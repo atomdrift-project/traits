@@ -1,0 +1,128 @@
+# Generic SSH-backdoor detection. This is not a named malware family — it
+# detects the shared techniques of SSH/sshd backdoors (hardcoded master
+# credentials, authentication bypass, credential logging, backdoor-toolkit
+# naming). Lives in objectives/ because it expresses an attacker goal, not a
+# specific corpus signature. The generic credential/auth-bypass markers it
+# composes live in objectives/credential-access/theft/keywords.
+defaults:
+  platforms:
+    - unix
+  for: [scripts, binaries]
+traits:
+  - id: python-default-root-username
+    desc: Python root username default
+    crit: component
+    for: [python]
+    if:
+      type: text
+      regex: "\\busername\\s*=\\s*['\"]root['\"]"
+  - id: python-default-password-value
+    desc: Python password literal default
+    crit: component
+    for: [python]
+    if:
+      type: text
+      regex: "\\bpassword\\s*=\\s*['\"]password['\"]"
+  - id: sshdoor-word
+    size_min: 512
+    size_max: 500000000
+    desc: sshdoor backdoor name
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      word: sshdoor
+      section: .text
+  - id: sshkit-word
+    size_min: 512
+    size_max: 500000000
+    desc: sshkit backdoor toolkit name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      word: sshkit
+      section: .text
+composite_rules:
+  - id: python-ssh-root-password-defaults
+    desc: SSH service defaults to root/password
+    crit: suspicious
+    conf: 0.99
+    for: [python]
+    near_lines: 4
+    all:
+      - id: python-default-root-username
+      - id: python-default-password-value
+      - id: micro-behaviors/communications/ssh/server::paramiko-server-interface
+  - id: paramiko-default-credential-pty-backdoor
+    desc: Paramiko SSH listener exposes a default-credential Bash PTY
+    crit: hostile
+    conf: 0.995
+    attack: "T1021.004, T1059.004"
+    mbc: B0022
+    scope: leaf
+    for: [python]
+    all:
+      - id: python-ssh-root-password-defaults
+      - id: micro-behaviors/communications/ssh/server::paramiko-server-interface
+      - id: micro-behaviors/communications/socket/bind/address::bind-all-interfaces
+      - id: micro-behaviors/process/tty/pty::openpty-call
+      - id: micro-behaviors/process/create/shell/spawn::bash-exec
+      - id: micro-behaviors/communications/socket/receive::socket-recv-call
+  - id: ssh-backdoor-names
+    size_min: 512
+    size_max: 500000000
+    desc: SSH backdoor family names
+    any:
+      - id: sshdoor-word
+      - id: sshkit-word
+  - id: ssh-hardcoded-credential-access
+    size_min: 512
+    size_max: 500000000
+    desc: Hardcoded SSH credential strings
+    any:
+      - id: objectives/credential-access/theft/keywords::hardcoded-master-password
+      - id: objectives/credential-access/theft/keywords::hardcoded-backdoor-pass
+      - id: objectives/credential-access/theft/keywords::hardcoded-magic-password
+  - id: ssh-auth-bypass
+    size_min: 512
+    size_max: 500000000
+    desc: SSH auth bypass markers
+    any:
+      - id: objectives/credential-access/theft/keywords::auth-bypass-marker
+      - id: objectives/credential-access/theft/keywords::skip-auth-marker
+  - id: ssh-cred-logging
+    size_min: 512
+    size_max: 500000000
+    desc: SSH credential logging
+    any:
+      - id: objectives/credential-access/theft/keywords::password-log-marker
+      - id: objectives/credential-access/theft/keywords::cred-log-marker
+  - id: ssh-detected
+    size_min: 512
+    size_max: 500000000
+    desc: SSH backdoor detected
+    crit: suspicious
+    conf: 0.95
+    attack: T1556.004
+    mbc: B0022
+    needs: 2
+    any:
+      - id: ssh-backdoor-names
+      - id: ssh-hardcoded-credential-access
+      - id: ssh-auth-bypass
+      - id: ssh-cred-logging
+  - id: go-ssh-relay-forwarding-backdoor
+    desc: Go SSH server exposes command and TCP forwarding through a relay tunnel
+    crit: hostile
+    conf: 0.99
+    attack: "T1021.004,T1090,T1059"
+    mbc: "B0022"
+    for: [elf, macho]
+    all:
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: micro-behaviors/communications/ssh/server::go-ssh-server-implementation
+      - id: micro-behaviors/communications/ssh/server::go-ssh-direct-tcpip-handler
+      - id: micro-behaviors/communications/ssh/server::go-ssh-tcpip-forward-handler
+      - id: micro-behaviors/communications/ssh/server::go-ssh-open-client-policy
+      - id: micro-behaviors/communications/proxy/tunnel::go-relay-tunnel-stack

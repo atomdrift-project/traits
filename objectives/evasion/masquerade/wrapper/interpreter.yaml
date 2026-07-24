@@ -1,0 +1,138 @@
+# Renamed script interpreter detection
+# Standalone script interpreters (LuaJIT, AutoIt, AutoHotkey, etc.) are
+# commonly renamed and bundled with malicious payloads to bypass filename
+# and process-name based detection.
+defaults:
+  platforms: [windows]
+  for: [pe]
+  attack: T1036.005
+  mbc: F0004
+traits:
+  # === LuaJIT ===
+- id: luajit-export-name
+  desc: PE export table identifies as luajit.exe
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    exact: "luajit.exe"
+
+- id: luajit-version-string
+  desc: LuaJIT version banner string
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    regex: 'LuaJIT \d+\.\d+\.\d+'
+
+- id: luajit-lua-init-env
+  desc: LUA_INIT environment variable handler
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    exact: "LUA_INIT"
+
+- id: basename-is-luajit
+  desc: Filename matches luajit
+  crit: notable
+  conf: 0.95
+  if:
+    type: path
+    basename: true
+    regex: '^luajit'
+    case_insensitive: true
+
+- id: luajit-bytecode-loader-fmt
+  desc: "LuaJIT bytecode loader format (luaJIT_BC_)"
+  crit: component
+  conf: 0.97
+  if:
+    type: text
+    substr: 'luaJIT_BC_'
+
+- id: luajit-embedded-script-path
+  desc: Embedded LuaJIT script path marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: '@\.\./[^"\n]{1,80}/scripts/[a-z][a-z0-9_-]{0,32}\.lua'
+
+  # === AutoIt ===
+- id: renamed-autoit
+  desc: Renamed AutoIt interpreter
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    exact: "AutoIt v3"
+
+  unless:
+  - type: basename
+    case_insensitive: true
+    regex: ^autoit
+  - type: basename
+    case_insensitive: true
+    regex: ^au3
+  - id: metadata/lang/compiled::autoit-compiled-script
+
+  # === AutoHotkey ===
+- id: renamed-autohotkey
+  desc: Renamed AutoHotkey interpreter
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: (?i)\bAutoHotkey\s+v[0-9]
+
+  unless:
+  - type: basename
+    case_insensitive: true
+
+    regex: ^autohotkey
+  - type: basename
+    case_insensitive: true
+
+    regex: ^ahk
+composite_rules:
+- id: renamed-luajit
+  desc: Renamed LuaJIT interpreter (not named luajit.exe)
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: luajit-export-name
+  any:
+  - id: luajit-version-string
+  - id: luajit-lua-init-env
+  unless:
+  - id: basename-is-luajit
+
+- id: embedded-luajit-runtime
+  desc: LuaJIT runtime embedded as scripting engine in non-luajit binary
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: luajit-version-string
+  - id: luajit-bytecode-loader-fmt
+  any:
+  - id: luajit-embedded-script-path
+  - id: luajit-lua-init-env
+  unless:
+  - id: basename-is-luajit
+  - id: luajit-export-name
+
+- id: luajit-malware-loader
+  desc: Embedded LuaJIT runtime used as malware loader
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: embedded-luajit-runtime
+  any:
+  - id: objectives/persistence/login/registry/autostart::run-key
+  - id: objectives/evasion/masquerade/identity/fabricated::defender-exe-path-string
+  - id: objectives/evasion/decoy/social::fake-error-dll-missing
+  - id: objectives/anti-static/obfuscation/imports::hidden-advapi32-rtlgenrandom-resolution
+  needs: 2
+  unless:
+  - id: metadata/signed/platform/

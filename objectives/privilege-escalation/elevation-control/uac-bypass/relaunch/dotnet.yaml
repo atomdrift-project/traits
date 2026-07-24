@@ -1,0 +1,109 @@
+# .NET/C# elevation via Start-Process -Verb RunAs
+# The single RunAs verb is an elevation prompt. Composites below add context
+# before treating it as suspicious UAC abuse.
+# ATT&CK: T1548.002 (Abuse Elevation Control: Bypass UAC)
+defaults:
+  for: [csharp, pe]
+  platforms: [windows]
+  attack: T1548.002
+  crit: notable
+  conf: 0.85
+
+traits:
+- id: start-process-verb-runas
+  desc: PowerShell Start-Process elevation
+  crit: notable
+  conf: 0.92
+  if:
+    type: text
+    regex: Start-Process.{0,60}-Verb\s+RunAs
+
+- id: shell-execute-runas
+  desc: ShellExecute with runas verb
+  crit: notable
+  conf: 0.88
+  if:
+    type: text
+    regex: (?i)(ShellExecute|ProcessStartInfo).{0,60}runas
+
+- id: is-in-role-admin
+  desc: WindowsIdentity IsInRole administrator check
+  conf: 0.85
+  if:
+    type: text
+    regex: (?i)IsInRole.{0,40}(Administrator|BuiltinAdministrator)
+
+- id: windows-principal-check
+  desc: WindowsPrincipal administrator check
+  conf: 0.85
+  if:
+    type: text
+    regex: (?i)WindowsPrincipal.{0,60}(IsInRole|Administrator)
+
+- id: relaunch-self-elevated--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: (?i)(GetCurrentProcess|ExecutablePath).{0,80}(RunAs|runas|Elevat)
+
+  count_max: 1017629
+- id: relaunch-self-elevated--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: (?i)(GetEntryAssembly).{0,80}(RunAs|runas|Elevat)
+
+  count_max: 1017630
+
+- id: uac-bypass-component-type
+  desc: UAC-bypass component type name
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: '(?i)\b(Cascading)?UacBypasser\b|\bShellExecuteRunasBypasser\b'
+    section: .rdata
+
+composite_rules:
+- id: admin-check-then-elevate
+  desc: Checks admin status then requests elevation
+  crit: suspicious
+  conf: 0.93
+  all:
+  - id: admin-check
+  any:
+  - id: start-process-verb-runas
+  - id: shell-execute-runas
+  - id: relaunch-self-elevated
+
+- id: admin-check
+  desc: Administrator privilege verification
+  crit: notable
+  conf: 0.85
+  any:
+  - id: is-in-role-admin
+  - id: windows-principal-check
+  - id: micro-behaviors/os/privilege/check::is-elevated-property
+- id: relaunch-self-elevated
+  desc: Re-launches current process with elevation
+  crit: suspicious
+  conf: 0.92
+  any:
+  - id: relaunch-self-elevated--rx-1
+  - id: relaunch-self-elevated--rx-2
+
+- id: nativeaot-uac-bypass-loader
+  desc: NativeAOT loader containing a UAC-bypass component and elevation flow
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: metadata/lang/compiler/aot::nativeaot-runtime-markers
+  - id: uac-bypass-component-type
+  - id: admin-check-then-elevate
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/

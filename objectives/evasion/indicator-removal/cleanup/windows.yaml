@@ -1,0 +1,253 @@
+# Anti-Forensics Evidence Removal - Windows
+# Detects techniques for removing traces of malicious activity on Windows
+# ATT&CK: T1070 (Indicator Removal), T1562.001 (Impair Defenses)
+# MBC: B0047 (Defense Evasion)
+defaults:
+  for: [powershell, batch, pe, lua]
+  platforms: [windows]
+  mbc: "B0047"
+  attack: "T1562.001"
+traits:
+  # MOTW (Mark of the Web) removal via Zone.Identifier stream
+- id: motw-removal-stream--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: Zone.Identifier
+    case_insensitive: true
+  count_max: 1020262
+- id: motw-removal-stream--rx-2
+  desc: Set-Content call near Zone.Identifier stream
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    regex: 'Set-Content.{0,80}Zone\.Identifier|Zone\.Identifier.{0,80}Set-Content'
+    case_insensitive: true
+  count_max: 1020263
+- id: motw-removal-stream--rx-3
+  desc: MOTW stream value argument
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    regex: '(Zone\.Identifier|Set-Content).{0,60}-Value|-Value.{0,60}(Zone\.Identifier|Set-Content)'
+    case_insensitive: true
+  for: [powershell, batch]
+  unless:
+  - id: well-known/app/drivers::ngx-dll-basename
+  - id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  count_max: 1020264
+- id: unblock-file
+  desc: PowerShell Unblock-File cmdlet
+  crit: baseline
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)Unblock-File'
+- id: motw-zone-identifier-reference
+  desc: PE references Zone.Identifier stream
+  crit: component
+  conf: 0.9
+  for: [pe, dll]
+  if:
+    type: text
+    substr: Zone.Identifier
+    case_insensitive: true
+- id: motw-removal-before-zone
+  desc: Removal verb precedes Zone.Identifier
+  crit: component
+  conf: 0.9
+  for: [pe, dll]
+  if:
+    type: text
+    regex: '(?i)\b(delete|remove|erase)\b[^\r\n]{0,80}Zone\.Identifier'
+- id: motw-removal-after-zone
+  desc: Removal verb follows Zone.Identifier
+  crit: component
+  conf: 0.9
+  for: [pe, dll]
+  if:
+    type: text
+    regex: '(?i)Zone\.Identifier[^\r\n]{0,80}\b(delete|remove|erase)\b'
+  # Clearing Event Logs
+- id: wevtutil-clear
+  desc: Clear event logs via wevtutil
+  crit: suspicious
+  conf: 0.9
+  for: [batch]
+  attack: "T1070.001"
+  if:
+    type: text
+    regex: '(?i)wevtutil\s+cl\s+'
+- id: powershell-clear-eventlog
+  desc: Clear event logs via PowerShell
+  crit: suspicious
+  conf: 0.9
+  for: [powershell]
+  attack: "T1070.001"
+  if:
+    type: text
+    regex: '(?i)\bClear-EventLog\b'
+  unless:
+  - id: well-known/app/windows-desktop-tools::quicklook-release-path
+  - id: metadata/package/quality/false-positives-powershell::owasp-crs-powershell-catalog-context
+- id: remove-staged-file-force
+  desc: PowerShell force-removes staged file
+  crit: component
+  conf: 0.85
+  attack: "T1070.004"
+  if:
+    type: text
+    regex: '(?i)Remove-Item\s+-Path\s+\$[A-Za-z_][A-Za-z0-9_]*\s+-Force'
+- id: windows-recent-files-delete
+  desc: Deletes Windows recent files
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: literal
+    substr: '%APPDATA%\\Microsoft\\Windows\\Recent'
+- id: windows-prefetch-delete
+  desc: Deletes Windows Prefetch files
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: literal
+    substr: '%WINDIR%\\Prefetch'
+- id: windows-runmru-reg-delete
+  desc: Deletes Windows RunMRU history
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: literal
+    substr: 'Explorer\\RunMRU'
+- id: windows-defender-log-disable
+  desc: Disables Defender logging
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: literal
+    substr: DisableLogging
+- id: lua-wevtutil-clear
+  desc: Lua wevtutil log clear
+  crit: suspicious
+  conf: 0.92
+  for: [lua]
+  attack: "T1070.001"
+  if:
+    type: literal
+    substr: wevtutil cl
+- id: prefetch-force-delete-command
+  desc: Force deletes Windows Prefetch
+  crit: suspicious
+  conf: 0.96
+  ref: sha256:8a710cccc278dc81e3fda6081c71cfac7bcfa0099821d7d0a7fab7f415cfd411
+  attack: "T1070.004"
+  if:
+    type: text
+    regex: '(?i)\bdel\s+/f\s+/q\s+(%WINDIR%|[A-Z]:\\Windows)\\Prefetch\\\*\.\*'
+- id: temp-force-delete-command
+  desc: Force deletes temp contents
+  crit: suspicious
+  conf: 0.92
+  ref: sha256:8a710cccc278dc81e3fda6081c71cfac7bcfa0099821d7d0a7fab7f415cfd411
+  attack: "T1070.004"
+  if:
+    type: text
+    regex: '(?i)\bdel\s+/f\s+/q\s+%temp%\\\*\.\*'
+- id: flushdns-quiet-command
+  desc: Quietly flushes DNS cache
+  crit: notable
+  conf: 0.86
+  ref: sha256:8a710cccc278dc81e3fda6081c71cfac7bcfa0099821d7d0a7fab7f415cfd411
+  attack: "T1070"
+  if:
+    type: text
+    regex: '(?i)\bipconfig\s+/flushdns\s*>\s*nul\s+2>&1'
+composite_rules:
+- id: windows-indicator-removal
+  desc: Windows indicator and defense removal
+  crit: suspicious
+  conf: 0.9
+  for: [powershell, batch, lua]
+  any:
+  - id: motw-removal-stream
+  - id: unblock-file
+  - id: wevtutil-clear
+  - id: lua-wevtutil-clear
+  - id: powershell-clear-eventlog
+  - id: temp-msi-cleanup
+- id: windows-user-trace-cleanup
+  desc: Cleans Windows user traces
+  crit: suspicious
+  conf: 0.97
+  all:
+  - id: windows-recent-files-delete
+  - id: windows-prefetch-delete
+  - id: windows-runmru-reg-delete
+  any:
+  - id: windows-defender-log-disable
+- id: lua-log-and-trace-cleanup
+  desc: Lua log and trace cleanup
+  crit: hostile
+  conf: 0.98
+  for: [lua]
+  all:
+  - id: lua-wevtutil-clear
+  - id: windows-recent-files-delete
+  - id: windows-prefetch-delete
+  - id: windows-runmru-reg-delete
+  - id: windows-defender-log-disable
+- id: motw-removal-stream
+  desc: Removes Mark of the Web (Zone.Identifier)
+  crit: suspicious
+  conf: 0.95
+  for: [powershell, batch]
+  all:
+  - id: motw-removal-stream--rx-1
+  - id: motw-removal-stream--rx-2
+  - id: motw-removal-stream--rx-3
+- id: pe-motw-removal
+  desc: PE deletes its Mark-of-the-Web Zone.Identifier stream
+  crit: suspicious
+  conf: 0.97
+  for: [pe, dll]
+  attack: "T1553.005"
+  all:
+  - id: motw-zone-identifier-reference
+  - id: micro-behaviors/fs/file/delete::deletefile-w
+  any:
+  - id: motw-removal-before-zone
+  - id: motw-removal-after-zone
+  unless:
+  - id: metadata/file/string/identity::official-7zip-component
+  - id: well-known/app/telegram::telegram-desktop-official-client
+- id: temp-msi-cleanup
+  desc: Removes staged MSI after install
+  crit: suspicious
+  conf: 0.94
+  attack: "T1070.004"
+  all:
+  - id: remove-staged-file-force
+  - id: micro-behaviors/fs/path/temp::temp-msi-staging
+  - id: objectives/command-and-control/dropper/delivery/download-execute::powershell-temp-msi-install
+- id: windows-prefetch-temp-recon-cleanup
+  desc: Windows prefetch temp cleanup with recon
+  crit: hostile
+  conf: 0.97
+  ref: sha256:8a710cccc278dc81e3fda6081c71cfac7bcfa0099821d7d0a7fab7f415cfd411
+  for: [pe, batch, powershell]
+  all:
+  - id: prefetch-force-delete-command
+  - id: temp-force-delete-command
+  - id: micro-behaviors/process/create/shell/script-host::cmd-exe-c-command
+  any:
+  - id: flushdns-quiet-command
+  - id: micro-behaviors/process/enumerate/shell::ps-aux
+  - id: micro-behaviors/process/enumerate/shell::ps-ef
+  - id: micro-behaviors/process/enumerate/shell::tasklist
+  - id: micro-behaviors/os/sysinfo/process::windows-systeminfo-command
+  - id: micro-behaviors/communications/http/url/external-ip::url-external-ip-port-binary
+  needs: 2

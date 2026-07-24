@@ -1,0 +1,464 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1041
+
+traits:
+  - id: lifecycle-random-id-generation
+    desc: Generates a per-install tracking identifier
+    crit: notable
+    conf: 0.93
+    if:
+      type: text
+      regex: '(userId|installId|clientId)\s*=\s*["''][^"'']{1,24}["'']\s*\+\s*Math\.random\(\)'
+
+  - id: lifecycle-install-startup-action-parameter
+    desc: Lifecycle beacon carries install/startup action
+    crit: notable
+    conf: 0.92
+    if:
+      type: literal
+      kind: string
+      regex: 'action=(install|startup)\b'
+
+  - id: extension-lifecycle-campaign-url
+    desc: Extension lifecycle URL campaign ID
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'https?://[^"''\s]{1,160}[?&]t=(install|uninstall)\b[^"''\s]{0,160}[?&]ti=[0-9a-f-]{12,}'
+  - id: extension-install-campaign-beacon-url
+    desc: Extension install campaign beacon URL
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'https?://[^"''\s]{1,160}[?&]t=install\b[^"''\s]{0,160}[?&]ti=[0-9a-f-]{12,}'
+
+  - id: page-link-check-message
+    desc: Link check message dispatch tag
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: 'what:\s*["'']check_links["'']'
+
+  - id: link-check-endpoint
+    desc: Remote link scanning endpoint
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      substr: https://service.allblock.app/check_links
+
+  - id: link-check-queue-key
+    desc: Queues harvested links for upload
+    crit: component
+    conf: 0.93
+    if:
+      type: text
+      substr: linkCheckQueue
+
+  - id: lifecycle-uid-tracking-url
+    desc: Welcome or uninstall UID tracking URL
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: 'https://allblock\.app/(en/welcome\?uid=|api/uninstall\?uid=)'
+
+  - id: extension-uid-cookie-name
+    desc: Browser extension UID cookie name
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'name\s*:\s*["'']uid["'']'
+
+  - id: extension-uid-sync-storage
+    desc: Browser extension UID sync-storage field
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'storage\.sync\.(get|set)\([^)]{0,120}\buid\b'
+
+  - id: extension-cookie-expiration-field
+    desc: Browser extension cookie expiration field
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: expirationDate
+
+  - id: extension-cookie-change-listener
+    desc: Browser extension cookie change listener
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: cookies.onChanged.addListener
+
+  - id: extension-uninstall-feedback-url
+    desc: Browser extension uninstall feedback URL
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: 'setUninstallURL\([^)]{0,120}feedback'
+
+  - id: extension-install-no-cors-ping
+    desc: Browser extension no-cors install ping
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: 'fetch\([^)]{0,160}mode:\s*["'']no-cors'
+  - id: extension-lifecycle-purpose-parameter
+    desc: Install/uninstall campaign parameter
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: '[?&](from|utm_source)=(install|uninstall)\b'
+  - id: employee-activity-data-fields
+    desc: Employee activity data fields
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'dataField:\s*["'']employee_(name|status)["'']'
+  - id: status-update-event-type
+    desc: Status update event type
+    crit: notable
+    conf: 0.88
+    if:
+      type: literal
+      kind: string
+      exact: status_update
+  - id: pageview-runtime-dispatch
+    desc: Dispatches pageview URL telemetry
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: 'message\s*:\s*["'']pageview["''].{0,100}(uri|url)\s*:'
+  - id: browser-page-referrer-uid-telemetry
+    desc: Reports page URL and referrer
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: '(userConfig|uid).{0,900}document\.referrer.{0,700}location\.href'
+  - id: pdf-filename-event-fields
+    desc: PDF filename fields in a telemetry event
+    crit: component
+    conf: 0.94
+    count_min: 2
+    if:
+      type: text
+      regex: '\bfile[12]_name\s*:'
+
+composite_rules:
+  - id: tracked-social-invitation-automation
+    desc: Tracked social invitation automation extension
+    crit: hostile
+    conf: 0.94
+    attack: T1491,T1041,T1176
+    for: [crx, xpi, zip]
+    scope: archive
+    all:
+      - id: extension-install-startup-id-telemetry
+      - id: objectives/impact/ui/manipulation/core::autonomous-social-invitation-trigger
+      - id: metadata/permission/host::content-script-social-meta
+
+  # Notable, not suspicious: a locally generated random id pinged with
+  # `action=install` / `action=startup` is install-count and daily-active-user
+  # analytics — the most common telemetry shape in free extensions. The
+  # identifier is minted by the extension for itself; no browsing data, page
+  # content, or personal field is collected, and nothing pre-existing on the
+  # machine is read. It is a network call plus an identifier, so it stays
+  # notable, but "rarely legitimate" does not describe it.
+  #
+  # Escalation belongs to the authority-gated composites that pair persistent
+  # identifiers with real observation power (all-urls host access, webRequest,
+  # cookie replanting) rather than to install counting on its own.
+  - id: extension-install-startup-id-telemetry
+    desc: Sends a generated extension identifier on install and startup
+    crit: notable
+    conf: 0.95
+    all:
+      - id: lifecycle-random-id-generation
+      - id: lifecycle-install-startup-action-parameter
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+
+  - id: extension-pdf-filename-telemetry
+    desc: Extension telemetry records selected PDF filenames
+    crit: notable
+    conf: 0.96
+    near_lines: 12
+    all:
+      - id: pdf-filename-event-fields
+      - id: micro-behaviors/os/telemetry/logging/event::log-event-identifier
+
+  - id: sandboxed-game-extension-lifecycle-tracking
+    desc: Sandboxed game extension lifecycle tracking
+    crit: suspicious
+    conf: 0.95
+    attack: T1176
+    ref: sha256:ae2655e0b8fe54fe47cad7acf24bb405c441e8d0527575c4a3c36bf72cfc1f93
+    scope: archive
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::extension-install-uninstall-lifecycle-urls
+      - id: metadata/permission/extension-api::extension-sandbox-page
+      - id: metadata/package/manifest/ecosystem::unity-webgl-wasm-build
+
+  - id: affiliate-tracked-newtab-install
+    desc: Affiliate-tracked new-tab install lifecycle
+    crit: notable
+    conf: 0.95
+    attack: T1176
+    for: [crx, xpi, zip]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::extension-affiliate-tracking-parameter
+
+  # A new-tab override that opens a campaign URL on install and reports another
+  # campaign URL on uninstall is a monetized lifecycle, not ordinary extension
+  # update traffic. Keep the UTM requirement so ordinary onboarding pages do not
+  # inherit the hostile finding.
+  - id: campaign-tracked-newtab-navigation
+    desc: Campaign-tracked new-tab lifecycle navigation
+    crit: notable
+    conf: 0.97
+    attack: T1176
+    for: [crx, xpi, zip]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: micro-behaviors/browser-extension/tabs::install-https-tab-open
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/communications/http/url/query::utm-source-medium-campaign-url
+
+  - id: content-script-link-harvest-dispatch
+    desc: Content script harvests page hyperlinks
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-selects-anchor-hrefs
+      - id: page-link-check-message
+
+  - id: employee-activity-extension-telemetry
+    desc: Extension collects employee activity
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: employee-activity-data-fields
+      - id: status-update-event-type
+      - id: micro-behaviors/ui/controls/activity-monitor::activity-monitor-helper
+    any:
+      - id: metadata/permission/runtime::is-extension
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-api
+
+  - id: background-link-check-upload
+    desc: Background worker uploads harvested links
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: link-check-endpoint
+      - id: link-check-queue-key
+    any:
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+
+  - id: extension-install-uninstall-uid-tracking
+    desc: Browser extension lifecycle UID tracking
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: lifecycle-uid-tracking-url
+    any:
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+  - id: monetized-search-extension-lifecycle-tracking
+    desc: Monetized search extension lifecycle tracking
+    crit: hostile
+    conf: 0.94
+    attack: T1176
+    all:
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::extension-monetized-search-newtab-hijack
+      - id: extension-lifecycle-campaign-url
+    any:
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+  - id: browser-extension-lifecycle-campaign-beacon
+    desc: Browser extension install/uninstall campaign beaconing
+    crit: hostile
+    conf: 0.93
+    attack: T1176
+    all:
+      - id: extension-lifecycle-campaign-url
+      - id: extension-install-campaign-beacon-url
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+    any:
+      - id: micro-behaviors/communications/http/request/credentials::fetch-credentials-include
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+
+  - id: extension-persistent-uid-cookie
+    desc: Browser extension recreates persistent UID cookie
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: extension-uid-cookie-name
+      - id: extension-uid-sync-storage
+      - id: extension-cookie-expiration-field
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-set
+    any:
+      - id: extension-cookie-change-listener
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-get
+
+  - id: all-site-pageview-surveillance
+    desc: All-site extension captures pageview telemetry
+    crit: hostile
+    conf: 0.98
+    attack: T1119
+    for: [crx, zip, archives]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: micro-behaviors/communications/http/url/path::browser-page-url-referrer-read
+      - id: pageview-runtime-dispatch
+
+  # URL/referrer reporting is ordinary analytics by itself. Combined with a
+  # runtime search-rule installer, it describes an extension that both watches
+  # browsing context and hijacks traffic; that combination is the reusable
+  # hostile signal, not any one vendor endpoint.
+  - id: browser-hijacker-page-telemetry
+    desc: Hijacker reports page URL and referrer
+    crit: hostile
+    conf: 0.98
+    attack: T1119,T1176,T1041
+    all:
+      - id: browser-page-referrer-uid-telemetry
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/dynamic::dnr-runtime-rule-install
+
+  # Sentry Replay is a legitimate diagnostic feature in a first-party web
+  # application, but an extension that starts it from an all-URL content
+  # script records unrelated sites and forwards those sessions off-host.
+  - id: extension-broad-sentry-replay-surveillance
+    desc: All-URL extension records and uploads page sessions
+    crit: hostile
+    conf: 0.98
+    attack: T1119,T1185
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: micro-behaviors/os/telemetry/activity::sentry-replay-session-recording
+      - id: micro-behaviors/process/inject/webextension::broad-content-script-injection
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+    any:
+      - id: objectives/collection/monitor/telemetry::sentry-ingest-dsn
+      - id: objectives/collection/monitor/telemetry::sentry-self-hosted-dsn
+    unless:
+      - id: well-known/app/copy-text-from-picture::documented-ocr-extension-context
+
+  # Replanting a first-party UID cookie when the user deletes it is aggressive
+  # affiliate tracking (PUP), but on its own — without authority to observe or
+  # hijack browsing across sites — it is suspicious, not hostile. The hostile
+  # verdict is carried by the gated composites (external-navigation with observe
+  # authority, tracked-search-lifecycle with a search override).
+  - id: extension-tracking-cookie-replant
+    desc: Browser extension replants tracking cookie
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: extension-uid-cookie-name
+      - id: extension-cookie-change-listener
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-set
+    any:
+      - id: extension-uid-sync-storage
+      - id: extension-cookie-expiration-field
+
+  # Persistent UID cookie + lifecycle telemetry is a monetized-tracker (PUP)
+  # profile; hostile only when paired with observe/hijack authority, which the
+  # gated composites below require. On its own it is suspicious.
+  - id: extension-persistent-lifecycle-tracking
+    desc: Browser extension persistent lifecycle tracking
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: extension-persistent-uid-cookie
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+    any:
+      - id: extension-uninstall-feedback-url
+      - id: extension-install-no-cors-ping
+      - id: micro-behaviors/browser-extension/lifecycle::uninstall-tracking
+
+  # Install ping + uninstall-feedback URL is ordinary install-source attribution
+  # that countless benign extensions carry (analytics + uninstall surveys); on
+  # its own it is a notable lifecycle observation, not hostile surveillance. The
+  # hostile case (attribution + observe/hijack authority) is covered by
+  # extension-install-uninstall-external-navigation below.
+  - id: extension-install-uninstall-feedback-tracking
+    desc: Browser extension install and uninstall feedback tracking
+    crit: notable
+    conf: 0.9
+    all:
+      - id: extension-install-no-cors-ping
+      - id: extension-uninstall-feedback-url
+    any:
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+
+  # A from=install/uninstall parameter on a lifecycle tab is ordinary install-
+  # source attribution that countless benign extensions carry; on its own it is
+  # not surveillance. This fires hostile only when the extension also holds
+  # authority to observe or hijack browsing (broad host access, content-script
+  # into all sites, request interception, or new-tab/search override) — the
+  # capability that turns lifecycle attribution into real tracking. A sandboxed,
+  # zero-permission casual-game extension that merely opens a promo/feedback tab
+  # has none of it and is cleared.
+  - id: extension-install-uninstall-external-navigation
+    desc: Tracking-authority extension opens lifecycle attribution URL
+    crit: hostile
+    conf: 0.96
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: extension-lifecycle-purpose-parameter
+    # Genuine OBSERVATION/tracking authority only — the capability to watch or
+    # intercept the user's browsing across sites. New-tab override and search
+    # override are UI/search hijacks (they belong to impact/ui-manipulation, and
+    # NTP override is the *defining function* of a new-tab wallpaper extension),
+    # and `scripting` without host access injects nothing — none of them make
+    # lifecycle attribution into surveillance, so they are NOT in this gate. A
+    # new-tab wallpaper PUP that only overrides the NTP + opens a UTM promo is
+    # covered (suspicious) by impact/ui/manipulation/core::newtab-override-promo-
+    # lifecycle instead of firing this hostile tracking composite.
+    any:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: metadata/permission/manifest::permission-all-urls
+      - id: metadata/permission/host::content-script-all-sites
+      - id: metadata/permission/network::web-request
+      - id: metadata/permission/network::permission-declarative-net-request
+
+  - id: tracked-search-lifecycle-extension
+    desc: Tracked search lifecycle extension
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: extension-persistent-lifecycle-tracking
+      - id: objectives/impact/ui/manipulation/core::browser-extension-default-search-override
+      - id: objectives/impact/ui/manipulation/core::extension-search-monetization

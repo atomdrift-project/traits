@@ -1,0 +1,484 @@
+defaults:
+  platforms: [unix, windows]
+  for: [json, chrome-manifest, javascript, typescript, crx]
+
+traits:
+  # Text coaching the user through the browser's OWN "an extension changed your
+  # search settings" bubble — "click 'Keep it'", "select Keep changes". Chrome
+  # shows that prompt so the user can undo a settings takeover; an extension that
+  # scripts the user's answer to it is defeating a browser security control, not
+  # onboarding. Deliberately phrased around the verb + Keep pair rather than any
+  # one vendor's wording so re-skins of the same funnel still match.
+  - id: browser-setting-change-keep-prompt-instruction
+    desc: Instructs user to accept browser change prompt
+    crit: component
+    conf: 0.9
+    for: [javascript, typescript, html]
+    if:
+      type: text
+      regex: '(?i)(click|select)[\s\S]{0,80}\bkeep\s+(it|changes|them)\b'
+
+  - id: search-url-query-template
+    desc: Search URL query template
+    crit: component
+    conf: 0.9
+    for: [json, chrome-manifest]
+    if:
+      type: value
+      path: chrome_settings_overrides.search_provider.search_url
+      regex: 'https?://[^"''\s]+([?&](q|query|kw)=\{searchTerms\}|/search/\{searchTerms\})'
+      case_insensitive: true
+  - id: search-branded-provider-host
+    desc: Search-branded provider host
+    crit: component
+    conf: 0.86
+    for: [json, chrome-manifest]
+    if:
+      type: value
+      path: chrome_settings_overrides.search_provider.search_url
+      regex: 'https?://[^/"'']*\b[a-z0-9-]*search[a-z0-9-]*\b'
+      case_insensitive: true
+
+  - id: dnr-search-query-param-injection
+    desc: declarativeNetRequest injects query parameters
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      word: addOrReplaceParams
+
+  - id: extension-uid-telemetry-callback-url
+    desc: Telemetry URL carries uid and extension id
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\buid=\$\{[^}]{0,40}\}[^\n]{0,80}\bext(Id|Version)='
+
+composite_rules:
+  - id: extension-remote-php-navigation-abuse
+    desc: Extension cache-busts PHP control endpoint into navigation
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1071.001
+    for: [javascript]
+    all:
+      - id: objectives/supply-chain/hidden-payload/extensions/backdoor::extension-remote-window-open-backdoor
+      - id: micro-behaviors/communications/http/url/php-endpoint::url-php-endpoint-script
+      - id: micro-behaviors/communications/http/request/url::fetch-no-store-cache
+
+  - id: extension-conditional-navigation-hijack
+    desc: Extension hijacks navigation and reports it
+    crit: hostile
+    conf: 0.98
+    attack: T1185,T1041,T1176
+    for: [javascript, typescript]
+    near_bytes: 3000
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-webnavigation-before-navigate
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-update-with-url
+      - id: micro-behaviors/communications/http/url/path::js-url-host-read
+      - id: micro-behaviors/communications/http/request/client::http-post-json
+      - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+  - id: browser-extension-install-active-tab-redirect
+    desc: Extension redirects active tab on install
+    crit: suspicious
+    conf: 0.96
+    attack: T1176
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-update
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::extension-affiliate-tracking-parameter
+
+  - id: browser-extension-default-search-override
+    desc: Overrides browser default search provider
+    crit: notable
+    conf: 0.92
+    for: [json, chrome-manifest]
+    all:
+      - id: metadata/permission/manifest::chrome-search-provider-override
+      - id: metadata/permission/manifest::chrome-default-search-provider
+      - id: metadata/permission/manifest::chrome-search-terms-template
+
+  - id: extension-search-rewrite-authority
+    desc: Search extension request rewrite authority
+    crit: notable
+    conf: 0.9
+    all:
+      - id: browser-extension-default-search-override
+    any:
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::search-rewrite-permission-dnr
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::search-rewrite-permission-dnr-host
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::search-rewrite-permission-webrequest
+      - id: metadata/permission/network::permission-declarative-net-request
+      - id: metadata/permission/network::declarative-net-request-with-host
+      - id: metadata/permission/network::web-request
+
+  # Monetized search-hijacker: overrides the default search provider AND rewrites
+  # its search requests via declarativeNetRequest to inject tracking parameters
+  # (queryTransform/addOrReplaceParams). A legitimate alternative-search extension
+  # just sets search_url; injecting per-user tracking params into search traffic
+  # is affiliate monetization/hijacking. (ttlSearch: default search override +
+  # DNR addOrReplaceParams u=<uid>, s=<src>.)
+  - id: extension-search-override-dnr-param-injection
+    desc: Search override injects DNR tracking params
+    crit: suspicious
+    conf: 0.93
+    attack: T1176
+    scope: archive
+    all:
+      - id: browser-extension-default-search-override
+      - id: dnr-search-query-param-injection
+
+  # A runtime-installed DNR rule that redirects main-frame search requests is
+  # direct browser traffic hijacking. Requiring both the rule-install surface
+  # and a search-shaped redirect keeps ordinary static rules and redirect
+  # libraries out of this hostile finding.
+  - id: runtime-search-dnr-hijack
+    desc: Extension installs runtime search redirect rules
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1185
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/dynamic::dnr-runtime-rule-install
+      - id: micro-behaviors/communications/http/dynamic::dnr-main-frame-search-redirect
+
+  # Search hijacker that keeps its takeover by scripting the user's answer to the
+  # browser's revert prompt: it overrides the default search provider, then a
+  # content script blankets the page with a full-viewport overlay whose only text
+  # tells the user to click the browser's own "Keep it" button. Chrome shows that
+  # bubble precisely so a settings takeover can be undone, so darkening the page
+  # and pointing at it is deception aimed at a security control — hostile, and a
+  # clear step beyond the merely-unwanted PUP line in newtab-override-promo-lifecycle.
+  # Gated on the search-override authority so ordinary onboarding tours, cookie
+  # banners and paywalls (overlay + "keep" prose, no hijack) cannot match.
+  - id: search-override-keep-changes-coercion
+    desc: Search override coerces browser keep-changes prompt
+    crit: hostile
+    conf: 0.95
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: browser-extension-default-search-override
+      - id: browser-setting-change-keep-prompt-instruction
+      - id: micro-behaviors/ui/window/manage/dom::fixed-viewport-overlay-style
+
+  # Search-override extension mints a persistent per-user id and phones it home
+  # with the extension id/version — install/user tracking for a monetized search
+  # provider, not a neutral update check.
+  - id: extension-search-uid-telemetry
+    desc: Search override reports tracking uid home
+    crit: suspicious
+    conf: 0.92
+    attack: T1176
+    scope: archive
+    all:
+      - id: browser-extension-default-search-override
+      - id: extension-uid-telemetry-callback-url
+
+  - id: extension-search-monetization
+    desc: Browser extension search monetization
+    # Affiliate monetization is privacy/UX-relevant, but an honest consented
+    # search extension is not malware without an additional abuse signal.
+    crit: notable
+    conf: 0.9
+    scope: archive
+    all:
+      - id: browser-extension-default-search-override
+      - id: search-url-query-template
+      - id: search-branded-provider-host
+      - id: objectives/collection/activity/browser::extension-persistent-affiliate-tracking
+
+  # A default-search takeover that also has all-host access and persists
+  # affiliate identifiers is materially riskier than an ordinary alternative
+  # search provider: it can rewrite arbitrary browsing traffic while retaining
+  # the monetisation identity across sessions.
+  - id: broad-authority-search-affiliate-takeover
+    desc: Broad-host search takeover with persistent affiliate tracking
+    crit: suspicious
+    conf: 0.94
+    attack: T1176
+    scope: archive
+    all:
+      - id: browser-extension-default-search-override
+      - id: metadata/permission/host::broad-host-access
+      - id: objectives/collection/activity/browser::extension-persistent-affiliate-tracking
+
+  # A default-search takeover that also reads cross-site cookies and sends
+  # persistent affiliate/session telemetry is a tracking payload, not merely a
+  # user-selected alternative search provider.
+  - id: search-takeover-cookie-telemetry
+    desc: Search takeover reads cookies for remote tracking telemetry
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1539,T1041
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: browser-extension-default-search-override
+      - id: metadata/permission/host::broad-host-access
+      - id: metadata/permission/cookie::permission-cookies
+      - id: objectives/collection/activity/browser::extension-persistent-affiliate-tracking
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-get-all
+      - id: micro-behaviors/communications/http/request/client::image-src-network-request
+
+  - id: tracked-browser-extension-search-hijacker
+    desc: Tracked browser extension search hijacker
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: browser-extension-default-search-override
+      - id: extension-search-monetization
+      - id: extension-persistent-lifecycle-tracking
+
+  - id: extension-persistent-lifecycle-tracking
+    desc: Persistent extension lifecycle tracking
+    crit: component
+    conf: 0.97
+    all:
+      - id: extension-persistent-cookie-access
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+    any:
+      - id: objectives/collection/monitor/tracking::extension-uninstall-feedback-url
+      - id: objectives/collection/monitor/tracking::extension-install-no-cors-ping
+      - id: micro-behaviors/browser-extension/lifecycle::uninstall-tracking
+
+  - id: extension-persistent-cookie-access
+    desc: Persistent extension cookie access pattern
+    crit: component
+    conf: 0.97
+    all:
+      - id: objectives/collection/monitor/tracking::extension-uid-cookie-name
+      - id: objectives/collection/monitor/tracking::extension-uid-sync-storage
+      - id: objectives/collection/monitor/tracking::extension-cookie-expiration-field
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-set
+    any:
+      - id: objectives/collection/monitor/tracking::extension-cookie-change-listener
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-get
+
+  - id: tracked-newtab-search-redirect
+    desc: Tracked new tab search redirect
+    crit: hostile
+    conf: 0.95
+    attack: T1176
+    for: [crx, xpi, zip]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::runtime-search-query-redirect
+      - id: micro-behaviors/ui/controls/widget::jquery-search-input-value-read
+    any:
+      - id: micro-behaviors/communications/http/url/query::token-query-parameter
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::runtime-search-affiliate-param
+      - id: micro-behaviors/communications/http/url/query::search-source-query-parameter
+
+  # Promotional new-tab lifecycle behavior: override NTP, open a promo tab on
+  # install, and register an uninstall URL. This is a clear monetisation
+  # behavior worth surfacing, but it is not hostile without search hijacking,
+  # deception, theft, or another concrete user-harm signal.
+  - id: newtab-override-promo-lifecycle
+    desc: New-tab override with campaign-tracked install/uninstall navigation
+    crit: notable
+    conf: 0.96
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: micro-behaviors/browser-extension/tabs::install-https-tab-open
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+    any:
+      - id: micro-behaviors/communications/http/url/query::utm-source-medium-campaign-url
+      - id: micro-behaviors/communications/http/url/domain::js-game-promotion-url
+
+  # Relocated from supply-chain/hidden-payload/extensions/affiliate, where it was
+  # hostile. Fetching a vendor's own "more extensions" list and rendering it as
+  # links to official Chrome Web Store listings is ordinary publisher
+  # cross-promotion: the panel is user-opened, the payload is JSON data (name /
+  # url / image) rendered via text and attribute assignment rather than code,
+  # the links carry no affiliate or tracking parameters, and none of it requires
+  # host permissions or a content script. Every leg is benign-shaped, so hostile
+  # convicted every wallpaper/new-tab pack that advertises its publisher's other
+  # extensions.
+  #
+  # Notable, not suspicious: unlike the campaign-tracked sibling above there is
+  # no attribution parameter or forced lifecycle navigation here, so this does
+  # not even reach the PUP-monetisation bar. It stays worth surfacing because
+  # the catalog is remote-controlled — the vendor can change every promoted link
+  # after review. Genuine new-tab abuse (default-search override, monetised
+  # search redirects, persistent tracking) keeps its own hostile composites.
+  - id: newtab-remote-promo-catalog
+    desc: New-tab fetches remote extension promo catalog
+    crit: notable
+    conf: 0.95
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: micro-behaviors/communications/http/url/path::remote-extension-catalog-url
+      - id: micro-behaviors/communications/http/url/domain::chrome-webstore-detail-url
+    any:
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/client::http-client
+
+  # REMOVED: `campaign-tracked-newtab-search-hijack` (was hostile).
+  #
+  # Its legs were exactly `newtab-override-promo-lifecycle` plus
+  # `chrome-search-query`, and it asserted "search hijack" in its own id while
+  # no leg ever checked that the search destination had been changed — no
+  # `chrome_settings_overrides.search_provider`, no monetised SERP host, no
+  # affiliate parameter on the query.
+  #
+  # `chrome.search.query()` is the *sanctioned* API that hands the query to
+  # whatever engine the user already configured; it is the recommended
+  # alternative to overriding the search provider. Its presence is evidence
+  # against hijacking, so it cannot upgrade a PUP-lifecycle pattern to hostile.
+  # A new-tab wallpaper page carrying a search box is the defining feature of
+  # that category, not an attack. The UTM tags in these samples sit on the
+  # install/uninstall promo tabs, not on the search — which is precisely what
+  # `newtab-override-promo-lifecycle` (suspicious) already describes, so this
+  # composite also double-counted one behaviour.
+  #
+  # Genuine search takeover keeps its dedicated hostiles, all of which require a
+  # real override or paid redirect: extension-search-newtab-takeover,
+  # extension-monetized-search-newtab-hijack, hosted-search-affiliate-hijack,
+  # search-override-runtime-affiliate-redirect, runtime-tracked-newtab-search-extension.
+
+  # Promotional navigation, not telemetry: opens a third-party game-site tab on
+  # the install/uninstall lifecycle. The behavior is notable, but not hostile
+  # without evidence of deception, theft, or other user harm.
+  - id: extension-lifecycle-external-game-promotion
+    desc: Extension promotes game sites on install/uninstall
+    crit: notable
+    conf: 0.97
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+    any:
+      - id: micro-behaviors/communications/http/url/domain::js-game-promotion-url
+      - id: micro-behaviors/communications/http/url/domain::html-game-link-catalog
+
+  - id: extension-install-game-promotion
+    desc: Extension opens game promotion on install
+    crit: notable
+    conf: 0.97
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create
+      - id: micro-behaviors/communications/http/url/domain::js-game-promotion-url
+    unless:
+      # Ad lists contain game URLs, while this known blocker opens its own
+      # settings page on install; do not infer promotion from that pair.
+      - id: well-known/app/browser-extension::adblock-extension-id
+
+  - id: extension-uninstall-game-promotion
+    desc: Extension redirects uninstall to game promotion
+    crit: notable
+    conf: 0.97
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/communications/http/url/domain::js-game-promotion-url
+
+  - id: forced-newtab-game-campaign
+    desc: New-tab extension opens campaign game navigation
+    crit: notable
+    conf: 0.99
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: micro-behaviors/browser-extension/tabs::install-https-tab-open
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/communications/http/url/domain::js-game-promotion-url
+      - id: micro-behaviors/communications/http/url/query::utm-source-medium-campaign-url
+
+  # A lifecycle redirect to a .click destination is hostile only when the
+  # extension also holds authority to hijack or observe the browser (new-tab /
+  # search override, broad host access, programmatic injection, content-script
+  # into all sites, or request interception). Without any of those, opening a
+  # promo/feedback tab on install/uninstall — even to a .click domain — is the
+  # ordinary onboarding of a sandboxed, zero-permission casual-game extension,
+  # not a redirect abuse. The `any:` discriminator keeps real new-tab/search
+  # hijackers (which carry that authority) while clearing benign game promos.
+  - id: abused-domain-lifecycle-redirect
+    desc: Hijack-authority extension opens abused-TLD lifecycle URL
+    crit: hostile
+    conf: 0.97
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: objectives/command-and-control/infrastructure/domain/abused-tlds::tld-click
+    any:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: metadata/permission/manifest::chrome-search-provider-override
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: metadata/permission/manifest::permission-all-urls
+      - id: metadata/permission/manifest::permission-scripting
+      - id: metadata/permission/host::content-script-all-sites
+      - id: metadata/permission/network::web-request
+      - id: metadata/permission/network::permission-declarative-net-request
+
+  # NOTE: A hostile "extension-lifecycle-navigation-abuse" rule was removed here.
+  # It shared four lifecycle legs (onInstalled + onStartup + tabs.create +
+  # setUninstallURL) with `abused-domain-lifecycle-redirect` above but replaced
+  # that rule's real discriminator (`tld-click`, an abused destination TLD) with
+  # `js-remote-host-url` — which matches ANY hardcoded backend URL. Every
+  # commercial extension that opens a welcome page and reports uninstalls to its
+  # own server tripped it. The genuinely-hostile variant (lifecycle redirect to
+  # an abused/affiliate destination) is already covered by
+  # `abused-domain-lifecycle-redirect` and `browser-extension-install-active-tab-redirect`.
+
+  - id: all-site-extension-dom-audio-overlay
+    desc: All-site extension injects audio overlay
+    crit: hostile
+    conf: 0.96
+    attack: T1491
+    ref: sha256:b5ad7ae1aa9174ae0f9e922e426bca209538fe454cdd2bfd206188096741fd3a
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: micro-behaviors/process/inject/webextension::webextension-scripting-execute
+      - id: metadata/permission/manifest::permission-scripting
+      - id: metadata/permission/active-tab::permission-active-tab
+      - id: micro-behaviors/hardware/input/audio::browser-audio-element-create
+      - id: micro-behaviors/hardware/input/audio::browser-audio-source-attribute
+      - id: micro-behaviors/ui/window/manage/dom::browser-append-child
+
+  - id: event-driven-extension-page-overlay
+    desc: Event-driven extension page overlay
+    crit: suspicious
+    conf: 0.94
+    attack: T1491
+    ref: sha256:b5ad7ae1aa9174ae0f9e922e426bca209538fe454cdd2bfd206188096741fd3a
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: micro-behaviors/process/inject/webextension::webextension-scripting-execute
+      - id: metadata/permission/manifest::permission-scripting
+      - id: metadata/permission/active-tab::permission-active-tab
+      - id: micro-behaviors/ui/window/manage/dom::browser-high-layer-iframe-container
+    any:
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-on-activated
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-on-updated

@@ -1,0 +1,88 @@
+defaults:
+  platforms: [unix, windows]
+  for: [scripts, binaries]
+  attack: T1552.005
+traits:
+  - id: kubernetes-secret-api
+    desc: Kubernetes Secret API access
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: '/api/v1/namespaces/[^"'']{1,120}/secrets\b'
+  - id: kubernetes-configmap-api
+    desc: Kubernetes ConfigMap API access
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '/api/v1/namespaces/[^"'']{1,120}/configmaps\b'
+  - id: container-secrets-read-command
+    desc: Container secrets read command
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: 'cat\s+/[^;\n]{0,80}(host/)?run/secrets'
+    unless:
+      - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubectl-command-context
+    downgrade:
+      any:
+        - id: micro-behaviors/os/container/runtime/
+        - id: well-known/tool/sysadmin/kubernetes/iac/
+        - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubectl-command-context
+composite_rules:
+  - id: kubernetes-secret-configmap-api
+    desc: Kubernetes Secret and ConfigMap API access
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: kubernetes-secret-api
+      - id: kubernetes-configmap-api
+    needs: 2
+    unless:
+      - id: metadata/library/runtime::legitimate-kubernetes-incluster-client-marker
+      - id: well-known/tool/sysadmin/kubernetes/iac/
+  - id: kubernetes-serviceaccount-secret-dump
+    desc: Kubernetes serviceaccount secret dump
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: micro-behaviors/os/container/runtime::serviceaccount-files
+      - id: kubernetes-secret-configmap-api
+    any:
+      - id: micro-behaviors/os/container/runtime::bearer-authz
+      - id: micro-behaviors/os/container/runtime::api-secrets-path
+    unless:
+      - id: objectives/credential-access/cloud/container/
+  - id: container-runtime-secret-harvest
+    desc: Container runtime secret harvest
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/fs/path/sensitive/credentials::container-run-secrets
+    any:
+      - id: container-secrets-read-command
+      - id: micro-behaviors/os/container/runtime::docker-host-escape-spec
+    unless:
+      - id: metadata/binary/metrics/size::massive-executable
+      - id: well-known/tool/sysadmin/container/
+      - id: well-known/tool/sysadmin/kubernetes/iac/
+      - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubectl-command-context
+      - id: objectives/credential-access/cloud/container/
+  - id: cloud-container-credential-sweep
+    desc: Cloud container credential sweep
+    crit: hostile
+    conf: 0.98
+    needs: 2
+    any:
+      - id: kubernetes-serviceaccount-secret-dump
+      - id: container-runtime-secret-harvest
+      - id: metadata/file/string/cloud::aws-iam-credentials-metadata-path
+      - id: metadata/file/string/cloud::gcp-service-account-token-path
+    unless:
+      - id: objectives/discovery/cloud/metadata/
+      - id: well-known/lib/deb-package::gdal-shared-library
+      - id: metadata/binary/metrics/size::massive-executable
+      - id: well-known/tool/sysadmin/container/
+      - id: metadata/library/runtime::legitimate-kubernetes-incluster-client-marker

@@ -1,0 +1,716 @@
+defaults:
+  platforms: [linux]
+  for: [elf, c, shell]
+traits:
+- id: dlsym-rtld-next-pattern
+  desc: dlsym(RTLD_NEXT) hook resolution
+  crit: component
+  conf: 0.8
+  for: [elf, c]
+  if:
+    type: text
+    regex: ^dlsym\s*\(\s*RTLD_NEXT\b
+- id: skullseclabs-string
+  desc: skullseclabs author string
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  if:
+    type: text
+    substr: skullseclabs
+- id: hooked-string
+  desc: Hooked function indicator
+  # The bare word "Hooked" is generic vocabulary (PHP property hooks, diagnostics,
+  # UI strings); not standalone-suspicious. Building block for the symbiote/
+  # LD_PRELOAD hook composites, which add static-string + preload context.
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: text
+    substr: Hooked
+  unless:
+  # PHP 8.4 property hooks emit user-facing diagnostics such as
+  # "Hooked properties cannot be readonly" / "...cannot be static" in the
+  # interpreter binary; that is language vocabulary, not a rootkit marking
+  # a hooked libc function. Real Symbiote-style hook markers ("Hooked: open")
+  # still match and still escalate via the symbiote composite.
+  - type: text
+    regex: Hooked propert(y|ies)
+- id: static-string
+  desc: Static hook indicator
+  crit: component
+  conf: 0.5
+  for:
+  - elf
+  unless:
+  - id: well-known/tool/development/gnat
+  - id: metadata/file/extension/identity::linux-firmware-blob-basename
+  - id: metadata/file/extension/identity::linux-firmware-embedded-elf-path
+  - id: well-known/tool/sysadmin/alpine-packages/
+  - id: well-known/tool/sysadmin/scli/
+  - id: well-known/tool/development/swiftlint::swiftlint-release-binary
+  if:
+    type: text
+    regex: Static:\s+\w+
+- id: proc-pid-pattern
+  desc: /proc/[pid] path pattern
+  crit: notable
+  conf: 0.4
+  for:
+  - elf
+  - c
+  unless:
+  - id: metadata/lang/source::linux-kernel-secondary-tree-path
+  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+  - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: metadata/package/files/dependency::os-image-root-file-path
+  if:
+    type: text
+    regex: /proc/[0-9]+/(stat|status|cmdline|maps)
+- id: hidden-proc-string
+  desc: hidden_proc rootkit hide marker
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - c
+  if:
+    type: text
+    word: hidden_proc
+  unless:
+  - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+  - id: metadata/lang/source/
+  - id: metadata/lang/source/
+- id: backup-ld-string
+  desc: backup_ld linker-backup marker
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  if:
+    type: text
+    word: backup_ld
+  unless:
+  - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+- id: orig-ld-string
+  desc: orig_ld linker-backup marker
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  if:
+    type: text
+    word: orig_ld
+- id: real-ld-string
+  desc: real_ld linker-backup marker
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  if:
+    type: text
+    word: real_ld
+- id: ld-so-bak-pattern
+  desc: ld.so backup file pattern
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  if:
+    type: text
+    regex: ld[\-_\.]so[.\-_]?bak
+    case_insensitive: true
+- id: backup-ld-so-file
+  desc: .backup_ld.so linker-backup file
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  if:
+    type: text
+    substr: .backup_ld.so
+  unless:
+  - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+- id: ld-so-preload-file
+  desc: References ld.so.preload file
+  crit: notable
+  conf: 0.9
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - elf
+  - shell
+  - c
+  - cpp
+  - rust
+  - go
+  if:
+    type: text
+    regex: (^|/etc/)ld\.so\.preload\b
+  unless:
+  - type: basename
+    regex: ^libjvm\.so$
+  - type: text
+    substr: print_ld_preload_file
+  - id: objectives/evasion/hijack-execution-flow/linker/
+    # libc itself implements the LD_PRELOAD mechanism and references
+    # /etc/ld.so.preload by string; that is the loading code, not an
+    # attacker writing to the file. Real malicious writes still escalate
+    # via composites that pair this trait with chattr/chmod/write ops.
+  - id: micro-behaviors/dylib/library/family/
+  - id: well-known/lib/glibc
+  - type: text
+    regex: UnveilIfExists
+- id: ld-so-preload-chattr
+  desc: Removes file attributes from ld.so.preload
+  crit: suspicious
+  conf: 0.9
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - shell
+  if:
+    type: string_literal
+    regex: chattr\s+[-+][ia]+\s+/etc/ld\.so\.preload
+- id: original-prefix-a
+  desc: original_ prefix core hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: text
+    regex: original_(open|read|write|execve)
+  unless:
+  - id: metadata/lang/compiler/generated/
+- id: original-prefix-b
+  desc: original_ prefix network hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: text
+    regex: \boriginal_(connect|socket|unlink)\b
+  unless:
+  - id: metadata/lang/compiler/generated/
+- id: real-prefix-a
+  desc: real_ prefix core hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: text
+    regex: real_(open|read|write|execve)
+  unless:
+  - id: metadata/lang/compiler/generated/
+- id: real-prefix-b
+  desc: real_ prefix network hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: text
+    regex: \breal_(connect|socket|unlink)\b
+  unless:
+  - id: metadata/lang/compiler/generated/
+- id: old-prefix-a
+  desc: old_ prefix core hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  - c
+  if:
+    type: text
+    regex: \bold_(open|read|write|execve)\b
+  unless:
+  - type: trait
+    id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+- id: old-prefix-b
+  desc: old_ prefix filesystem hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  - c
+  if:
+    type: text
+    regex: \bold_(readdir|unlink|mkdir|rmdir)\b
+  unless:
+  - id: micro-behaviors/os/syscall/invoke/
+- id: old-prefix-c
+  desc: old_ prefix xattr hook set
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  - c
+  if:
+    type: text
+    regex: \bold_(listxattr|getxattr|setxattr)\b
+- id: ld-preload-rootkit-installer-hostile
+  desc: Hostile LD_PRELOAD rootkit installer
+  crit: suspicious
+  conf: 0.98
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - shell
+  if:
+    type: text
+    regex: 'echo.{0,50}>\s*/etc/ld\.so\.preload'
+  unless:
+  - id: metadata/package/versioning/
+- id: ld-so-preload-clear
+  desc: Clears /etc/ld.so.preload content
+  crit: suspicious
+  conf: 0.9
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - shell
+  if:
+    type: string_literal
+    regex: (cat\s+/dev/null\s*>|echo\s*>|truncate\s+.{0,50}|>)\s*/etc/ld\.so\.preload
+- id: runtime-shared-object-compile--rx-1
+  desc: shared-object build command
+  crit: component
+  conf: 0.94
+  for: [c, cpp, rust, go, elf, shell]
+  if:
+    type: text
+    regex: '(?i)\b(gcc|clang|cc)\b[^\n]{0,120}(-shared|\.so\b)'
+  count_max: 1031162
+- id: runtime-shared-object-compile--rx-2
+  desc: fPIC shared-object compile flag
+  crit: component
+  conf: 0.94
+  for: [c, cpp, rust, go, elf, shell]
+  if:
+    type: text
+    substr: fPIC
+  count_max: 1031163
+- id: preload-rootkit-hook-set--rx-3
+  desc: readdir64 hook source reference
+  crit: component
+  conf: 0.92
+  for: [c, cpp]
+  if:
+    type: text
+    substr: readdir64
+  unless:
+  - id: well-known/app/drivers/
+  - id: well-known/lib/ggml
+  - id: well-known/lib/hpc
+  - type: text
+    substr: /proc/self/status
+  - type: text
+    substr: /proc/sys/kernel/pid_max
+  - type: text
+    substr: fopen(%s)
+  count_max: 1031164
+- id: hpc-afflib-source-marker
+  desc: HPC or AFFLIB source path marker
+  crit: notable
+  conf: 0.95
+  for: [c, cpp, elf]
+  if:
+    type: path
+    regex: 'mpich-|ucx|libfabric|AFFLIBv3-'
+- id: preload-rootkit-hook-set--rx-5
+  desc: libc access hook definition
+  crit: component
+  conf: 0.92
+  for: [c, cpp]
+  if:
+    type: text
+    regex: '(^|\n)\s*(int|static\s+int)\s+access\s*\('
+  unless:
+  - id: well-known/lib/pspsdk::psp-sdk-source
+  count_max: 1031166
+- id: preload-rootkit-hook-set--rx-6
+  desc: lxstat hook source reference
+  crit: component
+  conf: 0.92
+  for: [c, cpp]
+  if:
+    type: text
+    substr: lxstat
+  unless:
+  - id: well-known/app/drivers/
+  - id: well-known/lib/ggml
+  - type: trait
+    id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  count_max: 1031167
+- id: preload-rootkit-hook-set--rx-9
+  desc: libc lstat hook definition
+  crit: component
+  conf: 0.92
+  for: [c, cpp]
+  if:
+    type: text
+    regex: '(^|\n)\s*(int|static\s+int)\s+(__x)?lstat(64)?\s*\('
+  unless:
+  - id: well-known/lib/pspsdk::psp-sdk-source
+  count_max: 1031170
+- id: preload-rootkit-hook-set--rx-10
+  desc: rootkit hide-user constant
+  crit: component
+  conf: 0.92
+  for: [c, cpp, elf]
+  if:
+    type: text
+    regex: '\b(HIDEUID|hide_uid|hidden_uid|magic_uid)\b.{0,80}\b2000\b'
+  count_max: 1031171
+- id: rtld-next-readdir-lookup
+  desc: RTLD_NEXT readdir hook lookup
+  crit: notable
+  conf: 0.9
+  platforms: [unix]
+  for: [c, cpp]
+  if:
+    type: text
+    regex: '\bdlsym\s*\(\s*RTLD_NEXT[\s\S]{0,80}readdir'
+- id: timestomp-against-system-library--rx-11
+  desc: Timestomps libc.so via utime
+  crit: component
+  conf: 0.9
+  for: [c, cpp, rust, go, elf]
+  if:
+    type: text
+    regex: '(utimensat|utime)[\s\S]{0,600}/(usr/)?lib/(.{0,80}/)?libc\.so(\.\d+)?'
+  count_max: 1031172
+- id: timestomp-against-system-library--rx-12
+  desc: Timestomps libc.so via futimens
+  crit: component
+  conf: 0.9
+  for: [c, cpp, rust, go, elf]
+  if:
+    type: text
+    regex: '(utimes|futimens)[\s\S]{0,600}/(usr/)?lib/(.{0,80}/)?libc\.so(\.\d+)?'
+  count_max: 1031173
+- id: timestomp-against-system-library--rx-13
+  desc: Timestomps libc.so via utime (rev)
+  crit: component
+  conf: 0.9
+  for: [c, cpp, rust, go, elf]
+  if:
+    type: text
+    regex: '/(usr/)?lib/(.{0,80}/)?libc\.so(\.\d+)?[\s\S]{0,600}(utimensat|utime)'
+  count_max: 1031174
+- id: timestomp-against-system-library--rx-14
+  desc: Timestomps libc.so via futimens (rev)
+  crit: component
+  conf: 0.9
+  for: [c, cpp, rust, go, elf]
+  if:
+    type: text
+    regex: '/(usr/)?lib/(.{0,80}/)?libc\.so(\.\d+)?[\s\S]{0,600}(utimes|futimens)'
+  count_max: 1031175
+- id: go-ignored-test-wrapper-source
+  desc: Go-ignored C test wrapper source
+  crit: notable
+  conf: 0.95
+  for: [c, cpp]
+  if:
+    type: text
+    substr: '//go:build ignore'
+
+composite_rules:
+- id: preload-rootkit-benign-source-context
+  desc: Known benign source context for preload hook heuristics
+  crit: exception
+  conf: 0.98
+  any:
+  - id: go-ignored-test-wrapper-source
+  - id: well-known/lib/wine::wine-source-tree
+  - id: well-known/app/drivers/
+  - id: well-known/lib/
+  - id: well-known/app/linuxulator-steam-utils/
+  - id: hpc-afflib-source-marker
+  - id: well-known/tool/sysadmin/unix-benign/
+  - id: well-known/tool/reverse-engineering/frida/
+  - id: well-known/lib/uid-wrapper::uid-wrapper-source
+  - id: metadata/package/testing/compiled::c-test-framework-marker
+# NOTE: the former `ld-preload-comp` (any: LD_PRELOAD or LD_LIBRARY_PATH ->
+# suspicious) was removed. LD_LIBRARY_PATH is the neutral library search path
+# (micro-behaviors/os/linker/env::ld-library-path, baseline) that every program
+# loading libs from non-standard locations references (e.g. cx_Oracle locating
+# the Oracle client), and a bare LD_PRELOAD reference is already the notable
+# micro-behaviors/os/linker/env::ld-preload (T1574.006). Search-path *hijacking*
+# is objectives/evasion/hijack-execution-flow/linker; the real rootkit detection
+# lives in the hook-infrastructure / rkld composites below.
+- id: hook-infrastructure
+  desc: Hooking infrastructure (dlsym + RTLD_NEXT)
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: dlsym-rtld-next-pattern
+  all:
+  - id: micro-behaviors/dylib/lookup::dlsym-symbol
+  - id: micro-behaviors/dylib/lookup::rtld-next
+- id: hook-infrastructure-source
+  desc: Hooking infrastructure in source code
+  crit: suspicious
+  conf: 0.9
+  for:
+  - c
+  - cpp
+  all:
+  - id: micro-behaviors/dylib/lookup::dlsym-symbol
+  - id: micro-behaviors/dylib/lookup::rtld-next-source
+  any:
+  - id: original-prefix-a
+  - id: original-prefix-b
+  - id: real-prefix-a
+  - id: real-prefix-b
+  - id: old-prefix-a
+  - id: old-prefix-b
+  - id: old-prefix-c
+- id: dlsym-rtld-next
+  desc: Uses dlsym with RTLD_NEXT (function
+  crit: suspicious
+  conf: 0.9
+  mbc: F0015
+  attack: T1574.006
+  any:
+  - id: dlsym-rtld-next-pattern
+  - id: hook-infrastructure
+  - id: hook-infrastructure-source
+- id: hook-indicator
+  desc: Hook implementation indicator
+  crit: suspicious
+  conf: 0.7
+  needs: 2
+  any:
+  - id: micro-behaviors/dylib/lookup::dlsym-symbol
+  - id: micro-behaviors/dylib/lookup::rtld-next
+  - id: micro-behaviors/os/linker/env::ld-preload
+  - id: dlsym-rtld-next-pattern
+  unless:
+  - id: micro-behaviors/dylib/library/family/
+  - id: metadata/binary/linking/static/
+  - id: metadata/binary/provenance/
+  - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+  - id: objectives/evasion/hijack-execution-flow/linker/
+  - id: well-known/tool/development/qemu
+  # glibc's own static-pie runtime utilities (ldconfig, sln, ...) reference
+  # the LD_PRELOAD env name and the diagnostic "RTLD_NEXT used in code not
+  # dynamically loaded" string but implement no hooks. They carry glibc's
+  # internal rtld tunable namespace, which no third-party LD_PRELOAD rootkit
+  # .so embeds. Real rootkits resolve dlsym(RTLD_NEXT,...) and still match.
+  - id: metadata/binary/linking/runtime::glibc-runtime-markers
+- id: hook-prefixes
+  desc: Function hook prefixes (original_/real_)
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  all:
+  - id: original-prefix
+  - id: real-prefix
+- id: original-prefix
+  desc: original_ function prefix (hook backup)
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  unless:
+  - id: micro-behaviors/dylib/load/
+  - id: micro-behaviors/dylib/library/
+  - id: metadata/lang/compiler/
+  any:
+  - id: original-prefix-a
+  - id: original-prefix-b
+- id: real-prefix
+  desc: real_ hook-backup prefix
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  unless:
+  - id: micro-behaviors/dylib/load/
+  - id: micro-behaviors/dylib/library/
+  - id: metadata/lang/compiler/
+  any:
+  - id: real-prefix-a
+  - id: real-prefix-b
+- id: old-prefix
+  desc: repeated old_ hook-backup prefix
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  - c
+  needs: 2
+  any:
+  - id: old-prefix-a
+  - id: old-prefix-b
+  - id: old-prefix-c
+  unless:
+  - id: well-known/tool/reverse-engineering/radare2/
+- id: symbiote
+  desc: Symbiote rootkit indicators
+  crit: suspicious
+  conf: 0.95
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - elf
+  any:
+  - id: skullseclabs-string
+  - id: objectives/exfiltration/dns/tunnel::dnscat-name
+  - id: hook-prefixes
+  all:
+  - id: hooked-string
+  - id: static-string
+- id: proc-paths
+  desc: Multiple /proc path references
+  crit: component
+  conf: 0.4
+  for:
+  - elf
+  - c
+  needs: 2
+  any:
+  - id: micro-behaviors/fs/proc/info/path::process-self-exe
+  - id: proc-pid-pattern
+  - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
+- id: proc-hiding
+  desc: Patterns for hiding processes via LD_PRELOAD
+  crit: suspicious
+  conf: 0.9
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - elf
+  - c
+  any:
+  - id: objectives/evasion/kernel-hide/userspace::hide-pid
+  - id: hidden-proc-string
+  unless:
+  - id: objectives/discovery/network/scan/proc/
+- id: ld-backup-pattern
+  desc: Dynamic linker backup/restore pattern
+  crit: suspicious
+  conf: 0.9
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - elf
+  any:
+  - id: backup-ld-string
+  - id: orig-ld-string
+  - id: real-ld-string
+  - id: ld-so-bak-pattern
+  - id: backup-ld-so-file
+  unless:
+  - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+- id: ld-preload-rootkit
+  desc: LD_PRELOAD userspace rootkit (Symbiote-style)
+  crit: suspicious
+  conf: 0.95
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - elf
+  - c
+  all:
+  - id: dlsym-rtld-next
+  any:
+  - id: proc-hiding
+  - id: symbiote
+  - id: hook-prefixes
+  - id: old-prefix
+- id: ld-preload-rootkit-installer
+  desc: LD_PRELOAD rootkit installer (modifies /etc/ld.so.preload)
+  crit: hostile
+  conf: 0.95
+  mbc: F0015
+  attack: T1574.006
+  for:
+  - elf
+  - shell
+  all:
+  - id: ld-so-preload-file
+  any:
+  - id: ld-backup-pattern
+  - id: micro-behaviors/dylib/library/libc::libc-internal-functions-a
+  - id: dlsym-rtld-next
+  - id: ld-preload-rootkit-installer-hostile
+  - id: ld-so-preload-chattr
+  unless:
+  - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+- id: compile-on-host-preload-rootkit
+  desc: Compiles and installs LD_PRELOAD rootkit
+  crit: hostile
+  conf: 0.98
+  mbc: F0015
+  attack: T1574.006
+  for: [c, cpp, rust, go, elf, shell]
+  all:
+  - id: ld-so-preload-file
+  - id: runtime-shared-object-compile
+  any:
+  - id: preload-rootkit-hook-set
+  - id: dlsym-rtld-next
+  - id: timestomp-against-system-library
+- id: runtime-shared-object-compile
+  desc: fPIC shared-object compilation flags
+  crit: component
+  conf: 0.94
+  attack: T1574.006
+  for: [c, cpp, rust, go, elf, shell]
+  all:
+  - id: runtime-shared-object-compile--rx-1
+  - id: runtime-shared-object-compile--rx-2
+  near_bytes: 4096
+  unless:
+  - id: metadata/package/testing/presence/harness::freebsd-atf-shell
+  - id: metadata/package/testing/
+- id: preload-rootkit-hook-set
+  desc: RTLD_NEXT filesystem hook source
+  crit: suspicious
+  conf: 0.92
+  attack: T1574.006
+  for: [c, cpp, elf]
+  all:
+  - id: micro-behaviors/dylib/lookup::rtld-next-source
+  any:
+  - id: preload-rootkit-hook-set--rx-3
+  - id: preload-rootkit-hook-set--rx-5
+  - id: preload-rootkit-hook-set--rx-6
+  - id: preload-rootkit-hook-set--rx-9
+  - id: preload-rootkit-hook-set--rx-10
+  unless:
+  - id: preload-rootkit-benign-source-context
+  - id: well-known/lib/modernc-libc::source-tree
+- id: timestomp-against-system-library
+  desc: Copies timestamps from system library
+  crit: suspicious
+  conf: 0.9
+  attack: T1070.006
+  for: [c, cpp, rust, go, elf]
+  any:
+  - id: timestomp-against-system-library--rx-11
+  - id: timestomp-against-system-library--rx-12
+  - id: timestomp-against-system-library--rx-13
+  - id: timestomp-against-system-library--rx-14
+- id: unix-readdir-file-hiding-hook
+  desc: Unix readdir file-hiding hook
+  crit: hostile
+  conf: 0.97
+  platforms: [unix]
+  for: [c, cpp]
+  all:
+  - id: rtld-next-readdir-lookup
+  - id: micro-behaviors/fs/directory/readdir::readdir-source-definition
+  - id: micro-behaviors/fs/directory/readdir::readdir-dname-strcmp

@@ -1,0 +1,697 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+traits:
+  - id: gzipfile-symbol
+    desc: References Python GzipFile
+    crit: component
+    conf: 0.96
+    attack: T1195.002
+    for: [python]
+    if:
+      type: symbol
+      exact: GzipFile
+  - id: setup-pyc-filename-builder
+    desc: setup.py builds Python bytecode filename
+    crit: component
+    conf: 0.94
+    attack: T1195.002
+    for: [python]
+    unless:
+      - id: well-known/tool/detection/proxy-sandbox
+    if:
+      type: text
+      regex: '\.pyc|bytes\.fromhex\s*\(\s*["'']707963["'']\s*\)'
+  - id: obfuscated-httpx-socks-import
+    desc: Obfuscated httpx_socks import
+    crit: suspicious
+    conf: 0.95
+    attack: T1027
+    for: [python]
+    if:
+      type: text
+      regex: "__import__\\s*\\(\\s*['\"]httpx['\"]\\s*\\+\\s*['\"]_socks['\"]"
+  - id: reversed-subprocess-import
+    desc: Reversed subprocess dynamic import
+    crit: suspicious
+    conf: 0.96
+    attack: T1027
+    for: [python]
+    if:
+      type: text
+      regex: "__import__\\s*\\(\\s*['\"]ssecorpbus['\"]\\s*\\[::?-1\\]"
+  - id: obfuscated-shell-bool-spawn
+    desc: Obfuscated subprocess shell spawn
+    crit: suspicious
+    conf: 0.92
+    attack: T1059.006
+    for: [python]
+    if:
+      type: text
+      # Only the obfuscated literal form — bool(1)/bool("1")/bool(0) used to
+      # disguise shell=True. The benign coercion shell=bool(kwargs.get("shell",
+      # False)) / bool(self.use_shell) wraps a runtime value, not a constant,
+      # and is excluded.
+      regex: '\bshell\s*=\s*bool\s*\(\s*["'']?\d'
+  - id: python-base64-zlib-exec-loader
+    desc: Python executes base64-decoded zlib payload
+    crit: suspicious
+    conf: 0.96
+    attack: T1027
+    for: [python]
+    if:
+      type: text
+      regex: 'exec\s*\(\s*zlib\.decompress\s*\(\s*base64\.b64decode\s*\('
+  - id: node-dbconnectify-reference
+    desc: Node references dbconnectify module
+    crit: notable
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: text
+      regex: '\brequire\s*\(\s*["'']dbconnectify["'']\s*\)'
+  - id: node-db-connectivity-probe
+    desc: Node invokes database connectivity probe
+    crit: notable
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: text
+      regex: '\b[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*queryDBConnect\s*\(\s*\)'
+composite_rules:
+  - id: setup-gzip-pyc-loader
+    desc: setup.py extracts Python bytecode from gzip
+    crit: suspicious
+    conf: 0.96
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/build/pip::setup-py
+      - id: gzipfile-symbol
+      - id: setup-pyc-filename-builder
+  - id: setup-importlib-exec-module
+    desc: setup.py executes module through importlib spec
+    crit: suspicious
+    conf: 0.95
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/build/pip::root-setup-py
+      - id: micro-behaviors/os/api-resolution/dynamic::python-importlib-spec-exec-module
+    unless:
+      - id: well-known/tool/detection/proxy-sandbox
+  - id: python-zipapp-native-stage-loader
+    desc: Python ZIP app extracts native stage
+    crit: suspicious
+    conf: 0.94
+    attack: T1027.009
+    for: [python]
+    all:
+      - id: micro-behaviors/data/archive/extract/zip::python-zipfile-extractall
+      - id: micro-behaviors/fs/temp/mktemp::tempfile-mkdtemp
+      - id: micro-behaviors/fs/chmod/executable/mode::python-executable
+      - id: micro-behaviors/process/create/system::python-aliased-os-system
+    any:
+      - id: micro-behaviors/fs/directory/delete::shutil-rmtree
+      - id: micro-behaviors/fs/file/delete::py-rmtree
+  - id: python-base64-zip-write-exec-loader
+    desc: Python decodes ZIP payload then executes it
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: micro-behaviors/data/embedded/payload/archive::python-base64-zip-literal
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: micro-behaviors/fs/file/write/direct::py-open-write-mode
+      - id: micro-behaviors/process/create/system::python-aliased-os-system
+  - id: pypi-base64-zip-write-exec-loader
+    desc: PyPI package decodes an embedded payload then executes it
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [whl, python-sdist]
+    scope: archive
+    all:
+      - id: metadata/package/quality/ecosystem::pkginfo-core-metadata
+    # The blob-dropper variant is text-reliable: a package whose module is one
+    # huge base64 payload defeats literal/symbol extraction, so the strict
+    # zip-literal loader above misses it while the generalized dropper catches it.
+    any:
+      - id: python-base64-zip-write-exec-loader
+      - id: objectives/command-and-control/dropper/python-script::python-embedded-b64-blob-write-exec-dropper
+  - id: python-extracted-native-stage-exec
+    desc: Python extracts chmods and executes native stage
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: python-zipapp-native-stage-loader
+      - id: micro-behaviors/process/create/system::python-aliased-os-system
+      - id: micro-behaviors/fs/chmod/executable/mode::python-executable
+  - id: init-py-subprocess-touch
+    desc: __init__.py launches touch via subprocess
+    crit: suspicious
+    conf: 0.97
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: micro-behaviors/process/create/subprocess::call-touch-argv
+    unless:
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+  - id: import-side-effect-file-create
+    desc: Package import triggers file creation command
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: micro-behaviors/process/create/subprocess::call-touch-argv
+      - id: micro-behaviors/process/create/subprocess::call
+  - id: python-package-inline-reverse-shell
+    desc: Python package contains inline reverse shell
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python, pkginfo, zip, archives]
+    scope: archive
+    all:
+      - id: metadata/build/pip::setup-py
+      - id: objectives/command-and-control/reverse-shell/dup::inline-python-reverse-shell
+  - id: npm-cli-reverse-shell
+    desc: NPM CLI entrypoint contains reverse shell
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: metadata/package/files/count::npm-single-bin
+    any:
+      - id: objectives/command-and-control/reverse-shell/dup::reverse-shell-dev-tcp
+      - id: objectives/command-and-control/reverse-shell/dev-tcp::dev-tcp-revshell
+      - id: objectives/command-and-control/reverse-shell/dev-tcp::dev-tcp-bash-interactive-shell
+      - id: objectives/command-and-control/reverse-shell/dup::socket-plus-interactive-shell
+      - id: objectives/command-and-control/reverse-shell/dup::socket-plus-shell-exec
+  - id: npm-inline-python-reverse-shell
+    desc: NPM package embeds inline Python reverse shell
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1059.006
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/command-and-control/reverse-shell/dup::node-exec-inline-python-reverse-shell
+    any:
+      - id: micro-behaviors/process/create/shell/bridge::child-process-require
+      - id: metadata/import/builtin::require-child-process
+      - id: micro-behaviors/process/create/shell/bridge::child-process-destructure-require
+  - id: npm-jsonkeeper-remote-module-compile
+    desc: npm package compiles hidden remote payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1102.001,T1059.007
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/command-and-control/dropper/delivery/fetch-eval::jsonkeeper-node-module-compile-loader
+      - id: objectives/supply-chain/trojanized/package::npm-deaddrop-url-present
+  - id: npm-worker-message-eval-stage
+    desc: npm package worker executes message payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1059.007
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/anti-static/obfuscation/eval/require::worker-message-payload-module-smuggling
+    any:
+      - id: micro-behaviors/process/create/workers::new-worker-require-resolve
+      - id: micro-behaviors/process/create/workers::new-worker-instance
+  - id: npm-hollow-hosted-reverse-shell
+    desc: Hollow npm package contains hosted reverse shell
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/command-and-control/dropper/delivery/pipe::node-hosted-reverse-shell-pipe
+  - id: npm-hollow-obfuscated-ip-stage
+    desc: Hollow npm package ships obfuscated IP stage
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::full-obfuscator-io-toolkit
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
+  - id: npm-obfuscated-hidden-background-exec
+    desc: npm package hides background execution in obfuscated code
+    crit: hostile
+    conf: 0.97
+    attack: "T1195.002,T1059,T1027"
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::full-obfuscator-io-toolkit
+    any:
+      - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-true
+      - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-expression
+      - id: micro-behaviors/process/create/shell/bridge::js-spawnsync
+      - id: objectives/execution/interpreter/eval/dynamic::eval-as-last-arg
+    needs: 2
+    unless:
+      - id: metadata/package/testing/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: npm-decoded-hidden-background-installer
+    desc: npm package decodes a command before hidden spawn
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1027,T1059.007
+    for: [javascript, package.json, archives]
+    scope: leaf
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/data/decode/base64::atob-decode
+      - id: micro-behaviors/process/create/shell/bridge::child-process-destructure-require
+      - id: micro-behaviors/process/create/spawn::stdio-ignore
+      - id: micro-behaviors/process/create/spawn::windowshide-option
+    unless:
+      - id: metadata/package/testing/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: npm-hollow-host-profile-http-exfil
+    desc: Hollow npm package beacons host profile over HTTP
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1041"
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/exfiltration/stealer/host-profile/http::js-http-get-host-profile-exfil
+  - id: npm-hollow-local-route-oob-exfil
+    desc: Hollow npm package posts local route content to OOB
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1041"
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/exfiltration/oob/endpoint::js-local-route-oob-post
+  - id: npm-hollow-shell-file-exfil
+    desc: Hollow npm package shell-exfils local file content
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1041"
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/exfiltration/stealer/file::js-shell-curl-file-exfil
+  - id: npm-postinstall-daemon-socketio-rce
+    desc: npm postinstall starts socket.io command daemon
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1053,T1059.007"
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/install-hook/scripts/lifecycle::postinstall-supervisor-start-local-js
+      - id: objectives/command-and-control/remote-command/socketio-control::node-socketio-remote-command-execution
+  - id: npm-postinstall-obfuscated-js-daemon
+    desc: npm postinstall starts obfuscated JavaScript daemon
+    crit: hostile
+    conf: 0.97
+    attack: "T1195.002,T1053,T1027"
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/install-hook/scripts/lifecycle::postinstall-supervisor-start-local-js
+      - id: objectives/anti-static/obfuscation/encoding/content::encoded-node-require
+      - id: objectives/anti-static/obfuscation/encoding/hex::hex-control-flow-obfuscation
+  - id: npm-detached-database-connectivity-child
+    desc: Detached silent npm database probe
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1059.007,T1053
+    for: [javascript, package.json, archives]
+    scope: archive
+    all:
+      - id: node-dbconnectify-reference
+      - id: node-db-connectivity-probe
+      - id: micro-behaviors/process/create/shell/bridge::child-process-destructure-require
+      - id: micro-behaviors/process/create/spawn::process-execpath-spawn
+      - id: micro-behaviors/process/create/spawn::node-self-eval-argument
+      - id: micro-behaviors/process/create/spawn::detached-true
+      - id: micro-behaviors/process/create/spawn::stdio-ignore
+  - id: import-time-discord-dropper-bot
+    desc: Import-time Discord dropper bot
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: objectives/command-and-control/channel/discord::discord-python-bot-c2
+      - id: objectives/command-and-control/dropper/execution/script::python-download-appdata-startfile
+  - id: import-time-encrypted-python-payload
+    desc: Import-time encrypted Python payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: micro-behaviors/crypto/symmetric/stream::python-rc4-like-stream-cipher
+      - id: micro-behaviors/crypto/hash/digest::sha3-256-python
+      - id: micro-behaviors/fs/file/write/direct::py-write-call
+    any:
+      - id: micro-behaviors/data/source/language::python-import-from-statement
+      - id: micro-behaviors/data/source/language::python-py-extension-literal
+  - id: time-gated-encrypted-python-payload
+    desc: Time-gated encrypted Python payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: micro-behaviors/crypto/symmetric/stream::python-rc4-like-stream-cipher
+      - id: micro-behaviors/crypto/hash/digest::sha3-256-python
+      - id: micro-behaviors/fs/file/write/direct::py-write-call
+    any:
+      - id: micro-behaviors/data/source/language::python-datetime-threshold
+      - id: micro-behaviors/data/source/language::python-timezone-utc
+    needs: 1
+  - id: python-packaged-data-executable-loader
+    desc: Python package decrypts resource then writes and launches it
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: micro-behaviors/fs/read/resource::pkgutil-get-data
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: objectives/anti-static/obfuscation/eval/scripting::python-chr-ord-shift
+      - id: micro-behaviors/fs/file/write/direct::py-write-call
+      - id: micro-behaviors/process/create/subprocess::popen-content
+    any:
+      - id: micro-behaviors/fs/chmod/modify::python-os-chmod
+      - id: micro-behaviors/fs/chmod/executable/mode::python-executable
+      - id: micro-behaviors/process/create/subprocess::python-subprocess-devnull
+  - id: setup-gzip-pyc-exec-module
+    desc: setup.py extracts and executes gzip-compressed bytecode
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+      - id: setup-gzip-pyc-loader
+      - id: setup-pyc-filename-builder
+      - id: setup-importlib-exec-module
+  - id: pypi-setup-gzip-pyc-loader
+    desc: PyPI sdist executes gzip-compressed bytecode during setup
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python, pkginfo, archives, zip]
+    all:
+      - id: setup-gzip-pyc-exec-module
+      - id: metadata/build/pip::setup-py
+    scope: archive
+  - id: obfuscated-proxy-download-exec
+    desc: Obfuscated proxy download-execute payload
+    crit: hostile
+    conf: 0.98
+    attack: T1204.002
+    for: [python]
+    all:
+      - id: obfuscated-httpx-socks-import
+      - id: reversed-subprocess-import
+      - id: obfuscated-shell-bool-spawn
+  - id: pypi-obfuscated-proxy-download-exec
+    desc: PyPI package contains obfuscated proxy download-execute payload
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python, pkginfo, archives, zip]
+    all:
+      - id: obfuscated-proxy-download-exec
+      - id: metadata/build/pip::setup-py
+    scope: archive
+  - id: import-deferred-packaged-executable-loader
+    desc: Import-time deferred packaged executable loader
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: micro-behaviors/process/exit/handler::atexit-register
+      - id: python-packaged-data-executable-loader
+  - id: setup-tempfile-remote-exec-launch
+    desc: Setup hook writes remote-exec stager then launches it
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+      - id: objectives/command-and-control/dropper/execution/eval::exec-urlopen-read
+      - id: micro-behaviors/fs/file/write/direct::py-write-call
+      - id: objectives/anti-static/obfuscation/eval/scripting::pythonw-exe-replace-trick
+  - id: setup-base64-pe-tempfile-launch
+    desc: Setup hook decodes PE payload to temp file and launches it
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+      - id: objectives/anti-static/obfuscation/payload/encoded::base64-pe-header
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: micro-behaviors/fs/temp/reference::tempfile-ref
+      - id: micro-behaviors/fs/file/write/direct::py-write-call
+      - id: micro-behaviors/process/create/subprocess::popen-content
+  - id: python-packed-async-entrypoint
+    desc: Packed Python async entrypoint
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: objectives/anti-static/obfuscation/payload/encoded::python-packed-payload
+      - id: micro-behaviors/process/lifecycle/auto-exec::asyncio-run-main
+  - id: setup-encoded-remote-download-exec-payload
+    desc: setup.py executes encoded remote download payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+      - id: objectives/anti-static/obfuscation/payload/encoded::decoded-remote-download-execute
+      - id: objectives/anti-static/obfuscation/eval/scripting::import-builtins-exec
+  - id: pth-obfuscated-exec-dropper
+    desc: pth file contains obfuscated exec dropper
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: objectives/persistence/login/python-pth::encoded-pth-startup-loader
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::one-line-obfuscated-dropper
+  - id: decoded-fetch-write-exec-loader
+    desc: Decoded loader fetches writes executes payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: objectives/command-and-control/dropper/node-bootstrap::fetch-write-execute
+      - id: objectives/anti-static/obfuscation/eval/scripting::python-decode-decrypt-dynamic-exec
+  - id: file-read-base64-exec-loader
+    desc: File content base64 decoded then executed
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: micro-behaviors/fs/read/file::file-read-content
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+    # Keep the read, decode, and exec in one compact loader sequence. A broad
+    # file-wide join conflates unrelated REPL execution with base64 assets or
+    # embedded installer templates in legitimate runtimes.
+    near_lines: 12
+    unless:
+      - id: metadata/library/python-stdlib
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+  - id: file-read-decode-dynamic-exec-loader
+    desc: File content decoded through dynamic exec loader
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: file-read-base64-exec-loader
+      - id: objectives/anti-static/obfuscation/eval/scripting::python-decode-decrypt-dynamic-exec
+  - id: aes-ecb-file-decrypt-exec-loader
+    desc: AES ECB file decrypt exec loader
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python]
+    all:
+      - id: file-read-decode-dynamic-exec-loader
+      - id: micro-behaviors/crypto/symmetric/aes/library::cryptography-aes-symbol
+      - id: micro-behaviors/crypto/symmetric/aes/library::cryptography-ecb-mode
+  - id: encrypted-file-read-exec-loader
+    desc: Encrypted file content decoded and executed
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python, pkginfo, zip, archives]
+    all:
+      - id: objectives/command-and-control/dropper/staging/encrypted::encrypted-loader
+      - id: micro-behaviors/fs/read/file::file-read-content
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+  - id: pypi-encoded-subprocess-payload
+    desc: PyPI package has encoded subprocess payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python, pkginfo, zip, archives]
+    all:
+      - id: metadata/package/quality/ecosystem::pkginfo-core-metadata
+      - id: objectives/anti-static/obfuscation/payload/encoded::base64-subprocess-proximity
+    scope: archive
+    unless:
+      - id: metadata/package/testing/
+  - id: pypi-packed-python-payload
+    desc: PyPI package has packed Python payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python, pkginfo, zip]
+    all:
+      - id: metadata/package/quality/ecosystem::pkginfo-core-metadata
+      - id: objectives/anti-static/obfuscation/payload/encoded::python-packed-payload
+    scope: archive
+    unless:
+      - id: metadata/package/testing/
+  - id: pypi-pth-open-read-payload
+    desc: PyPI package uses .pth startup to execute payload file
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python, pkginfo, archives]
+    all:
+      - id: metadata/package/quality/ecosystem::pkginfo-core-metadata
+      - id: objectives/persistence/login/python-startup::pth-open-read-startup-exec
+    scope: archive
+  - id: pypi-pth-process-launch-payload
+    desc: PyPI .pth startup payload launches process
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python, pkginfo, archives]
+    all:
+      - id: pypi-pth-open-read-payload
+      - id: micro-behaviors/process/create/subprocess::popen-content
+    scope: archive
+
+  - id: pth-startup-process-launch
+    desc: .pth startup loader reaches process launch
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python, pkginfo, zip, archives]
+    all:
+      - id: objectives/persistence/login/python-startup::pth-open-read-startup-exec
+      - id: micro-behaviors/process/create/subprocess::popen-content
+    scope: archive
+  - id: pypi-fetch-write-execute-dropper
+    desc: PyPI package fetches writes executes payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python, pkginfo, archives]
+    all:
+      - id: metadata/package/quality/ecosystem::pkginfo-core-metadata
+      - id: objectives/command-and-control/dropper/node-bootstrap::fetch-write-execute
+    scope: archive
+  - id: pypi-remote-exec-payload
+    desc: PyPI package executes remote code
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002
+    for: [python, pkginfo, archives]
+    all:
+      - id: metadata/package/quality/ecosystem::pkginfo-core-metadata
+      - id: objectives/command-and-control/dropper/execution/eval::remote-exec-text
+    scope: archive
+  - id: pypi-setup-network-code-execution
+    desc: PyPI setup hook executes network code
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002
+    for: [python, pkginfo, archives]
+    all:
+      - id: objectives/supply-chain/install-hook/setup::setup-code-execution
+      - id: objectives/supply-chain/install-hook/build/behavioral::setup-py-network-in-install
+    scope: archive
+  - id: python-package-home-config-module-loader
+    desc: Package hijacks Python module resolution to execute home config
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1059.006
+    # Evaluate only on individual Python members. Matching on whl/archives
+    # rolls up legs from unrelated modules (sys.path mutate in one file,
+    # Path.home()/.config in another, importlib.exec_module in a third) and
+    # incorrectly fires as a package-level hostile finding.
+    for: [python]
+    scope: file
+    near_lines: 80
+    all:
+      - id: micro-behaviors/os/module/search-path::sys-path-mutate
+      - id: micro-behaviors/fs/path/location::hidden-dir-literal
+      - id: micro-behaviors/fs/path/location::home-config-documents-reference
+      - id: micro-behaviors/os/api-resolution/dynamic::python-importlib-spec-exec-module
+
+  # Remote encoded-archive stager: download a blob over HTTP, base64-DECODE it
+  # into an archive, EXTRACT it to disk, and run it. Base64-decoding downloaded
+  # bytes into a zip and executing them is a dropper with no benign use — this is
+  # the staging half of a typosquat that fetches a disguised .png, decodes it to
+  # a zip under %APPDATA%, and launches pythonw.exe. Pairs with command-and-
+  # control/dropper::python-remote-deobfuscated-payload-dropper (the decode-and-
+  # run half) to give two hostile detections in distinct kill-chain stages.
+  - id: python-remote-encoded-archive-stager
+    desc: Decodes a downloaded blob into an archive and runs it
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1027
+    for: [python]
+    scope: file
+    # The agent keeps its HTTP, decoding, archive, and execution tools in
+    # separate functions.  Require a genuinely staged chain in one region.
+    near_lines: 40
+    all:
+      - id: micro-behaviors/communications/http/request/client::request-python
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+      - id: micro-behaviors/data/archive/extract/zip::python-zipfile-extractall
+    any:
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/process/create/flags::python-create-no-window-hex
+      - id: micro-behaviors/process/create/subprocess::python-subprocess-devnull
+      - id: micro-behaviors/process/create/system::python-aliased-os-system

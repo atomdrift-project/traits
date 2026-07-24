@@ -1,0 +1,168 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  crit: suspicious
+  attack: T1027
+  mbc: E1014
+  for: [scripts, binaries]
+traits:
+  - id: codecs-rot13
+    desc: codecs ROT13 decoding
+    crit: suspicious
+    conf: 0.85
+    size_max: 10000
+    if:
+      type: string_literal
+      regex: codecs\.decode.{0,20}rot13|rot13.{0,20}codecs
+  - id: rot13-encoded-string
+    desc: ROT13 encoded string literal
+    crit: suspicious
+    conf: 0.8
+    size_max: 10000
+    if:
+      type: string_literal
+      regex: codecs\.decode\('[^']{10,}'
+  - id: base64-then-decode
+    desc: Base64 then decode
+    crit: suspicious
+    conf: 0.84
+    for:
+      - python
+    size_max: 15000
+    if:
+      type: tree-sitter
+      query: "(call\n  function: (attribute\n    object: (call\n      function: (attribute\n        object: [\n          (identifier) @mod\n          (attribute\n            object: (identifier) @pkg\n            attribute: (identifier) @submod)\n        ]\n        attribute: (identifier) @decoder)\n      arguments: (argument_list\n        [\n          (string) @encoded\n          (bytes) @encoded\n        ]))\n    attribute: (identifier) @decode_method)\n  arguments: (argument_list)?\n  (#eq? @decode_method \"decode\")\n  (#any-of? @decoder \"b64decode\" \"standard_b64decode\" \"urlsafe_b64decode\")\n  (#any-of? @mod \"base64\" \"binascii\")\n  (#eq? @pkg \"base64\")\n  (#any-of? @submod \"standard_b64decode\" \"urlsafe_b64decode\"))\n"
+  - id: base64-with-codecs
+    desc: Base64 with codecs
+    crit: suspicious
+    conf: 0.85
+    size_max: 15000
+    if:
+      type: string_literal
+      regex: b64decode.{0,20}codecs|codecs.{0,20}b64decode
+  - id: multi-layer-string
+    desc: Layered bytes/string conversion
+    crit: notable
+    conf: 0.8
+    unless:
+      - id: metadata/package/files/dependency::python-type-stub-path
+      - id: metadata/package/documentation::python-doctest-prompt
+      - id: well-known/tool/detection/llm-scanner::mvar-security-context
+    if:
+      type: string_literal
+      regex: \bbytes\(.{0,40}\)\.decode\(|\bstr\(.{0,40}\)\.encode\(
+  - id: encoded-path-assembly
+    desc: Encoded path assembly
+    crit: suspicious
+    conf: 0.85
+    size_max: 10000
+    if:
+      type: string_literal
+      regex: codecs\.encode\('/|decode\('/
+composite_rules:
+  - id: base64-xor-transform
+    desc: Base64-decoded data XOR transformation
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    near_bytes: 256
+    all:
+      - id: micro-behaviors/data/encode/xor::b64decode-then-xor-bytes
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+  - id: rot13-obfuscation
+    desc: ROT13 string obfuscation
+    crit: suspicious
+    conf: 0.9
+    needs: 2
+    any:
+      - id: codecs-rot13
+      - id: rot13-encoded-string
+  - id: base64-layered-encoding
+    desc: Layered base64 encoding
+    crit: suspicious
+    conf: 0.9
+    for:
+      - python
+      - javascript
+    needs: 2
+    any:
+      - id: base64-then-decode
+      - id: base64-with-codecs
+  - id: double-obfuscation
+    desc: Double encoding obfuscation
+    crit: suspicious
+    conf: 0.95
+    needs: 3
+    any:
+      - id: codecs-rot13
+      - id: base64-with-codecs
+      - id: multi-layer-string
+      - id: encoded-path-assembly
+  - id: advanced-string-obfuscation
+    desc: Advanced string obfuscation
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: rot13-obfuscation
+      - id: base64-layered-encoding
+  - id: javascript-custom-decoder-eval-carrier
+    desc: Large JavaScript custom-alphabet payload is handed to aliased eval
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    for: [javascript]
+    scope: file
+    all:
+      - id: micro-behaviors/data/decode/custom::js-alphabet-coded-decoder-source
+      - id: micro-behaviors/process/interpreter/eval::js-eval-alias-assignment
+      - id: metadata/file/metrics::js-many-very-long-strings
+    unless:
+      - id: metadata/package/testing/
+  - id: js-wsh-base64-staged-cleanup-loader
+    desc: WSH PowerShell loader stages a large Base64 carrier and cleans it up
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.001,T1059.007
+    mbc: B0032
+    for: [javascript]
+    scope: file
+    all:
+      - id: objectives/evasion/indicator-removal/cleanup::js-wsh-staged-file-cleanup
+      - id: objectives/anti-static/obfuscation/payload/encoded::large-base64-string-dup
+      - id: micro-behaviors/fs/write/file/stream::adodb-stream
+
+  - id: javascript-large-decoder-eval-loader
+    desc: Large JavaScript decoder executes a stage
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    for: [javascript]
+    scope: file
+    near_bytes: 8192
+    all:
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: micro-behaviors/data/decode/custom::js-indexof-source-token
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-source-token
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    unless:
+      - id: metadata/package/testing/
+
+  - id: javascript-stepped-decoder-eval-loader
+    desc: Stepped JavaScript decoder executes a stage
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    for: [javascript]
+    scope: file
+    near_bytes: 8192
+    all:
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: micro-behaviors/data/decode/custom::js-step-two-source-token
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-source-token
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    unless:
+      - id: metadata/package/testing/

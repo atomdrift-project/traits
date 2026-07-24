@@ -1,0 +1,310 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for: [scripts, pe, elf, macho]
+  attack: T1027
+  mbc: B0032
+traits:
+  - id: very-long-lines
+    desc: Multiple long lines (>1000 chars)
+    crit: baseline
+    conf: 0.85
+    for: [scripts]
+    size_max: 1000000
+    # `lines_over_1000 >= 2` cleanly partitions with
+    # `single-long-line-outlier` (which fires at exactly 1) — packed
+    # payloads put their bulk on one line; legitimate minified bundles
+    # spread across several. No overlap with the outlier means no
+    # need for a redundant `unless:` clause.
+    unless:
+      - id: recognized-very-long-lines-marker
+      - id: metadata/lang/source::windows-generated-def-path
+      - id: metadata/package/testing/scripted/
+      - id: metadata/signed/platform::microsoft-corporation
+      - id: metadata/file/catalog/identity/
+      - id: well-known/app/google-web::google-ads-bgc-bootstrapper
+      - type: basename
+        regex: \.(pyc|pyd)$|\.d\.ts$
+      - type: text
+        regex: automatically generated|DO NOT MODIFY BY HAND
+    if:
+      type: metrics
+      field: text.lines_over_1000
+      min: 2
+  - id: has-invisible-unicode
+    desc: Contains many invisible Unicode characters
+    crit: component
+    conf: 0.88
+    if:
+      type: metrics
+      field: text.invisible_chars
+      min: 17
+      max: 64
+  - id: high-invisible-unicode
+    desc: Suspicious invisible Unicode count
+    crit: notable
+    conf: 0.92
+    if:
+      id: metadata/file/invisible-unicode::multiple
+    unless:
+      - type: basename
+        substr: yarn-standalone.js
+      - type: text
+        substr: /opt/Hyper/resources/bin/yarn-standalone.js
+      - type: text
+        regex: yarnpkg\.com/en/docs/cli/|nightly\.yarnpkg\.com/latest\.js
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/file/invisible-unicode/
+      - id: well-known/app/open-webui-computer/
+      - id: metadata/lang/source::codegen-source-path
+      - id: metadata/file/catalog/identity/
+  - id: last-line-over-1000
+    desc: Last line is over 1000 chars
+    crit: component
+    conf: 0.9
+    # The metrics matcher is capped at 17 concrete types; scripts are the
+    # supported obfuscation surface for this shared rule.
+    for: [scripts]
+    # Source maps serialize generated code as one JSON line; that is not
+    # obfuscation evidence.
+    unless:
+      - id: metadata/build/bundler::has-sourcemap
+      - id: metadata/library/structure::javascript-source-map-file
+      - id: metadata/file/format::sourcemap-sources-content
+      - type: path
+        regex: '(?i)(^|[/\\])dist[/\\].+\.(?:m?js|cjs)$'
+      - id: metadata/lang/scripted::dts-declaration-file
+      - type: path
+        basename: true
+        regex: '^[A-Za-z0-9_.-]+[-.][A-Za-z0-9_-]{8,}\.js$'
+
+    if:
+      type: metrics
+      field: text.last_line_length
+      min: 1000
+  - id: single-long-line-outlier
+    desc: Exactly one line exceeds 1000 chars
+    crit: component
+    conf: 0.9
+    for: [scripts]
+    unless:
+      - id: metadata/build/bundler::has-sourcemap
+      - id: metadata/library/structure::javascript-source-map-file
+      - id: metadata/file/format::sourcemap-sources-content
+      - type: path
+        regex: '(?i)(^|[/\\])dist[/\\].+\.(?:m?js|cjs)$'
+      - id: metadata/lang/scripted::dts-declaration-file
+      - type: path
+        basename: true
+        regex: '^[A-Za-z0-9_.-]+[-.][A-Za-z0-9_-]{8,}\.js$'
+
+    if:
+      type: metrics
+      field: text.lines_over_1000
+      min: 1
+      max: 1
+  - id: buildkit-dockerfile-v0
+    desc: BuildKit dockerfile marker
+    crit: component
+    conf: 0.95
+
+    if:
+      type: text
+      substr: '"comment":"buildkit.dockerfile.v0"'
+  - id: python-zipapp-structure
+    desc: Python zipapp container structure
+    crit: component
+    conf: 0.95
+    for: [zip]
+    if:
+      type: path
+      basename: true
+      regex: \.pyz$
+  - id: ico-resource-basename
+    desc: Icon resource file extension
+    crit: component
+    for: [data]
+    if:
+      type: path
+      basename: true
+      regex: '(?i)\.ico$'
+  - id: source-map-inline
+    desc: Inline source map data URL
+    crit: component
+    if:
+      type: text
+      substr: '//# sourceMappingURL=data:application/json'
+  - id: test-basename-path
+    desc: Test file path or basename
+    crit: component
+    for: [javascript, typescript, python]
+    if:
+      type: path
+      dirname: true
+      regex: (^|[\\/])__?tests?__?([\\/]|$)
+composite_rules:
+  - id: wordpress-rest-response-fixture
+    desc: WordPress REST response fixture
+    crit: component
+    conf: 0.95
+    all:
+      - id: metadata/package/testing/presence/harness::wordpress-rest-route
+      - id: metadata/package/testing/presence/harness::wordpress-target-hints
+      - id: metadata/package/testing/presence/harness::wordpress-allow-methods-array
+  - id: recognized-very-long-lines-marker
+    desc: Recognized long line file marker
+    crit: component
+    conf: 0.95
+    any:
+      - id: buildkit-dockerfile-v0
+      - id: python-zipapp-structure
+      - id: test-basename-path
+      - id: metadata/package/testing/presence/harness::python-php-test-basename-suffix
+      - id: wordpress-rest-response-fixture
+      - id: metadata/file/format::source-svg-path-data-marker
+      - id: metadata/library/structure::js-any-bundle-output
+      - id: metadata/file/format::sourcemap-sources-content
+      - id: metadata/library/structure::js-emscripten-generated-bundle
+      - id: metadata/library/runtime::next-edge-runtime-bundle
+      - id: well-known/lib/influxdb3-js
+      - id: well-known/lib/protobuf-ts
+      - id: well-known/lib/apache-arrow
+      - id: metadata/package/testing/scripted::xterm-terminal-recording
+      - id: ico-resource-basename
+      - id: metadata/file/catalog/identity::frequency-list-catalog
+  - id: minified-code
+    desc: Minified/compressed code (multiple indicators)
+    crit: baseline
+    conf: 0.9
+    all:
+      - id: metadata/file/metrics::low-whitespace
+    any:
+      - id: metadata/file/metrics::very-low-comment-ratio
+      - id: metadata/file/metrics::high-function-density
+      - id: objectives/anti-static/obfuscation/code-metrics/functions::many-one-liner-functions
+      - id: metadata/file/metrics::no-comments-code
+      - id: metadata/file/profile/identity::sequential-identifiers
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::py-sequential-identifiers
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/file/extension/identity::html-basename
+      - id: ico-resource-basename
+      - id: metadata/lang/source::windows-generated-def-path
+      - id: metadata/lang/source/
+      - id: metadata/library/web-frameworks/
+      - id: objectives/anti-static/obfuscation/code-metrics/functions/
+  - id: appended-long-line
+    desc: Single appended long line in source
+    crit: baseline
+    conf: 0.9
+    for: [scripts, source]
+
+    all:
+      - id: last-line-over-1000
+      - id: metadata/file/metrics::file-has-30-plus-lines
+      - id: single-long-line-outlier
+    unless:
+      - id: source-map-inline
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/signed/platform::microsoft-corporation
+  - id: appended-steganography
+    desc: Steganography payload in appended long line
+    crit: hostile
+    conf: 0.95
+    for: [scripts, source]
+
+    all:
+      - id: appended-long-line
+      - id: high-invisible-unicode
+    unless:
+      - id: metadata/package/testing/presence/scripted::faker-word
+      - id: metadata/file/invisible-unicode::hyper-yarn-standalone-text-fragment
+      - id: metadata/file/invisible-unicode/
+      - id: metadata/file/invisible-unicode/
+      - id: metadata/library/vscode::require-vscode
+  - id: has-encoding
+    desc: Data encoding or decoding detected
+    crit: component
+    for: [scripts, source]
+
+    any:
+      - id: has-invisible-unicode
+      - id: micro-behaviors/data/decode/base64/
+      - id: micro-behaviors/data/encode/payload::large-base64-payload
+      - id: micro-behaviors/data/decode/hex/
+      - id: micro-behaviors/data/encode/payload::hex-byte-format
+      - id: micro-behaviors/data/encode/xor::js-chunked-xor-loop
+      - id: micro-behaviors/data/encode/xor::js-xor-decoder-loop
+      - id: micro-behaviors/data/encode/xor::js-xor-decoder-ast
+  - id: has-dynamic-exec
+    desc: Dynamic code execution detected
+    crit: component
+    for: [scripts, source]
+
+    any:
+      - id: micro-behaviors/process/interpreter/eval/
+      - id: micro-behaviors/process/interpreter/python/
+      - id: objectives/execution/interpreter/eval/
+      - id: micro-behaviors/process/create/direct/
+      - id: micro-behaviors/process/create/shell/bridge::child-process-exec
+      - id: micro-behaviors/process/create/shell/bridge::js-exec
+      - id: micro-behaviors/process/create/shell/bridge::js-execsync
+      - id: micro-behaviors/process/create/shell/spawn::sh-c-exec
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-interactive
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: objectives/command-and-control/dropper/execution/script/
+      - id: objectives/command-and-control/dropper/execution/eval/
+  - id: trailing-whitespace-payload
+    desc: Trailing whitespace on a line hides code
+    crit: suspicious
+    conf: 0.9
+    for:
+      - scripts
+      - source
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::whitespace-hiding
+      - id: last-line-over-1000
+    any:
+      - id: has-encoding
+      - id: has-dynamic-exec
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::excessive-single-char-vars
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+  - id: one-line-obfuscated-dropper
+    desc: One-line script that decodes and executes or writes a payload (hostile)
+    crit: hostile
+    conf: 0.95
+    for: [scripts, source]
+    # A genuine one-line dropper payload is compact. Multi-MB "one-liners" are
+    # multi-line minified bundles whose text.total_lines is mis-computed as 1
+    # for archive members (engine metric bug); guard against that hostile FP.
+    size_max: 1048576
+    all:
+      - id: metadata/file/metrics::file-one-liner
+      - id: metadata/file/metrics::single-long-line
+      - id: has-encoding
+    any:
+      - id: has-dynamic-exec
+      - id: micro-behaviors/fs/write/file
+    unless:
+      - id: objectives/anti-static/obfuscation/code-metrics/structure/
+
+  - id: appended-encoded-exec
+    desc: Encoded payload executed from appended line
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, source]
+
+    all:
+      - id: appended-long-line
+      - id: has-encoding
+      - id: has-dynamic-exec
+    unless:
+      - id: metadata/file/magic/identity/
+      - id: micro-behaviors/fs/temp/pyinstaller::pyinstaller-meipass
+      - id: micro-behaviors/fs/temp/pyinstaller/
+      - id: metadata/library/structure/

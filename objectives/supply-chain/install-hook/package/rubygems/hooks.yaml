@@ -1,0 +1,124 @@
+# RubyGems Installation Hooks
+# GuardDog: Detects Gem installation hooks that execute code during install
+# ATT&CK: T1195.002 (Supply Chain Compromise)
+defaults:
+  platforms: [unix, windows]
+  for: [ruby]
+  crit: suspicious
+  conf: 0.95
+  attack: "T1195.002"
+traits:
+  # === Post-install Hooks ===
+  - id: gem-post-install
+    desc: Gem.post_install hook
+    if:
+      # Migrated from a tree-sitter call query to a `kind: member`
+      # match on the pre-extracted member fact (no per-member
+      # tree-sitter cursor walk; same name semantics).
+      type: symbol
+      kind: member
+      exact: 'Gem.post_install'
+    unless:
+      - id: well-known/tool/development/rbenv::rbenv-gem-rehash-plugin-context
+  - id: gem-installer-post-install
+    desc: Gem::Installer.post_install hook
+    if:
+      type: symbol
+      regex: 'Gem::Installer\.post_install'
+  # === Pre-install Hooks ===
+  - id: gem-pre-install
+    desc: Gem.pre_install hook
+    if:
+      # Migrated from a tree-sitter call query to a `kind: member`
+      # match on the pre-extracted member fact (no per-member
+      # tree-sitter cursor walk; same name semantics).
+      type: symbol
+      kind: member
+      exact: 'Gem.pre_install'
+  - id: gem-installer-pre-install
+    desc: Gem::Installer.pre_install hook
+    if:
+      type: symbol
+      regex: 'Gem::Installer\.pre_install'
+  # === Uninstall Hooks ===
+  - id: gem-post-uninstall
+    desc: Gem.post_uninstall hook
+    if:
+      # Migrated from a tree-sitter call query to a `kind: member`
+      # match on the pre-extracted member fact (no per-member
+      # tree-sitter cursor walk; same name semantics).
+      type: symbol
+      kind: member
+      exact: 'Gem.post_uninstall'
+    unless:
+      - id: well-known/tool/development/rbenv::rbenv-gem-rehash-plugin-context
+  - id: gem-pre-uninstall
+    desc: Gem.pre_uninstall hook
+    if:
+      # Migrated from a tree-sitter call query to a `kind: member`
+      # match on the pre-extracted member fact (no per-member
+      # tree-sitter cursor walk; same name semantics).
+      type: symbol
+      kind: member
+      exact: 'Gem.pre_uninstall'
+  # === Extension Building ===
+  - id: gem-extensions
+    desc: Gem specification extensions attribute
+    conf: 0.85
+    if:
+      type: symbol
+      substr: ".extensions"
+  - id: ruby-gemrc-post-install-hook
+    desc: Ruby writes gemrc post-install hook
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      substr: "post_install:"
+    unless:
+      - id: well-known/app/homebrew::source-tree
+  - id: ruby-gem-wrapper-replacement
+    desc: Ruby replaces gem command wrapper
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '/usr/local/bin/gem[\s\S]{0,220}\.real'
+  - id: ruby-gem-sources-cache-write
+    desc: Ruby writes RubyGems sources cache
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      substr: cached_sources
+composite_rules:
+# A gem install-time hook that dynamically evaluates Ruby code crosses the
+# package-install trust boundary and is a suspicious review signal; hostile
+# intent requires corroborating behavior.
+  - id: gem-install-hook-dynamic-eval
+    desc: Gem install hook runs dynamic code evaluation
+    # Dynamic evaluation in an install hook is a useful review signal, but
+    # class_eval is also used by legitimate Ruby tooling such as rbenv's
+    # gem-rehash integration.  Hostile intent requires stronger corroboration.
+    crit: suspicious
+    conf: 0.96
+    mbc: B0024
+    all:
+      - id: objectives/supply-chain/install-hook/package/rubygems::eval-imports
+    any:
+      - id: gem-post-install
+      - id: gem-pre-install
+      - id: gem-installer-post-install
+      - id: metadata/build/package::filename-extconf
+    unless:
+      - id: well-known/tool/development/rbenv::rbenv-gem-rehash-plugin-context
+  - id: rubygems-config-install-hook
+    desc: RubyGems config install hook persistence
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: ruby-gemrc-post-install-hook
+    any:
+      - id: ruby-gem-wrapper-replacement
+      - id: ruby-gem-sources-cache-write
+  # GuardDog: Any gem installation hook

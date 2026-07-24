@@ -1,0 +1,228 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1553.004
+traits:
+- id: electron-ignore-certificate-errors
+  desc: Electron ignores certificate errors
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: 'app\.commandLine\.appendSwitch\s*\(\s*[''"]ignore-certificate-errors[''"]'
+  unless:
+  - type: basename
+    regex: '(^|[-_.])(test|spec)\.[cm]?[jt]sx?$'
+  - id: well-known/app/mastergo::mastergo-application-context
+  - id: well-known/app/codewhale::codewhale-application-context
+
+- id: reject-unauthorized-false-native
+  desc: Native embedded source disables TLS checks
+  crit: notable
+  conf: 0.95
+  for: [pe, dll]
+  if:
+    type: text
+    regex: 'headers[\s\S]{0,240}rejectUnauthorized\s*:\s*false'
+
+  # axios specifically: `axios.<method>(url, { httpsAgent: ... })` with
+  # bypass config. Keep this even though the generic above catches it,
+  # because composite consumers may want the library-specific atom.
+- id: axios-https-agent-bypass--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.94
+  if:
+    type: text
+    regex: 'axios\.(get|post)\s*\([^\n]{0,400}rejectUnauthorized\s*:\s*false'
+
+  # got: `got(url, { https: { rejectUnauthorized: false } })`
+  count_max: 1030588
+- id: axios-https-agent-bypass--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.94
+  if:
+    type: text
+    regex: 'axios\.(put|delete)\s*\([^\n]{0,400}rejectUnauthorized\s*:\s*false'
+
+  # got: `got(url, { https: { rejectUnauthorized: false } })`
+  count_max: 1030589
+- id: axios-https-agent-bypass--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.94
+  if:
+    type: text
+    regex: 'axios\.(head|patch)\s*\([^\n]{0,400}rejectUnauthorized\s*:\s*false'
+
+  # got: `got(url, { https: { rejectUnauthorized: false } })`
+  count_max: 1030590
+- id: axios-https-agent-bypass--rx-4
+  desc: Regex component marker
+  crit: component
+  conf: 0.94
+  if:
+    type: text
+    regex: 'axios\.(request)\s*\([^\n]{0,400}rejectUnauthorized\s*:\s*false'
+
+  # got: `got(url, { https: { rejectUnauthorized: false } })`
+  count_max: 1030591
+- id: got-rejectunauthorized-false
+  desc: got TLS bypass via https option
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: 'got\s*\([^\n]{0,400}https\s*:\s*\{[^}\n]{0,200}rejectUnauthorized\s*:\s*false'
+
+  # node-fetch + custom Agent is a useful component, but a custom agent is not
+  # itself a TLS bypass: proxy clients and database tooling use agents
+  # routinely. The composite below requires explicit TLS-verification evidence
+  # nearby before escalating.
+- id: node-fetch-agent-bypass--rx-6
+  desc: node-fetch passed a custom HTTPS agent
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: 'node-fetch[\s\S]{0,200}new\s+https?\.Agent|new\s+https?\.Agent[\s\S]{0,200}node-fetch'
+  count_max: 1030594
+- id: node-fetch-agent-bypass--rx-7
+  desc: node-fetch library marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: node-fetch
+  count_max: 1030595
+- id: check-server-identity-bypass--rx-8
+  desc: checkServerIdentity callback marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: checkServerIdentity
+  count_max: 1030596
+- id: check-server-identity-arrow-empty
+  desc: checkServerIdentity arrow returns empty
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: text
+    regex: 'checkServerIdentity\s*[:=]\s*\(.{0,80}\)\s*=>\s*(undefined|null|void\s+0)\b'
+  unless:
+  - id: well-known/lib/mongodb::mongodb-tls-option-parser
+  - id: well-known/lib/mongodb/
+  - id: metadata/lang/scripted::dts-declaration-file
+  - id: well-known/app/opensearch::security-dashboards-plugin-path
+  - id: well-known/app/lightdash::lightdash-redshift-tls-context
+  - id: well-known/app/cloudflare::source-map-containers-client-path
+- id: check-server-identity-return-empty
+  desc: checkServerIdentity returns empty
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: text
+    regex: 'checkServerIdentity\s*[:=]\s*function[^}]{0,180}\breturn\s+(undefined|null|void\s+0)\s*;'
+  unless:
+  - id: well-known/lib/mysql2::mysql2-tls-connection
+  - id: metadata/lang/scripted::dts-declaration-file
+  - id: well-known/app/opensearch::security-dashboards-plugin-path
+composite_rules:
+- id: tls-bypassed-remote-code-loader
+  desc: TLS-bypassed HTTPS response executes as code
+  crit: hostile
+  conf: 0.99
+  attack: T1573,T1059.007,T1105
+  all:
+  - id: objectives/command-and-control/dropper/delivery/fetch-eval::remote-https-get-tls-bypass
+  - id: objectives/command-and-control/dropper/delivery/fetch-eval::https-streamed-require-loader
+
+  # SNI/host-decouple: tls.connect specifies a `servername` while
+  # connecting to a different destination — same intent as the Python
+  # manual-socket-wrap composite. Pair with hardcoded IP for hostile.
+- id: js-tls-sni-host-decouple
+  desc: TLS SNI decoupled from destination
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: micro-behaviors/communications/http/tls::tls-connect-servername
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-script
+  downgrade:
+    any:
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/harness/
+
+  # TLS bypass + hardcoded IP target — JS equivalent of the Python
+  # tls-bypass-ip-target hostile composite.
+- id: js-tls-bypass-ip-target
+  desc: TLS validation off with hardcoded IP target
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-script
+  any:
+  - id: micro-behaviors/communications/socket/ssl::reject-unauthorized-false
+  - id: axios-https-agent-bypass
+  - id: got-rejectunauthorized-false
+  - id: node-fetch-agent-bypass
+  - id: check-server-identity-bypass
+  - id: micro-behaviors/communications/socket/ssl::node-tls-verification-env-disable
+  downgrade:
+    any:
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/harness/
+- id: axios-https-agent-bypass
+  desc: axios using TLS-bypass httpsAgent
+  crit: suspicious
+  conf: 0.94
+  any:
+  - id: axios-https-agent-bypass--rx-1
+  - id: axios-https-agent-bypass--rx-2
+  - id: axios-https-agent-bypass--rx-3
+  - id: axios-https-agent-bypass--rx-4
+- id: node-fetch-agent-bypass
+  desc: node-fetch with TLS-bypass agent
+  crit: suspicious
+  conf: 0.92
+  # node-fetch presence (--rx-7) is required but never sufficient: it must be
+  # paired with explicit TLS-verification-disabling evidence in the same local
+  # code region. This rejects benign node-fetch bundles that also contain an
+  # unrelated database option such as accept_invalid_certs.
+  near_bytes: 4096
+  all:
+  - id: node-fetch-agent-bypass--rx-7
+  any:
+  - id: micro-behaviors/communications/socket/ssl::reject-unauthorized-false
+  unless:
+  - id: metadata/library/github-actions/
+  - id: metadata/package/files/dependency::node-modules-path
+  - id: well-known/tool/development/socket-cli::socket-dev-cli-bundle
+  - id: well-known/tool/development/socket-cli::socket-dev-cli-vendored-path
+- id: node-fetch-custom-agent
+  desc: node-fetch uses a custom HTTPS agent
+  crit: notable
+  conf: 0.88
+  all:
+  - id: node-fetch-agent-bypass--rx-7
+  - id: node-fetch-agent-bypass--rx-6
+- id: check-server-identity-bypass
+  desc: checkServerIdentity callback disables TLS hostname validation
+  crit: suspicious
+  conf: 0.92
+  near_bytes: 512
+  all:
+  - id: check-server-identity-bypass--rx-8
+  any:
+  - id: check-server-identity-arrow-empty
+  - id: check-server-identity-return-empty
+  unless:
+  - id: metadata/library/data::postgresql-libpq-tls-client
+  - id: metadata/package/testing/
+  - id: metadata/library/structure/
+  - id: metadata/package/files/dependency::node-modules-path
+  - id: well-known/lib/mongodb/
+  - id: well-known/app/opensearch::security-dashboards-plugin-path
+  - id: well-known/app/cloudflare::source-map-containers-client-path
+  - id: well-known/app/lightdash::lightdash-redshift-tls-context

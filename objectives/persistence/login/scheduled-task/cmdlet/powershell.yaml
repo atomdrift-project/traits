@@ -1,0 +1,236 @@
+# PowerShell ScheduledTasks cmdlet persistence
+# ATT&CK: T1053.005 (Scheduled Task/Job: Scheduled Task)
+defaults:
+  platforms: [windows]
+  for: [powershell, batch, go]
+  attack: T1053.005
+  mbc: F0012
+traits:
+- id: unregister-scheduledtask-silent
+  desc: Silent Unregister-ScheduledTask
+  crit: notable
+  conf: 0.9
+  unless:
+  - id: well-known/tool/sysadmin/kubernetes
+  if:
+    type: text
+    regex: Unregister-ScheduledTask\b[^\n]{0,120}-Confirm:\s*\$false
+    case_insensitive: true
+- id: schtask-daily-trigger-line
+  desc: Non-comment scheduled trigger line
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?m)^(?![ \t]*#).{0,120}New-ScheduledTaskTrigger\b'
+    case_insensitive: true
+- id: schtask-daily-at-line
+  desc: Non-comment daily fixed-time option
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?m)^(?![ \t]*#).{0,120}-Daily\b.{0,80}-At\b'
+    case_insensitive: true
+- id: schtask-launches-explorer-arg--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    case_insensitive: true
+    substr: explorer.exe
+  count_max: 1026921
+- id: schtask-launches-explorer-arg--rx-3
+  desc: Scheduled task argument parameter
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    case_insensitive: true
+    regex: 'New-ScheduledTaskAction[^\n]{0,200}-Argument\b'
+  count_max: 1026922
+- id: schtask-launches-explorer-arg--rx-4
+  desc: Scheduled task execute parameter
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    case_insensitive: true
+    regex: 'New-ScheduledTaskAction[^\n]{0,200}-Execute\b'
+  count_max: 1026923
+- id: schtask-execution-time-limit-zero
+  desc: Scheduled task with no execution time limit
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: -ExecutionTimeLimit\s+\(\[TimeSpan\]::Zero\)
+    case_insensitive: true
+- id: schtask-force-after-cmdlet
+  desc: ScheduledTask then Force flag
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: 'ScheduledTask\w*[^\n]{0,120}-Force\b'
+    case_insensitive: true
+- id: schtask-force-before-cmdlet
+  desc: Force flag before ScheduledTask
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '-Force\b[^\n]{0,120}ScheduledTask\w*'
+    case_insensitive: true
+- id: schtask-get-scheduledtask
+  desc: Get-ScheduledTask cmdlet
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    substr: Get-ScheduledTask
+    case_insensitive: true
+- id: schtask-where-object-taskname
+  desc: Where-Object filtering by TaskName
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: Where-Object\s+\{\s*\$\_.TaskName\s+-like
+    case_insensitive: true
+- id: schtask-trigger-periodic-repeat
+  desc: Scheduled task short -RepetitionInterval
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: text
+    regex: -RepetitionInterval\b[^\n]{0,80}-Minutes\s+([1-9]|[12]?\d|3\d)\b
+    case_insensitive: true
+- id: software-protection-task-name--rx-9
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: Register-ScheduledTask
+    case_insensitive: true
+  count_max: 1026932
+- id: software-protection-task-name--rx-10
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: Software Protection
+    case_insensitive: true
+  count_max: 1026933
+- id: software-protection-task-name--rx-11
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: schtasks.exe
+    case_insensitive: true
+  count_max: 1026934
+- id: software-protection-task-name--rx-12
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: TaskName
+    case_insensitive: true
+  count_max: 1026935
+composite_rules:
+- id: schtask-daily-fixed-hour
+  desc: Daily scheduled-task trigger at fixed hour
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: schtask-daily-trigger-line
+  - id: schtask-daily-at-line
+  near_lines: 1
+- id: schtask-force-flag
+  desc: Scheduled task force flag
+  crit: notable
+  conf: 0.8
+  any:
+  - id: schtask-force-after-cmdlet
+  - id: schtask-force-before-cmdlet
+  - id: micro-behaviors/os/autorun/scheduled::schtasks-force-flag
+- id: schtask-explorer-lnk-launcher
+  desc: Scheduled task proxies via explorer.exe LNK launcher
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: schtask-launches-explorer-arg
+  - id: micro-behaviors/os/autorun/scheduled::register-scheduledtask
+- id: new-scheduledtask-principal-elevated
+  desc: Scheduled task uses a system principal
+  crit: notable
+  conf: 0.93
+  any:
+  - id: micro-behaviors/os/autorun/scheduled::new-scheduledtask-principal-system
+  - id: micro-behaviors/os/autorun/scheduled::new-scheduledtask-principal-local-system
+  - id: micro-behaviors/os/autorun/scheduled::new-scheduledtask-principal-authority-system
+- id: schtask-system-multi-trigger
+  desc: Scheduled task as SYSTEM with multiple triggers
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: micro-behaviors/os/autorun/scheduled::register-scheduledtask
+  - id: new-scheduledtask-principal-elevated
+  any:
+  - id: micro-behaviors/os/autorun/scheduled::schtask-trigger-at-startup
+  - id: micro-behaviors/os/autorun/scheduled::schtask-trigger-at-logon
+  - id: schtask-trigger-periodic-repeat
+  needs: 2
+  unless:
+  - id: well-known/app/open-endpoint-events::administration-uploader-context
+  - id: well-known/tool/sysadmin/kubernetes
+- id: hidden-encoded-repeating-task-persistence
+  desc: Hidden encoded PowerShell task persistence
+  crit: hostile
+  conf: 0.98
+  attack: T1053.005,T1059.001,T1564.003
+  all:
+  - id: micro-behaviors/process/create/hidden::encodedcommand-bypass
+  - id: micro-behaviors/os/autorun/scheduled::register-scheduledtask
+  - id: micro-behaviors/os/autorun/scheduled::scheduledtask-repeating-trigger
+  - id: micro-behaviors/os/autorun/scheduled::scheduledtask-hidden-settings
+  - id: micro-behaviors/process/create/hidden::powershell-hidden-window
+  unless:
+  - id: metadata/signed/platform/
+  - id: well-known/tool/sysadmin/kubernetes
+- id: software-protection-periodic-task
+  desc: Software Protection periodic task
+  crit: suspicious
+  conf: 0.93
+  all:
+  - id: software-protection-task-name
+  - id: schtask-trigger-periodic-repeat
+  any:
+  - id: micro-behaviors/os/autorun/scheduled::register-scheduledtask
+  - id: micro-behaviors/os/autorun/scheduled::new-scheduledtaskaction
+- id: schtask-launches-explorer-arg
+  desc: Scheduled task launches explorer.exe with argument
+  crit: suspicious
+  conf: 0.92
+  attack: T1202
+  all:
+  - id: micro-behaviors/os/autorun/scheduled::new-scheduledtaskaction
+  - id: schtask-launches-explorer-arg--rx-2
+  - id: schtask-launches-explorer-arg--rx-3
+  - id: schtask-launches-explorer-arg--rx-4
+  near_bytes: 4096
+- id: software-protection-task-name
+  desc: Software Protection task name
+  crit: component
+  conf: 0.9
+  any:
+  - id: software-protection-task-name--rx-9
+  - id: software-protection-task-name--rx-10
+  - id: software-protection-task-name--rx-11
+  - id: software-protection-task-name--rx-12

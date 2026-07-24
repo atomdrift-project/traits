@@ -1,0 +1,118 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for: [scripts, binaries]
+traits:
+  - id: x-auth-token-hex-32
+    desc: Hardcoded X-Auth-Token hex secret
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: (?i)X-Auth-Token["'\s:=]{0,16}[a-f0-9]{32,}
+    unless:
+      - id: metadata/package/testing/
+  - id: slack-xoxp-token
+    desc: Hardcoded Slack user OAuth token
+    crit: suspicious
+    conf: 0.95
+    # Gitpanda's checked-in .envrc.example uses an all-zero placeholder that
+    # has the right shape but is not a credential. Keep live-looking tokens
+    # detectable while excluding deterministic example values.
+    unless:
+      - type: text
+        regex: 'xoxp-(?:0+-){3}0{20,}'
+    if:
+      type: text
+      regex: xoxp-\d{10,}-\d{10,}-\d{10,}-[a-f0-9]{20,}
+  - id: slack-xoxb-token
+    desc: Hardcoded Slack bot OAuth token
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: xoxb-\d{10,}-\d{10,}-[a-zA-Z0-9]{20,}
+    unless:
+      - id: well-known/app/atuin::atuin-binary
+  - id: vault-service-token
+    # HashiCorp Vault token format: hvs.=service, hvb.=batch, hvr.=recovery,
+    # each followed by a long base62 body. The prefix+length make a live
+    # hardcoded Vault token distinctive (near-zero benign collision).
+    desc: Hardcoded HashiCorp Vault token
+    # The token is a credential-exposure observation; the literal alone does
+    # not show that the program steals or exfiltrates it.
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: \bhv[sbr]\.[A-Za-z0-9_-]{24,}
+    unless:
+      - id: metadata/library/structure::vscode-extension-generated-asset
+  - id: hardcoded-gateway-token-assignment
+    desc: Hardcoded gateway token assignment
+    # A checked-in token is worth review, but assignment alone is not hostile
+    # credential access. Intent comes from the consuming operation.
+    crit: notable
+    conf: 0.86
+    for: [python, json]
+    if:
+      type: text
+      regex: '(?i)\b[A-Z0-9_]*GATEWAY_TOKEN\s*[:=]\s*["''][A-Za-z0-9._~+\-/=]{32,}'
+    unless:
+      - id: well-known/tool/detection/
+      - type: text
+        regex: '(?i)(example|sample|placeholder)'
+  - id: slack-xoxa-token
+    desc: Hardcoded Slack app-level token
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: xoxa-\d+-[a-zA-Z0-9]{20,}
+  - id: slack-xoxs-token
+    desc: Hardcoded Slack session token
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: xoxs-\d+-[a-zA-Z0-9]{20,}
+  - id: hardcoded-emergent-project-token
+    desc: Embedded Emergent project API token
+    crit: notable
+    conf: 0.94
+    for: [scripts, source]
+    if:
+      type: text
+      regex: '\bemt_[A-Za-z0-9]{40,}\b'
+    unless:
+      - type: text
+        regex: '(?i)\bemt_(?:abc123|your[_-]?token|example)\b'
+
+composite_rules:
+  - id: embedded-gateway-auth-material
+    desc: Gateway token bundled with a private signing key
+    crit: suspicious
+    conf: 0.98
+    for: [python]
+    near_lines: 200
+    all:
+      - id: hardcoded-gateway-token-assignment
+      - id: micro-behaviors/crypto/asymmetric/key::embedded-pem-private-key
+  - id: embedded-signing-key-auth-client
+    desc: Embedded signing key used by an auth client
+    crit: hostile
+    conf: 0.97
+    for: [python]
+    all:
+      - id: micro-behaviors/crypto/asymmetric/key::embedded-pem-private-key
+      - id: micro-behaviors/communications/http/headers::authorization-header-map-entry
+      - id: micro-behaviors/communications/http/request/httpx::httpx-async-client-post
+  - id: remote-emergent-graph-write-with-embedded-token
+    desc: Remote graph write uses embedded project token
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/services/emergent::emergent-memory-service-url
+      - id: micro-behaviors/communications/http/services/emergent::emergent-memory-graph-relationship-command
+      - id: hardcoded-emergent-project-token

@@ -1,0 +1,130 @@
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: T1027
+  mbc: E1014
+  for: [python]
+traits:
+
+  - id: bit-shift-arithmetic
+    desc: Repeated numeric bit-shift arithmetic
+    crit: suspicious
+    conf: 0.8
+    count_min: 3
+    if:
+      type: text
+      regex: '<<[0-9]{2,}.{0,50}>>[0-9]{2,}|>>[0-9]{2,}.{0,50}<<[0-9]{2,}'
+    unless:
+      - id: well-known/app/kubeflow-community::notebook-scripts
+  - id: arithmetic-expression-chains
+    desc: Complex arithmetic chains
+    crit: suspicious
+    conf: 0.75
+    unless:
+      - type: text
+        substr: //|==|!=|>=|<=|<<|>>|\+=|-=|\*=|/=|//=|<<=|>>=
+    if:
+      type: text
+      regex: "[*].{0,30}//.{0,30}[|].{0,30}<<.{0,30}>>"
+  - id: loop-large-numeric-branch
+    desc: Loop branch compares large numeric literal
+    # A single numeric branch is only an obfuscation indicator; the
+    # state-machine composite supplies the required multi-signal context.
+    crit: component
+    conf: 0.82
+    if:
+      type: text
+      regex: while.{0,30}:[^}]{0,50}if.{0,30}==.{0,30}[1-9][0-9]{4,}\b
+  - id: obfuscated-state-variable
+    desc: Chinese identifier with large numeric state
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      regex: "(?m)^[ \\t]*[一-鿿]{5,}\\s*=\\s*[1-9][0-9]{3,}\\b"
+  # com-dispatch-usage removed - use micro-behaviors/communications/ipc/win32com/python composite instead
+  - id: join-map-getattr-chr
+    desc: "built via join(map(getattr(__builtins__)))"
+    crit: suspicious
+    conf: 0.92
+    count_min: 3
+    if:
+      type: text
+      substr: join(map(getattr(__builtins__
+  - id: is-admin-flag
+    desc: IsAdmin flag check (Python)
+    # Building block for the admin-check-ctypes composite only. A bare IsAdmin
+    # identifier (e.g. an API-model bool field) is not standalone obfuscation.
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      word: IsAdmin
+  - id: check-token-membership
+    desc: CheckTokenMembership Windows API call
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      kind: call
+      regex: '(?i)^CheckTokenMembership(Ex)?$'
+  - id: getattr-builtins-obfuscation
+    desc: Constructed builtin lookup
+    crit: suspicious
+    conf: 0.9
+    unless:
+      - type: basename
+        regex: (test_|_test\.|\.test\.|\.spec\.).*\.py$
+      - id: metadata/library/data::paramiko-source
+    if:
+      type: tree-sitter
+      kind: call
+      regex: getattr\(_*builtins_*\s*,\s*(chr\(|["'].{1,24}["']\s*\+|["']{0,2}\.join\()
+composite_rules:
+  - id: advanced-python-obfuscation
+    desc: Advanced Python obfuscation
+    crit: suspicious
+    conf: 0.9
+    needs: 3
+    any:
+      - id: metadata/file/profile/language::unicode-variable-names
+      - id: bit-shift-arithmetic
+      - id: getattr-builtins-obfuscation
+  - id: state-machine-obfuscation
+    desc: Opaque numeric state-machine dispatch
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: loop-large-numeric-branch
+      - id: obfuscated-state-variable
+  - id: admin-check-ctypes
+    desc: Admin privilege check via ctypes (composite)
+    crit: notable
+    conf: 0.85
+    any:
+      - id: micro-behaviors/os/privilege/check::ctypes-is-admin
+      - id: is-admin-flag
+      - id: check-token-membership
+    unless:
+      - id: well-known/tool/detection/
+  - id: windows-com-elevation
+    desc: Windows COM elevation attempt
+    crit: suspicious
+    conf: 0.95
+    attack: T1078
+    mbc: E1059
+    platforms:
+      - windows
+    all:
+      - id: micro-behaviors/communications/ipc/win32com::dispatch-call
+      - id: admin-check-ctypes
+  - id: obfuscated-setup-py-trojan
+    desc: Heavily obfuscated setup.py trojan
+    crit: hostile
+    conf: 0.95
+    attack: T1195.002
+    mbc: B0024
+    all:
+      - id: advanced-python-obfuscation
+      - id: state-machine-obfuscation
+      - id: micro-behaviors/communications/ipc/win32com::import-win32com

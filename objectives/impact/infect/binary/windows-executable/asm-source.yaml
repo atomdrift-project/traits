@@ -1,0 +1,230 @@
+defaults:
+  platforms: [windows]
+  for: [c, text]
+  attack: T1204
+  mbc: B0009
+
+traits:
+  - id: pe-asm-mz-pe-check
+    desc: PE source checks MZ and PE
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'cmp .{0,24}"ZM"[\s\S]{0,160}cmp .{0,24}"EP"'
+
+  - id: pe-asm-file-mask
+    desc: PE source EXE file mask
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\*\.(exe|scr)'
+
+  - id: pe-asm-findfirstfile
+    desc: PE source FindFirstFile call
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'FindFirstFile[A-Z]?'
+
+  - id: pe-asm-section-resize
+    desc: PE source resizes last section
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: 'SH_SizeOfRawData[\s\S]{0,260}SH_VirtualSize'
+
+  - id: pe-asm-entrypoint-patch
+    desc: PE source patches entrypoint
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'AddressOfEntryPoint[\s\S]{0,260}(0E8h|CALL|JMP)'
+
+  - id: pe-asm-tls-epo-comment
+    desc: PE source uses TLS EPO
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)(EPO \(TLS infection\)|existing TLS callback|created TLS directory)'
+
+  - id: pe-asm-mapped-file-edit
+    desc: PE source maps file for edit
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: 'CreateFileMapping[A-Z]?[\s\S]{0,800}MapViewOfFile'
+    unless:
+      - id: well-known/tool/sysadmin/chroot-win/
+      - id: well-known/app/obs-studio
+      - id: well-known/lib/ggml
+      - id: well-known/lib/hpc
+      - id: metadata/package/files/dependency::node-modules-path
+      - type: text
+        substr: CreateFileMappingFromApp
+
+  - id: pe-asm-section-appender-comment
+    desc: PE section appender comment
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)(reloc section inserter|last section appender|appending at last section)'
+
+  - id: pe-asm-infectpe-routine
+    desc: PE InfectPE routine
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)(InfectPE proc|@PE_Infectar|call InfectPE)'
+
+  - id: pe-asm-remap-larger
+    desc: PE source remaps larger file
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)(remap.{0,40}(larger|grande)|fichier\+virus)'
+
+  - id: pe-asm-companion-rename
+    desc: Moves/copies host to ex_ companion
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)\b(MoveFile[AW]?|CopyFile[AW]?)\b[\s\S]{0,160}\bex_[A-Za-z0-9_.-]*'
+
+    unless:
+    - id: well-known/lib/wine::wine-source-tree
+    - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+  - id: pe-asm-run-renamed-host
+    desc: PE source runs renamed host
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)(ex_[\s\S]{0,260}WinExec|WinExec[\s\S]{0,260}ex_)'
+
+    unless:
+    - id: well-known/lib/wine::wine-source-tree
+    - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+  - id: pe-asm-subroutine-injection-doc
+    desc: PE source subroutine injection docs
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      substr: injecting poly decryptor into some proc
+
+  - id: pe-asm-entrypoint-subtrace
+    desc: PE source traces host entrypoint
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      substr: OH_AddressOfEntryPoint
+
+  - id: pe-asm-dizzy-engine-call
+    desc: PE source calls dizzy engine
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'call\s+dizzy'
+
+  - id: pe-asm-shell-overwrite-copy
+    desc: PE source overwrites proc with shell
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'mov\s+esi,\s*offset shell[\s\S]{0,120}rep\s+movsb'
+
+composite_rules:
+  - id: pe-asm-file-enumeration
+    desc: PE source enumerates EXE files
+    crit: suspicious
+    conf: 0.94
+    near_bytes: 200
+    all:
+      - id: pe-asm-file-mask
+      - id: pe-asm-findfirstfile
+    unless:
+      - id: well-known/app/obs-studio
+
+  - id: pe-section-appending-infector-source
+    desc: PE section-appending infector source
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: pe-asm-mz-pe-check
+      - id: pe-asm-file-enumeration
+      - id: pe-asm-section-resize
+
+  - id: pe-tls-epo-infector-source
+    desc: PE TLS EPO infector source
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: pe-asm-tls-epo-comment
+      - id: pe-asm-file-enumeration
+    any:
+      - id: pe-asm-mapped-file-edit
+      - id: pe-asm-section-resize
+      - id: pe-asm-section-appender-comment
+
+  - id: pe-mapped-file-infector-source
+    desc: PE mapped-file infector source
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: pe-asm-file-enumeration
+      - id: pe-asm-mapped-file-edit
+    any:
+      - id: pe-asm-infectpe-routine
+      - id: pe-asm-section-appender-comment
+      - id: pe-asm-remap-larger
+
+  - id: pe-remap-infector-source
+    desc: PE remap infector source
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: pe-asm-file-enumeration
+      - id: pe-asm-infectpe-routine
+      - id: pe-asm-remap-larger
+
+  - id: pe-companion-replacement-infector-source
+    desc: PE companion replacement infector
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: pe-asm-file-enumeration
+      - id: pe-asm-companion-rename
+      - id: pe-asm-run-renamed-host
+
+  - id: pe-subroutine-overwrite-infector-source
+    desc: PE subroutine overwrite infector
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: pe-asm-mapped-file-edit
+      - id: pe-asm-entrypoint-subtrace
+      - id: pe-asm-dizzy-engine-call
+      - id: pe-asm-shell-overwrite-copy
+
+  - id: pe-polymorphic-proc-injection-doc
+    desc: PE polymorphic proc injection docs
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: pe-asm-subroutine-injection-doc
+      - id: pe-asm-entrypoint-subtrace
+      - id: pe-asm-dizzy-engine-call

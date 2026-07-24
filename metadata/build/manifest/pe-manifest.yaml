@@ -1,0 +1,117 @@
+# PE side-by-side assembly manifest signals.  Cleave's binary kv
+# extractor parses the embedded RT_MANIFEST resource into the kv
+# tree at `pe.manifest.*`.
+#
+# These are the highest-leverage swap-detection signals on Windows
+# binaries: vendors typically ship the same manifest across releases,
+# so a version drift, escalation in requestedExecutionLevel, or a
+# previously-absent autoElevate is unambiguous tampering.
+defaults:
+  platforms: [windows]
+  for: [pe]
+  conf: 1.0
+traits:
+  - id: pe-has-manifest
+    desc: PE carries side-by-side assembly manifest
+    crit: baseline
+    if:
+      type: value
+      path: pe.manifest
+      exists: true
+  - id: pe-requires-admin
+    desc: "PE manifest requests admin"
+    crit: notable
+    if:
+      type: value
+      path: pe.manifest.requested_execution_level
+      exact: requireAdministrator
+  - id: pe-highest-available
+    desc: Manifest requests highestAvailable execution
+    crit: notable
+    if:
+      type: value
+      path: pe.manifest.requested_execution_level
+      exact: highestAvailable
+  - id: pe-as-invoker
+    desc: requestedExecutionLevel is asInvoker
+    crit: baseline
+    if:
+      type: value
+      path: pe.manifest.requested_execution_level
+      exact: asInvoker
+
+  - id: pe-auto-elevate
+    desc: Manifest sets autoElevate (UAC-bypass tooling)
+    crit: notable
+    if:
+      type: value
+      path: pe.manifest.auto_elevate
+      exact: "true"
+    downgrade:
+      any:
+        - id: metadata/binary/vendor/
+        - id: metadata/build/manifest::pe-requires-admin
+  - id: pe-ui-access
+    desc: Manifest requests uiAccess privilege
+    crit: notable
+    if:
+      type: value
+      path: pe.manifest.ui_access
+      exact: "true"
+  - id: pe-dpi-aware
+    desc: GUI binary declares DPI awareness
+    crit: baseline
+    if:
+      type: value
+      path: pe.manifest.dpi_aware
+      exact: "true"
+  - id: pe-long-path-aware
+    desc: Manifest declares long-path awareness
+    crit: baseline
+    if:
+      type: value
+      path: pe.manifest.long_path_aware
+      exact: "true"
+  - id: pe-common-controls-v6
+    desc: Depends on Common-Controls v6
+    crit: baseline
+    if:
+      type: value
+      path: pe.manifest.dependencies
+      regex: "Microsoft.Windows.Common-Controls"
+  - id: pe-supports-win10
+    desc: Manifest opts into Windows 10+ behavior
+    crit: baseline
+    if:
+      type: value
+      path: pe.manifest.supported_os
+      regex: '"name":"win10"'
+  - id: pe-vista-only-manifest
+    desc: Manifest declares only Vista support
+    crit: notable
+    if:
+      type: value
+      path: pe.manifest.supported_os
+      regex: '"name":"vista"'
+    unless:
+      - id: pe-supports-win10
+  - id: pe-oracle-java-manifest-identity
+    desc: Manifest claims Oracle Java identity
+    crit: component
+    conf: 0.95
+    if:
+      type: value
+      path: pe.manifest
+      regex: 'Oracle Corporation|Java\(TM\) SE javaw process|Java\(tm\) 2 Standard Edition'
+
+  # Embedded/nested PE manifests often sit past 1MB in overlays. Neutral
+  # structural signal — not installer-family identity by itself.
+  - id: overlay-require-administrator-literal
+    desc: requireAdministrator manifest literal past 1MB
+    crit: component
+    conf: 0.9
+    size_min: 1000000
+    if:
+      type: text
+      exact: <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      offset_range: [1048576, null]

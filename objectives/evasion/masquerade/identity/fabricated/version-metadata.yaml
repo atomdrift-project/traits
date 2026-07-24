@@ -1,0 +1,215 @@
+defaults:
+  attack: T1036.005
+  for:
+    - pe
+  platforms:
+    - windows
+traits:
+  - id: lowercase-underscore-internal-name
+    desc: Lowercase underscore internal name
+    crit: component
+    conf: 0.82
+    if:
+      type: text
+      regex: '^[a-z]{4,12}_[a-z]{4,12}$'
+      section: .rsrc
+  - id: word-salad-version-copyright
+    desc: Word-salad LegalCopyright metadata
+    crit: suspicious
+    conf: 0.84
+    if:
+      type: value
+      path: pe.version.copyright
+      regex: '^[a-z]{4,20}( [a-z]{4,20}){2,4}$'
+    not:
+      - regex: '(?i)copyright'
+      - regex: '(?i)rights?'
+      - regex: '(?i)reserved'
+      - regex: '(?i)inc\.?'
+      - regex: '(?i)corp\.?'
+      - regex: '(?i)company'
+      - regex: '(?i)ltd\.?'
+      - regex: '(?i)llc'
+  # Crypter stubs frequently XOR/shift the VERSIONINFO string table, leaving
+  # CompanyName/ProductName/FileDescription as symbol-garbage that no legitimate
+  # vendor field ever contains. The chars `< > = @ ; { } |` essentially never
+  # appear in a real company/product/description; requiring TWO of them in one
+  # field (via the composite below needing two scrambled fields) keeps this
+  # near-zero-FP. Note: only catches symbol-range scrambles — alphanumeric-range
+  # scrambles need the planned pe.version.identity_entropy metric.
+  - id: symbol-garbage-company
+    desc: 'CompanyName field is symbol-garbage'
+    crit: component
+    conf: 0.85
+    if:
+      type: value
+      path: pe.version.company
+      regex: '[<>=@;{}|][^<>=@;{}|]*[<>=@;{}|]'
+  - id: symbol-garbage-product
+    desc: 'ProductName field is symbol-garbage'
+    crit: component
+    conf: 0.85
+    if:
+      type: value
+      path: pe.version.product_name
+      regex: '[<>=@;{}|][^<>=@;{}|]*[<>=@;{}|]'
+  - id: symbol-garbage-description
+    desc: 'FileDescription field is symbol-garbage'
+    crit: component
+    conf: 0.85
+    if:
+      type: value
+      path: pe.version.description
+      regex: '[<>=@;{}|][^<>=@;{}|]*[<>=@;{}|]'
+  # Metric-based scramble primitives (filefacts pe.version.identity_* over
+  # CompanyName+ProductName+FileDescription). Catch alphanumeric-range scrambles
+  # the symbol charset above misses. ANDed in the composite below: symbol/digit
+  # density alone FPs on version-laden product names and the entropy floor alone
+  # is near-always true for prose, but a field that is BOTH symbol-dense AND
+  # non-degenerate (entropy floor excludes repeated padding like "00000000…") is
+  # a scrambled identity, not a real one.
+  - id: identity-symbol-dense
+    desc: "VERSIONINFO symbol/digit-dense identity"
+    crit: component
+    conf: 0.8
+    if:
+      type: metrics
+      field: pe.version.identity_symbol_ratio
+      min: 0.4
+  - id: dotnet-bcl-type-version-product
+    desc: .NET BCL type used as product name
+    crit: component
+    conf: 0.86
+    if:
+      type: value
+      path: pe.version.product_name
+      exact: BitConverter
+  - id: dotnet-bcl-type-original-filename
+    desc: .NET BCL type used as original filename
+    crit: component
+    conf: 0.86
+    if:
+      type: value
+      path: pe.version.original_filename
+      regex: '^CallConv\w+\.exe$'
+  - id: opaque-original-filename-token
+    desc: Opaque tokenized original filename identity
+    crit: notable
+    conf: 0.9
+    if:
+      type: value
+      path: pe.version.original_filename
+      # Two or more long uppercase/alphanumeric blocks are enough to be an
+      # opaque generated identity.  The old three-block floor missed packed
+      # loaders using the common PREFIX_TOKEN.exe form; benign context is
+      # handled by the consuming packed-loader composites.
+      regex: '^[A-Z0-9]{4,}(_[A-Z0-9]{4,}){1,}\.exe$'
+composite_rules:
+  - id: scrambled-versioninfo-resource
+    desc: Scrambled (symbol-garbage) PE VERSIONINFO string table
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    needs: 2
+    any:
+      - id: symbol-garbage-company
+      - id: symbol-garbage-product
+      - id: symbol-garbage-description
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/app/wireshark/
+      - id: well-known/app/wireshark::wireshark-artifact-path
+  - id: scrambled-versioninfo-entropy
+    desc: Scrambled PE VERSIONINFO identity (high symbol density + entropy)
+    crit: suspicious
+    conf: 0.88
+    attack: T1027
+    all:
+      - id: identity-symbol-dense
+      - id: metadata/binary/metrics/structural::pe-version-identity-nondegenerate-entropy
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/package/versioning::pe-productversion-semver-git-hash
+  # OR-umbrella so downstream crypter composites trip on either the charset
+  # detector or the metric detector — independent keystones, so fixing one
+  # evasion (avoiding `<>` chars) does not evade the hostile verdict.
+  - id: garbled-versioninfo-identity
+    desc: PE VERSIONINFO identity is scrambled (charset or metric)
+    crit: component
+    conf: 0.9
+    any:
+      - id: scrambled-versioninfo-resource
+      - id: scrambled-versioninfo-entropy
+  - id: opaque-themida-version-masquerade
+    desc: Themida loader with opaque fabricated identity
+    crit: hostile
+    conf: 0.97
+    attack: T1036.005,T1027.002,T1070.006
+    all:
+      - id: opaque-original-filename-token
+      - id: objectives/anti-static/pack/detect::themida-boot-loader-layout
+      - id: metadata/binary/anomaly/provenance::pe-far-future-timestamp
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+  - id: fabricated-dotnet-type-versioninfo
+    desc: Fabricated .NET type VERSIONINFO identity
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: metadata/build/manifest::pe-manifest-myapplication-template
+      - id: dotnet-bcl-type-version-product
+      - id: dotnet-bcl-type-original-filename
+  - id: dotted-quad-version-pair
+    desc: Two dotted-quad version strings
+    crit: component
+    conf: 0.94
+    needs: 2
+    any:
+      - id: metadata/package/versioning::pe-file-version-ipv4-shape
+      - id: metadata/package/versioning::pe-product-version-ipv4-shape
+      - id: metadata/package/versioning::pe-product-name-ipv4-shape
+  # Doubly-fabricated identity: the string table is scrambled garbage AND the
+  # numeric version fields are throwaway dotted-quads. This is a strong
+  # packed/obfuscated .NET marker, but not by itself proof that the program
+  # decrypts or launches a payload; loader verdicts live under the reflective
+  # resource/in-memory execution composites.
+  - id: dotnet-fabricated-identity-crypter
+    desc: Unsigned .NET assembly with scrambled identity and throwaway version numbers
+    crit: suspicious
+    conf: 0.94
+    attack: T1027
+    all:
+      - id: metadata/binary/framework::dotnet-metadata
+      - id: garbled-versioninfo-identity
+      - id: dotted-quad-version-pair
+    unless:
+      - id: metadata/signed/platform/
+  - id: networked-fake-version-resource
+    desc: Unsigned fake version resource with IP-shaped metadata
+    crit: suspicious
+    conf: 0.94
+    size_max: 1048576
+    all:
+      - id: dotted-quad-version-pair
+    any:
+      - id: word-salad-version-copyright
+      - id: lowercase-underscore-internal-name
+      - id: metadata/binary/installer/script::nsis
+      - id: micro-behaviors/mem/protect/modify::getprocaddr-memory-loader-primitives
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/resource::resource-heavy-rsrc
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: well-known/lib/rsa-bsafe/
+      - id: well-known/lib/jvm/
+  - id: manifest-mismatched-word-salad-versioninfo
+    desc: Mismatched PE version with word-salad metadata
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: metadata/package/versioning::pe-version-resource
+      - id: word-salad-version-copyright
+      - id: metadata/build/artifact::manifest-version-mismatch
+    unless:
+      - id: metadata/signed/platform/

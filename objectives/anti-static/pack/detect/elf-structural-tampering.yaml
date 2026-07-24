@@ -1,0 +1,129 @@
+# ELF structural tampering — composite rules elevating clusters of
+# segment / EP anomalies to `hostile`. Mirrors the Mach-O equivalents
+# at objectives/anti-static/pack/detect/macho-structural-tampering.yaml.
+#
+# The base atomic traits live at metadata/binary/anomaly/format/elf.yaml;
+# on their own each is `notable` or `suspicious`, but two-or-more
+# fired together is a high-confidence packing / unpacker-stub signal
+# that warrants objective-tier classification.
+defaults:
+  platforms: [linux, android]
+  for: [elf]
+  attack: T1027.002
+composite_rules:
+  - id: malformed-elf-native-agent-endpoint
+    desc: Malformed ELF with PAM APIs and an embedded external endpoint
+    crit: hostile
+    conf: 0.97
+    attack: T1027.002,T1071.001
+    mbc: B0030
+    all:
+      - id: metadata/binary/anomaly/format::elf-parse-failure
+      - id: micro-behaviors/communications/ip/endpoint::external-ipv4-port-elf
+      - id: micro-behaviors/os/pam/auth::pam-auth-api-raw-reference
+    any:
+      - id: micro-behaviors/process/identity/setuid::uid-gid-cgo-api-cluster
+      - id: metadata/hardening/missing::stripped-binary
+  # Core cluster — writable EP region AND a W+X loadable segment.
+  # Two independent structural signals; together they are the textbook
+  # self-modifying / unpacker-stub fingerprint (e.g. runtime ELF
+  # decompressors that allocate W+X PT_LOAD and jump into it).
+  - id: elf-structural-tampering-cluster
+    desc: ELF writable EP region with W+X segment cluster
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/binary/anomaly/format::elf-entry-in-writable-segment
+      - id: metadata/binary/anomaly/format::elf-wx-segment
+    unless:
+      - id: metadata/binary/vendor/
+      - id: metadata/binary/vendor/
+      - id: well-known/tool/sysadmin/unix-benign/
+      - id: metadata/file/extension/identity::stm32-external-loader-elf
+      - id: well-known/tool/development/patchelf::patchelf-test-fixture
+      - id: metadata/binary/anomaly/format::arm-single-program-header-layout
+
+  # Section-flag tampering — `.text` or `.rodata` flag-set as writable
+  # is a deliberate flag-tampering signal that pefile-style validators
+  # catch. Either alone is a `consistency.*` `suspicious`-tier signal;
+  # together they are an unambiguous tampering fingerprint.
+  - id: elf-section-flag-tampering
+    desc: ELF .text and .rodata both carry SHF_WRITE
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/build/artifact::elf-text-section-writable
+      - id: metadata/build/artifact::elf-rodata-writable
+    unless:
+      - id: well-known/tool/development/patchelf::patchelf-test-fixture
+
+  # Header-tampering signal — any one of these alone is rare enough
+  # in legitimate binaries to warrant elevation. Section-count
+  # mismatch, segment overlap, multiple PT_INTERP, or duplicated
+  # section names all indicate deliberate header rewriting.
+  - id: elf-header-tampering
+    desc: ELF header tampering (overlap / count mismatch / multi-interp / dup names)
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: metadata/binary/anomaly/format::elf-segment-overlap
+      - id: metadata/binary/anomaly/format::elf-section-header-count-mismatch
+      - id: metadata/binary/anomaly/format::elf-multiple-pt-interp
+      - id: metadata/binary/anomaly/format::elf-duplicate-section-name
+    unless:
+      - id: metadata/package/testing/presence/harness::binary-test-directory
+      - id: metadata/binary/metrics/structural::elf-relocatable-object
+      - id: metadata/file/extension/identity::linux-firmware-blob-basename
+      - id: metadata/file/extension/identity::linux-firmware-embedded-elf-path
+      - id: well-known/tool/development/binutils::binutils-ld-testsuite-object
+      - id: well-known/tool/development/binutils::binutils-pr27590-object-basename
+      - id: well-known/tool/development/patchelf::patchelf-test-fixture
+      - id: metadata/binary/vendor::nvidia-cuda-cubin-sections
+
+  # A sectionless, stripped ELF that uses raw mmap/mprotect syscalls is not
+  # merely difficult to inspect: it has the characteristic memory-unpacking
+  # substrate of a loader. The direct-syscall atoms are sectionless-safe and
+  # avoid relying on imports that a nolibc stub intentionally omits.
+  - id: elf-sectionless-direct-syscall-unpacker
+    desc: Sectionless ELF direct-syscall memory unpacker
+    crit: hostile
+    conf: 0.97
+    attack: "T1027.002,T1620"
+    all:
+      - id: objectives/anti-static/pack/detect::no-section-headers
+      - id: metadata/hardening/missing::stripped-binary
+      - id: micro-behaviors/os/syscall/raw::x64-mmap-syscall-sectionless
+      - id: micro-behaviors/os/syscall/raw::x64-mprotect-syscall-sectionless
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/sysadmin/unix-benign/
+
+  - id: elf-sectionless-memory-loader
+    desc: Sectionless ELF maps memory, changes it executable, and transfers control
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002,T1620"
+    all:
+      - id: objectives/anti-static/pack/detect::no-section-headers
+      - id: micro-behaviors/os/syscall/raw::x64-mmap-syscall-sectionless
+      - id: metadata/binary/metrics/structural::few-functions
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/sysadmin/unix-benign/
+
+  - id: malformed-elf-kernel-control-loader
+    desc: Malformed ELF combines module control with process execution and networking
+    crit: hostile
+    conf: 0.98
+    attack: T1027.002,T1547.006,T1059,T1071
+    mbc: B0030
+    all:
+      - id: metadata/binary/anomaly/format::elf-parse-failure
+      - id: micro-behaviors/os/kernel/module::linux-module-load-import-text
+      - id: micro-behaviors/os/kernel/module::linux-module-unload-import-text
+      - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
+    any:
+      - id: micro-behaviors/communications/socket/listen::listen-import-text
+    unless:
+      - id: well-known/tool/sysadmin/unix-benign/
+      - id: metadata/binary/vendor/

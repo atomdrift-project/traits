@@ -1,0 +1,337 @@
+defaults:
+  platforms:
+    - windows
+traits:
+  - id: page-execute-readwrite
+    desc: PAGE_EXECUTE_READWRITE flag
+    crit: component
+    conf: 0.9
+    attack: T1055
+    for:
+      - pe
+      - dll
+      - c
+      - cpp
+      - csharp
+    if:
+      type: text
+      substr: PAGE_EXECUTE_READWRITE
+  - id: page-protection-enum
+    desc: PAGE protection constant enumeration
+    crit: component
+    for:
+      - pe
+      - dll
+      - c
+      - cpp
+      - csharp
+    if:
+      type: text
+      substr: PAGE_WRITECOPY
+  - id: kernel-pool-alloc
+    desc: Kernel pool memory allocation
+    crit: notable
+    conf: 0.9
+    attack: T1055
+    for:
+      - c
+      - cpp
+      - pe
+      - dll
+    if:
+      type: symbol
+      exact: ExAllocatePoolWithTag
+    downgrade:
+      any:
+        - type: text
+          exact: ntoskrnl.exe
+  - id: nonpaged-pool
+    desc: NonPagedPool kernel memory flag
+    crit: notable
+    conf: 0.9
+    for:
+      - c
+      - cpp
+      - pe
+      - dll
+    if:
+      type: text
+      substr: NonPagedPool
+    unless:
+      - id: metadata/lang/compiler/managed::delphi
+  - id: page-execute-readwrite-push
+    desc: Push PAGE_EXECUTE_READWRITE constant
+    crit: notable
+    conf: 0.7
+    attack: T1055
+    for:
+      - pe
+      - dll
+    count_min: 2
+    size_max: 2097152
+    if:
+      type: hex
+      section: .text
+      pattern: 6A 40
+  - id: virtualalloc-rwx-commit-x86
+    desc: VirtualAlloc commit RWX buffer
+    crit: notable
+    conf: 0.84
+    attack: T1055
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: text
+      pattern: '6A 40 68 00 10 00 00 [0-8] (FF 15 ?? ?? ?? ??|E8 ?? ?? ?? ??)'
+  - id: virtualalloc-rwx-commit-x86-raw
+    desc: VirtualAlloc commit RWX byte pattern
+    crit: notable
+    conf: 0.8
+    attack: T1055
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: raw
+      regex: '(?s)\x6A\x40\x68\x00\x10\x00\x00.{0,8}\xFF\x15'
+  - id: virtualalloc-rwx-commit-x86-stack
+    desc: VirtualAlloc RWX commit with stack arguments
+    crit: notable
+    conf: 0.9
+    attack: T1055
+    for: [pe, dll]
+    arch: [x86]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      # Stack-form x86 callers commonly materialize PAGE_EXECUTE_READWRITE
+      # and MEM_COMMIT before calling the imported VirtualAlloc thunk.
+      pattern: 'C7 44 24 0C 40 00 00 00 C7 44 24 08 00 10 00 00 C7 44 24 04 ?? ?? ?? ?? C7 04 24 00 00 00 00 FF 15 ?? ?? ?? ??'
+  - id: virtualalloc-rwx-commit-x86-direct
+    desc: VirtualAlloc commit RWX direct-call buffer
+    crit: notable
+    conf: 0.84
+    attack: T1055
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: text
+      pattern: '6A 40 68 00 10 00 00 [0-8] E8 ?? ?? ?? ??'
+  - id: virtualalloc-rwx-commit-x86-indirect
+    desc: x86 RWX allocation arguments with indirect call
+    crit: notable
+    conf: 0.92
+    attack: T1055
+    for: [pe, dll]
+    arch: [x86]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      # PAGE_EXECUTE_READWRITE, MEM_COMMIT, 0x1000-byte allocation, then an
+      # indirect x86 call. This covers runtime-resolved VirtualAlloc thunks.
+      pattern: '6A 40 68 00 10 00 00 68 00 10 00 00 6A 00 FF 55 ??'
+  # x64 counterpart to virtualalloc-rwx-commit-x86: the push-form patterns above
+  # are 32-bit (stack args). In the x64 fastcall ABI VirtualAlloc's flAllocationType
+  # (MEM_COMMIT=0x1000) lands in r8d and flProtect (PAGE_EXECUTE_READWRITE=0x40) in
+  # r9d, so neither push pattern fires on 64-bit loaders. This matches the RWX flag
+  # loaded into r9d (commonly as `lea r9d,[rcx+0x40]` with rcx pre-zeroed — an
+  # obfuscated way to materialize 0x40) next to the MEM_COMMIT constant in r8d.
+  - id: virtualalloc-rwx-commit-x64
+    desc: x64 VirtualAlloc RWX+MEM_COMMIT arg setup
+    crit: notable
+    conf: 0.84
+    attack: T1055
+    for: [pe, dll]
+    arch: [x86-64]
+    # No size_max: the match is bounded to the small .text section, and padded
+    # loaders inflate the FILE past any few-MB cap by design — exactly the case
+    # we must still catch.
+    if:
+      type: hex
+      section: .text
+      pattern: '44 8D 49 40 [0-8] 41 B8 00 10 00 00'
+  - id: virtualalloc-rwx-commit-resolved-x64
+    desc: Resolved x64 VirtualAlloc RWX call
+    crit: notable
+    conf: 0.96
+    attack: T1055
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      # Windows x64 fastcall order: lpAddress=0, dwSize, allocation type,
+      # then PAGE_EXECUTE_READWRITE, followed by an indirect call. Wildcard
+      # the requested size so this remains useful across loader families.
+      pattern: '41 B9 40 00 00 00 41 B8 00 30 00 00 BA ?? ?? ?? ?? B9 00 00 00 00 FF D0'
+  - id: page-execute-read-push
+    desc: Push PAGE_EXECUTE_READ constant (0x20)
+    crit: component
+    conf: 0.7
+    attack: T1055
+    for: [pe, dll]
+    size_max: 2097152
+    if:
+      type: hex
+      section: .text
+      pattern: 6A 20
+  - id: page-readwrite-push
+    desc: Push PAGE_READWRITE constant (0x04)
+    crit: component
+    conf: 0.7
+    attack: T1055
+    for: [pe, dll]
+    size_max: 2097152
+    if:
+      type: hex
+      section: .text
+      pattern: 6A 04
+  - id: page-execute-readwrite-arg-x64
+    desc: 'Load PAGE_EXECUTE_READWRITE into r8d/r9d'
+    crit: component
+    conf: 0.7
+    attack: T1055
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      pattern: 41 (B8|B9) 40 00 00 00
+    unless:
+      - id: well-known/app/
+      - id: well-known/lib/
+      - id: well-known/tool/
+      - id: well-known/tool/sysadmin/chroot-win::chroot-windows-component
+  - id: page-execute-read-arg-x64
+    desc: Load PAGE_EXECUTE_READ (0x20) into r8d/r9d
+    crit: component
+    conf: 0.7
+    attack: T1055
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      pattern: 41 (B8|B9) 20 00 00 00
+    unless:
+      - id: well-known/app/
+      - id: well-known/lib/
+      - id: well-known/tool/
+
+  - id: protected-buffer-indirect-call
+    desc: Calls buffer after executable protection change
+    crit: suspicious
+    conf: 0.92
+    attack: T1620
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      pattern: '41 B8 20 00 00 00 [0-64] FF 15 ?? ?? ?? ?? FF D6'
+  - id: protected-buffer-indirect-call-x64-reloc
+    desc: Calls transformed buffer in reloc section
+    crit: suspicious
+    conf: 0.96
+    attack: T1620
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .reloc
+      pattern: '48 89 F9 4A BA ?? ?? ?? ?? 00 00 00 00 4B B8 20 00 00 00 00 00 00 00 49 89 E1 4D FF 15 ?? ?? ?? ?? 4A 89 F9 4A 81 C7 ?? ?? ?? ?? 48 FF D7'
+  - id: page-readwrite-arg-x64
+    desc: Load PAGE_READWRITE (0x04) into r8d/r9d
+    crit: component
+    conf: 0.7
+    attack: T1055
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      pattern: 41 (B8|B9) 04 00 00 00
+    unless:
+      - id: well-known/app/
+      - id: well-known/lib/
+      - id: well-known/tool/
+  - id: virtualalloc-readwrite-commit-resolved-x64
+    desc: Resolved x64 VirtualAlloc read-write buffer
+    crit: notable
+    conf: 0.94
+    attack: T1620
+    arch: [x86-64]
+    for: [pe, dll]
+    if:
+      type: hex
+      section: .text
+      # MEM_COMMIT|MEM_RESERVE in r8d and PAGE_READWRITE in r9d, followed by
+      # an indirect call: the x64 VirtualAlloc argument order.
+      # The imported-thunk form used by compact native loaders.
+      pattern: '41 B9 04 00 00 00 41 B8 00 30 00 00 [0-32] FF 15 ?? ?? ?? ??'
+  - id: virtualalloc-readwrite-commit-stack-x64
+    desc: Stack-indirect x64 VirtualAlloc RW buffer
+    crit: notable
+    conf: 0.94
+    attack: T1620
+    arch: [x86-64]
+    for: [pe, dll]
+    if:
+      type: hex
+      section: .text
+      pattern: '41 B9 04 00 00 00 41 B8 00 30 00 00 [0-32] FF 94 24 ?? ?? ?? ??'
+  - id: virtualalloc-readwrite-commit-register-x64
+    desc: Register-resolved x64 VirtualAlloc RW buffer
+    crit: notable
+    conf: 0.95
+    attack: T1620
+    arch: [x86-64]
+    for: [pe, dll]
+    size_max: 5242880
+    if:
+      type: hex
+      section: .text
+      # VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+      # followed by a register-indirect call, as used by API hash loaders.
+      pattern: '41 B9 04 00 00 00 [0-24] 41 B8 00 30 00 00 [0-32] 41 FF (D0|D1|D2|D3|D4|D5|D6|D7)'
+  - id: safebuffers-directive
+    desc: Buffer security check suppression
+    crit: notable
+    conf: 0.85
+    attack: T1562
+    for:
+      - c
+      - cpp
+      - pe
+      - dll
+    if:
+      type: text
+      substr: safebuffers
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+composite_rules:
+  - id: executable-allocation-indicator
+    desc: Executable-memory allocation argument sequence
+    crit: notable
+    conf: 0.82
+    attack: T1055
+    for: [pe, dll]
+    any:
+      - id: virtualalloc-rwx-commit-x86
+      - id: virtualalloc-rwx-commit-x86-stack
+      - id: virtualalloc-rwx-commit-x86-indirect
+      - id: virtualalloc-rwx-commit-x86-raw
+      - id: virtualalloc-rwx-commit-x64
+    downgrade:
+      any:
+        - id: metadata/lang/compiler/systems::go-binary
+        - id: metadata/lang/compiled/

@@ -1,0 +1,165 @@
+# DNS-based exfiltration via install hooks (Node.js)
+# Detects install-time DNS beacon patterns where host metadata
+# is encoded and sent via DNS lookups to canary/OOB services.
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain),
+#         T1048.003 (Exfiltration Over Alternative Protocol: DNS)
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: "T1048.003"
+  mbc: "E1041"
+
+traits:
+  # Hex encoding for DNS label exfiltration
+  # Buffer.from(data).toString("hex").slice(0,60) — truncation to 60 chars
+  # stays under the 63-byte DNS label limit
+- id: hex-encode-dns-label
+  desc: Hex-encodes data truncated to DNS label limit
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: text
+    regex: 'toString\s*\(\s*["''](hex)["'']\s*\)\s*\.\s*slice\s*\(\s*0\s*,\s*6[0-3]\s*\)'
+
+  # Base64-decoded canary domain in encoded strings
+  # Matches dnshook.site domains recovered from base64
+- id: encoded-dnshook-canary
+  desc: Base64-decoded dnshook.site canary domain
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: encoded
+    encoding: base64
+    regex: '[a-z0-9]{8,64}\.dnshook\.site'
+
+  # Obfuscated dns.lookup with canary domain
+  # Detects when dns.lookup is called with a variable containing
+  # a dnshook.site domain (recovered from encoded strings)
+- id: dns-lookup-with-canary-domain--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: burpcollaborator.net
+  count_max: 1023579
+- id: dns-lookup-with-canary-domain--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: canarytokens
+  count_max: 1023580
+- id: dns-lookup-with-canary-domain--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: dnshook.site
+  count_max: 1023581
+- id: dns-lookup-with-canary-domain--rx-4
+  desc: Regex component marker
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: interact.sh
+  count_max: 1023582
+- id: dns-lookup-with-canary-domain--rx-5
+  desc: Regex component marker
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: dns.lookup
+  count_max: 1023583
+- id: dns-lookup-with-canary-domain--rx-7
+  desc: OAST interactsh canary domain
+  crit: component
+  conf: 0.95
+  # Match the OAST hostname (oast.fun/site/live/online/pro), not a bare `oast`
+  # substring — the latter fires inside "Yoast" and other benign words.
+  if:
+    type: text
+    regex: '\boast\.[a-z]{2,8}'
+  count_max: 1023585
+- id: dns-lookup-with-canary-domain--rx-8
+  desc: Oastify Collaborator canary domain
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: oastify.com
+  count_max: 1023586
+composite_rules:
+  # Install-time DNS beacon: install hook + DNS lookup + canary domain
+- id: npm-install-dns-beacon
+  desc: NPM install hook beacons via DNS canary
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-install
+  - id: micro-behaviors/communications/dns/lookup/resolver::dns-lookup-call
+  - id: encoded-dnshook-canary
+  any:
+  - id: hex-encode-dns-label
+  - id: dns-lookup-with-canary-domain
+
+  # DNS exfil with host profiling: install hook + DNS + hostname/userinfo
+- id: npm-install-dns-host-profile-exfil
+  desc: NPM install hook exfils host profile via DNS
+  crit: hostile
+  conf: 0.995
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-install
+  - id: encoded-dnshook-canary
+  - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+  - id: micro-behaviors/process/user/query::os-userinfo-call
+  any:
+  - id: hex-encode-dns-label
+  - id: dns-lookup-with-canary-domain
+  - id: micro-behaviors/communications/dns/lookup/resolver::dns-lookup-call
+
+  # DNS exfil with IP discovery: install hook + DNS + ifconfig.me
+- id: npm-install-dns-ip-exfil
+  desc: NPM install hook discovers IP and exfils via DNS
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-install
+  - id: encoded-dnshook-canary
+  - id: micro-behaviors/communications/http/ip-discovery::ifconfig-me
+  any:
+  - id: hex-encode-dns-label
+  - id: dns-lookup-with-canary-domain
+- id: dns-lookup-with-canary-domain
+  desc: DNS lookup targets canary domain service
+  crit: suspicious
+  conf: 0.95
+  any:
+  - id: dns-lookup-with-canary-domain--rx-1
+  - id: dns-lookup-with-canary-domain--rx-2
+  - id: dns-lookup-with-canary-domain--rx-3
+  - id: dns-lookup-with-canary-domain--rx-4
+  - id: dns-lookup-with-canary-domain--rx-5
+  - id: dns-lookup-with-canary-domain--rx-7
+  - id: dns-lookup-with-canary-domain--rx-8
+  unless:
+  - id: metadata/lang/scripted::dts-declaration-file
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+
+# Import-time hex DNS label beacon to a canary/OAST host (no install hook required).
+- id: js-hex-dns-canary-exfil
+  desc: Hex-truncated DNS labels queried against a canary host
+  crit: hostile
+  conf: 0.97
+  for: [javascript]
+  all:
+  - id: hex-encode-dns-label
+  - id: dns-lookup-with-canary-domain
+  any:
+  - id: micro-behaviors/communications/dns/lookup/resolver::dns-resolve-call
+  - id: micro-behaviors/communications/dns/lookup/resolver::dns-lookup-call
+  - id: micro-behaviors/communications/dns/lookup/resolver::node-dns-lookup

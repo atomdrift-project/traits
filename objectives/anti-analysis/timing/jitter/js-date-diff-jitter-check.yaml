@@ -1,0 +1,66 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - javascript
+traits:
+  - id: js-subtraction-func-regex
+    desc: Function returning simple subtraction
+    crit: component
+    # `return a - b;` — a one-line subtraction return (timing-diff helper). This
+    # source-text form subsumes the former AST twin; node scoping isn't needed
+    # because the composite gates this on triple-Date proximity.
+    if:
+      type: text
+      regex: 'return\s+[A-Za-z0-9_$]+\s*-\s*[A-Za-z0-9_$]+\s*;'
+  - id: js-multiple-sleep-raw
+    desc: Multiple Sleep calls (anti-emulation) - Raw
+    crit: suspicious
+    count_min: 2
+    if:
+      # Capture the call object so the `not:` below (checked against the matched
+      # span) can see it: `time.Sleep` (Go) and `Thread.Sleep` (Java/.NET) are
+      # normal blocking-sleep idioms, not JS evasion jitter, and Go templates
+      # (.go.tmpl) misdetect as JS so their retry-backoff loops trip this.
+      type: text
+      regex: '[\w$]+\.Sleep\s*\('
+    not:
+      - regex: '(?:time|Thread|Async)\.Sleep'
+    unless:
+    - id: well-known/lib/wine::wine-source-tree
+    - type: path
+      regex: '\.go(?:\.|$)'
+    - type: path
+      regex: '\.(?:fs|fsi|fsx|fsscript)(?:\.|$)'
+  - id: js-multiple-sleep-ast
+    desc: Multiple Sleep calls (anti-emulation) - AST
+    crit: suspicious
+    count_min: 2
+    if:
+      # Migrated from a tree-sitter call query to a `kind: call`
+      # match on the pre-extracted call fact (no per-member
+      # tree-sitter cursor walk; same name semantics).
+      type: symbol
+      kind: call
+      regex: '[\w$]+\.Sleep$'
+    not:
+      - regex: '(?:time|Thread|Async)\.Sleep'
+    unless:
+    - id: well-known/lib/wine::wine-source-tree
+    - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+    - type: path
+      regex: '\.go(?:\.|$)'
+    - type: path
+      regex: '\.(?:fs|fsi|fsx|fsscript)(?:\.|$)'
+composite_rules:
+  - id: js-date-diff-jitter-check
+    desc: JavaScript date-difference timing check
+    crit: notable
+    near_bytes: 500
+    unless:
+      - id: micro-behaviors/time/query/
+    all:
+      - id: micro-behaviors/time/query::js-triple-date
+    any:
+      - id: js-subtraction-func-regex
+      - id: js-multiple-sleep-raw
+      - id: js-multiple-sleep-ast

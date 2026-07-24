@@ -1,0 +1,105 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for: [scripts, binaries]
+  attack: T1053.003
+traits:
+  - id: cron-pidof-remote-restart
+    desc: "Cron restarts proc with remote host argument"
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      regex: "pidof -s %s.{0,80}then %s [0-9]{1,3}(\\.[0-9]{1,3}){3}"
+  - id: cron-hidden-tmp-entry
+    desc: Cron launches hidden tmp payload
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '\*/[0-9]{1,2} \* \* \* \* /tmp/\.'
+composite_rules:
+  - id: cron-paths-comp
+    desc: Cron file paths
+    crit: notable
+    any:
+      - id: objectives/persistence/system/cron/job::cron-d-path-reference
+      - id: micro-behaviors/fs/path/config/system::var-spool-cron-path
+      - id: micro-behaviors/os/autorun/scheduled::crontab-option
+  - id: cron-keywords
+    desc: Cron-related keywords
+    crit: notable
+    any:
+      - id: micro-behaviors/os/autorun/scheduled::crontab-keyword
+      - id: objectives/persistence/system/cron/job::etc-cron-path
+    unless:
+      - id: well-known/app/kilocode::kilo-code-native-runtime
+      - id: metadata/file/profile/identity::ansible-python-package-path
+      - id: well-known/app/notepad-plus-plus/
+  - id: cron-with-base64
+    desc: Cron with base64 decode
+    crit: suspicious
+    all:
+      - id: cron-keywords
+      - id: micro-behaviors/data/decode/base64::base64-decode-shell
+    unless:
+      - id: well-known/tool/detection/llm-scanner::mvar-security-context
+      - id: well-known/tool/sysadmin/acme-sh::acme-sh-main-script-context
+
+  - id: cron-encoded-remote-execution
+    desc: Cron installs encoded remote shell payload
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: cron-with-base64
+      - id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec
+  - id: cron-with-hidden
+    desc: Cron with hidden file paths
+    crit: suspicious
+    near_lines: 20
+    all:
+      - id: cron-keywords
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+    unless:
+      - id: metadata/file/profile/identity::ansible-python-package-path
+      - id: well-known/tool/detection/chkrootkit::source-tree
+  - id: cron-with-download
+    desc: Cron with download cradle
+    crit: notable
+    conf: 0.85
+    near_lines: 6
+    all:
+      - id: cron-paths-comp
+    any:
+      - id: micro-behaviors/communications/http/download/cli::curl-s-flag
+      - id: micro-behaviors/communications/http/download/cli::wget-q-flag
+  - id: cron-hidden
+    desc: Hidden or obfuscated cron entries
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: cron-with-base64
+      - id: cron-with-hidden
+  - id: cron-remote-payload-persistence
+    desc: Cron self-restart persistence for remote payload
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: cron-with-download
+      - id: cron-pidof-remote-restart
+    any:
+      - id: objectives/command-and-control/beacon/network/http::direct-http-c2-ip-url
+      - id: objectives/command-and-control/dropper/execution/eval::download-url-hardcoded
+  - id: hidden-cron-self-restart-persistence
+    desc: Hidden cron persistence with self-restarting payload
+    crit: hostile
+    conf: 0.98
+    mbc: B0030
+    platforms: [linux]
+    for: [elf]
+    all:
+      - id: cron-with-hidden
+      - id: objectives/persistence/login/shell/tasking::native-pipe-crontab-install
+      - id: micro-behaviors/fs/path/config/system::var-spool-cron-path
+      - id: micro-behaviors/os/service/config::systemd-keyword

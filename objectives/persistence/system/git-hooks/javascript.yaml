@@ -1,0 +1,100 @@
+# Git hook persistence via JavaScript
+# Detects scripts that install git hooks for persistent code execution
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+traits:
+  - id: git-hooks-path-join
+    desc: Constructs path to .git hooks directory
+    crit: notable
+    conf: 0.85
+    attack: T1546
+    if:
+      type: text
+      # A generic `path.join(..., 'hooks')` also describes AI-agent hook
+      # directories and ordinary plugin bundles. Require the Git metadata
+      # directory in the same path construction.
+      regex: "path\\.join\\([^;\\n]{0,120}['\"]\\.git['\"][^;\\n]{0,120}['\"]hooks['\"]"
+  - id: pre-commit-hook-ref
+    desc: References pre-commit hook name
+    crit: component
+    conf: 0.7
+    attack: T1546
+    if:
+      type: text
+      substr: pre-commit
+  - id: pre-push-hook-ref
+    desc: References pre-push hook name
+    crit: component
+    conf: 0.7
+    attack: T1546
+    if:
+      type: text
+      substr: pre-push
+  - id: post-checkout-hook-ref
+    desc: References post-checkout hook name
+    crit: component
+    conf: 0.78
+    attack: T1546
+    if:
+      type: text
+      substr: post-checkout
+  - id: hook-executable-write-mode
+    desc: writeFileSync executable mode
+    crit: component
+    conf: 0.9
+    attack: T1546
+    if:
+      type: text
+      regex: 'writeFileSync\([^;\n]{0,180}mode\s*:\s*0o?755'
+composite_rules:
+  - id: git-hook-installer
+    desc: Installs git hooks for persistent execution
+    crit: hostile
+    conf: 0.92
+    all:
+      - id: micro-behaviors/process/create/shell/git::git-rev-parse-dir
+      - id: git-hooks-path-join
+      - id: micro-behaviors/fs/write/file/direct::write-file-sync
+    unless:
+      - id: micro-behaviors/process/interpreter/vm/
+      - id: metadata/library/runtime::acquire-vscode-api
+    any:
+      - id: pre-commit-hook-ref
+      - id: pre-push-hook-ref
+  - id: direct-git-hook-installer
+    desc: Directly writes a git hook
+    # Installing a hook is a persistence-capable behavior, but legitimate
+    # developer tools do this too. Escalation requires a separate execution or
+    # delivery objective; this atom remains suspicious for triage.
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: git-hooks-path-join
+      - id: micro-behaviors/fs/write/file/direct::write-file-sync
+    any:
+      - id: micro-behaviors/fs/chmod/modify::node-chmod
+      - id: objectives/command-and-control/dropper/delivery/pipe::curl-pipe-node
+      - id: hook-executable-write-mode
+  - id: direct-executable-git-hook-installer
+    desc: Writes executable git hook
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: git-hooks-path-join
+      - id: micro-behaviors/fs/write/file/direct::write-file-sync
+      - id: hook-executable-write-mode
+    any:
+      - id: pre-commit-hook-ref
+      - id: pre-push-hook-ref
+      - id: post-checkout-hook-ref
+  - id: git-hook-writer
+    desc: Writes to git hooks directory
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/process/create/shell/git::git-rev-parse-dir
+      - id: git-hooks-path-join
+    unless:
+      - id: micro-behaviors/process/interpreter/vm/
+      - id: metadata/library/runtime::acquire-vscode-api

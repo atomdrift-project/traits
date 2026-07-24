@@ -1,0 +1,319 @@
+# Dotenv Credential Theft Detection
+# Detects malware stealing credentials from .env files
+# ATT&CK: T1552.001 (Credentials In Files)
+# MBC: B0014 (Credentials)
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: "T1552.001"
+  mbc: "B0014"
+  for: [python, shell, javascript, typescript]
+traits:
+  # === Dotenv File Access ===
+- id: dotenv-api-key-value
+  desc: Dotenv API key value
+  crit: component
+  conf: 0.88
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^[A-Z0-9_]{0,64}API_?KEY[A-Z0-9_]*=[A-Za-z0-9._/-]{32,128}$'
+  not:
+  - regex: '(?i)generate'
+  - regex: '(?i)your-'
+  - regex: '(?i)example'
+  - regex: '(?i)placeholder'
+  - regex: '(?i)changeme'
+- id: dotenv-secret-key-value
+  desc: Dotenv secret key value
+  crit: component
+  conf: 0.88
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^[A-Z0-9_]{0,64}SECRET(_KEY)?[A-Z0-9_]*=[A-Za-z0-9+/=_-]{32,160}$'
+  not:
+  - regex: '(?i)generate'
+  - regex: '(?i)your-'
+  - regex: '(?i)example'
+  - regex: '(?i)placeholder'
+  - regex: '(?i)changeme'
+- id: dotenv-db-password-value
+  desc: Dotenv database password value
+  crit: component
+  conf: 0.86
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^[A-Z0-9_]{0,64}DB[A-Z0-9_]*PASSWORD[A-Z0-9_]*=[A-Za-z0-9._%-]{12,80}$'
+  not:
+  - regex: '(?i)generate'
+  - regex: '(?i)your-'
+  - regex: '(?i)example'
+  - regex: '(?i)placeholder'
+  - regex: '(?i)changeme'
+- id: dotenv-password-value
+  desc: Dotenv password value
+  crit: component
+  conf: 0.82
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^[A-Z0-9_]{2,80}PASSWORD[A-Z0-9_]*=[A-Za-z0-9._%-]{12,80}$'
+  not:
+  - regex: '(?i)generate'
+  - regex: '(?i)your-'
+  - regex: '(?i)example'
+  - regex: '(?i)placeholder'
+  - regex: '(?i)changeme'
+- id: dotenv-admin123-password
+  desc: Dotenv admin123 password
+  crit: component
+  conf: 0.9
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^ADMIN[A-Z0-9_]{0,64}PASSWORD[A-Z0-9_]*=admin123$'
+- id: dotenv-admin-password
+  desc: Dotenv admin password
+  crit: component
+  conf: 0.88
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^[A-Z0-9_]{2,80}PASSWORD[A-Z0-9_]*=admin$'
+- id: dotenv-dsn-password-value
+  desc: Dotenv DSN embeds password
+  crit: component
+  conf: 0.84
+  for: [data, text]
+  if:
+    type: text
+    regex: '(?m)^[A-Z0-9_]{0,64}DSN=[^:\s]{1,32}:[^@\s]{8,80}@'
+- id: dotenv-file-access--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: "open\\(.{0,50}[\"'`/\\\\]\\.env($|[^A-Za-z0-9_]).{0,50}\\)"
+  count_max: 1013803
+- id: dotenv-file-access--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: "with open\\(.{0,50}[\"'`/\\\\]\\.env($|[^A-Za-z0-9_])"
+  count_max: 1013804
+- id: dotenv-read-secrets
+  desc: Dotenv secrets reading
+  crit: suspicious
+  conf: 0.85
+  unless:
+  - id: well-known/tool/detection/foresight::guardrail-source-context
+  if:
+    type: text
+    regex: "[\"'`/\\\\]\\.env($|[^A-Za-z0-9_]).{0,50}read\\(\\)|\\bdotenv\\b.{0,50}read\\(\\)"
+  # === Environment Variable Theft ===
+  # === Powershell Enumeration ===
+- id: powershell-drive-enum
+  desc: Powershell drive enumeration
+  crit: suspicious
+  conf: 0.85
+  unless:
+  - id: metadata/package/testing/
+  - id: well-known/app/agent-browser::agent-browser-benchmark
+  if:
+    type: text
+    regex: 'Get-ChildItem.{0,40}-Path\s+["'']?[A-Z]:\\\\["'']?.{0,40}(-Recurse|-Force)'
+  downgrade:
+    any:
+    - {id: 'metadata/package/testing/harness/runtime/'}
+- id: available-drives-enum
+  desc: Available drives enumeration
+  crit: suspicious
+  conf: 0.80
+  if:
+    type: text
+    regex: "ascii_uppercase.{0,50}exists|available_drives"
+- id: js-dotenv-parse-file
+  desc: Node parses dotenv file after reading it
+  # Parsing an application's own .env configuration is a normal build/runtime
+  # operation. Theft intent comes from the credential-harvest and HTTP-exfil
+  # composites below, not from dotenv.parse alone.
+  crit: notable
+  conf: 0.93
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'readFileSync\s*\([^)]{0,160}\)[\s\S]{0,220}dotenv(_\d+)?\.(default\.)?parse\s*\('
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/harness/runtime::test-basename-suffix
+  - id: metadata/package/testing/presence/harness/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - type: text
+    substr: setUpCloudShellEnvironment
+  # Sentry's build plugin reads this package-specific file for build metadata;
+  # it is not a search for user or application credentials.
+  - type: text
+    substr: .env.sentry-build-plugin
+- id: js-json-stringify-env
+  desc: JavaScript stringifies env object
+  crit: component
+  conf: 0.86
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*(parsed|env|process\.env)\b'
+- id: shell-cat-dotenv
+  desc: Shell cat of .env file
+  # Reading .env is a sensitive-file access signal (notable), not inherently
+  # credential theft. Stealers combine this with harvest keywords in composites.
+  crit: notable
+  conf: 0.9
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)(^|\s)cat\s+(~\/)?\.env(\s|$|[|;&])'
+  unless:
+    # Security scanners list `cat .env` as a credential-access threat signature.
+    - id: well-known/tool/detection/ai-guardrail/
+    - id: well-known/tool/detection/foresight::guardrail-source-context
+- id: archive-timestamped-dotenv-backup
+  desc: Archive includes timestamped dotenv backup
+  crit: suspicious
+  conf: 0.92
+  for: [zip]
+  if:
+    type: value
+    path: "archive.members[*].path"
+    regex: '(^|/)\.env\.backup\.[0-9]{8}_[0-9]{6}$'
+composite_rules:
+  # A stealer builds a list of .env paths (home + cwd + .env.local/.production)
+  # and reads them in a loop scanning for wallet secrets, so the readFileSync
+  # sits far from the .env literals and js-dotenv-readfile misses it. Reading
+  # a .env file next to a chain-specific private-key name is the harvest tell:
+  # a legitimate app loads its OWN key, it does not scan .env for MNEMONIC and
+  # ETH/BTC/SOLANA private keys together.
+- id: dotenv-crypto-secret-harvest
+  desc: Reads .env files to harvest crypto keys
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  near_lines: 40
+  all:
+    - id: micro-behaviors/fs/path/sensitive/credentials::dotenv-filename-literal
+    - id: objectives/credential-access/env/secrets/wallet::env-chain-private-key-name
+  # === Dotenv Credential Theft ===
+- id: dotenv-backup-with-secrets
+  desc: Dotenv backup contains secrets
+  crit: suspicious
+  conf: 0.92
+  for: [data, text]
+  all:
+  - id: metadata/file/extension/identity::dotenv-backup-filename
+  - id: dotenv-concrete-secret-assignment
+- id: dotenv-concrete-secret-assignment
+  desc: Dotenv contains concrete secrets
+  crit: suspicious
+  conf: 0.9
+  for: [data, text]
+  needs: 2
+  any:
+  - id: dotenv-api-key-value
+  - id: dotenv-secret-key-value
+  - id: dotenv-db-password-value
+  - id: dotenv-password-value
+  - id: dotenv-admin123-password
+  - id: dotenv-admin-password
+  - id: dotenv-dsn-password-value
+- id: archive-dotenv-backup-with-secret-policy
+  desc: Archive ships dotenv backup with secrets policy
+  crit: suspicious
+  conf: 0.9
+  for: [zip]
+  all:
+  - id: metadata/package/files/secret::packaged-dotenv-backup-file
+  - id: metadata/package/files/secret::packaged-secretsignore-file
+- id: dotenv-credentials-theft
+  desc: Dotenv credentials theft
+  crit: suspicious
+  conf: 0.90
+  for: [python]
+  unless:
+  - id: well-known/tool/detection/foresight::guardrail-source-context
+  all:
+  - id: dotenv-file-access
+  any:
+  - id: micro-behaviors/os/env/vars/access::python-environ-iteration
+  - id: micro-behaviors/os/env/vars/access::python-environ-dict
+  - id: micro-behaviors/os/env/vars/access::python-environ-string
+- id: env-exfiltration
+  desc: Environment variable exfiltration
+  crit: suspicious
+  conf: 0.95
+  needs: 2
+  any:
+  - id: dotenv-credentials-theft
+  - id: micro-behaviors/os/env/vars/access::python-environ-dict
+  - id: micro-behaviors/os/env/vars/access::python-environ-string
+- id: js-dotenv-read
+  desc: Node parses or scans dotenv credentials
+  crit: notable
+  conf: 0.84
+  for: [javascript, typescript]
+  near_bytes: 240
+  unless:
+  - id: well-known/app/opencode-router
+  - id: well-known/app/nitin-ai
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/harness/runtime::test-basename-suffix
+  - id: metadata/package/testing/presence/harness/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  any:
+  - id: js-dotenv-parse-file
+  - id: micro-behaviors/fs/path/sensitive/credentials::hidden-app-dotenv
+  all:
+  - id: micro-behaviors/fs/file/read::read-node
+- id: js-dotenv-http-exfil
+  desc: Dotenv contents posted over HTTP
+  crit: hostile
+  conf: 0.98
+  for: [javascript, typescript]
+  all:
+  - id: js-dotenv-parse-file
+  - id: js-dotenv-json-post
+- id: js-dotenv-json-post
+  desc: Dotenv JSON posted over HTTP
+  crit: suspicious
+  conf: 0.95
+  for: [javascript, typescript]
+  all:
+  - id: js-dotenv-parse-file
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: js-json-stringify-env
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/harness/runtime::test-basename-suffix
+  - id: metadata/package/testing/presence/harness/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+- id: npm-postinstall-dotenv-http-exfil
+  desc: npm postinstall exfils dotenv file
+  crit: hostile
+  conf: 0.99
+  attack: T1195.002
+  for: [javascript, typescript]
+  all:
+  - id: js-dotenv-http-exfil
+  - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+- id: dotenv-file-access
+  desc: Dotenv file access
+  crit: suspicious
+  conf: 0.75
+  unless:
+  - id: well-known/tool/detection/foresight::guardrail-source-context
+  any:
+  - id: dotenv-file-access--rx-1
+  - id: dotenv-file-access--rx-2

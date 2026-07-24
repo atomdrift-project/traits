@@ -1,0 +1,101 @@
+# Module Resolution Hijacking
+# Detects package/runtime search-order hijacks where the search path
+# is extended with a hidden directory (a leading-dot folder, a
+# tempdir path, or a sibling of a known package directory).
+#
+# Earlier revisions of this file matched bare list methods
+# (`append` / `extend` / `insert`) and bare directory tokens
+# (`site-packages` / `venv`), which triggered on every Python stdlib
+# file that touches a list method or imports from a package
+# directory. The fix is to match the *combined* shape: a path-list
+# manipulation API receiving a hidden-path string literal — i.e.
+# the actual attack pattern, not the building blocks.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, python, shell]
+
+traits:
+
+  # `PYTHONPATH=` / `NODE_PATH=` set to a hidden directory.
+  - id: env-path-hijack-hidden
+    desc: "NODE_PATH or PYTHONPATH set to hidden dir"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      # \b so `_PYTHONPATH=.../.libs` (libtool helpers) is not a hit; real
+      # `PYTHONPATH=./.hidden` implants still match.
+      regex: '(?i)\b(NODE_PATH|PYTHONPATH)\s*=\s*["'']?([^"''\s:;]{0,60}[\\/])?\.[\w-]{1,30}'
+    # Well-known project/tooling/agent dotdirs (Claude Code skills, OpenClaw
+    # workspace libs, venvs, config dirs) are conventional layout, not
+    # module-resolution hijacks — e.g. `PYTHONPATH=.claude/skills/<name>` or
+    # `sys.path` entries under ~/.openclaw/workspace/.
+    not:
+      - regex: '(?i)["''=/]\.(build|claude(-plugin)?|openclaw|hermes|codex|gemini|reference|venv|virtualenv|tox|nox|local|config|cache|github|gitlab|circleci|vscode|idea|husky|yarn|pnpm|devcontainer|bin)\b'
+      # Libtool's in-tree `.libs` directory is a normal native-extension
+      # build output, not a hidden module-resolution implant.
+      - regex: '(?i)[\\/]\.libs\b'
+
+  # `require("/.hidden/foo")` / `import .hidden.foo`
+  - id: require-from-hidden-path
+    desc: Import from hidden module directory
+    crit: notable
+    conf: 0.85
+    for: [javascript, python]
+    if:
+      type: text
+      regex: '(require\(|import\s+).{0,40}/\.[\w-]{1,20}/'
+    # Well-known project/agent/IDE dotdirs are conventional layout, not
+    # module-resolution hijacks (e.g. importing from .claude-plugin/ or
+    # ~/.openclaw/workspace libs).
+    not:
+      - regex: '/\.(claude(-plugin)?|openclaw|hermes|codex|gemini|github|gitlab|circleci|vscode|idea|config|husky|yarn|pnpm|changeset|well-known|storybook|next|nuxt|svelte-kit|devcontainer|bin)/'
+
+composite_rules:
+  # `sys.path.<insert|append|extend>(<literal hidden path>)` — Python.
+  - id: sys-path-hijack-hidden
+    desc: sys.path mutated with hidden-directory literal
+    crit: suspicious
+    conf: 0.93
+    for: [python]
+    near_lines: 1
+    all:
+      - id: micro-behaviors/os/module/search-path::sys-path-mutate
+      - id: micro-behaviors/fs/path/location::hidden-dir-literal
+    unless:
+      - id: well-known/app/cowork-flow::cowork-flow-hook-context
+      - id: metadata/package/testing/presence/harness::test-directory
+      - id: metadata/package/documentation::documentation-dir-path
+
+  # `module.paths.<unshift|push>(<literal hidden path>)` — Node.js.
+  - id: node-module-paths-hijack-hidden
+    desc: module.paths mutated with hidden-directory literal
+    crit: suspicious
+    conf: 0.93
+    for: [javascript]
+    near_lines: 1
+    all:
+      - id: micro-behaviors/os/module/search-path::node-module-paths-mutate
+      - id: micro-behaviors/fs/path/location::hidden-dir-literal
+    unless:
+      - id: metadata/library/structure::js-webpack-bundle
+      - id: metadata/library/structure::js-webpack-bundle-minified
+      - id: metadata/library/structure::js-webpack-minified-module-call
+
+  - id: module-resolution-hijack
+    desc: Module resolution hijack
+    crit: hostile
+    conf: 0.95
+    any:
+      - id: sys-path-hijack-hidden
+      - id: node-module-paths-hijack-hidden
+      - id: env-path-hijack-hidden
+      - id: require-from-hidden-path
+    downgrade:
+      any:
+        - id: metadata/library/structure::js-large-module-bundle
+        - id: micro-behaviors/process/interpreter/vm/
+    unless:
+      - id: well-known/lib/psutil/
+      - id: well-known/app/cowork-flow::cowork-flow-hook-context
+      - id: metadata/package/testing/presence/harness::test-directory

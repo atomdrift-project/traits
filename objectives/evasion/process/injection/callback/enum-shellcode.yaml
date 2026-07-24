@@ -1,0 +1,92 @@
+# Shellcode execution by passing the buffer address as an EnumXxx callback.
+# Classic Windows trick: APIs like EnumDesktopsA/W, EnumWindows,
+# EnumChildWindows take a function pointer; passing a pointer to RWX
+# shellcode makes the OS call into the payload during routine
+# enumeration, bypassing direct CreateThread heuristics.
+# Used by ShadowPad (SHADOW-EARTH-053 TosBtKbd loader).
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1106
+  mbc: E1106
+traits:
+  - id: enum-windows-callback
+    desc: EnumWindows / EnumChildWindows API
+    crit: component
+    conf: 0.6
+    if:
+      type: symbol
+      regex: '^Enum(Child)?Windows$'
+    unless:
+      - id: well-known/lib/dioxus::dioxus-runtime
+      - id: well-known/game/mod/
+  - id: enum-fonts-callback
+    desc: EnumFonts callback shellcode execution API
+    crit: notable
+    conf: 0.65
+    if:
+      type: symbol
+      regex: '^EnumFonts[AW]$'
+  - id: enum-locale-callback
+    desc: EnumSystemLocales callback API
+    crit: component
+    conf: 0.7
+    if:
+      type: symbol
+      regex: '^EnumSystemLocales[AW]$'
+    unless:
+      - id: well-known/app/drivers::ngx-dll-basename
+    downgrade:
+      any:
+      - id: metadata/signed/developer::cisco-systems
+      - id: metadata/signed/leaf::cisco-systems-inc.
+  - id: virtualalloc-rwx-text
+    desc: VirtualAlloc with RWX permissions
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: 'VirtualAlloc\S{0,40}\(\S{0,200}(0x40\b|PAGE_EXECUTE_READWRITE)'
+composite_rules:
+  - id: enum-callback-shellcode-execution
+    desc: Shellcode executed via Enum* callback
+    crit: suspicious
+    conf: 0.92
+    near_lines: 80
+    all:
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
+      - id: virtualalloc-rwx-text
+    any:
+      - id: micro-behaviors/ui/window/manage/enumerate::enum-desktops
+      - id: enum-windows-callback
+      - id: enum-fonts-callback
+      - id: enum-locale-callback
+  - id: scrambled-upx-enumfonts-process-injection
+    desc: Magic-stripped UPX EnumFonts callback with process-injection APIs
+    crit: hostile
+    conf: 0.97
+    attack: T1027.002,T1055.002,T1055.003
+    all:
+      - id: objectives/anti-static/pack/upx::scrambled-upx-header
+      - id: enum-fonts-callback
+      - id: metadata/binary/layout::pe-tls-callback-table
+    any:
+      - id: micro-behaviors/process/inject/runtime/call::queue-user-apc
+      - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-binary
+    needs: 2
+    unless:
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+      - id: well-known/tool/reverse-engineering/
+  - id: cert-enum-encrypted-payload-execution
+    desc: Encrypted embedded PE payload is released through a CertEnum callback
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1106,T1620
+    all:
+      - id: micro-behaviors/os/callback/enum::payload-release-log
+      - id: micro-behaviors/os/callback/enum::cert-enum-callback-token
+      - id: micro-behaviors/crypto/symmetric/aes/library::rust-aes-crate-path
+      - id: micro-behaviors/data/embedded/payload/header::pe-header-compare-immediate-multiple
+      - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator

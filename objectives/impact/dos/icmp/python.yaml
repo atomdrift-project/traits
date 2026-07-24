@@ -1,0 +1,83 @@
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1498.001
+  mbc: B0042
+
+traits:
+  - id: python-large-ping-payload
+    desc: Python ping command with maximum payload
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)\bping\b[^\n]{0,120}\s-s\s*65500\b'
+  - id: python-subprocess-ping-argv
+    desc: Subprocess argv starts with ping
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: '\[[''"]ping[''"]'
+  - id: python-os-system-ping
+    desc: os.system or popen runs ping
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: 'os\.(system|popen)\([^)]{0,100}\bping\b'
+  - id: python-subprocess-run-ping
+    desc: subprocess call runs ping
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: 'subprocess\.(call|run|Popen)\([^)]{0,100}\bping\b'
+  - id: python-shell-ping-flag
+    desc: Shell ping with flag argument
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '[''"`]ping\s+-'
+  - id: python-background-ping-command
+    desc: Python ping command launched in the background
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '\bping\b[^\n]{0,100}\s&(\s|[;&|)]|$)'
+
+composite_rules:
+  - id: python-ping-process-launch
+    desc: Python launches ping process
+    crit: component
+    conf: 0.92
+    # Keep the process evidence in the same source region as the ping call;
+    # archive-wide aggregation must not join a Redis/API "ping" with another file.
+    near_lines: 20
+    any:
+      - id: python-subprocess-ping-argv
+      - id: python-os-system-ping
+      - id: python-subprocess-run-ping
+      - id: python-shell-ping-flag
+  - id: python-repeated-ping-launch
+    desc: Python loop repeatedly launches ping commands
+    crit: suspicious
+    conf: 0.94
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/evidence::evidence-scripts-directory-path
+    all:
+      - id: micro-behaviors/data/control-flow/analysis::iteration-loop-pattern
+      - id: python-ping-process-launch
+    near_lines: 20
+  - id: python-icmp-flood-implementation
+    desc: Python ICMP flood implementation
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: python-large-ping-payload
+      - id: python-repeated-ping-launch
+      - id: python-background-ping-command

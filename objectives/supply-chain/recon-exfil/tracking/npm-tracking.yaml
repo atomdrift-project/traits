@@ -1,0 +1,199 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+traits:
+- id: npm-config-query-pkg
+  desc: Config fetch keyed by package
+  crit: suspicious
+  conf: 0.88
+  attack: T1592
+  if:
+    type: text
+    substr: /api/config?pkg=
+- id: standard-telemetry-optout-env
+  desc: Standard telemetry opt-out env
+  crit: component
+  conf: 0.82
+  if:
+    type: text
+    regex: 'process\.env\.(DISABLE_TELEMETRY|DO_NOT_TRACK|NO_TELEMETRY)'
+- id: namespaced-telemetry-optout-env
+  desc: Namespaced telemetry opt-out env
+  crit: component
+  conf: 0.82
+  if:
+    type: text
+    regex: 'process\.env\.[A-Z0-9_]*TELEMETRY'
+- id: hbase-addkey-endpoint
+  desc: HBase addKey telemetry endpoint
+  crit: suspicious
+  conf: 0.95
+  attack: T1041
+  if:
+    type: string_literal
+    substr: /Hbase/addKey?method=addkey
+- id: dependency-changesets-row
+  desc: Dependency changesets telemetry row
+  crit: suspicious
+  conf: 0.94
+  attack: T1041
+  if:
+    type: string_literal
+    exact: dependencies_changesets
+- id: package-changesets-table-name
+  desc: Package name forms changesets table
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: 'name\.replace\.replace[\s\S]{0,120}_changesets'
+- id: agent-session-presence-marker
+  desc: Agent session presence metadata marker
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    substr: buildSessionTransportPresence
+- id: package-object-json-stringify
+  desc: Serializes local package metadata object
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\([^)]{0,500}\b(pkg|packageJson|packageJSON)\b'
+composite_rules:
+- id: npm-disable-telemetry-env-gate
+  desc: Telemetry gated by env opt-out
+  crit: component
+  conf: 0.82
+  any:
+  - id: standard-telemetry-optout-env
+  - id: namespaced-telemetry-optout-env
+- id: npm-install-git-check
+  desc: Checks for .git during npm install script
+  crit: suspicious
+  conf: 0.8
+  attack: T1497.001
+  mbc: B0009
+  all:
+  - id: micro-behaviors/fs/path/check::check-git-dir
+  - id: micro-behaviors/os/env/vars/access::npm-lifecycle
+- id: npm-package-telemetry
+  desc: Collects npm package metadata for telemetry
+  crit: suspicious
+  conf: 0.7
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/os/env/vars/access::npm-package-info
+  - id: micro-behaviors/communications/http/post/
+  - id: package-object-json-stringify
+  unless:
+  - id: agent-session-presence-marker
+  - id: well-known/app/tencent-codebuddy::tencent-codebuddy
+- id: npm-package-json-telemetry-post
+  desc: Posts local package metadata over HTTP
+  crit: suspicious
+  conf: 0.9
+  attack: T1041
+  size_max: 20000
+  all:
+  - id: micro-behaviors/fs/file/read::require-local-package-json
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: package-object-json-stringify
+- id: npm-host-package-metadata-exfil
+  desc: NPM host package metadata exfiltration
+  crit: hostile
+  conf: 0.98
+  attack: T1041
+  size_max: 20000
+  all:
+  - id: npm-package-json-telemetry-post
+  - id: objectives/discovery/system/fingerprint/hardware::js-victim-id
+  - id: objectives/supply-chain/recon-exfil/host-profile/install-context::npm-install-tracking-object
+  - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+- id: npm-import-time-system-telemetry-post
+  desc: Import-time npm system telemetry POST
+  crit: hostile
+  conf: 0.96
+  attack: T1041
+  mbc: E1041
+  size_max: 20000
+  all:
+  - id: npm-package-json-telemetry-post
+  - id: micro-behaviors/communications/http/url/path::telemetry-api-path
+  - id: objectives/discovery/system/fingerprint/hardware::node-short-os-alias-host-user
+  - id: objectives/discovery/system/fingerprint/hardware::node-short-os-alias-profile
+  - id: micro-behaviors/communications/http/request/client::node-https-request-h-alias
+  - id: micro-behaviors/os/sysinfo/platform/runtime::process-cwd-call
+  - id: objectives/anti-static/obfuscation/eval/dynamic::loader-iife-tail
+  - id: objectives/supply-chain/trojanized/library/hidden-dep::swallowed-loader-errors
+- id: npm-optout-gated-telemetry-post
+  desc: Env-gated npm telemetry POST
+  crit: suspicious
+  conf: 0.9
+  attack: T1041
+  size_max: 20000
+  all:
+  - id: npm-package-json-telemetry-post
+  - id: npm-disable-telemetry-env-gate
+  - id: micro-behaviors/communications/http/request/client::node-https-request-h-alias
+- id: npm-config-gated-telemetry-post
+  desc: Remote config gates npm telemetry POST
+  crit: suspicious
+  conf: 0.92
+  attack: T1041
+  all:
+  - id: npm-package-json-telemetry-post
+  - id: npm-config-query-pkg
+  - id: micro-behaviors/communications/http/url/path::telemetry-api-path
+- id: repo-package-metadata-post
+  desc: Collects git revision and local package metadata for HTTP POST
+  crit: suspicious
+  conf: 0.9
+  attack: T1041
+  size_max: 12000
+  all:
+  - id: micro-behaviors/process/create/shell/git::git-rev-parse-head
+  - id: micro-behaviors/os/sysinfo/platform/runtime::process-cwd-call
+  - id: micro-behaviors/fs/file/read::require-cwd-package-json
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+- id: repo-package-metadata-post-alt-http
+  desc: Reports local repo metadata to alternate HTTP service
+  crit: suspicious
+  conf: 0.92
+  attack: T1041
+  all:
+  - id: repo-package-metadata-post
+  - id: micro-behaviors/communications/http/url/port::http-alt-port-8080
+- id: npm-dependency-changeset-hbase-post
+  desc: Posts dependency changesets to HBase
+  crit: suspicious
+  conf: 0.97
+  attack: T1041
+  all:
+  - id: repo-package-metadata-post
+  - id: hbase-addkey-endpoint
+  - id: dependency-changesets-row
+  any:
+  - id: package-changesets-table-name
+  - id: micro-behaviors/communications/url/construction/fragment::js-fragmented-url-protocol
+  - id: micro-behaviors/communications/http/url/port::http-alt-port-8080
+- id: npm-publish-repo-metadata-telemetry
+  desc: npm publish helper reports local repo and package metadata
+  crit: suspicious
+  conf: 0.93
+  attack: T1195.002
+  all:
+  - id: objectives/supply-chain/impersonation/package/manifest::npm-publish-hooks
+  - id: repo-package-metadata-post
+  any:
+  - id: micro-behaviors/communications/http/url/port::http-alt-port-8080
+  - id: metadata/import/builtin::require-child-process
+- id: npm-postpublish-git-tag-push
+  desc: npm publish helper creates and pushes git tags
+  crit: suspicious
+  conf: 0.88
+  attack: T1195.002
+  all:
+  - id: objectives/supply-chain/impersonation/package/manifest::npm-publish-hooks
+  - id: micro-behaviors/process/create/shell/git::git-tag-and-push

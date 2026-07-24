@@ -1,0 +1,64 @@
+# Code-signing trust abuse: a binary that carries an embedded code-signing
+# certificate (so it presents as a signed, trustworthy product) while hiding a
+# malicious payload. Trojanized-signed-host loaders (e.g. ACRStealer / Shelma)
+# graft an encrypted second stage onto a real signed component; the file still
+# ships the original certificate table even though the body no longer matches.
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1553.002
+  mbc: B0032
+composite_rules:
+  - id: signed-nsis-zero-width-overlay-carrier
+    desc: Microsoft-signed NSIS carrier hides a zero-width-marked high-entropy overlay
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1036.005,T1553.002
+    all:
+      - id: metadata/binary/layout::cert-table-present
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/binary/installer/script::nsis
+      - id: metadata/binary/layout::signed-pe-checksum-mismatch
+      - id: metadata/binary/layout::high-entropy-overlay
+      - id: metadata/binary/layout::overlay-dominates-90pct
+      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206d
+      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206f
+
+  - id: signed-inno-opaque-marker-carrier
+    desc: Signed Inno carrier hides a zero-width opaque payload
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1036.005,T1553.002
+    all:
+      - id: metadata/binary/layout::cert-data-zeroed-checksum
+      - id: metadata/binary/layout::high-entropy-overlay
+      - id: metadata/binary/layout::overlay-dominates-90pct
+      - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206d
+      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206f
+
+  # Carries a code-signing certificate AND conceals an encrypted payload in an
+  # oversized .reloc. A genuinely signed product never hides an encrypted stage
+  # in its relocation section, so the pairing is the trust-abuse signature of a
+  # trojanized signed host. References the concealed-payload composite so the
+  # structural gate (entropy + overhang) is inherited.
+  - id: signed-host-concealed-payload
+    desc: Signed host conceals encrypted payload
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/binary/layout::cert-table-present
+      - id: objectives/anti-static/pack/section-anomaly::reloc-concealed-encrypted-payload
+  # A malformed PE with a Microsoft leaf certificate and a huge low-entropy
+  # relocation section is a distinct signed-loader pattern even when the
+  # relocation bytes are not high-entropy enough for the encrypted-payload
+  # composite above.
+  - id: signed-malformed-reloc-loader
+    desc: Microsoft-signed malformed PE hides data in oversized relocations
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1553.002
+    all:
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/binary/metrics/structural::malformed-pe-structure
+      - id: objectives/anti-static/pack/section-anomaly::oversized-reloc-masking

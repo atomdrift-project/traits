@@ -1,0 +1,218 @@
+# Atomic traits moved to micro-behaviors:
+#   console-check-api → micro-behaviors/os/sysinfo/console::console-screen-buffer-info
+#   getenv-api → micro-behaviors/os/env/access::get-environment-strings
+defaults:
+  mbc: B0001
+composite_rules:
+  - id: console-environment-detection
+    desc: Console environment detection checks
+    crit: suspicious
+    conf: 0.75
+    platforms:
+      - windows
+    for: [pe]
+    attack: T1497.001
+    needs: 2
+    any:
+      - id: micro-behaviors/os/sysinfo/console::console-screen-buffer-info
+      - id: micro-behaviors/hardware/display/screen::write-console-w
+    unless:
+      - id: metadata/library/runtime::microsoft-openmp-runtime
+      - id: well-known/lib/jline/
+      - id: well-known/lib/jline/
+      - id: metadata/lang/compiler/systems/
+      - id: well-known/app/telegram::telegram-desktop-signed-client-context
+    downgrade:
+      any:
+        - id: metadata/binary/metrics/structural::many-imports
+        - id: metadata/package/versioning::pe-version-resource
+        - id: well-known/app/swifttunnel_vpn/
+  - id: environment-query-capability
+    desc: Environment query capability
+    crit: notable
+    conf: 0.8
+    platforms: [unix, windows, macos]
+    for: [binaries, scripts]
+    attack: T1497
+    any:
+      - id: micro-behaviors/os/env/access::get-environment-strings
+      - id: console-environment-detection
+    unless:
+      - id: well-known/app/swifttunnel_vpn/
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/lang/compiler/systems::rustc-path
+    downgrade:
+      any:
+        - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
+        - id: metadata/binary/vendor::microsoft-corp-marker-rdata
+        - id: metadata/signed/platform/
+        - id: metadata/package/versioning::pe-version-resource
+  - id: known-benign-environment-tool-context
+    desc: Recognized benign environment-tool context
+    crit: exception
+    conf: 0.99
+    platforms: [unix, windows, macos]
+    for: [binaries, scripts]
+    any:
+      - id: well-known/lib/ssh2::ssh2-pageant-helper-context
+      - id: well-known/lib/win-ca::win-ca-native-certificate-enumerator
+      - id: well-known/app/elevate::elevate-benign-context
+      - id: well-known/app/baidu-comate::baidu-comate
+  - id: environment-adaptive-behavior
+    desc: Adaptive behavior based on environment
+    crit: suspicious
+    conf: 0.85
+    platforms: [unix, windows, macos]
+    for: [binaries, scripts, go]
+    attack: T1497
+    all:
+      - id: environment-query-capability
+    any:
+      - id: objectives/anti-analysis/vm-detect/
+      - id: objectives/anti-analysis/sandbox-detect/inline/
+      - id: micro-behaviors/fs/proc/container::multi-marker-runtime-detection
+      # A bare IsDebuggerPresent import is common CRT noise. Require a guarded
+      # debugger-check composite before treating environment queries as adaptive.
+      - id: objectives/anti-analysis/debugger-detect/check::debugger-check-with-guards
+    needs: 2
+    unless:
+      - id: well-known/game/steam/
+      - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
+      - id: metadata/signed/platform/
+      - id: metadata/lang/compiled/
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: well-known/app/ventoy/
+      - id: known-benign-environment-tool-context
+  - id: desktop-aware-sandbox-check
+    desc: Desktop-aware sandbox detection with debugger checks
+    crit: suspicious
+    conf: 0.93
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/hardware/display/screen::get-desktop-window
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
+    any:
+      - id: micro-behaviors/os/privilege/manifest::admin-manifest
+      - id: micro-behaviors/os/registry/access::registry-transacted-api-chain
+      - id: metadata/binary/metrics/structural::high-entropy-data
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/binary/installer/family/
+        - id: metadata/signed/platform/
+        - id: well-known/app/drivers/
+    unless:
+      - id: metadata/signed/developer::tencent-technologyshenzhen-company-limited
+      # Both `all:` legs are universal in a large native GUI app: every Windows
+      # GUI program calls GetDesktopWindow, and IsDebuggerPresent ships in the
+      # stock MSVC CRT startup imports of every MSVC binary (adjacent to
+      # InitializeSListHead/GetStartupInfoW in the import name table). The `any:`
+      # legs are equally ordinary there — an admin manifest, and `high-entropy-data`
+      # that is really just uncompressed bitmap/PNG resources. A sandbox-evading
+      # loader hides its API use behind dynamic resolution and has a thin import
+      # table; 80+ imports resolved through a plain import table is a real
+      # application. Same guard the sibling composite above already uses.
+      - id: metadata/binary/metrics/structural::many-imports
+  - id: packed-loader-environment-fingerprint
+    desc: Packed loader with anti-analysis environment fingerprinting
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    for: [pe, dll]
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/signed/platform/
+    all:
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
+      - id: objectives/discovery/system/locale::windows-locale-fingerprint
+      - id: micro-behaviors/ui/window/station::window-station-query-chain
+      - id: objectives/anti-static/obfuscation/payload/self-read::self-read-file-chain
+    any:
+      - id: metadata/binary/metrics/structural::high-entropy-data
+      - id: objectives/anti-static/pack/entropy::high-entropy-data-section
+    downgrade:
+      any:
+        - id: metadata/package/versioning::pe-version-resource
+        - id: metadata/lang/compiler/native::ms-visual
+        - id: metadata/binary/metrics/structural::many-imports
+  - id: native-environment-probe-cluster
+    desc: Native loader probes locale, hardware, and desktop state
+    crit: suspicious
+    conf: 0.96
+    platforms: [windows]
+    for: [pe, dll]
+    attack: T1497.001,T1614
+    needs: 4
+    any:
+      - id: micro-behaviors/os/sysinfo/platform/locale::get-system-default-lang-id
+      - id: micro-behaviors/os/sysinfo/platform/locale::get-system-default-lcid
+      - id: micro-behaviors/os/sysinfo/platform/locale::get-thread-locale
+      - id: micro-behaviors/os/sysinfo/processor::get-process-version
+      - id: micro-behaviors/os/sysinfo/processor::get-active-processor-group-count
+      - id: micro-behaviors/ui/window/station/
+      - id: micro-behaviors/os/clipboard/access::clipboard-sequence-number
+      - id: micro-behaviors/hardware/input/keyboard/hook::get-key-state
+      - id: micro-behaviors/hardware/input/keyboard/hook::get-async-key-state
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/framework/
+      # Locale, clipboard, processor and window-station APIs are routine in a
+      # full native GUI. Keep this objective for sparse/loader-like binaries;
+      # the opaque-dispatch composite still correlates it with obfuscation.
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/package/versioning::pe-version-resource
+      # Headless WebKit (PhantomJS) legitimately queries locale/desktop APIs.
+      - id: well-known/app/phantomjs::phantomjs-official-binary
+  - id: opaque-dispatch-environment-probe
+    desc: Opaque native loader fingerprints host state
+    crit: hostile
+    conf: 0.98
+    platforms: [windows]
+    for: [pe, dll]
+    attack: T1027,T1497.001,T1614
+    all:
+      - id: objectives/anti-static/obfuscation/control-flow/dispatch::opaque-indexed-dispatch-loader
+      - id: native-environment-probe-cluster
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/framework/
+      - id: metadata/binary/installer/family/
+  - id: msi-opaque-runtime-environment-loader
+    desc: MSI stages an opaque host-fingerprinting runtime payload
+    crit: hostile
+    conf: 0.99
+    platforms: [windows]
+    # The composite correlates an MSI container with a PE/DLL payload in the
+    # outer analysis scope.  `all` is not a valid file-type declaration; name
+    # the container and native PE formats explicitly so the rule remains
+    # eligible for both a directly analyzed MSI and an archive carrying its
+    # extracted payload.
+    for: [oledoc, zip, pe, dll]
+    attack: T1027,T1497.001,T1614,T1036.005
+    scope: outer
+    all:
+      - id: metadata/package/files/msi::ole2-installer-kind
+      - id: metadata/package/files/msi::msi-wix-toolset-branding
+      - id: opaque-dispatch-environment-probe
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family::known-benign-installer
+  - id: sparse-import-device-window-probing
+    desc: Sparse-import loader probes devices and windows
+    crit: suspicious
+    conf: 0.94
+    platforms: [windows]
+    for: [pe, dll]
+    attack: T1497.001
+    all:
+      - id: micro-behaviors/fs/device/query::query-dos-device-w
+      - id: micro-behaviors/ui/window/manage/control::is-window-visible
+    any:
+      - id: metadata/binary/symbols/imports::pe-imports-max-six
+      - id: metadata/binary/section/metrics::pe-nonstandard-entry
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::dominant-section
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/signed/developer

@@ -1,0 +1,340 @@
+# Remote Shell Detection
+# MBC: OB0004 (Command & Control) → B0030 (C2 Communication)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+# NOTE: Socket connect/bind/listen are defined in communications/socket/*/unix.yaml
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+traits:
+  # Python-specific reverse shell patterns
+  - id: python-dup2
+    desc: Python file descriptor duplication (os.dup2)
+    crit: component
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "os.dup2"
+  - id: python-socket-fileno-common
+    desc: Python named socket fileno
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: '\b(sock|socket|conn|client)\.fileno\(\)'
+  - id: python-socket-fileno-short
+    desc: Python short socket fileno
+    crit: component
+    conf: 0.65
+    if:
+      type: text
+      regex: '\b(s|c)\.fileno\(\)'
+  - id: python-bash-interactive
+    desc: Interactive bash shell in Python (-i flag)
+    crit: notable
+    conf: 0.9
+    attack: T1059.004
+    if:
+      type: string_literal
+      regex: "/bin/bash.{0,10}-i|-i.{0,10}/bin/bash"
+  - id: inline-python-socket-dup2
+    desc: Inline Python socket dup2 redirection
+    crit: suspicious
+    conf: 0.95
+    unless:
+      - id: well-known/tool/offensive/pentestkit::local-storage-panel
+      - id: well-known/tool/offensive/decepticon::package-tree-member
+    size_max: 50000
+    if:
+      type: text
+      regex: 'socket\.socket[\s\S]{0,600}\.connect\s*\([\s\S]{0,600}os\.dup2\s*\(.{0,120}\.fileno\(\)'
+  - id: inline-python-subprocess-shell
+    desc: Inline Python interactive shell launch
+    crit: suspicious
+    conf: 0.95
+    unless:
+      - id: well-known/tool/offensive/pentestkit::local-storage-panel
+      - id: well-known/tool/offensive/decepticon::package-tree-member
+    size_max: 50000
+    if:
+      type: text
+      regex: 'subprocess\.(call|Popen)\s*\(.{0,120}/bin/(sh|bash).{0,80}-i'
+  - id: python-popen-stdin-pipe
+    desc: Python Popen command with piped stdin
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: stdin=PIPE
+  - id: python-popen-stdout-pipe
+    desc: Python Popen command with piped stdout
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: stdout=PIPE
+  - id: python-popen-stderr-stdout
+    desc: Python Popen redirects stderr to stdout
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      substr: stderr=STDOUT
+  - id: python-bash-executable-string
+    desc: Bash executable string in Python
+    crit: component
+    conf: 0.75
+    if:
+      type: string_literal
+      exact: bash
+  - id: python-socket-io-forwarders
+    desc: Python socket IO forwarders
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'sock\.recv\s*\(\s*8192\s*\)[\s\S]{0,520}sock\.send\s*\('
+
+composite_rules:
+  - id: python-fileno
+    desc: Python socket fileno() FD extraction
+    crit: component
+    conf: 0.7
+    any:
+      - id: python-socket-fileno-common
+      - id: python-socket-fileno-short
+  - id: python-dup2-io-redirect
+    desc: Python os.dup2 socket FD redirect (stdin/stdout/stderr)
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.006
+    near_lines: 80
+    unless:
+      - id: well-known/tool/offensive/pentestkit::local-storage-panel
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/import/python::unittest
+      - id: metadata/import/python::test
+    all:
+      - id: python-dup2
+      - id: python-fileno
+      - id: micro-behaviors/communications/socket/connect::socket-socket-call
+  - id: python-dup2-shell
+    desc: Python reverse shell via os.dup2 FD hijack
+    crit: suspicious
+    unless:
+    - id: well-known/tool/offensive/pentestkit::local-storage-panel
+    conf: 0.95
+    attack: T1059.006
+    all:
+      - id: python-dup2-io-redirect
+      - id: micro-behaviors/process/create/subprocess::call
+    any:
+      - id: micro-behaviors/process/create/shell/spawn::python-bash-path
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+      - id: micro-behaviors/process/create/shell/spawn::bin-shell
+  - id: python-dup2-c2
+    desc: Python dup2 reverse shell with hardcoded C2 IP
+    crit: hostile
+    conf: 0.99
+    attack: T1059.006
+    mbc: "OB0004"
+    all:
+      - id: python-dup2-shell
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-script
+  - id: inline-python-reverse-shell
+    desc: Inline Python socket dup2 reverse shell
+    crit: hostile
+    conf: 0.99
+    attack: T1059.006
+    mbc: "B0030.002"
+    all:
+      - id: inline-python-socket-dup2
+      - id: inline-python-subprocess-shell
+    any:
+      - id: micro-behaviors/process/create/shell/lang::python-c-flag
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+      - id: micro-behaviors/process/create/shell/spawn::bin-shell
+    # A recognized offensive-security tool legitimately ships reverse-shell
+    # payloads in its corpus — dual-use, not "no legitimate use." The underlying
+    # socket-dup2 / shell-spawn atoms remain at their own (suspicious) tier, so
+    # the capability still surfaces; only the hostile verdict is withheld.
+    unless:
+      - id: well-known/tool/offensive/
+  - id: inline-python-reverse-shell-c2
+    desc: Inline Python reverse shell with C2
+    crit: hostile
+    conf: 0.995
+    attack: T1059.006
+    mbc: "B0030.002"
+    all:
+      - id: inline-python-reverse-shell
+      - id: micro-behaviors/communications/socket/dial::python-connect-ip-port
+  - id: python-socket-popen-stream-revshell
+    desc: Python socket bridged to piped shell process
+    crit: hostile
+    conf: 0.98
+    attack: T1059.006
+    mbc: "B0030.002"
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-connect-method
+      - id: python-popen-stdin-pipe
+      - id: python-popen-stdout-pipe
+      - id: python-popen-stderr-stdout
+      - id: python-bash-executable-string
+      - id: micro-behaviors/communications/socket/receive::socket-recv-call
+    any:
+      - id: micro-behaviors/communications/socket/send::python-sendall
+      - id: micro-behaviors/communications/socket/send::socket-send-call
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+      - id: well-known/tool/detection/llm-scanner/
+  - id: python-generic-socket-popen-revshell
+    desc: Python socket-to-process reverse shell
+    crit: hostile
+    conf: 0.97
+    attack: T1059.006
+    mbc: "B0030.002"
+    all:
+      - id: python-popen-stdin-pipe
+      - id: python-popen-stdout-pipe
+      - id: python-popen-stderr-stdout
+      - id: python-socket-io-forwarders
+    any:
+      - id: micro-behaviors/process/create/thread::python-thread-create
+      - id: micro-behaviors/communications/socket/create::python-socket
+      - id: micro-behaviors/communications/socket/receive::socket-recv-call
+  - id: python-bash-socket-threaded-revshell
+    desc: Python threaded socket-to-bash reverse shell
+    crit: hostile
+    conf: 0.96
+    attack: T1059.006
+    mbc: "B0030.002"
+    all:
+      - id: python-socket-popen-stream-revshell
+      - id: micro-behaviors/process/create/thread::python-thread-create
+      - id: python-bash-executable-string
+    any:
+      - id: micro-behaviors/communications/socket/send::python-sendall
+      - id: micro-behaviors/communications/socket/receive::socket-recv-call
+  - id: combo-reverse-shell
+    desc: Classic reverse shell pattern (socket
+    crit: hostile
+    mbc: B0030.002
+    attack: T1059
+    conf: 0.95
+    platforms:
+      - unix
+    all:
+      - id: micro-behaviors/communications/socket/connect::connect
+      - id: python-dup2
+    any:
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+      - id: micro-behaviors/process/create/shell/spawn::bin-shell
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+  - id: python-reverse-shell
+    desc: Python reverse shell detected (socket
+    crit: hostile
+    unless:
+    - id: well-known/tool/offensive/pentestkit::local-storage-panel
+    mbc: B0022
+    attack: T1059
+    conf: 0.98
+    near_lines: 20
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-connect-method
+      - id: python-dup2
+  - id: python-fd-redirect-shell
+    desc: Python socket shell FD redirection
+    crit: hostile
+    mbc: B0030
+    attack: T1059.006
+    conf: 0.98
+    platforms: [unix]
+    near_lines: 80
+    all:
+      - id: micro-behaviors/process/create/system::python-os-system
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-interactive
+      - id: micro-behaviors/process/create/shell/fd::shell-stdin-fd-redirect
+      - id: python-fileno
+    any:
+      - id: objectives/command-and-control/backdoor/shell/socket::python-connect-call
+      - id: objectives/command-and-control/backdoor/shell/socket::python-bind-call
+
+  - id: python-socket-dup2-pty-revshell
+    desc: Python socket + os.dup2 + pty.spawn reverse shell
+    crit: hostile
+    conf: 0.99
+    mbc: B0030.002
+    attack: T1059.006
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-socket-call
+      - id: python-dup2
+      - id: micro-behaviors/process/tty/pty::pty-spawn
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+
+  - id: python-fileno-dup2-shell-revshell
+    desc: Python os.dup2 over socket.fileno() with shell exec
+    crit: hostile
+    conf: 0.98
+    mbc: B0030.002
+    attack: T1059.006
+    all:
+      - id: python-dup2
+      - id: python-fileno
+    any:
+      - id: micro-behaviors/process/tty/pty::pty-spawn
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+    unless:
+      - id: well-known/tool/offensive/pentestkit/
+      - id: well-known/tool/detection/llm-scanner/
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness::unittest-module
+      - id: metadata/package/testing/presence/harness::test-directory-path
+
+  - id: python-pty-spawn-socket-connect
+    desc: Python pty.spawn + socket.connect on revshell pattern
+    crit: hostile
+    conf: 0.97
+    mbc: B0030.002
+    attack: T1059.006
+    all:
+      - id: micro-behaviors/process/tty/pty::pty-spawn
+      - id: micro-behaviors/communications/socket/connect::socket-socket-call
+      - id: python-dup2
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+
+  - id: python-socket-fileno-pty-revshell
+    desc: Python socket + fileno + pty.spawn shell
+    crit: hostile
+    conf: 0.98
+    mbc: B0030.002
+    attack: T1059.006
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-connect-method
+      - id: python-fileno
+      - id: micro-behaviors/process/tty/pty::pty-spawn
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+
+  - id: python-revshell-quadruple
+    desc: Python socket + dup2 + fileno + pty.spawn
+    crit: hostile
+    conf: 0.99
+    mbc: B0030.002
+    attack: T1059.006
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-connect-method
+      - id: python-dup2
+      - id: python-fileno
+      - id: micro-behaviors/process/tty/pty::pty-spawn
+    unless:
+      - id: well-known/tool/detection/llm-scanner/

@@ -1,0 +1,295 @@
+# Android staged loader using a hidden asset DEX and reflective classloader patching.
+defaults:
+  platforms: [android]
+  for: [apk, zip]
+  crit: suspicious
+  conf: 0.95
+  attack: "T1406"
+
+traits:
+  - id: firebase-messaging-event
+    desc: Firebase messaging event service
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      exact: "com.google.firebase.MESSAGING_EVENT"
+
+  - id: cleartext-traffic-enabled
+    desc: Android app allows cleartext traffic
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      exact: "usesCleartextTraffic"
+
+
+  - id: connectivity-change-receiver
+    desc: Receiver watches connectivity changes
+    crit: suspicious
+    conf: 0.84
+    if:
+      type: text
+      exact: "android.net.conn.CONNECTIVITY_CHANGE"
+
+  - id: wake-lock-permission
+    desc: Wake lock permission requested
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      exact: "android.permission.WAKE_LOCK"
+    unless:
+      - id: well-known/app/ankidroid::package-member
+      - type: text
+        substr: com/ichi2/anki
+
+  - id: post-notifications
+    desc: Notification posting permission requested
+    crit: suspicious
+    conf: 0.78
+    if:
+      type: text
+      exact: "android.permission.POST_NOTIFICATIONS"
+
+  - id: obfuscated-gc-namespace-burst
+    desc: Repeated short obfuscated tk.gc classes
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: yara
+      source: |
+        rule obfuscated_gc_namespace_burst {
+          strings:
+            $a = /tk\.gc\.[A-Za-z]{1,5}/ ascii wide
+          condition:
+            #a >= 20
+        }
+
+  - id: loader-manifest-control-yara
+    desc: Obfuscated loader manifest control surface
+    crit: suspicious
+    conf: 0.995
+    if:
+      type: yara
+      source: |
+        rule loader_manifest_control_surface {
+          strings:
+            $a = "com.google.firebase.MESSAGING_EVENT" ascii wide
+            $b = "android.permission.FOREGROUND_SERVICE" ascii wide
+            $c = "android.permission.READ_EXTERNAL_STORAGE" ascii wide
+            $d = "android.permission.WRITE_EXTERNAL_STORAGE" ascii wide
+            $e = "android.net.conn.CONNECTIVITY_CHANGE" ascii wide
+            $f = "android.permission.WAKE_LOCK" ascii wide
+            $g = "usesCleartextTraffic" ascii wide
+            $h = "android.permission.POST_NOTIFICATIONS" ascii wide
+            $ns = /tk\.gc\.[A-Za-z]{1,5}/ ascii wide
+          condition:
+            $a and $b and $c and $d and $e and 1 of ($f,$g,$h) and #ns >= 20
+        }
+
+  - id: reflective-loader-cluster-marker
+    desc: Obfuscated staged loader class markers
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      substr: "scnl.eift2kiuh"
+
+  - id: encoded-loader-control-strings
+    desc: Encoded Android loader control strings
+    crit: suspicious
+    conf: 0.98
+    for: [apk]
+    if:
+      type: yara
+      source: |
+        rule encoded_loader_control_strings {
+          strings:
+            $a = "bmd5Ym1h" ascii
+            $b = "bXNiaGd0Zw" ascii
+            $c = "bUluaXRpYWxBcHBsaWNhdGlvbg" ascii
+          condition:
+            all of them
+        }
+
+composite_rules:
+  - id: staged-dex-loader
+    desc: APK hides and loads a second-stage DEX from assets
+    crit: hostile
+    conf: 0.995
+    mbc: "B0030"
+    all:
+      - id: micro-behaviors/process/create/loader::reflective-classloader-patch
+      - id: micro-behaviors/process/create/loader::hidden-dex-write
+
+  - id: obfuscated-push-control-manifest
+    desc: Obfuscated manifest with push control hooks
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: firebase-messaging-event
+      - id: obfuscated-gc-namespace-burst
+    any:
+      - id: micro-behaviors/os/service/daemon::android-foreground-service-permission
+      - id: connectivity-change-receiver
+      - id: cleartext-traffic-enabled
+      - id: wake-lock-permission
+      - id: micro-behaviors/os/privilege/manifest::read-external-storage
+      - id: micro-behaviors/os/privilege/manifest::write-external-storage
+      - id: post-notifications
+    needs: 3
+
+  - id: staged-loader-manifest-control-surface
+    desc: Staged loader manifest with background control surface
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: loader-manifest-control-yara
+      - id: obfuscated-gc-namespace-burst
+
+  - id: staged-loader-dex-cluster
+    desc: Reflective staged loader with obfuscated class cluster
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: micro-behaviors/process/create/loader::reflective-dex-loader-member
+      - id: reflective-loader-cluster-marker
+
+  # The 11 generic AssetManager/Base64/reflection dalvik APIs are captured by
+  # micro-behaviors/process/create/loader::asset-inflater-reflective-loader
+  # (suspicious). Alone they appear in benign apps, so hostile only when paired
+  # with a large opaque extensionless staged asset.
+  - id: android-asset-payload-reflective-apk
+    desc: APK asset payload reflective loader
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: micro-behaviors/process/create/loader::asset-inflater-reflective-loader
+      - id: objectives/command-and-control/dropper/staging/archive::apk-large-extensionless-asset
+
+  - id: encoded-android-native-stage-loader
+    desc: Encoded Android loader with native stage writer
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: micro-behaviors/process/create/loader::encoded-application-swap-loader
+      - id: micro-behaviors/process/create/loader::obfuscated-jni-stage-writer
+      - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
+
+  - id: encoded-delimited-native-stage-loader
+    desc: Delimited encoded Android loader with native stage writer
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: micro-behaviors/process/create/loader::encoded-delimited-application-swap-loader
+      - id: micro-behaviors/process/create/loader::obfuscated-jni-stage-writer
+      - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
+
+  - id: encoded-hqjgwjslwxj-native-stage-loader
+    desc: Delimited encoded Android loader with native stage writer
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: micro-behaviors/process/create/loader::encoded-hqjgwjslwxj-application-swap-loader
+      - id: micro-behaviors/process/create/loader::android-native-embedded-dex-loader
+      - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
+
+  - id: android-native-encrypted-stage-writer
+    desc: Android native library writes encrypted stage payload
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: micro-behaviors/process/create/loader::obfuscated-jni-stage-writer
+      - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
+
+  - id: staged-loader-with-push-control
+    desc: Staged Android loader with push and background control hooks
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: staged-dex-loader
+      - id: firebase-messaging-event
+    any:
+      - id: micro-behaviors/os/service/daemon::android-foreground-service-permission
+      - id: connectivity-change-receiver
+      - id: cleartext-traffic-enabled
+    needs: 2
+
+  - id: android-opaque-asset-dex-loader
+    desc: Android opaque asset DEX loader
+    crit: suspicious
+    conf: 0.97
+    for: [apk, binaries, zip]
+    ref: sha256:093c727149837d576d10f843edce933436efe648e74b9008ccd91badf197fc5c
+    scope: outer
+    all:
+      - id: metadata/package/files/mobile-package::android-apk-opaque-loader-layout
+      - id: micro-behaviors/process/create/loader::dynamic-dex-loading
+      - id: micro-behaviors/process/create/loader::zip-stage-read
+    any:
+      - id: micro-behaviors/process/create/loader::attach-base-context
+      - id: micro-behaviors/data/compress/library::gzip-decompress
+      - id: micro-behaviors/fs/write/file/direct::jvm-fileoutputstream-bytecode
+    downgrade:
+      all:
+        - id: micro-behaviors/os/telemetry/activity::appsflyer-event-endpoint
+        - id: metadata/package/files/mobile-package::apk-multiple-secondary-dex
+        - id: metadata/package/files/mobile-package::apk-face-landmarker-model
+    needs: 2
+
+  - id: android-opaque-loader-control-surface
+    desc: Hidden Android loader with install and storage control
+    crit: hostile
+    conf: 0.995
+    attack: T1129
+    all:
+      - id: android-opaque-asset-dex-loader
+      - id: micro-behaviors/os/package-manager/install::android-request-install-packages-permission
+      - id: micro-behaviors/os/privilege/manifest::manage-external-storage
+      - id: micro-behaviors/os/privilege/paths::android-root-check
+    any:
+      - id: micro-behaviors/os/privilege/manifest::bind-notification-listener
+      - id: micro-behaviors/os/privilege/manifest::package-usage-stats
+
+  - id: android-dex-zip-native-loader
+    desc: Android DEX Zip native loader
+    crit: suspicious
+    conf: 0.97
+    for: [apk, binaries]
+    ref: sha256:093c727149837d576d10f843edce933436efe648e74b9008ccd91badf197fc5c
+    all:
+      - id: micro-behaviors/process/create/loader::dynamic-dex-and-native-loading
+      - id: micro-behaviors/process/create/loader::zip-stage-read
+      - id: micro-behaviors/process/create/loader::attach-base-context
+    any:
+      - id: micro-behaviors/os/privilege/paths::android-root-check
+      - id: micro-behaviors/process/create/spawn::java-runtime-exec-bytecode
+      - id: micro-behaviors/data/compress/library::gzip-decompress
+    unless:
+      - id: well-known/app/tiktok::package-member
+      - id: well-known/app/tiktok::tiktok-domain-marker
+      - id: well-known/app/tiktok::tiktok-font-marker
+    downgrade:
+      all:
+        - id: micro-behaviors/os/telemetry/activity::appsflyer-event-endpoint
+        - id: metadata/package/files/mobile-package::apk-multiple-secondary-dex
+        - id: metadata/package/files/mobile-package::apk-face-landmarker-model
+    needs: 1
+
+  - id: android-split-native-loader-bundle
+    desc: Android split native loader bundle
+    crit: suspicious
+    conf: 0.96
+    for: [apk, binaries, zip]
+    ref: sha256:093c727149837d576d10f843edce933436efe648e74b9008ccd91badf197fc5c
+    scope: outer
+    all:
+      - id: metadata/package/files/mobile-package::xapk-opaque-consonant-jni-split-pair
+      - id: micro-behaviors/process/create/loader::dynamic-dex-and-native-loading
+      - id: micro-behaviors/process/create/loader::zip-stage-read
+    any:
+      - id: micro-behaviors/process/create/loader::attach-base-context
+      - id: micro-behaviors/os/privilege/paths::android-root-check
+      - id: micro-behaviors/process/create/spawn::java-runtime-exec-bytecode
+    needs: 1

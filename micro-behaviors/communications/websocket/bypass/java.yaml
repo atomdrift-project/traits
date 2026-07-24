@@ -1,0 +1,99 @@
+# WebSocket Bypass via Coyote Reflection
+# Detects Tomcat Coyote request header forgery to bypass Nginx/CDN WebSocket blocking
+# MBC: C0034 (OS integration)
+# ATT&CK: T1562 (Impair Defenses)
+defaults:
+  platforms: [windows, unix]
+  for: [java, class]
+
+traits:
+  - id: coyote-request-field
+    desc: Tomcat Coyote request field reflective lookup
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: symbol
+      kind: call
+      substr: getDeclaredField
+      arg:
+        kind: string
+        exact: coyoteRequest
+
+  - id: mime-headers-reflection
+    desc: Tomcat MimeHeaders reflective lookup
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: symbol
+      kind: call
+      substr: getDeclaredField
+      arg:
+        kind: string
+        substr: MimeHeaders
+
+  - id: upgrade-util-class-path
+    desc: Tomcat UpgradeUtil class path
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      substr: org.apache.tomcat.websocket.server.UpgradeUtil
+
+  - id: upgrade-util-do-upgrade
+    desc: Tomcat UpgradeUtil doUpgrade call
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: 'UpgradeUtil\s*\.\s*doUpgrade\b'
+
+  - id: upgrade-util-websocket-check
+    desc: Tomcat UpgradeUtil WebSocket check
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: 'UpgradeUtil\s*\.\s*isWebSocketUpgrade\b'
+
+  - id: set-header-method
+    desc: Custom SetHeader method for header forgery
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: void\s+SetHeader\s*\(HttpServletRequest
+
+  - id: sec-websocket-version-header
+    desc: Sec-WebSocket-Version header reference
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: Sec-WebSocket-Version
+    unless:
+      - id: well-known/tool/detection/security-scanner/
+      - id: well-known/tool/detection/
+      - id: micro-behaviors/communications/websocket/library::websocket-rfc6455-client-context
+
+composite_rules:
+  - id: upgrade-util
+    desc: Tomcat WebSocket UpgradeUtil usage
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: upgrade-util-class-path
+      - id: upgrade-util-do-upgrade
+      - id: upgrade-util-websocket-check
+
+  - id: coyote-websocket-bypass
+    desc: Tomcat Coyote WebSocket bypass via header forgery
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: coyote-request-field
+      - id: mime-headers-reflection
+    scope: leaf
+    any:
+      - id: upgrade-util
+      - id: set-header-method
+      - id: sec-websocket-version-header

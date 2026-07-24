@@ -1,0 +1,66 @@
+# Untrusted-tool-call command execution bridged into a local shell.
+#
+# The retained composites require an XML-style `<tool=...>`/`tool_call` command
+# parser wired to a shell-spawning subprocess (optionally alongside a bundled
+# browser-extension AI chat surface). That parse-then-shell shape is what turns
+# model-emitted tool calls into arbitrary local execution.
+#
+# NOTE: earlier revisions carried `python-llm-shell-command-execution` and
+# `python-mcp-raw-cli-execution`, which fired on the literal function names
+# (`execute_shell_command`, `execute_mcp_cli_command`) and the `raw_command`
+# parameter of one benign local-first AI automation suite (Pipulate). A local
+# agent exposing a shell tool to a user-run LLM is a legitimate, dual-use
+# capability (already surfaced as notable subprocess execution), so keying a
+# hostile verdict off those symbol names produced false positives on every
+# such tool and matched no future attacker. They were removed; genuine remote
+# LLM command abuse is covered by the prompt-directive composites in
+# objectives/evasion/security-bypass/llm/ and this file's tool-bridge rules.
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1059.004
+
+traits:
+  - id: python-xml-tool-tag-parser
+    desc: Python parses XML-style tool command tags
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      substr: '<tool='
+
+  - id: python-tool-call-input-field
+    desc: Python tool-call payload field
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      word: tool_call
+
+  - id: python-tool-http-endpoint
+    desc: Python HTTP endpoint receives tool commands
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      substr: '@app.post("/extension/run-tool")'
+
+composite_rules:
+  - id: python-xml-tool-shell-bridge
+    desc: XML tool bridge launches shell
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: python-xml-tool-tag-parser
+      - id: python-tool-call-input-field
+      - id: python-tool-http-endpoint
+      - id: micro-behaviors/process/create/subprocess::popen-shell-true
+
+  - id: bundled-ai-chat-python-shell-bridge
+    desc: AI-chat extension plus Python shell bridge
+    crit: hostile
+    conf: 0.99
+    scope: archive
+    all:
+      - id: objectives/impact/ui/manipulation/core::ai-chat-autonomous-local-command-bridge
+      - id: python-xml-tool-shell-bridge

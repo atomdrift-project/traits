@@ -1,0 +1,100 @@
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1027
+traits:
+  - id: punycode-idn-error-strings
+    desc: Punycode/IDN parser error strings
+    crit: component
+    conf: 0.85
+    size_max: 5242880
+    if:
+      type: text
+      substr: PosOverflowNegOverflowZeroParseIntError
+  - id: rust-stdio-error-enum-strings
+    desc: Rust std::io::Error full enum strings
+    crit: component
+    conf: 0.85
+    size_max: 5242880
+    if:
+      type: text
+      substr: NotFoundPermissionDeniedConnectionRefusedConnectionReset
+  - id: rust-fs-readdir-strings
+    desc: Rust fs::read_dir error strings
+    crit: component
+    conf: 0.8
+    size_max: 5242880
+    if:
+      type: text
+      regex: \bread_dir\b|fs::ReadDir
+composite_rules:
+  - id: ml-evasion-recognized-code-mass
+    desc: Shellcode loader padded with unrelated recognized code paths
+    crit: suspicious
+    conf: 0.88
+    size_max: 5242880
+    all:
+      - id: objectives/anti-static/obfuscation/imports::pe-walk-hash-resolver-x64
+    needs: 2
+    any:
+      - id: punycode-idn-error-strings
+      - id: rust-stdio-error-enum-strings
+      - id: rust-fs-readdir-strings
+    unless:
+      - id: metadata/binary/framework::dotnet-metadata
+      - id: metadata/binary/framework/
+  # Brand-agnostic SilverFox/Winos dropper shape: a >50MB PE whose writable .data
+  # is >=95% of the file at low entropy (NUL size-inflation to defeat size-capped
+  # sandboxes) AND is stuffed with 90k+ ripped decoy strings to read as a complex
+  # benign app. The two techniques are independent, so requiring both stays tight.
+  - id: size-inflated-decoy-stuffed-loader
+    desc: Oversized null-padded decoy-stuffed PE loader
+    crit: hostile
+    conf: 0.92
+    for: [pe]
+    all:
+      - id: objectives/anti-static/obfuscation/payload/section::low-entropy-data-padding-carrier
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::massive-string-count
+    unless:
+      - id: metadata/signed/platform/
+  # Same loader shape seen from the payload side: the size-inflating low-entropy
+  # padding also conceals the encrypted stage it exists to hide. Padding observes
+  # the file's emptiness; the windowed peak-region metric proves a cipher-grade
+  # blob is buried in it. Independent of the decoy-string tell above.
+  - id: padded-loader-concealed-encrypted-stage
+    desc: Padded loader conceals an encrypted stage
+    crit: hostile
+    conf: 0.95
+    for: [pe]
+    all:
+      - id: objectives/anti-static/obfuscation/payload/section::low-entropy-data-padding-carrier
+      - id: metadata/file/metrics::low-entropy-binary-with-dense-region
+    unless:
+      - id: metadata/signed/platform/
+  - id: dominant-high-entropy-overlay-before-7z-payload
+    desc: Dominant high-entropy overlay precedes a late 7-Zip payload
+    crit: suspicious
+    conf: 0.97
+    for: [pe]
+    all:
+      - id: metadata/binary/layout::large-overlay-1mb
+      - id: metadata/binary/layout::high-entropy-overlay
+      - id: metadata/binary/layout::overlay-dominates-90pct
+      - id: micro-behaviors/data/embedded/payload/archive::late-embedded-7z-archive
+
+  # Detection-dilution padding: the file is inflated with tens of thousands of
+  # generated natural-language sentence strings (dictionary-word filler) so its
+  # string profile reads as a large benign app and it exceeds size-capped
+  # sandbox/AV scanners. Distinct from the null/overlay padding above — here the
+  # padding IS the string corpus (sentence ratio ~1.0), which is why it slips a
+  # raw string-count check. Suspicious rather than hostile because a genuine
+  # text/localization/NLP data blob can also be sentence-dominant.
+  - id: sentence-string-detection-dilution
+    desc: PE bloated with natural-language sentence filler to dilute detection
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: metadata/binary/metrics/structural::sentence-string-dominant
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::massive-string-count
+    unless:
+      - id: metadata/signed/platform/

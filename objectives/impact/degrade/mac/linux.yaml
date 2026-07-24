@@ -1,0 +1,133 @@
+# Mandatory Access Control (MAC) Degradation - Linux
+# Detects attempts to disable or weaken SELinux and AppArmor
+# ATT&CK: T1562.001 (Impair Defenses: Disable or Modify Tools)
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: "T1562.001"
+  for: [shell, elf, python, ruby, go, rust]
+traits:
+  # === SELinux Manipulation ===
+  - id: selinux-setsebool
+    desc: SELinux boolean modification
+    conf: 0.85
+    if:
+      type: text
+      regex: '(?m)^[ \t]*((sudo[ \t]+)?setsebool)[ \t]+'
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: well-known/tool/sysadmin/container/
+    unless:
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: well-known/app/postgresql::postgresql-source-tree
+  - id: selinux-setenforce
+    desc: Changes SELinux enforcement to permissive mode
+    conf: 0.90
+    if:
+      type: text
+      regex: "\\bsetenforce\\s+0\\b"
+    unless:
+      # Security scanners list `setenforce 0` as a threat signature / test fixture.
+      - id: well-known/tool/detection/ai-guardrail/
+      - id: well-known/app/olares::cli-source-tree
+      # K3s provisioning on immutable SELinux hosts can intentionally skip the
+      # k3s-selinux RPM and run permissive for disposable cluster nodes.
+      - type: text
+        substr: INSTALL_K3S_SKIP_SELINUX_RPM=true
+      - id: well-known/tool/sysadmin/k3s::k3s-vagrant-provisioner
+      - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
+      - id: well-known/tool/sysadmin/virtualization::lima-virtualization-tool
+      - id: metadata/package/quality/recognized-contexts::rag-documentation-context
+    downgrade:
+      any:
+        - id: metadata/package/files/included::install-uninstall-shell-basename
+  - id: selinux-disable
+    desc: SELinux disable in config
+    conf: 0.90
+    if:
+      type: text
+      regex: "SELINUX\\s*=\\s*disabled"
+    unless:
+      - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+      - id: well-known/app/olares::cli-source-tree
+      - id: metadata/package/testing/presence/harness::ruby-spec-file
+      - id: well-known/lib/specinfra/
+      - id: well-known/app/dataease::installer-script-marker
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: metadata/package/files/included::install-uninstall-shell-basename
+  # === AppArmor Manipulation ===
+  - id: apparmor-disable
+    desc: AppArmor profile disable
+    conf: 0.90
+    if:
+      type: text
+      regex: "\\baa-disable\\b|apparmor_parser\\s+-R"
+    unless:
+      - id: well-known/tool/dual-use/rclone::rclone-package-path
+      - id: metadata/build/package::apparmor-profile-removal-post-remove
+      - id: well-known/app/microsoft-edge::microsoft-edge-package-context
+  - id: apparmor-stop
+    desc: AppArmor service stop
+    conf: 0.90
+    if:
+      type: text
+      regex: "service\\s+apparmor\\s+stop|systemctl\\s+(stop|disable)\\s+apparmor"
+composite_rules:
+  # SELinux disabled via any method
+  - id: selinux-disabled
+    desc: SELinux disabled
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: selinux-setenforce
+      - id: selinux-disable
+      - id: selinux-setsebool
+    unless:
+      - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+      - id: metadata/package/quality/recognized-contexts::rag-documentation-context
+      - id: well-known/app/dataease::installer-script-marker
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: metadata/package/files/included::install-uninstall-shell-basename
+  # AppArmor disabled via any method
+  - id: apparmor-disabled
+    desc: AppArmor disabled
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: apparmor-disable
+      - id: apparmor-stop
+  # Both MAC systems disabled
+  - id: mac-disabled
+    desc: Multiple MAC systems disabled
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: selinux-disabled
+      - id: apparmor-disabled
+  # Complete security stack degradation (MAC + Firewall)
+  - id: full-security-disable
+    desc: Complete security stack disable (MAC + Firewall)
+    crit: hostile
+    conf: 0.98
+    attack: "T1562"
+    all:
+      - id: objectives/impact/degrade/firewall/
+    any:
+      - id: selinux-disabled
+      - id: apparmor-disabled
+    unless:
+      - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+      - id: well-known/tool/development/osbuild-composer::osbuild-composer-installer-test-path
+      - id: well-known/tool/sysadmin/virtualization::lima-virtualization-tool
+      - id: micro-behaviors/os/service/legitimate::installer-script
+      - id: metadata/package/files/included::install-uninstall-shell-basename
+      - id: metadata/package/quality/recognized-contexts::rag-documentation-context
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: metadata/package/files/included::install-uninstall-shell-basename

@@ -1,0 +1,178 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  crit: suspicious
+  attack: T1036.005
+  mbc: F0004
+  for:
+    - python
+    - shell
+traits:
+  - id: os-rename-call
+    desc: os.rename file movement
+    crit: suspicious
+    conf: 0.7
+    if:
+      id: micro-behaviors/fs/file/rename::rename
+  - id: startup-or-appdata-path-reference
+    desc: Startup or AppData path reference
+    crit: component
+    conf: 0.85
+    if:
+      type: string_literal
+      regex: rename.{0,50}Startup|move.{0,50}Startup|rename.{0,50}AppData
+    unless:
+      - id: well-known/app/samba::samba-source-tree
+      - id: well-known/app/calvyn-code
+      - id: metadata/package/files/dependency::bundled-python-library-path
+  - id: suspicious-folder-name-a
+    desc: Suspicious folder combo grabber/logger
+    crit: suspicious
+    conf: 0.75
+    for:
+      - python
+    if:
+      type: string_literal
+      regex: '(?i)[\\/](grabber|logger)[\\/].{0,40}[\\/](test|tmp)[\\/]'
+    unless:
+      - id: well-known/tool/development/stoobly-agent/
+      - id: well-known/app/tabby::tabby-eval-dataset-member
+      - id: well-known/lib/pytest/
+      - id: metadata/package/files/dependency::bundled-python-library-path
+      - type: text
+        substr: 'make_file_handler("/tmp/metrics.log")'
+  - id: suspicious-folder-name-b
+    desc: Grabber/logger temp/boot path combination
+    crit: suspicious
+    conf: 0.75
+    for:
+      - python
+    if:
+      type: string_literal
+      regex: '(?i)[/\\\\](grabber|logger)[/\\\\](temp|boot|lmao)[/\\\\]'
+  - id: suspicious-folder-name-c
+    desc: Suspicious folder combo stealer/bot
+    crit: suspicious
+    conf: 0.75
+    for:
+      - python
+    if:
+      type: string_literal
+      regex: ([A-Za-z]:)?[\\/][^\\n]{0,80}\b(stealer|bot)\b.{0,50}\b(test|tmp)\b
+    unless:
+      # AI-agent monitors discuss "bot"/agent test paths in detection docs.
+      - id: well-known/tool/detection/ai-guardrail/
+      - id: micro-behaviors/communications/http/services/telegram::python-telegram-bot-wrapper-context
+      # Test fixtures combine bot/stealer + test/tmp tokens benignly.
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+  - id: suspicious-folder-name-d
+    desc: Suspicious folder combo stealer/bot alt
+    crit: suspicious
+    conf: 0.75
+    for:
+      - python
+    if:
+      type: string_literal
+      regex: ([A-Za-z]:)?[\\/][^\\n]{0,80}\b(stealer|bot)\b.{0,50}\b(temp|boot|lmao)\b
+  - id: appdata-path-manipulation
+    desc: AppData path reference
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string_literal
+      regex: AppData.{0,50}Roaming.{0,50}Microsoft.{0,50}Windows.{0,50}CurrentVersion
+  - id: startup-folder-access
+    desc: Startup folder path access
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string_literal
+      regex: Start Menu.{0,50}Programs.{0,50}Startup.{0,50}boot
+  - id: directory-masquerade-a
+    desc: Office name with grabber
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string_literal
+      regex: (Powerpoint|Excel|Word|Outlook).{0,50}grabber
+  - id: directory-masquerade-b
+    desc: Office name with stealer naming
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string_literal
+      regex: \b(Power[Pp]oint|Excel|Word|Outlook)[\\/_ .-]{0,8}steal(er)?\b
+  - id: directory-masquerade-c
+    desc: Office name with bot naming
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string_literal
+      regex: \b(Power[Pp]oint|Excel|Word|Outlook)[\\/_ .-]{0,8}bot(net)?\b
+composite_rules:
+  - id: file-masquerade-move
+    desc: Startup or AppData used with file movement
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: startup-or-appdata-path-reference
+      - id: file-move-call
+    unless:
+      - id: well-known/app/samba::samba-source-tree
+      - id: well-known/app/calvyn-code
+      - id: metadata/package/files/dependency::bundled-python-library-path
+
+  - id: file-move-call
+    desc: File movement helper call
+    crit: component
+    conf: 0.7
+    any:
+      - id: os-rename-call
+      - id: micro-behaviors/fs/file/rename::shutil-move
+  - id: suspicious-folder-name
+    desc: Suspicious folder name
+    crit: suspicious
+    conf: 0.75
+    for:
+      - python
+    any:
+      - id: suspicious-folder-name-a
+      - id: suspicious-folder-name-b
+      - id: suspicious-folder-name-c
+      - id: suspicious-folder-name-d
+  - id: directory-masquerade
+    desc: Directory masquerading
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: directory-masquerade-a
+      - id: directory-masquerade-b
+      - id: directory-masquerade-c
+  - id: file-masquerade-execution
+    desc: File masquerade for execution
+    crit: suspicious
+    conf: 0.9
+    attack: T1036.005 - python
+    needs: 2
+    any:
+      - id: file-masquerade-move
+      - id: directory-masquerade
+      - id: startup-folder-access
+    all:
+      - id: file-move-call
+  - id: advanced-masquerade
+    desc: Advanced file masquerading
+    crit: hostile
+    conf: 0.95
+    platforms:
+      - windows
+    for:
+      - python
+    needs: 3
+    any:
+      - id: directory-masquerade
+      - id: suspicious-folder-name
+      - id: appdata-path-manipulation
+      - id: startup-folder-access

@@ -1,0 +1,85 @@
+# Git hook persistence via Go
+# Detects Go programs that install git hooks for persistent code execution.
+# Counterpart to objectives/persistence/system/git-hooks/javascript.yaml.
+defaults:
+  platforms: [windows, unix]
+  for: [go]
+  attack: T1546
+traits:
+  - id: hooks-dir-join-go
+    desc: filepath.Join references hooks directory
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: 'filepath\.Join\([^)]{0,120}["`]hooks["`]'
+  - id: post-commit-fragment
+    desc: post-commit hook name literal in Go source
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: '["`]post["`]\s*,\s*["`]-commit["`]|["`]post-commit["`]'
+  - id: pre-commit-fragment
+    desc: pre-commit hook name literal in Go source
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: '["`]pre["`]\s*,\s*["`]-commit["`]|["`]pre-commit["`]'
+  - id: pre-push-fragment
+    desc: pre-push hook name literal in Go source
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: '["`]pre["`]\s*,\s*["`]-push["`]|["`]pre-push["`]'
+  - id: parent-dir-search
+    desc: filepath.Join references .git directory
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: 'filepath\.Join\([^)]{0,80}["`]\.git["`]'
+  - id: git-remote-exfil-shell
+    desc: Shell snippet exfiltrating git remote URL
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'git remote get-url[^"`]{0,80}base64'
+composite_rules:
+  - id: hooks-path-join-go
+    desc: filepath.Join with git hooks
+    crit: component
+    conf: 0.9
+    near_bytes: 320
+    all:
+      - id: parent-dir-search
+      - id: hooks-dir-join-go
+  - id: go-git-hook-installer
+    desc: Go program installs git hooks for persistent execution
+    crit: hostile
+    conf: 0.97
+    near_lines: 40
+    all:
+      - id: parent-dir-search
+      - id: hooks-path-join-go
+      - id: micro-behaviors/fs/file/create::os-create
+      - id: micro-behaviors/fs/chmod/modify::go-os-chmod
+    any:
+      - id: post-commit-fragment
+      - id: pre-commit-fragment
+      - id: pre-push-fragment
+  - id: go-git-hook-exfil-backdoor
+    desc: Git hook installs shell exfil of repo URL
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: hooks-path-join-go
+      - id: git-remote-exfil-shell
+    any:
+      - id: post-commit-fragment
+      - id: pre-commit-fragment
+      - id: pre-push-fragment
+      - id: micro-behaviors/process/create/construction::go-formatted-shell-script

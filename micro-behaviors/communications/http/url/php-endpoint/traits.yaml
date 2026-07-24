@@ -1,0 +1,118 @@
+# URLs whose path targets a .php file. Modern legitimate APIs almost
+# never expose raw .php request URIs; the pattern dominates cheap
+# webshell / drop-box C2 (LokiBot, AgentTesla, AsyncRAT panels, the
+# packagist supply-chain Analytics.php case).
+defaults:
+  platforms: [unix, windows]
+  mbc: C0002
+  attack: T1071.001
+  size_max: 20000000
+traits:
+  - id: url-php-endpoint-script
+    desc: URL targets .php endpoint
+    crit: notable
+    conf: 0.8
+    for: [scripts, source]
+    if:
+      type: string_literal
+      regex: 'https?://[A-Za-z0-9._:\-]{1,253}/[A-Za-z0-9._/\-]{1,200}\.php(\?|$|/)'
+    not:
+      - regex: '(?i)/viewtopic\.php\?'
+      - regex: '(?i)://jrsoftware\.org/ishelp/index\.php\?'
+      - regex: '(?i)index\.php(\?|/)'
+      - regex: '(?i)vim\.org/scripts/script\.php'
+      - regex: '(?i)://en\.wikipedia\.org/w/api\.php'
+      - regex: '(?i)://www\.albumart\.org/index_detail\.php'
+    unless:
+      - id: metadata/file/profile/identity::static-html-shell
+      - id: well-known/lib/osano::osano-consent-manager
+
+  - id: url-php-endpoint-encoded
+    desc: Encoded URL targets .php endpoint
+    crit: suspicious
+    conf: 0.9
+    for: [php, javascript, python, shell, powershell]
+    if:
+      type: encoded
+      encoding: [base64, hex, url, xor]
+      regex: 'https?://[A-Za-z0-9._:\-]{1,253}/[A-Za-z0-9._/\-]{1,200}\.php(\?|$|/)'
+    not:
+      - regex: '(?i)\bviewtopic\.php\?'
+      # Social-share integrations commonly retain Facebook's public share
+      # endpoint in encoded/decoded asset data; it is not an operator C2
+      # endpoint.
+      - regex: '(?i)facebook\.com/sharer/sharer\.php'
+      # Source maps often preserve scholarly/documentation URLs such as the
+      # IACR TCHES article index; those are not encoded command endpoints.
+      - regex: '(?i)\bindex\.php(\?|/)'
+      # AiPrice's extension API is a documented first-party application
+      # endpoint, not an operator-controlled PHP channel.
+      - regex: '(?i)api\.aiprice\.com/index\.php/chrome'
+    unless:
+      # JSON escaping makes every URL retained in sourcesContent look encoded;
+      # source maps are non-executable provenance, not an encoded C2 carrier.
+      - type: basename
+        regex: '(?i)(\.js\.map$|^public-suffix-list\.data\.js$)'
+      # Inline source maps embed unrelated source text in base64; decoded URLs
+      # there are build provenance, not runtime HTTP endpoints.
+      - type: text
+        regex: '(?i)sourceMappingURL\s*=\s*data:[^,]{0,120};base64,'
+      # AiPrice's browser extension uses its own first-party PHP API for
+      # product metadata and reviews; this is an application endpoint, not C2.
+      - type: text
+        substr: api.aiprice.com/index.php/chrome
+      - id: well-known/app/browser-extension::honey-popover-wallet-bundle
+      - id: well-known/app/wordpress-plugins::wordpress-plugin-path-email-subscribers
+      - id: micro-behaviors/communications/url/encoded::stripe-private-frame-context
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+      - id: metadata/file/profile/identity::static-html-shell
+
+  - id: url-php-query-script
+    desc: URL targets .php with query
+    crit: notable
+    conf: 0.85
+    for: [scripts, source]
+    if:
+      type: string_literal
+      regex: 'https?://[A-Za-z0-9._:\-]{1,253}/[A-Za-z0-9._/\-]{1,200}\.php\?'
+    not:
+      - regex: '(?i)/viewtopic\.php\?'
+      - regex: '(?i)://jrsoftware\.org/ishelp/index\.php\?'
+      - regex: '(?i)index\.php\?'
+      - regex: '(?i)vim\.org/scripts/script\.php'
+      - regex: '(?i)://en\.wikipedia\.org/w/api\.php'
+      - regex: '(?i)://www\.albumart\.org/index_detail\.php'
+    unless:
+      - id: metadata/file/profile/identity::static-html-shell
+      - id: well-known/lib/osano::osano-consent-manager
+
+  - id: url-php-endpoint-binary
+    desc: URL targets .php endpoint
+    crit: notable
+    conf: 0.8
+    for: [binaries]
+    # Capture the query string too (tight URL-arg class, no \S, so binary noise
+    # in concatenated strings is not absorbed) so the not: filters below can
+    # inspect query params — `not:` matches the matched substring, which would
+    # otherwise stop at `.php?` and never see `?title=`/`?search=` (see RULES.md).
+    if:
+      type: text
+      regex: 'https?://[A-Za-z0-9._:\-]{1,253}/[A-Za-z0-9._/\-]{1,200}\.php(\?[\w%=&:/.\-]{0,200}|/|$)'
+    not:
+      - regex: '(?i)/viewtopic\.php\?'
+      - regex: '(?i)://jrsoftware\.org/ishelp/index\.php\?'
+      # MediaWiki article/search URLs (Wikipedia, cppreference, dejavu, many
+      # wikis) — index.php?title=/?search= or path-style index.php/ — are benign
+      # documentation endpoints, not C2 panels.
+      - regex: '(?i)index\.php(\?(title|search)=|/)'
+      - regex: '(?i)://(www\.)?(wikibooks|wikipedia|wiktionary)\.org/w/index\.php\?'
+      # vim.org script registry (legitimate plugin index).
+      - regex: '(?i)vim\.org/scripts/script\.php'
+      # Public service APIs used by benign album-art/media integrations.
+      - regex: '(?i)://en\.wikipedia\.org/w/api\.php'
+      - regex: '(?i)://www\.albumart\.org/index_detail\.php'
+      # Hydrogen drum machine sound-library feed (first-party .php list endpoint).
+      - regex: '(?i)://(www\.)?hydrogen-music\.org/feeds/[^?\s]*\.php'
+    unless:
+      - id: well-known/app/hydrogen-music::hydrogen-drum-machine
+      - id: well-known/app/hydrogen-music::hydrogen-music-org-url

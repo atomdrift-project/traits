@@ -1,0 +1,71 @@
+# PowerShell-Specific Metrics-Based Obfuscation Detection
+# Detects PowerShell obfuscation patterns used in malware
+defaults:
+  platforms: [windows]
+  for: [powershell]
+  attack: "T1027"
+  mbc: "B0032"
+traits:
+  # === PowerShell-Specific Obfuscation Patterns ===
+- id: ps-obfuscated-vars
+  desc: "High-entropy PowerShell identifiers"
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: metrics
+    field: identifiers.avg_entropy
+    # Descriptive vendor variables can exceed 3.7; require a stronger
+    # entropy signal before calling a PowerShell script obfuscated.
+    min: 3.9
+  not:
+    - substr: SqlServerDsc
+  unless:
+  # conda activate.d/deactivate.d scripts are a wall of long SCREAMING_SNAKE
+  # env-var names (COOT_REFMAC_LIB_DIR, CLIBD_MON, …) that clear the entropy
+  # bar without any obfuscation.
+  - id: metadata/build/conda::conda-activation-env-vars
+  - type: metrics
+    field: identifiers.total
+    max: 4
+  - type: text
+    substr: "Install-Chocolatey"
+  - id: metadata/build/conda::conda-recipe-prefix-install-script
+  - id: well-known/app/aui-agent-builder/
+  - id: well-known/app/azure-dev-cli/
+  - id: well-known/app/maester/
+  - id: well-known/app/sql-server-dsc::benign-module-context
+- id: ps-many-single-char
+  desc: "Many single-character variables"
+  crit: suspicious
+  conf: 0.75
+  if:
+    type: metrics
+    field: identifiers.single_char_ratio
+    min: 0.35
+  unless:
+  - type: text
+    substr: "# SIG # Begin signature block"
+- id: ps-no-comments
+  desc: "No comments in PowerShell script"
+  crit: component
+  conf: 0.6
+  if:
+    type: metrics
+    field: comments.total
+    max: 0
+
+composite_rules:
+- id: ps-invoke-obfuscation
+  desc: "PowerShell Invoke-Obfuscation patterns detected"
+  crit: suspicious
+  conf: 0.95
+- id: ps-encoded-downloader
+  desc: "Encoded PowerShell downloader"
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: micro-behaviors/process/create/hidden::encodedcommand-flag-raw
+  - id: objectives/anti-static/obfuscation/code-metrics/structure::ps-no-comments
+  any:
+  - id: metadata/file/metrics::powershell-long-line
+  - id: objectives/anti-static/obfuscation/code-metrics/structure::ps-obfuscated-vars

@@ -1,0 +1,160 @@
+defaults:
+  attack: T1027
+  mbc: B0032
+  platforms:
+    - windows
+  for:
+    - pe
+traits:
+  - id: mpress-packer-symbol
+    desc: MPRESS packer symbol
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      regex: (^|[^a-zA-Z])[Mm][Pp]ress::_
+  - id: mpress-packer-string
+    desc: MPRESS packer string
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      word: MPRESS
+  - id: mpress-section-one
+    desc: MPRESS compressed payload section
+    crit: component
+    conf: 0.95
+    if:
+      type: section
+      exact: .MPRESS1
+      entropy_min: 6.0
+  - id: mpress-section-two
+    desc: MPRESS loader stub section
+    crit: component
+    conf: 0.95
+    if:
+      type: section
+      exact: .MPRESS2
+  - id: mpress-section-two-rwx
+    desc: MPRESS loader stub is writable and executable
+    crit: component
+    conf: 0.97
+    if:
+      type: section
+      exact: .MPRESS2
+      executable: true
+      writable: true
+  - id: mpress-v219-version
+    desc: MPRESS v2.19 version marker
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      exact: v2.19
+composite_rules:
+  - id: sparse-dynamic-import-table
+    desc: MPRESS sparse dynamic import table
+    crit: component
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+    any:
+      - id: micro-behaviors/os/module/load::get-module-handle-ansi
+      - id: micro-behaviors/communications/http/get::internet-open
+      - id: micro-behaviors/os/com/invoke::co-initialize
+    needs: 1
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-20
+  - id: mpress-two-section-loader
+    desc: MPRESS two-section packed PE
+    crit: notable
+    conf: 0.95
+    all:
+      - id: mpress-section-one
+      - id: mpress-section-two
+  - id: mpress-versioned-stub
+    desc: MPRESS versioned packer stub
+    # The version marker identifies the packer, but does not establish hostile
+    # intent.  MPRESS is also used by ordinary Windows software.
+    crit: notable
+    conf: 0.95
+    all:
+      - id: mpress-two-section-loader
+    any:
+      - id: mpress-packer-string
+      - id: mpress-v219-version
+      - id: mpress-section-two-rwx
+  - id: mpress-sparse-dynamic-loader
+    desc: MPRESS sparse dynamic API loader
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: mpress-two-section-loader
+      - id: sparse-dynamic-import-table
+      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+    unless:
+      - id: metadata/signed/platform/
+  - id: mpress-obfuscated-overlay-loader
+    desc: MPRESS loader with writable entry and large overlay
+    # Packing, a writable entry section, and an appended high-entropy region
+    # This identifies a packer layout, but does not establish the payload's
+    # purpose without a concrete capability.
+    crit: notable
+    conf: 0.98
+    attack: "T1027,T1027.009"
+    all:
+      - id: mpress-sparse-dynamic-loader
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
+      - id: metadata/binary/layout::overlay-over-35pct
+    unless:
+      - id: metadata/signed/platform/
+  # Import concealment plus a staged payload. MPRESS legitimately resolves its
+  # own handful of APIs at runtime, but a stub that keeps the import table
+  # near-empty AND ships a text-encoded blob is using the packer as a crypter:
+  # neither the payload nor the API surface is visible to static inspection.
+  # Distinct from packed-pe-encoded-payload-crypter, which keys on overlay
+  # dominance rather than on the concealed import surface.
+  - id: mpress-concealed-import-encoded-payload
+    desc: MPRESS crypter hiding imports and payload
+    crit: hostile
+    conf: 0.96
+    attack: T1027.013
+    mbc: F0001
+    all:
+      - id: mpress-sparse-dynamic-loader
+      - id: objectives/anti-static/obfuscation/payload/encoded::custom-alphabet-encoded-blob
+      - id: metadata/binary/section/metrics::pe-multiple-executable-writable-sections
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: mpress-network-aware-shell-dropper
+    desc: MPRESS-packed network-aware shell dropper
+    crit: hostile
+    conf: 0.97
+    attack: "T1027.002,T1059,T1016"
+    all:
+      - id: mpress-versioned-stub
+      - id: micro-behaviors/communications/socket/init::winsock-startup-ordinal
+      - id: micro-behaviors/os/network/interface::get-adapters-addresses
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/signed/developer
+  - id: mpress-packed-team-vr-license-crack
+    desc: MPRESS-packed Team V.R license crack
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002,T1036.005"
+    ref: sha256:2ed770b87cbe9c96c4265e4e104732dd002e32560ab0d938f44bdb838226c507
+    all:
+      - id: mpress-versioned-stub
+      - id: well-known/unwanted/software-crack::team-vr-self-issued-authenticode
+      - id: objectives/evasion/masquerade/version-resource/licensing::steinberg-elicenser-version-identity
+    any:
+      - id: mpress-sparse-dynamic-loader
+      - id: metadata/signed/certificate/identity::pe-signature-verified-kv
+    unless:
+      - id: metadata/signed/platform/

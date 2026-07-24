@@ -1,0 +1,183 @@
+defaults:
+  platforms: [windows]
+  for: [pe]
+  attack: "T1070.006"
+traits:
+  - id: zero-header-timestamp
+    desc: PE header timestamp is zero
+    crit: component
+    conf: 0.9
+    if:
+      type: metrics
+      field: pe.timestamp_is_zero
+      min: 1
+
+  - id: timestamp-anomaly
+    desc: PE timestamp anomaly detected
+    crit: baseline
+    conf: 0.7
+    if:
+      type: metrics
+      field: pe.timestamp_anomaly
+      min: 1
+    unless:
+      # Go's linker sets PE timestamp=0 by default (reproducible builds);
+      # every Go PE has a "timestamp anomaly" that doesn't indicate removal.
+      - id: metadata/lang/compiled/
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/lang/compiler/systems::go-pe-symtab
+      - id: metadata/lang/compiler/systems/
+
+  - id: export-timestamp-absent
+    desc: Export timestamp is absent
+    crit: baseline
+    conf: 0.9
+    if:
+      type: metrics
+      field: pe.has_export_timestamp
+      max: 0
+    unless:
+      - id: metadata/lang/compiler/systems::go-pe-symtab
+      - id: metadata/lang/compiler/systems/
+
+  - id: export-timestamp-maxval
+    desc: "Export dir timestamp set to 0xFFFFFFFF"
+    crit: component
+    conf: 0.9
+    if:
+      type: metrics
+      field: pe.export_timestamp
+      min: 2100
+    unless:
+      - id: export-timestamp-absent
+      - id: metadata/binary/metrics/threshold::many-exports-200
+      - id: metadata/signed/platform::shenzhen-goodix-technology-co.
+      - id: well-known/lib/psutil/
+      - id: metadata/binary/framework/
+
+  - id: debug-timestamp-post-2024
+    desc: Debug directory timestamp is 2025 or newer
+    crit: component
+    conf: 0.7
+    if:
+      type: metrics
+      field: pe.debug_timestamp_min
+      min: 1735689600
+
+  - id: header-timestamp-pre-2025
+    desc: PE header compile timestamp predates 2025
+    crit: component
+    conf: 0.7
+    if:
+      type: metrics
+      field: pe.timestamp
+      min: 1
+      max: 1735689599
+
+  - id: header-timestamp-pre-2000
+    desc: PE header timestamp predates 2000
+    crit: component
+    conf: 0.78
+    if:
+      type: metrics
+      field: pe.timestamp_pre_2000
+      min: 1
+    unless:
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/lang/compiler/systems/
+
+  - id: header-timestamp-post-2030
+    desc: PE header timestamp after 2030
+    crit: component
+    conf: 0.78
+    if:
+      type: metrics
+      field: pe.timestamp
+      min: 1925059200
+    unless:
+      - id: metadata/lang/compiled/
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/lang/compiler/systems/
+
+  - id: debug-timestamps-consistent
+    desc: Debug timestamps internally consistent
+    crit: component
+    conf: 0.7
+    if:
+      type: metrics
+      field: pe.debug_timestamp_consistent
+      min: 1
+
+composite_rules:
+  - id: signed-go-zero-timestamp-loader
+    desc: Signed Go loader with zero timestamp
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: zero-header-timestamp
+      - id: metadata/signed/trust-level::signer-evidence-present
+      - id: metadata/lang/compiler/systems::go-pe-rich-symbols
+      - id: micro-behaviors/os/api-resolution/manual::go-syscall-dynamic-api-dispatch
+    any:
+      - id: metadata/binary/resource::no-resources
+      - id: micro-behaviors/process/inject/runtime/thread-context::thread-context-apis-3of4
+      - id: metadata/binary/symbols/imports::pe-single-import-dll
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: debug-newer-than-compile-header
+    desc: Debug timestamp newer than PE compile timestamp
+    crit: suspicious
+    conf: 0.88
+    all:
+      - id: debug-timestamp-post-2024
+      - id: header-timestamp-pre-2025
+    unless:
+      - id: debug-timestamps-consistent
+      - id: metadata/binary/framework/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/sfx/
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/script/
+
+  - id: future-pe-debug-timestamps
+    desc: Far-future PE and debug timestamps
+    crit: notable
+    conf: 0.9
+    all:
+      - id: header-timestamp-post-2030
+      - id: debug-timestamp-post-2024
+    unless:
+      - id: metadata/binary/framework/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/sfx/
+      - id: metadata/binary/installer/script/
+      - id: metadata/signed/platform/
+      - id: well-known/app/internet-explorer/
+      - id: well-known/lib/windows-vault/
+
+  - id: inno-55-pre2000-timestamp
+    desc: Inno 5.5 installer with impossible timestamp
+    crit: suspicious
+    conf: 0.91
+    all:
+      - id: header-timestamp-pre-2000
+      - id: metadata/binary/installer/script::inno-setup-550-data-marker
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: packed-loader-future-provenance
+    desc: Themida-packed loader with implausible future provenance
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002,T1070.006"
+    mbc: "F0001"
+    all:
+      - id: objectives/anti-static/pack/detect::themida-boot-loader-layout
+      - id: metadata/binary/anomaly/provenance::pe-far-future-timestamp
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

@@ -1,0 +1,332 @@
+defaults:
+  platforms:
+    - windows
+  for:
+    - javascript
+    - vbs
+    - html
+    - text
+    - data
+traits:
+  # Bare Win32_Process class reference. Dual-use: a *query* of it is process
+  # enumeration (micro-behaviors/process/enumerate/wmi), while execution is
+  # Win32_Process.Create — so the bare class name alone is not an execution
+  # signal. Keep it a component building block for the wmi-process-spawn
+  # composite below (which adds the Create/SpawnInstance/winmgmts evidence).
+  - id: win32-process-query
+    desc: Win32_Process WMI class reference
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      word: Win32_Process
+    attack: T1047
+    mbc: E1043
+  - id: process-startup-config
+    desc: Win32_ProcessStartup config
+    crit: notable
+    conf: 0.75
+    if:
+      type: text
+      substr: Win32_ProcessStartup
+    attack: T1047
+    mbc: E1043
+  - id: wmi-get-object
+    desc: GetObject WMI retrieval
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      exact: GetObject
+    attack: T1047
+  - id: process-startup-fragmented
+    desc: Fragmented Win32_ProcessStartup class
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'Win32_Proc["'']\s*\+\s*["'']essStartup'
+    attack: T1047
+    mbc: E1043
+  - id: win32-process-fragmented
+    desc: Fragmented Win32_Process class
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: 'Win3["'']\s*\+\s*["'']2_Pro["'']\s*\+\s*["'']cess'
+    attack: T1047
+    mbc: E1043
+  - id: process-create-call
+    desc: WMI Win32_Process.Create invocation
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '(Win32_Process|winmgmts|wbemServices|StdRegProv)[^\n]{0,80}\.\s*Create\s*\('
+    attack: T1047
+    mbc: E1043
+  - id: process-startup-spawninstance-symbol
+    desc: WMI startup SpawnInstance symbol
+    crit: component
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '(^|\.)SpawnInstance_$'
+    attack: T1047
+    mbc: E1043
+  - id: process-startup-spawninstance-text
+    desc: WMI startup SpawnInstance text
+    crit: component
+    conf: 0.88
+    for: [javascript, html]
+    if:
+      type: text
+      substr: SpawnInstance_
+    attack: T1047
+    mbc: E1043
+  - id: process-create-symbol
+    desc: WMI process Create call symbol
+    crit: component
+    conf: 0.82
+    if:
+      type: symbol
+      kind: call
+      regex: '\.Create$'
+    attack: T1047
+    mbc: E1043
+  - id: process-create-cvar-call
+    desc: WMI Create CVar command
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\.\s*Create\s+CVar\s*\('
+    attack: T1047
+    mbc: E1043
+  - id: process-startup-create-variable
+    desc: WMI startup object creates a process
+    crit: notable
+    conf: 0.9
+    # WMI startup objects expose SpawnInstance_ before the process object's
+    # Create method.  Keep the relation local so ordinary JavaScript APIs such
+    # as document.create() do not become a process-execution finding.
+    if:
+      type: text
+      regex: '(?is)SpawnInstance_\s*(\(\s*\))?[\s\S]{0,700}\b[A-Za-z_$][A-Za-z0-9_$]{1,40}\.Create\s*\('
+    attack: T1047
+    mbc: E1043
+  - id: js-spawninstance-hidden-window
+    desc: WMI SpawnInstance followed by hidden window
+    crit: notable
+    conf: 0.96
+    for: [javascript, html]
+    if:
+      type: text
+      regex: '(?is)SpawnInstance_\s*\(\s*\)[\s\S]{0,700}\.\s*ShowWindow\s*=\s*0'
+    attack: T1047
+    mbc: E1043
+  - id: js-hidden-window-process-create
+    desc: Hidden window followed by WMI Create
+    crit: notable
+    conf: 0.96
+    for: [javascript, html]
+    if:
+      type: text
+      regex: '(?is)\.\s*ShowWindow\s*=\s*0[\s\S]{0,700}\.\s*Create\s*\('
+    attack: T1047
+    mbc: E1043
+composite_rules:
+  - id: js-hidden-process-create-sequence
+    desc: Obfuscated WMI hidden process sequence
+    crit: notable
+    conf: 0.97
+    for: [javascript, html]
+    all:
+      - id: js-spawninstance-hidden-window
+      - id: js-hidden-window-process-create
+    attack: T1047
+    mbc: E1043
+  - id: wmi-process-spawn
+    desc: WMI process execution
+    crit: suspicious
+    conf: 0.85
+    attack: T1047
+    mbc: E1043
+    # A WMI moniker or Win32_Process query alone is discovery.  Require an
+    # explicit process-creation signal before describing the behavior as spawn.
+    all:
+      - id: process-create-call
+    any:
+      - id: micro-behaviors/os/wmi/query::wmi-moniker-string
+      - id: win32-process-query
+      - id: process-startup-config
+      - id: process-startup-fragmented
+      - id: win32-process-fragmented
+      - id: process-create-call
+    unless:
+      - id: well-known/app/samba::samba-source-tree
+      - id: metadata/package/quality/false-positives::samba-source-path
+  - id: wmi-fileless-malware
+    desc: WMI fileless malware
+    crit: hostile
+    conf: 0.9
+    attack: T1047
+    mbc: E1043
+    all:
+      - id: wmi-process-spawn
+      - id: wmi-showwindow-hidden-property
+  - id: wmi-showwindow-hidden-property
+    desc: WMI ShowWindow hidden property
+    crit: notable
+    conf: 0.88
+    attack: T1564.003
+    mbc: E1003
+    any:
+      - id: micro-behaviors/process/create/flags::sw-hide-token
+      - id: micro-behaviors/process/create/flags::show-window-property-symbol
+      - id: micro-behaviors/process/create/flags::show-window-hidden-assignment
+  - id: wmi-hidden-cvar-process-create
+    desc: WMI hidden CVar process create
+    crit: hostile
+    conf: 0.96
+    attack: T1047, T1564.003
+    mbc: E1043
+    all:
+      - id: process-create-cvar-call
+      - id: wmi-showwindow-hidden-property
+    any:
+      - id: micro-behaviors/process/create/macro/office::createobject-non-literal-arg
+      - id: objectives/anti-static/obfuscation/wsh::vbs-createobject-variable-arg
+  - id: wmi-hidden-variable-process-create
+    desc: WMI hidden variable process create
+    # Hidden WMI process creation is a strong execution indicator, but the
+    # primitive is also used by administration software.  Hostile intent is
+    # established by the loader composites that add encoding, WSH, or staging.
+    crit: suspicious
+    conf: 0.95
+    attack: T1047, T1564.003
+    mbc: E1043
+    all:
+      - id: process-startup-create-variable
+      - id: wmi-showwindow-hidden-property
+    any:
+      - id: process-startup-spawninstance-symbol
+      - id: process-startup-spawninstance-text
+      - id: objectives/execution/interpreter/vbscript/wmi::startup-spawn-instance
+
+  - id: wmi-hidden-startup-process
+    desc: WMI hidden process startup
+    crit: suspicious
+    conf: 0.92
+    attack: T1047, T1564.003
+    mbc: E1043
+    all:
+      - id: process-startup-spawninstance-symbol
+      - id: wmi-showwindow-hidden-property
+    any:
+      - id: wmi-get-object
+      - id: process-startup-fragmented
+  - id: wmi-obfuscated-startup-hidden-process
+    desc: Obfuscated WMI startup creates hidden process
+    crit: hostile
+    conf: 0.98
+    attack: T1047, T1564.003
+    mbc: E1043
+    all:
+      - id: micro-behaviors/os/com/invoke::getobject-call-text
+      - id: process-startup-spawninstance-text
+      - id: wmi-showwindow-hidden-property
+  - id: wmi-hidden-powershell-process
+    desc: WMI hidden PowerShell process launch
+    crit: hostile
+    conf: 0.96
+    attack: T1047, T1059.001, T1564.003
+    mbc: E1043
+    all:
+      - id: wmi-hidden-startup-process
+      - id: process-create-symbol
+      - id: micro-behaviors/process/create/shell/lang::powershell-keyword
+    any:
+      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+      - id: wmi-showwindow-hidden-property
+  - id: wmi-staged-hidden-powershell-process
+    desc: Staged hidden WMI PowerShell process
+    crit: hostile
+    conf: 0.99
+    attack: "T1027.002,T1047,T1059.001,T1564.003"
+    for: [javascript]
+    mbc: E1043
+    all:
+      - id: process-startup-spawninstance-text
+      - id: micro-behaviors/process/create/flags::show-window-hidden-assignment
+      - id: objectives/anti-static/obfuscation/steganography/unicode::js-nonascii-split-join-cleanup
+      - id: micro-behaviors/os/env/access::env-item-random-variable
+      - id: micro-behaviors/communications/http/url/domain::workers-dev-url
+  - id: wmi-obfuscated-wsh-hidden-process-loader
+    desc: Obfuscated WSH WMI hidden-process loader
+    # Keep this overlapping execution summary suspicious; the more specific
+    # encoded-loader and staged-PowerShell composites remain hostile.
+    crit: suspicious
+    conf: 0.99
+    attack: "T1027.002,T1047,T1059.001,T1059.007,T1564.003"
+    for: [javascript]
+    mbc: E1043
+    all:
+      - id: js-hidden-process-create-sequence
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: micro-behaviors/data/decode/base64::decoded-text-carrier
+    any:
+      # Prefer the Unicode-marker atom when it is recoverable, but retain the
+      # generic split/join obfuscation shape for oversized JScript where the
+      # bounded parser may not preserve the control-character marker.
+      - id: objectives/anti-static/obfuscation/steganography/unicode::js-nonascii-split-join-cleanup
+      - id: objectives/anti-static/obfuscation/string/encoding::js-split-join-cleanup
+  - id: wmi-hidden-activex-encoded-loader
+    desc: Hidden WMI process with encoded WSH stage
+    crit: hostile
+    conf: 0.99
+    attack: "T1027,T1047,T1059.001,T1059.007,T1564.003"
+    for: [javascript]
+    mbc: "B0032,E1043"
+    all:
+      - id: js-hidden-process-create-sequence
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: micro-behaviors/data/decode/base64::decoded-text-carrier
+  - id: wsh-environment-staged-hidden-wmi-loader
+    desc: Obfuscated WSH stages environment payload into hidden WMI process
+    crit: hostile
+    conf: 0.99
+    attack: "T1027.002,T1047,T1059.001,T1059.007,T1564.003"
+    for: [javascript]
+    mbc: "B0032,E1043"
+    all:
+      - id: js-hidden-process-create-sequence
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: micro-behaviors/os/env/access::wsh-environment-object-item-assignment
+    any:
+      - id: objectives/anti-static/obfuscation/steganography/unicode::js-nonascii-split-join-cleanup
+      - id: objectives/anti-static/obfuscation/string/encoding::js-long-delimiter-split-join-cleanup
+  - id: hta-downloaded-hidden-powershell-wmi-loader
+    desc: HTA hidden PowerShell WMI downloader
+    crit: hostile
+    conf: 0.99
+    for: [html]
+    attack: T1047, T1059.001, T1059.005, T1105, T1564.003
+    mbc: E1043
+    all:
+      - id: objectives/command-and-control/dropper/execution/download-exec::hidden-hta-window
+      - id: js-hidden-process-create-sequence
+      - id: micro-behaviors/communications/http/client/webclient::webclient-download-data
+      - id: micro-behaviors/process/create/shell/html::powershell-command-string
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: micro-behaviors/os/wmi/query::wmi-moniker-string
+  - id: wmi-lateral-movement
+    desc: WMI lateral movement
+    crit: hostile
+    conf: 0.9
+    attack: T1047
+    mbc: E1080
+    all:
+      - id: wmi-process-spawn
+      - id: micro-behaviors/os/wmi/remote::remote-wmi-moniker

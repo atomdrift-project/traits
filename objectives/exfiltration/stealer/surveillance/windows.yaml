@@ -1,0 +1,143 @@
+# Windows PE Reconnaissance + Exfiltration Composites
+# Combines system reconnaissance + data collection + exfiltration
+# Covers native C/C++ recon modules (Aeternum, AgentTesla DLLs, etc.)
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: T1041
+composite_rules:
+  - id: tor-proxy-screenshot-stealer
+    desc: Screenshot stealer with Tor proxy exfil
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/hardware/display/screen::gdi-bitblt
+      - id: micro-behaviors/data/encode/image/gdiplus::create-bitmap-from-hbitmap
+      - id: micro-behaviors/dylib/library/family::libcurl-ref
+      - id: micro-behaviors/communications/proxy/tor::onion-domain-reference
+      - id: micro-behaviors/communications/proxy/socks::socks5-string
+    unless:
+      - id: metadata/signed/platform/
+  - id: tor-proxy-minidump-stealer
+    desc: MiniDump stealer with screenshot and Tor
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/credential-access/dump/process::minidump-admin-process-dump
+      - id: tor-proxy-screenshot-stealer
+    unless:
+      - id: metadata/signed/platform/
+  # Telegram-specific: screenshot + recon + Telegram bot
+  - id: recon-screenshot-telegram
+    desc: System recon with screenshot and Telegram exfiltration
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+      - id: micro-behaviors/hardware/display/screen::gdi-bitblt
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::get-computer-name
+      - id: micro-behaviors/os/sysinfo/hostname::get-user-name
+      - id: micro-behaviors/os/network/interface/
+  # Generic: screenshot + recon + any HTTP exfil
+  - id: recon-screenshot-exfil
+    desc: System recon with screenshot and HTTP exfiltration
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: objectives/collection/screenshot/capture::gdi-gdiplus-capture
+      - id: micro-behaviors/communications/http/post/
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::get-computer-name
+      - id: micro-behaviors/os/sysinfo/hostname::get-user-name
+      - id: micro-behaviors/os/network/interface/
+      - id: micro-behaviors/process/enumerate/psapi/
+    unless:
+      - id: metadata/library/automation/
+      - id: metadata/library/automation/
+      - id: well-known/app/winmerge/
+  - id: recon-screenshot-socket-exfil
+    desc: System recon with screenshot and socket exfiltration
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/collection/screenshot/capture::gdi-gdiplus-capture
+      - id: micro-behaviors/communications/socket/init::winsock-client-symbol-lifecycle
+    any:
+      - id: objectives/discovery/host/system::windows-binary-stealer-recon
+      - id: objectives/discovery/host/geo::geo-api
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-binary
+    unless:
+      - id: metadata/signed/platform/
+  # Telegram text-only: recon + Telegram (no screenshot needed)
+  #
+  # `near_bytes` is what separates a stealer from an ordinary application that
+  # merely offers Telegram notifications. Sending a message and querying the OS
+  # are both legitimate on their own: media managers, backup tools and CI agents
+  # all ship a user-configured Telegram notifier AND enumerate volumes, network
+  # interfaces and processes as part of their normal job. Without a locality
+  # constraint this composite fired hostile on any large binary that happened to
+  # contain both subsystems anywhere in the same file (observed on the shipped
+  # Sonarr.Common.dll of the official Sonarr installer, VT 0/67). A real stealer
+  # collects the recon and ships it from the same routine, so the strings sit
+  # together; unrelated subsystems in a multi-megabyte library do not.
+  - id: recon-telegram-exfil
+    desc: System reconnaissance with Telegram exfiltration
+    crit: hostile
+    conf: 0.93
+    near_bytes: 8192
+    all:
+      - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+      - id: telegram-send-operation
+    needs: 2
+    any:
+      - id: micro-behaviors/os/sysinfo/
+      - id: micro-behaviors/os/network/interface/
+      - id: micro-behaviors/process/enumerate/psapi/
+      - id: micro-behaviors/fs/enumerate/volume::get-volume-info
+  # A host string alone can be a URL validator or notification configuration.
+  # Require an explicit Telegram message/file endpoint before treating recon
+  # plus Telegram as exfiltration.
+  - id: telegram-send-operation
+    desc: Telegram API message or file send operation
+    crit: notable
+    conf: 0.94
+    all:
+      - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+    any:
+      - id: micro-behaviors/communications/messaging/send::chat-send-message
+      - id: micro-behaviors/communications/messaging/send::chat-send-document
+      - id: micro-behaviors/communications/messaging/send::chat-send-photo
+  # Surveillance: screenshot + process enum (any exfil method)
+  - id: surveillance-capture
+    desc: Screenshot capture with process enumeration
+    crit: notable
+    conf: 0.9
+    attack: T1113
+    all:
+      - id: micro-behaviors/hardware/display/screen::gdi-bitblt
+      - id: micro-behaviors/process/enumerate/psapi/
+    any:
+      - id: micro-behaviors/data/encode/image/gdiplus/
+      - id: micro-behaviors/communications/http/post/
+    downgrade:
+      any:
+        - id: metadata/binary/vendor/
+        - id: well-known/app/internet-explorer/
+        - id: metadata/library/automation/
+        - id: well-known/app/qbittorrent/
+        - id: well-known/lib/electron/
+        - id: well-known/lib/benign-runtime-bundles::tauri-frame-app
+  - id: browser-focused-injection-surveillance
+    desc: Browser-focused native injection with screenshot surveillance
+    crit: hostile
+    conf: 0.96
+    attack: T1113
+    all:
+      - id: surveillance-capture
+      - id: objectives/evasion/process/injection/dll::remote-thread-dll-injection-chain
+      - id: objectives/anti-analysis/debugger-detect/hardware-breakpoints::suspect-browser-snapshot
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/library/automation/
+      - id: well-known/lib/electron/

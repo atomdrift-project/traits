@@ -1,0 +1,143 @@
+defaults:
+  platforms: [windows]
+  for:
+    - python
+    - pe
+  attack: T1499.004
+traits:
+  - id: nt-raise-hard-error
+    desc: NtRaiseHardError API (BSOD trigger)
+    crit: notable
+    conf: 0.98
+    if:
+      type: text
+      substr: NtRaiseHardError
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+  - id: rtl-adjust-privilege
+    desc: Enables privilege via RtlAdjustPrivilege
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: RtlAdjustPrivilege
+  - id: shutdown-privilege
+    desc: SeShutdownPrivilege constant
+    crit: notable
+    conf: 0.7
+    for:
+      - python
+    if:
+      type: string_literal
+      regex: RtlAdjustPrivilege\s*\(\s*(c_uint\()?19
+  - id: set-system-power-state
+    desc: Calls SetSystemPowerState API
+    crit: suspicious
+    conf: 0.9
+    for:
+      - python
+    attack: T1529
+    if:
+      type: symbol
+      kind: call
+      regex: '(?i)^SetSystemPowerState$'
+  - id: status-assertion-failure
+    desc: STATUS_ASSERTION_FAILURE error code (BSOD)
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: 0x[Cc]000007[Bb]|3221226363
+  - id: rtlsetprocessiscritical
+    desc: Marks process critical to force BSOD
+    crit: suspicious
+    conf: 0.94
+    for:
+      - pe
+    if:
+      type: text
+      exact: RtlSetProcessIsCritical
+    unless:
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/binary/linking/api-set::api-set-core-cluster
+composite_rules:
+  - id: ntdll-reference
+    desc: ntdll reference (import or ctypes)
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/os/syscall/invoke::ntdll-import
+      - id: micro-behaviors/dylib/load/runtime::ctypes-windll
+    downgrade:
+      any:
+        - id: metadata/binary/metrics/structural::many-imports
+  - id: bsod-raise-error
+    desc: BSOD via NtRaiseHardError API call
+    crit: suspicious
+    conf: 0.99
+    mbc: B0033
+    all:
+      - id: ntdll-reference
+      - id: nt-raise-hard-error
+    downgrade:
+      any:
+        - id: metadata/binary/metrics/structural::many-exports
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::node-windows-distribution-archive
+      - id: well-known/lib/benign-runtime-bundles::node-windows-runtime-binary
+  - id: bsod-adjust-privilege
+    desc: BSOD via privilege adjustment + assert
+    crit: hostile
+    conf: 0.98
+    mbc: B0033
+    all:
+      - id: ntdll-reference
+      - id: rtl-adjust-privilege
+      - id: status-assertion-failure
+  - id: critical-process-bsod-risk
+    desc: Critical process termination crash risk
+    crit: hostile
+    conf: 0.96
+    mbc: B0033
+    for:
+      - pe
+    all:
+      - id: ntdll-reference
+      - id: rtlsetprocessiscritical
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/linking/api-set::api-set-core-cluster
+  - id: python-bsod-traits
+    desc: Python BSOD trigger via ctypes
+    crit: hostile
+    conf: 0.99
+    for:
+      - python
+    all:
+      - id: objectives/impact/system/crash::python-ctypes-import
+      - id: ntdll-reference
+    any:
+      - id: nt-raise-hard-error
+      - id: rtl-adjust-privilege
+  - id: python-ctypes-import
+    desc: Python ctypes import
+    crit: component
+    conf: 0.7
+    for:
+      - python
+    any:
+      - id: micro-behaviors/dylib/load/runtime::ctypes-import
+      - id: micro-behaviors/dylib/load/runtime::ctypes-import-module
+  - id: windows-powerstate-abuse
+    desc: Privilege + power-state API abuse in Python
+    crit: hostile
+    conf: 0.98
+    for:
+      - python
+    attack: T1529
+    all:
+      - id: objectives/impact/system/crash::python-ctypes-import
+      - id: micro-behaviors/dylib/load/runtime::ctypes-windll
+      - id: rtl-adjust-privilege
+      - id: set-system-power-state

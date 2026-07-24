@@ -1,0 +1,113 @@
+# Cross-language reverse-shell aggregator composites.
+# Other reverse-shell technique dirs reference any-shell-exec / any-socket-dial
+# to express "<this technique> + a shell exec / a socket dial".
+defaults:
+  for: [scripts, source]
+  platforms: [linux, macos, windows]
+  attack: T1059
+  mbc: B0030
+
+composite_rules:
+  - id: any-socket-dial
+    desc: Socket dial primitive aggregate
+    crit: component
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/socket/dial/
+
+  - id: any-shell-exec
+    desc: any interactive shell exec
+    crit: component
+    conf: 0.9
+    unless:
+      - id: well-known/app/community-scripts-proxmoxve::mirror-connectivity-context
+    any:
+      - id: micro-behaviors/process/create/shell/interactive::sh-interactive
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-interactive
+      - id: micro-behaviors/process/create/shell/spawn::bash-exec
+      - id: micro-behaviors/process/create/shell/lang::ruby-shell-exec
+      - id: micro-behaviors/process/create/shell/spawn::sh-c-exec
+      - id: micro-behaviors/process/create/shell/lang::go-exec-command-bin-sh
+      - id: objectives/command-and-control/reverse-shell/dup::java-runtime-exec-shell-array
+      - id: objectives/command-and-control/reverse-shell/stdio::pipe-to-shell-stdin
+
+  - id: socket-plus-shell-exec
+    desc: socket dial plus interactive shell exec
+    crit: hostile
+    conf: 0.96
+    scope: leaf
+    near_lines: 10
+    all:
+      - id: any-socket-dial
+      - id: any-shell-exec
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/security-scanner/
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+      - id: well-known/lib/jruby/
+      - id: well-known/lib/jruby::bundler-thor-open-uri-helper
+      - id: metadata/package/testing/presence/harness::go-test-file
+      - id: metadata/package/testing/harness/unit/
+      - id: well-known/app/macos-benign::podman-desktop-bundle
+      - id: well-known/app/macos-benign::podman-desktop-resource
+
+  - id: dup2-plus-shell-exec
+    desc: dup2 stdio plus shell exec
+    crit: hostile
+    conf: 0.97
+    scope: leaf
+    near_lines: 80
+    all:
+      - id: micro-behaviors/process/fd/dup::dup2
+      - id: any-shell-exec
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/security-scanner/
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+
+  - id: socket-dup2-shell-exec
+    desc: socket dial plus dup2 plus shell exec (classic revshell triple)
+    crit: hostile
+    conf: 0.99
+    scope: leaf
+    near_lines: 80
+    all:
+      - id: any-socket-dial
+      - id: micro-behaviors/process/fd/dup::dup2
+      - id: any-shell-exec
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/security-scanner/
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+
+  - id: socket-plus-interactive-shell
+    desc: socket dial plus /bin/sh -i interactive shell
+    crit: hostile
+    conf: 0.98
+    scope: leaf
+    # Without proximity, an unrelated socket call (e.g. TLS test harness) and an
+    # unrelated `sh -i` (e.g. interactive-debug helper) co-occur in the same file
+    # and trip a hostile finding. Mirror socket-plus-shell-exec's proximity.
+    near_lines: 80
+    all:
+      - id: any-socket-dial
+      - id: micro-behaviors/process/create/shell/interactive::sh-interactive
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/security-scanner/
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+
+  - id: socket-shell-exec-malware-term
+    desc: socket + shell exec near reverse-shell keyword
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: any-socket-dial
+      - id: any-shell-exec
+      - id: objectives/command-and-control/backdoor/keywords::reverse-shell-match
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/security-scanner/
+      - id: metadata/package/quality/false-positives::benign-app-fp-context

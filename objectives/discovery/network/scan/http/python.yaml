@@ -1,0 +1,134 @@
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  attack: "T1595"
+traits:
+- id: many-public-http-endpoint-literals
+  desc: Large hardcoded public HTTP endpoint list
+  crit: notable
+  conf: 0.95
+  count_min: 20
+  if:
+    id: micro-behaviors/communications/ip/literal::http-ip-url-source-literal
+
+- id: requests-head-probe
+  desc: Python HTTP HEAD probing with requests.request
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: 'requests\.request\(\s*method,\s*url,\s*allow_redirects\s*=\s*True'
+- id: fofa-ollama-search-query
+  desc: FOFA query targets exposed Ollama servers
+  crit: notable
+  conf: 0.99
+  if:
+    type: text
+    substr: 'port="11434" && body="Ollama"'
+- id: sensitive-web-extension-list-secrets--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '\[[^\]]{0,160}"\.(git|env)"[^\]]{0,160}"\.(git|env)"[^\]]{0,160}\]'
+  count_max: 1020077
+- id: sensitive-web-extension-list-secrets--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '\[[^\]]{0,160}"\.(git|env)"[^\]]{0,160}"\.(pem|key)"[^\]]{0,160}\]'
+  count_max: 1020078
+- id: sensitive-web-extension-list-secrets--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '\[[^\]]{0,160}"\.(pem|key)"[^\]]{0,160}"\.(git|env)"[^\]]{0,160}\]'
+  count_max: 1020079
+- id: sensitive-web-extension-list-secrets--rx-4
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '\[[^\]]{0,160}"\.(pem|key)"[^\]]{0,160}"\.(pem|key)"[^\]]{0,160}\]'
+  count_max: 1020080
+- id: sensitive-web-extension-list-datastore
+  desc: Datastore web extensions for probing
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: '"\.(sql|db)"'
+- id: sensitive-web-extension-list-backups
+  desc: Backup web extensions for probing
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: '"\.(bak|old)"'
+- id: sensitive-web-extension-list-log
+  desc: Log file extension for probing
+  crit: component
+  conf: 0.7
+  if:
+    type: text
+    substr: '".log"'
+# A thread pool is a neutral concurrency capability, not network-scan intent;
+# it lives in micro-behaviors/process/create/workers::worker-pool (case-
+# insensitive, matches ThreadPoolExecutor). The composite below references it
+# cross-tier alongside the HTTP-probe + sensitive-extension legs that supply
+# the actual scanning intent.
+composite_rules:
+- id: fofa-ollama-server-discovery
+  desc: Searches FOFA for exposed Ollama servers
+  crit: suspicious
+  conf: 0.99
+  all:
+  - id: micro-behaviors/communications/http/services/fofa::search-api-endpoint
+  - id: fofa-ollama-search-query
+  - id: micro-behaviors/communications/http/lib/requests::requests-get
+
+- id: public-http-endpoint-swarm
+  desc: Requests to many hardcoded public HTTP endpoints
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: many-public-http-endpoint-literals
+  - id: micro-behaviors/communications/http/lib/requests::requests-get
+
+- id: ollama-open-server-fleet-probe
+  desc: Concurrent probing of public Ollama servers
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: many-public-http-endpoint-literals
+  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: well-known/app/ollama::ollama-api-tags-path
+  - id: micro-behaviors/process/create/workers::worker-pool
+
+- id: concurrent-web-extension-probe
+  desc: Concurrent HTTP probing of sensitive file extensions
+  crit: notable
+  conf: 0.9
+  all:
+  - id: requests-head-probe
+  - id: micro-behaviors/process/create/workers::worker-pool
+  any:
+  - id: sensitive-web-extension-list-secrets
+  - id: sensitive-web-extension-list-datastore
+  - id: sensitive-web-extension-list-backups
+  - id: sensitive-web-extension-list-log
+- id: sensitive-web-extension-list-secrets
+  desc: Sensitive secret-bearing web extensions for probing
+  crit: component
+  conf: 0.8
+  any:
+  - id: sensitive-web-extension-list-secrets--rx-1
+  - id: sensitive-web-extension-list-secrets--rx-2
+  - id: sensitive-web-extension-list-secrets--rx-3
+  - id: sensitive-web-extension-list-secrets--rx-4

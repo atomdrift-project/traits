@@ -1,0 +1,275 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+  - javascript
+  - typescript
+traits:
+- id: ts-node-package-member
+  desc: ts-node package member
+  crit: component
+  conf: 1.0
+  if:
+    type: path
+    substr: ts-node-
+- id: vm-require
+  desc: Node.js vm module import
+  crit: notable
+  conf: 0.85
+  if:
+    type: text
+    regex: require\(['"](node:)?vm['"]\)|from ['"](node:)?vm['"]
+- id: vm-createContext-call
+  desc: createContext symbol (vm or React/Vue/...)
+  crit: component
+  conf: 0.8
+  # Matches both `vm.createContext(...)` (dotted) and bare `createContext`
+  # (from `const {createContext} = require('vm')`). Bare `createContext`
+  # is heavily overloaded — React, Vue, and other UI frameworks export
+  # their own `createContext`. Component-only; the composite
+  # `vm-createContext` below requires co-occurrence with a node:vm import.
+  if:
+    type: symbol
+    regex: (^|\.)createContext$
+- id: vm-runInContext-call
+  desc: Direct Node.js vm.runInContext() call
+  crit: notable
+  conf: 0.9
+  if:
+    type: symbol
+    # Do not treat lodash's `_.runInContext()` helper as Node VM execution.
+    # Bundlers commonly rename the imported module to vm_1 or node_vm.
+    regex: '^(vm|vm_[0-9]+|node_vm)(\.default)?\.runInContext$'
+- id: vm-runInNewContext-call
+  desc: vm.runInNewContext() call symbol
+  crit: component
+  conf: 0.9
+  if:
+    type: symbol
+    exact: runInNewContext
+- id: vm-runInThisContext
+  desc: "VM runInThisContext"
+  crit: notable
+  conf: 0.85
+  attack: T1059
+  if:
+    type: symbol
+    exact: runInThisContext
+  downgrade:
+    any:
+    - id: metadata/package/testing/harness/runtime::node-common-require
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/lang/scripted::dts-declaration-file
+- id: vm-Script
+  desc: VM Script compilation
+  crit: notable
+  conf: 0.8
+  if:
+    type: string_literal
+    regex: new vm\.Script|vm\.Script\(
+- id: global-object-constructor-discovery
+  desc: Function-constructor global object discovery
+  crit: notable
+  conf: 0.95
+  if:
+    type: string_literal
+    regex: constructor\s*\(\s*['"]return this['"]\s*\)|this\.constructor\.constructor
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/manifest::test-fixtures
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+- id: process-binding
+  desc: Calls the internal Node.js process.binding API
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: \bprocess\.binding\s*\(
+  unless:
+  - type: text
+    regex: process\.binding\(['"]uv['"]\)
+  - id: micro-behaviors/process/interpreter/node::process-binding-evals
+  - id: micro-behaviors/process/interpreter/node::process-binding-natives
+  - id: metadata/package/testing/compiled/
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/manifest::test-fixtures
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+- id: function-constructor-access
+  desc: Function.constructor access
+  crit: notable
+  conf: 0.6
+  if:
+    type: string_literal
+    substr: Function.constructor
+  unless:
+  - id: metadata/lang/javascript-features::closure-externs-annotation
+  # Common globalThis polyfill: Function("return this")()
+  - type: text
+    regex: 'Function\s*\(\s*["'']return this["'']\s*\)'
+- id: jsdom-run-scripts
+  desc: JSDOM configured to run scripts
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: runScripts\s*:\s*['"](outside-only|dangerously)['"]
+- id: base64-url
+  desc: Base64-encoded URL
+  crit: notable
+  conf: 0.85
+  mbc: C0026
+  attack: T1027
+  if:
+    type: encoded
+    encoding: base64
+    regex: https?://
+  not:
+  - regex: authorizationFingerprint
+  - regex: microsoft\.com/pki
+  - regex: digicert\.com
+  - regex: verisign\.com
+  - regex: globalsign\.com
+  - regex: sandbox\.braintreegateway\.com
+  unless:
+  - id: micro-behaviors/process/interpreter/vm/
+  downgrade:
+    any:
+    - id: micro-behaviors/process/interpreter/vm/
+- id: yarn-release-bundle
+  desc: Yarn bundled release artifact
+  crit: component
+  if:
+    type: path
+    basename: true
+    regex: ^yarn-[0-9][0-9.]*\.cjs$
+- id: parcel-test-utils-context
+  desc: Parcel test utilities module
+  crit: baseline
+  conf: 0.98
+  if:
+    type: text
+    substr: "export {fsFixture} from './fsFixture';"
+- id: vm-runInNewContext-cond-0--inline-4298
+  desc: runInNewContext("gc") (V8 GC test harness)
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \brunInNewContext\s*\(\s*['"]gc['"]\s*\)
+  count_max: 1004299
+composite_rules:
+  - id: base64-url-benign-context
+    desc: Benign base64 URL context
+    crit: component
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/url/encoded::braintree-client-token-doc-context
+      - id: micro-behaviors/communications/url/encoded::inline-svg-data-uri-context
+      - id: metadata/package/testing/harness/runtime::is-test
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/lang/scripted::dts-declaration-file
+      - id: micro-behaviors/crypto/certificate/usage::has-pem-certificate
+      - id: metadata/file/format::sourcemap-inline-base64
+      - id: well-known/lib/sentry-js::sentry-js-sdk
+  - id: base64-url-downgrade-context
+    desc: Lower-risk base64 URL context
+    crit: component
+    conf: 0.9
+    any:
+      - id: metadata/library/vscode::vscode-extension-marker
+      - id: metadata/binary/metrics/encoded::large-embedded-b64-blob
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: vm-runInNewContext-benign-harness
+    desc: VM runInNewContext benign harness context
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: metadata/package/testing/harness/runtime::node-common-require
+      - id: metadata/package/testing/harness/runtime::test-basename-pattern
+      - id: metadata/package/testing/harness/runtime::test-basename-spec
+      - id: metadata/package/testing/harness/runtime::node-inspector-harness
+      - id: metadata/lang/scripted::dts-declaration-file
+  - id: vm-run-methods
+    desc: VM code execution methods
+    crit: notable
+    conf: 0.8
+    any:
+      - id: vm-runInContext
+      - id: vm-runInNewContext
+  - id: vm-with-http-benign-context
+    desc: VM HTTP benign context
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: yarn-release-bundle
+      - id: metadata/package/testing/harness/runtime::is-test
+      - id: metadata/package/testing/presence/harness::test-directory
+      - id: metadata/package/testing/scripted::js-bdd-suite-text
+      - id: parcel-test-utils-context
+  - id: vm-with-http
+    desc: VM execution combined with HTTP
+    crit: notable
+    conf: 0.95
+    mbc: B0024
+    attack: T1105
+    unless:
+      - id: micro-behaviors/process/interpreter/vm/
+    all:
+      - id: vm-run-methods
+    any:
+      - id: micro-behaviors/communications/http/request/client::script-http-client
+      - id: micro-behaviors/communications/http/request/client::generic-request-method-call
+    downgrade:
+      any:
+        - id: metadata/package/quality/false-positives::benign-build-tooling-context
+        - id: metadata/library/lodash::domain
+        - id: metadata/library/react/
+        - id: micro-behaviors/process/interpreter/vm/
+        - id: metadata/library/vscode::require-vscode
+        - id: metadata/package/manifest/name/
+  - id: file-to-vm-execution
+    desc: File read + VM execution
+    crit: notable
+    conf: 0.92
+    mbc: E1059
+    attack: T1059.007
+    all:
+      - id: vm-require
+      - id: vm-run-methods
+      - id: metadata/import/builtin::require-fs
+    unless:
+      - id: metadata/package/manifest/name::ts-node-package-name
+      - id: ts-node-package-member
+  - id: vm-runInContext
+    desc: VM runInContext sandbox execution
+    crit: notable
+    conf: 0.9
+    mbc: B0024
+    attack: T1059
+    all:
+      - id: vm-runInContext-call
+      - id: vm-require
+    unless:
+      - id: metadata/package/testing/harness/runtime::node-common-require
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/lang/scripted::dts-declaration-file
+  - id: vm-runInNewContext
+    desc: VM runInNewContext sandbox execution
+    crit: notable
+    conf: 0.9
+    mbc: B0024
+    attack: T1059
+    all:
+      - id: vm-runInNewContext-call
+      - id: metadata/lang/scripted::require-symbol
+    unless:
+      - id: vm-runInNewContext-cond-0--inline-4298
+      - id: metadata/package/testing/harness/runtime/
+  - id: vm-createContext
+    desc: node:vm createContext sandbox creation
+    crit: notable
+    conf: 0.85
+    all:
+      - id: vm-require
+      - id: vm-createContext-call

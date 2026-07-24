@@ -1,0 +1,98 @@
+# Reflective PE Loading - Windows Composites
+# Detects in-memory PE loading (manual mapping, MemoryLoadLibrary)
+# ATT&CK: T1620 (Reflective Code Loading)
+# MBC: B0032
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1620"
+  mbc: "B0032"
+composite_rules:
+- id: runtime-loader-with-encoded-data
+  desc: Runtime loader APIs with encoded data
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: objectives/anti-static/obfuscation/reflection/class::dynamic-load-pattern
+  - id: metadata/binary/metrics/structural::high-entropy-data
+  any:
+  - id: micro-behaviors/mem/query/info::virtualquery
+  - id: micro-behaviors/mem/protect/modify::virtual-protect
+  - id: micro-behaviors/mem/protect/modify::virtual-protect-ex
+  - id: micro-behaviors/os/api-resolution/manual::kernel32-resolver
+  downgrade:
+    any:
+    - id: objectives/anti-static/pack/asprotect
+    - id: objectives/anti-static/pack/detect::aspack-marker
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: well-known/tool/reverse-engineering/windows-debugger/
+    - id: metadata/binary/metrics/threshold::many-exports-20
+- id: pe-reflective-loader
+  desc: Manual in-memory PE loader with executable staging
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: native-pe-loader
+  - id: metadata/binary/section/metrics::high-entropy-nonreadable-exec-section
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/reverse-engineering/
+- id: native-pe-loader
+  desc: Native PE reflective loader
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: micro-behaviors/data/embedded/payload/header::inline-pe-signature-check
+  - id: objectives/evasion/process/injection/memory::rwx-allocation
+  - id: micro-behaviors/os/exception/register::rtl-add-function-table
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/reverse-engineering/
+- id: native-manual-map-file-loader
+  desc: Native PE manually maps file content with dynamic API resolution
+  crit: hostile
+  conf: 0.98
+  attack: T1620,T1055
+  all:
+  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  - id: micro-behaviors/dylib/load/runtime::load-library-w
+  - id: micro-behaviors/os/module/load::get-proc-address-import
+  - id: micro-behaviors/fs/file/open::file-create-win
+  - id: micro-behaviors/fs/memory/mmap::map-view-of-file
+  unless:
+  - id: metadata/package/testing/
+  - id: well-known/tool/reverse-engineering/
+- id: x64-transformed-buffer-loader
+  desc: x64 transformed buffer made executable and called
+  crit: hostile
+  conf: 0.99
+  attack: T1027,T1140,T1620
+  all:
+  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  - id: micro-behaviors/mem/protect/modify::virtual-protect
+  - id: micro-behaviors/mem/alloc/executable::protected-buffer-indirect-call-x64-reloc
+  - id: metadata/binary/section/metrics::encrypted-reloc-section
+  unless:
+  - id: metadata/signed/platform/
+- id: pe-crypter-loader
+  desc: Encrypted PE payload with reflective loading
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: pe-reflective-loader
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::dominant-section
+  any:
+  - id: metadata/binary/metrics/structural::high-entropy-data
+  - id: objectives/anti-static/obfuscation/payload/section::oversized-data-section
+- id: x64-encrypted-manual-map-loader
+  desc: x64 loader decrypts a payload and manually resolves PE APIs before mapping it
+  crit: hostile
+  conf: 0.99
+  attack: T1027,T1140,T1620
+  all:
+  - id: micro-behaviors/os/api-resolution/manual::x64-peb-loader-list-walk-inline
+  - id: micro-behaviors/os/api-resolution/manual::x64-pe-export-directory-walk-inline-rex
+  - id: micro-behaviors/crypto/symmetric/stream::chacha20-block-constant-native
+  - id: micro-behaviors/process/debug/detect::is-debugger-present-import

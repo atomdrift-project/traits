@@ -1,0 +1,61 @@
+# XDP ICMP Covert Channel Detection
+# Detects XDP programs used for ICMP-based covert channels
+# ATT&CK: T1095 (Non-Application Layer Protocol)
+defaults:
+  attack: T1095
+  platforms: [linux]
+  for: [c, elf]
+traits:
+  - id: icmp-pingback
+    desc: ICMP pingback covert channel marker
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: (?i)\bicmp[_-]?ping[_-]?back\b|\bping[_-]back\b
+composite_rules:
+  # XDP program + ICMP manipulation + packet reflection = ICMP covert channel
+  - id: xdp-icmp-covert
+    desc: XDP ICMP covert channel
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/os/bpf/program/loader::sec-xdp
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-parsing
+      - id: micro-behaviors/os/bpf/program/network::xdp-tx
+    any:
+      - id: objectives/command-and-control/channel/covert::icmp-pingback
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-prog-reply
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context
+  - id: xdp-icmp-responder
+    desc: XDP ICMP pingback responder
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: objectives/command-and-control/channel/covert::xdp-icmp-covert
+    needs: 2
+    any:
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-reply-rewrite
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-fixed-ip-reply-profile
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-echo-only-filter
+  # XDP loader with ICMP covert channel markers
+  # Userspace loader that attaches XDP program for ICMP manipulation
+  - id: xdp-icmp-loader
+    desc: XDP ICMP reply loader
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/bpf/program/network::xdp-attach
+    any:
+      - id: objectives/command-and-control/channel/covert::icmp-pingback
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-prog-reply
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-reply-rewrite
+  # Moved from micro-behaviors/os/bpf/program/icmp (tier violation — references objectives)
+  - id: icmp-indicators
+    desc: ICMP reply-channel indicators
+    crit: notable
+    conf: 0.8
+    any:
+      - id: objectives/command-and-control/channel/covert::icmp-pingback
+      - id: micro-behaviors/os/bpf/program/icmp::icmp-prog-reply

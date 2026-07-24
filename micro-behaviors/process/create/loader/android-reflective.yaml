@@ -1,0 +1,469 @@
+# Android Reflective Staged DEX Loader
+# Detects stage-1 APK loaders that decrypt/write a hidden payload and patch BaseDexClassLoader internals.
+defaults:
+  platforms: [android]
+  for: [apk, zip]
+  crit: notable
+  conf: 0.9
+  attack: "T1406"
+
+traits:
+  - id: reflective-array
+    desc: Reflection array helper for loader patching
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      substr: "Ljava/lang/reflect/Array;"
+
+  - id: base-dex-class-loader
+    desc: BaseDexClassLoader referenced directly
+    conf: 0.92
+    if:
+      type: text
+      substr: "dalvik.system.BaseDexClassLoader"
+
+  - id: dex-elements-field
+    desc: BaseDexClassLoader dexElements field access
+    conf: 0.94
+    if:
+      type: text
+      substr: "dexElements"
+
+  - id: path-list-field
+    desc: BaseDexClassLoader pathList field access
+    conf: 0.92
+    if:
+      type: text
+      substr: "pathList"
+
+  - id: attach-base-context
+    desc: Android loader hooks app context
+    crit: notable
+    conf: 0.82
+    if:
+      type: text
+      substr: "attachBaseContext"
+
+  - id: hidden-stage-asset
+    desc: Large hex-named APK asset
+    crit: suspicious
+    conf: 0.9
+    size_min: 1048576
+    if:
+      type: path
+      basename: true
+      regex: '^[a-f0-9]{8}$'
+
+  - id: high-entropy-stage-asset
+    desc: Large stage asset has maximum entropy
+    # High entropy on a large archive is a neutral measurement (every wheel/jar/
+    # zip ≥1MB is ~8.0). Only meaningful paired with a hex-named opaque asset in
+    # the opaque-hex-stage-asset composite, so component + APK-only.
+    crit: component
+    conf: 0.96
+    for: [apk]
+    size_min: 1048576
+    if:
+      type: metrics
+      field: binary.overall_entropy
+      min: 7.95
+    unless:
+      - id: metadata/binary/layout::binary-format-checked
+      - type: basename
+        regex: '\.7z$'
+
+  - id: dropped-stage-dex
+    desc: Hex named private DEX path
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      # Bound the name so a long numeric timestamp such as
+      # 1764808731656.dex cannot match an 8-character substring.
+      regex: '(^|[^A-Za-z0-9])[a-f0-9]{8}\.dex($|[^A-Za-z0-9])'
+
+  - id: file-output-stream-call
+    desc: Android loader writes staged payload
+    crit: notable
+    conf: 0.84
+    if:
+      type: text
+      substr: "java.io.FileOutputStream("
+
+  - id: dalvik-file-output-stream-class
+    desc: Dalvik FileOutputStream class reference
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      substr: "Ljava/io/FileOutputStream;"
+
+  - id: dalvik-asset-manager-class
+    desc: Dalvik AssetManager class reference
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      substr: "Landroid/content/res/AssetManager;"
+
+  - id: dalvik-get-assets-call
+    desc: Dalvik getAssets API call
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      word: "getAssets"
+
+  - id: dalvik-base64-class
+    desc: Dalvik Base64 class reference
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      substr: "Landroid/util/Base64;"
+
+  - id: dalvik-inflater-input-stream
+    desc: Dalvik InflaterInputStream reference
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      substr: "Ljava/util/zip/InflaterInputStream;"
+
+  - id: dalvik-get-files-dir-call
+    desc: Dalvik getFilesDir API call
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      word: "getFilesDir"
+
+  - id: dalvik-classloader-descriptor
+    desc: Dalvik ClassLoader descriptor
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      substr: "Ljava/lang/ClassLoader;"
+
+  - id: dalvik-reflect-constructor-class
+    desc: Dalvik reflect Constructor descriptor
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      substr: "Ljava/lang/reflect/Constructor;"
+
+  - id: dalvik-reflect-method-class
+    desc: Dalvik reflect Method descriptor
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      substr: "Ljava/lang/reflect/Method;"
+
+  - id: dalvik-get-method-call
+    desc: Dalvik getMethod reflection call
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      word: "getMethod"
+
+  - id: dalvik-invoke-call
+    desc: Dalvik invoke reflection call
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      word: "invoke"
+
+  - id: encoded-loader-delimiter
+    desc: Base64 encoded loader delimiter
+    crit: component
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule encoded_loader_delimiter {
+          strings:
+            $a = "aHJpam5qcHN2Y29i" ascii
+          condition:
+            #a >= 6
+        }
+
+  - id: encoded-android-runtime-fields
+    desc: Encoded Android runtime fields
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: yara
+      source: |
+        rule encoded_android_runtime_fields {
+          strings:
+            $a = "bU1haW5UaHJlYW" ascii
+            $b = "bVBhY2thZ2VJbmZv" ascii
+            $c = "bUFwcGxpY2F0aW9u" ascii
+          condition:
+            all of them
+        }
+
+  - id: encoded-android-asset-loader
+    desc: Encoded Android staged asset name
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: yara
+      source: |
+        rule encoded_android_asset_loader {
+          strings:
+            $a = "bmd5Ym1h" ascii
+            $b = "bXNiaGd0Zw" ascii
+            $c = "cGF0aExpc3Q" ascii
+          condition:
+            all of them
+        }
+
+  - id: encoded-cjnejwgbazc-delimiter
+    desc: Repeated encoded loader delimiter
+    crit: component
+    conf: 0.9
+    count_min: 8
+    if:
+      type: text
+      substr: "Y2puZWp3Z2Jhem"
+
+  - id: encoded-cjnejwgbazc-runtime-fields
+    desc: Encoded Android runtime swap fields
+    crit: suspicious
+    conf: 0.96
+    count_min: 6
+    if:
+      type: text
+      substr: "Y2puZWp3Z2JhemNt"
+
+  - id: encoded-cjnejwgbazc-stage-asset
+    desc: Encoded Android staged asset name
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      substr: "Y2puZWp3Z2JhemN5cXdzcmNqbmVqd2diYXpj"
+
+  - id: encoded-cjnejwgbazc-dex-elements
+    desc: Encoded dexElements field name
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      substr: "Y2puZWp3Z2JhemNkZXhFbGVtZW50c2NqbmVqd2diYXpj"
+
+  - id: encoded-cjnejwgbazc-path-list
+    desc: Encoded pathList field name
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      substr: "Y2puZWp3Z2JhemNwYXRoTGlzdGNqbmVqd2diYXpj"
+
+  - id: encoded-hqjgwjslwxj-delimiter
+    desc: Encoded loader delimiter token
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: "hqjgwjslwxj"
+
+  - id: encoded-hqjgwjslwxj-runtime-fields
+    desc: Encoded Android runtime swap fields
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      substr: "aHFqZ3dqc2x3eGptSW5pdGlhbEFwcGxpY2F0aW9u"
+
+  - id: encoded-hqjgwjslwxj-stage-asset
+    desc: Encoded Android staged asset name
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      substr: "aHFqZ3dqc2x3eGphZXFhdGtidWhxamd3anNsd3hq"
+
+  - id: encoded-hqjgwjslwxj-dex-elements
+    desc: Encoded dexElements field name
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      substr: "aHFqZ3dqc2x3eGpkZXhFbGVtZW50c2hxamd3anNsd3hq"
+
+  - id: encoded-hqjgwjslwxj-path-list
+    desc: Encoded pathList field name
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      substr: "aHFqZ3dqc2x3eGpwYXRoTGlzdGhxamd3anNsd3hq"
+
+  - id: dex-file-api
+    desc: Dalvik DexFile loader API
+    conf: 0.92
+    if:
+      type: text
+      substr: "dalvik.system.DexFile"
+
+  - id: zip-stage-read
+    desc: Android loader reads payload from ZipFile
+    crit: notable
+    conf: 0.84
+    if:
+      type: text
+      substr: "Ljava/util/zip/ZipFile;"
+
+  - id: reflective-field-access
+    desc: Reflective declared field access
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      substr: "getDeclaredField"
+
+  - id: reflective-method-access
+    desc: Reflective declared method access
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      substr: "getDeclaredMethod"
+
+  - id: reflective-access-bypass
+    desc: Reflection accessibility bypass
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      substr: "setAccessible"
+
+composite_rules:
+  - id: reflective-classloader-patch
+    desc: Reflective BaseDexClassLoader element patching
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: base-dex-class-loader
+      - id: dex-elements-field
+      - id: path-list-field
+    any:
+      - id: reflective-array
+      - id: attach-base-context
+
+  - id: reflective-dex-loader-member
+    desc: Reflective DexFile classloader patching chain
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: base-dex-class-loader
+      - id: dex-elements-field
+      - id: path-list-field
+      - id: dex-file-api
+    any:
+      - id: reflective-field-access
+      - id: reflective-method-access
+      - id: reflective-access-bypass
+      - id: file-output-stream-call
+      - id: zip-stage-read
+    needs: 2
+
+  - id: asset-inflater-reflective-loader
+    desc: Asset inflater with reflective loader invoke
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: dalvik-asset-manager-class
+      - id: dalvik-get-assets-call
+      - id: dalvik-base64-class
+      - id: dalvik-inflater-input-stream
+      - id: dalvik-file-output-stream-class
+      - id: dalvik-get-files-dir-call
+      - id: dalvik-classloader-descriptor
+      - id: dalvik-reflect-constructor-class
+      - id: dalvik-reflect-method-class
+    unless:
+      - id: well-known/app/ankidroid::package-member
+      - id: dalvik-get-method-call
+      - id: dalvik-invoke-call
+
+  - id: opaque-hex-stage-asset
+    desc: Hex named staged asset with high entropy
+    crit: suspicious
+    conf: 0.98
+    for: [apk]
+    all:
+      - id: hidden-stage-asset
+      - id: high-entropy-stage-asset
+    unless:
+      - id: well-known/tool/reverse-engineering/radare2/
+      # An Arch makepkg package is not an Android APK.  Atomscan can promote
+      # archive-entry evidence to the outer package node, so retain the
+      # package-format guard here as well as the APK file-type field.
+      - id: metadata/package/files/system-package::arch-makepkg-generated
+
+  - id: hidden-dex-write
+    desc: Hidden stage asset written to private DEX path
+    crit: suspicious
+    conf: 0.99
+    all:
+      - id: hidden-stage-asset
+      - id: dropped-stage-dex
+      - id: file-output-stream-call
+
+  - id: encoded-application-swap-loader
+    desc: Encoded Android application swap loader
+    crit: suspicious
+    conf: 0.99
+    all:
+      - id: encoded-loader-delimiter
+      - id: encoded-android-runtime-fields
+      - id: encoded-android-asset-loader
+    any:
+      - id: reflective-field-access
+      - id: reflective-method-access
+      - id: reflective-access-bypass
+      - id: dalvik-file-output-stream-class
+    needs: 2
+
+  - id: encoded-delimited-application-swap-loader
+    desc: Delimited encoded Android application swap loader
+    crit: suspicious
+    conf: 0.99
+    all:
+      - id: encoded-cjnejwgbazc-delimiter
+      - id: encoded-cjnejwgbazc-runtime-fields
+      - id: encoded-cjnejwgbazc-stage-asset
+      - id: encoded-cjnejwgbazc-dex-elements
+      - id: encoded-cjnejwgbazc-path-list
+    any:
+      - id: reflective-field-access
+      - id: reflective-method-access
+      - id: reflective-access-bypass
+      - id: dalvik-file-output-stream-class
+    needs: 2
+
+  - id: encoded-hqjgwjslwxj-application-swap-loader
+    desc: Delimited encoded Android application swap loader
+    crit: suspicious
+    conf: 0.99
+    all:
+      - id: encoded-hqjgwjslwxj-delimiter
+      - id: encoded-hqjgwjslwxj-runtime-fields
+      - id: encoded-hqjgwjslwxj-stage-asset
+      - id: encoded-hqjgwjslwxj-dex-elements
+      - id: encoded-hqjgwjslwxj-path-list
+    any:
+      - id: reflective-field-access
+      - id: reflective-method-access
+      - id: reflective-access-bypass
+      - id: dalvik-file-output-stream-class
+    needs: 2

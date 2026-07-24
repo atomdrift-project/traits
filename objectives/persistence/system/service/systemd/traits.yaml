@@ -1,0 +1,905 @@
+defaults:
+  attack: T1543.002
+  platforms: [linux]
+  for: [shell, python, systemd, go, rust, objc]
+
+traits:
+- id: service-extension
+  desc: .service file extension (systemd unit)
+  crit: notable
+  conf: 0.6
+  if:
+    type: text
+    substr: "/.service"
+- id: systemctl-enable
+  desc: Enables a systemd service to start automatically
+  crit: notable
+  conf: 0.8
+  mbc: B0028
+  unless:
+  - type: text
+    substr: 'Source: https://docs.docker.com/engine/install/linux-postinstall/'
+  - type: text
+    substr: '# Configure Docker to boot up with the OS'
+  - type: text
+    regex: '\bsystemctl\s+enable\s+docker\b'
+  - type: basename
+    regex: '(^|[\\/])(README|REQUIREMENTS|INSTALL)(\.[A-Za-z0-9]+)?$'
+  - id: metadata/file/extension/identity::markdown-file-basename
+  if:
+    type: text
+    regex: '(?m)^\s*(sudo\s+)?systemctl\s+enable\b'
+  downgrade:
+    any:
+    - id: well-known/tool/sysadmin/kubernetes
+- id: systemd-worker-service-path
+  desc: systemd-worker service install path
+  crit: suspicious
+  conf: 0.94
+  for: [elf, shell, python]
+  if:
+    type: text
+    substr: /lib/systemd/system/systemd-worker.service
+
+- id: restart-always-text
+  # Restart=always is a persistence-defining directive: it keeps the unit
+  # respawning indefinitely. On the TAXONOMY persistence bar that is notable in
+  # its own right, not a mere composite fragment.
+  desc: Restart=always directive (extracted strings)
+  crit: notable
+  conf: 0.7
+  for: [shell, python, systemd, go, rust, objc, elf]
+  if:
+    type: text
+    word: "Restart=always"
+  unless:
+    - id: metadata/lang/source::linux-kernel-primary-tree-path
+- id: restart-always-kv
+  desc: "Restart=always directive"
+  for: [systemd]
+  crit: component
+  if:
+    type: value
+    path: "service.restart"
+    exact: "always"
+
+- id: wanted-by-target-text
+  # WantedBy=default.target enrolls the unit for automatic start — a
+  # persistence directive that defines program purpose, hence notable.
+  desc: 'WantedBy=default.target directive'
+  crit: notable
+  conf: 0.7
+  for: [shell, python, systemd, go, rust, objc, elf]
+  if:
+    type: text
+    word: "WantedBy=default.target"
+
+- id: wanted-by-target-kv
+  desc: 'WantedBy=default.target directive'
+  for: [systemd]
+  crit: component
+  if:
+    type: value
+    path: "install.wanted_by"
+    exact: "default.target"
+
+- id: wanted-by-timer-target
+  desc: WantedBy=timers.target directive
+  for: [systemd]
+  crit: suspicious
+  conf: 0.86
+  if:
+    type: value
+    path: "install.wanted_by"
+    exact: "timers.target"
+
+- id: wanted-by-socket-target
+  desc: WantedBy=sockets.target directive
+  for: [systemd]
+  crit: suspicious
+  conf: 0.86
+  if:
+    type: value
+    path: "install.wanted_by"
+    exact: "sockets.target"
+
+- id: wanted-by-path-target
+  desc: WantedBy=paths.target directive
+  for: [systemd]
+  crit: suspicious
+  conf: 0.86
+  if:
+    type: value
+    path: "install.wanted_by"
+    exact: "paths.target"
+
+- id: systemd-dropin-path--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.84
+  unless:
+  - type: path
+    regex: '/tests/'
+  if:
+    type: text
+    regex: '/etc/systemd/(system|user)/[^/\s]{1,80}\.(service|timer)\.d/'
+
+  count_max: 1029750
+- id: systemd-dropin-path--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.84
+  unless:
+  - type: path
+    regex: '/tests/'
+  if:
+    type: text
+    regex: '/etc/systemd/(system|user)/[^/\s]{1,80}\.(socket|path)\.d/'
+
+  count_max: 1029751
+- id: systemctl-enable-nonservice-unit
+  desc: systemctl enables timer path or socket unit
+  crit: notable
+  conf: 0.86
+  if:
+    type: text
+    regex: '\bsystemctl\s+(--user\s+)?enable\s+[^\n;]{1,120}\.(timer|socket|path)\b'
+  unless:
+  - id: metadata/package/quality/recognized-contexts::pvetui-workflow-test-script
+  downgrade:
+    any:
+    - id: well-known/tool/sysadmin/kubernetes
+
+# A bare path to a .timer/.path/.socket unit is a location, not intent — every
+# distro package that ships a systemd unit references one. Notable (like
+# systemd-user-service-directory-path / etc-systemd-path), not suspicious: the persistence
+# intent comes from the trigger composites below (systemd-timer-trigger,
+# systemd-path-trigger, systemd-socket-trigger) that require the actual
+# OnCalendar/PathChanged/ListenStream directive.
+- id: systemd-timer-unit-path
+  desc: Systemd timer unit path
+  crit: notable
+  conf: 0.84
+  if:
+    type: text
+    regex: '/(etc|usr/lib|lib)/systemd/(system|user)/[^\s]{1,120}\.timer\b'
+
+- id: systemd-path-unit-path
+  desc: Systemd path unit path
+  crit: notable
+  conf: 0.84
+  if:
+    type: text
+    regex: '/(etc|usr/lib|lib)/systemd/(system|user)/[^\s]{1,120}\.path\b'
+
+- id: systemd-socket-unit-path
+  desc: Systemd socket unit path
+  crit: notable
+  conf: 0.84
+  if:
+    type: text
+    regex: '/(etc|usr/lib|lib)/systemd/(system|user)/[^\s]{1,120}\.socket\b'
+  downgrade:
+    any:
+    - id: well-known/tool/sysadmin/kubernetes
+
+- id: timer-on-calendar
+  desc: Systemd timer calendar trigger
+  crit: suspicious
+  conf: 0.86
+  for: [systemd]
+  if:
+    type: value
+    path: "timer.on_calendar"
+    exists: true
+
+- id: timer-on-boot
+  desc: Systemd timer boot trigger
+  crit: suspicious
+  conf: 0.86
+  for: [systemd]
+  if:
+    type: value
+    path: "timer.on_boot_sec"
+    exists: true
+
+- id: timer-on-unit-active
+  desc: Systemd recurring unit-active timer
+  crit: suspicious
+  conf: 0.84
+  for: [systemd]
+  if:
+    type: value
+    path: "timer.on_unit_active_sec"
+    exists: true
+
+- id: path-unit-trigger
+  desc: Systemd path unit trigger
+  crit: suspicious
+  conf: 0.84
+  for: [systemd]
+  if:
+    type: value
+    path: "path.path_changed"
+    exists: true
+
+- id: path-unit-exists-trigger
+  desc: Systemd path exists trigger
+  crit: suspicious
+  conf: 0.84
+  for: [systemd]
+  if:
+    type: value
+    path: "path.path_exists"
+    exists: true
+
+- id: socket-listen-stream
+  desc: Systemd socket ListenStream trigger
+  crit: suspicious
+  conf: 0.84
+  for: [systemd]
+  if:
+    type: value
+    path: "socket.listen_stream"
+    exists: true
+
+- id: socket-listen-datagram
+  desc: Systemd socket ListenDatagram trigger
+  crit: suspicious
+  conf: 0.84
+  for: [systemd]
+  if:
+    type: value
+    path: "socket.listen_datagram"
+    exists: true
+
+- id: exec-start-boot
+  desc: ExecStart from /boot
+  for: [systemd]
+  crit: component
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/boot/"
+
+- id: exec-start-var
+  desc: ExecStart from /var
+  for: [systemd]
+  crit: component
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/var/"
+
+- id: exec-start-tmp
+  desc: ExecStart from /tmp
+  for: [systemd]
+  crit: component
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/tmp/"
+
+- id: exec-start-dev
+  desc: ExecStart from /dev
+  for: [systemd]
+  crit: component
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/dev/"
+
+- id: timer-unit-field
+  desc: Systemd timer Unit target
+  crit: component
+  for: [systemd]
+  if:
+    type: value
+    path: "timer.unit"
+    exists: true
+
+- id: socket-service-field
+  desc: Systemd socket Service target
+  crit: component
+  for: [systemd]
+  if:
+    type: value
+    path: "socket.service"
+    exists: true
+
+- id: exec-start-expected-system
+  desc: ExecStart from system library path
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/(usr/sbin|usr/lib)/"
+
+- id: exec-start-userwritable-path
+  desc: ExecStart from user writable path
+  for: [systemd]
+  crit: component
+  conf: 0.7
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/(tmp|var/tmp|dev/shm|run/user)/"
+
+- id: exec-start-unusual-root-path
+  desc: ExecStart from unusual root path
+  for: [systemd]
+  crit: component
+  conf: 0.7
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: "^/(home|root|opt|etc)/"
+
+# The %h/~/$HOME macro forms resolve to the same home-relative location that the
+# absolute /home/<user>/ rule above already treats as unusual. A user unit whose
+# binary lives in a home dot-dir (~/.local, ~/.cache, ~/.config) is the
+# self-copy persistence shape used by dropped payloads (real system daemons run
+# from /usr/sbin or /usr/lib). Completes coverage so the macro form is not a gap.
+- id: exec-start-home-dotdir-path
+  desc: ExecStart from home dot-directory
+  for: [systemd]
+  crit: component
+  conf: 0.7
+  if:
+    type: value
+    path: "service.exec_start"
+    regex: '^(%h|~|\$\{?HOME\}?)/\.[a-z]{3,8}/'
+
+- id: exec-stop-userwritable-path
+  desc: ExecStop from user writable path
+  for: [systemd]
+  crit: component
+  conf: 0.7
+  if:
+    type: value
+    path: "service.exec_stop"
+    regex: "^/(tmp|var/tmp|dev/shm|run/user)/"
+
+- id: exec-stop-unusual-root-path
+  desc: ExecStop from unusual root path
+  for: [systemd]
+  crit: component
+  conf: 0.7
+  if:
+    type: value
+    path: "service.exec_stop"
+    regex: "^/(home|root|opt|etc)/"
+
+- id: exec-stop-bin-sh
+  # ExecStop=/bin/sh -c '...' one-liners are routine in stock distro units
+  # (ebtables, nfs-server); shell-at-stop is execution surface, not intent.
+  desc: Shell script execution at service stop
+  for: [systemd]
+  crit: notable
+  conf: 0.8
+  if:
+    type: value
+    path: "service.exec_stop"
+    regex: "^/bin/sh"
+
+- id: exec-stop-casaos-shell
+  desc: ExecStop uses CasaOS packaged shell helper
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.exec_stop"
+    regex: "^/casaOS/server/shell/"
+
+- id: systemd-before-exists
+  desc: Unit Before= exists
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "unit.before"
+    exists: true
+  unless:
+  - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: well-known/app/drivers/
+
+- id: comment-exists
+  desc: Systemd unit comment exists
+  crit: baseline
+  for: [systemd-service]
+  count_min: 2
+  if:
+    type: text
+    regex: '^\s*#[ a-zA-Z0-9]{3,}'
+  unless:
+  - id: well-known/app/drivers/
+
+- id: condition-exists
+  desc: Unit Condition exists
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "unit.condition"
+    exists: true
+
+- id: standard-output-exists
+  desc: Service StandardOutput= exists
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.standard_output"
+    exists: true
+
+- id: requires-exists
+  desc: Unit Requires= exists
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "unit.requires"
+    exists: true
+
+- id: environment-file-exists
+  desc: Systemd service declares EnvironmentFile
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.environment_file"
+    exists: true
+
+- id: environment-list-exists
+  desc: Service Environment= exists
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.environment_list"
+    exists: true
+  unless:
+  - id: well-known/app/drivers/
+
+- id: bus-name-exists
+  desc: Service BusName= exists
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.bus_name"
+    exists: true
+
+- id: systemd-forking-no-deps
+  desc: Forking service with no dependencies
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.type"
+    exact: "forking"
+
+  conf: 0.85
+  unless:
+  - id: micro-behaviors/os/service/config::after-exists
+  - id: systemd-before-exists
+  - id: metadata/package/testing/harness/unit/
+  - id: metadata/package/testing/
+  - id: well-known/app/kpango-dotfiles::kpango-dotfiles-source-path
+
+- id: default-deps-no
+  desc: Service DefaultDependencies=no
+  for: [systemd]
+  crit: notable
+  if:
+    type: value
+    path: "service.default_dependencies"
+    exact: "no"
+
+composite_rules:
+- id: exec-start-unexpected-path
+  desc: ExecStart from unusual path
+  crit: suspicious
+  conf: 0.7
+  any:
+  - id: exec-start-userwritable-path
+  - id: exec-start-unusual-root-path
+  - id: exec-start-home-dotdir-path
+  unless:
+  - id: micro-behaviors/os/service/config::exec-start-expected-core
+  - id: exec-start-expected-system
+  not:
+  - regex: "^/(bin|sbin|usr/bin|usr/sbin)/"
+  - regex: "^/(etc/(rc|update)|lib/|usr/(bin|sbin))/"
+  - regex: "^/(bin|run|sbin|nix|usr/lib)/"
+
+- id: exec-stop-unexpected-path
+  desc: ExecStop from unusual path
+  crit: suspicious
+  conf: 0.7
+  any:
+  - id: exec-stop-userwritable-path
+  - id: exec-stop-unusual-root-path
+  unless:
+  - id: exec-stop-casaos-shell
+  not:
+  - regex: "^/(usr/bin|usr/sbin|bin|usr/lib)/"
+
+- id: restart-always
+  desc: Restart=always directive
+  crit: notable
+  any:
+  - id: restart-always-text
+  - id: restart-always-kv
+  downgrade:
+    any:
+    - id: metadata/file/catalog/service::deployment-helper-context
+
+# WantedBy= is the standard Install-section enrollment directive present in
+# essentially every enabled unit (its own leaf atoms are notable). An OR over
+# its text/kv variants is the same notable signal, not a suspicious escalation;
+# the actionable suspicion is WantedBy plus a dangerous ExecStart / undocumented
+# unit, which the composites below layer on.
+- id: wanted-by-target
+  desc: Systemd unit declares a WantedBy startup target
+  crit: notable
+  any:
+  - id: wanted-by-target-text
+  - id: micro-behaviors/os/service/config::wanted-by-multi-user-text
+  - id: wanted-by-target-kv
+
+- id: systemd-timer-trigger
+  desc: Systemd timer persistence trigger
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: timer-on-calendar
+  - id: timer-on-boot
+  - id: timer-on-unit-active
+  - id: wanted-by-timer-target
+
+- id: systemd-path-trigger
+  desc: Systemd path persistence trigger
+  crit: suspicious
+  conf: 0.88
+  any:
+  - id: path-unit-trigger
+  - id: path-unit-exists-trigger
+  - id: wanted-by-path-target
+
+- id: systemd-socket-trigger
+  desc: Systemd socket activation persistence
+  crit: suspicious
+  conf: 0.88
+  any:
+  - id: socket-listen-stream
+  - id: socket-listen-datagram
+  - id: wanted-by-socket-target
+
+- id: service-environment-exists
+  desc: Service environment is configured
+  crit: notable
+  any:
+  - id: environment-file-exists
+  - id: environment-list-exists
+
+- id: systemd
+  desc: Configures or controls a systemd unit
+  crit: notable
+  conf: 0.66
+  mbc: B0028
+  needs: 2
+  # Standalone systemd unit files trivially satisfy multiple indicators
+  # (that's their definition). The composite targets scripts/binaries
+  # that deploy systemd persistence, not the unit-file artifacts themselves.
+  # Lowered to notable because legitimate sysadmin scripts (postinst,
+  # ansible plays, distro installers) routinely manage systemd services.
+  for: [shell, python, elf, go, rust, objc]
+  # systemd-keyword (bare word "systemd") is intentionally excluded: it is a
+  # substring of every path indicator (e.g. /etc/systemd/system), so a single
+  # benign path reference would satisfy needs:2 on its own. Persistence requires
+  # an actual action/unit indicator, not a passing mention of the word.
+  any:
+  - id: micro-behaviors/os/service/control::systemctl-word
+  - id: micro-behaviors/os/service/config::systemd-etc-directory-path
+  - id: micro-behaviors/os/service/config::systemd-lib-directory-path
+  - id: service-extension
+  - id: systemctl-enable
+  - id: systemctl-enable-nonservice-unit
+  - id: systemd-dropin-path
+  - id: systemd-timer-unit-path
+  - id: systemd-path-unit-path
+  - id: systemd-socket-unit-path
+  - id: micro-behaviors/os/service/config::exec-start
+  - id: restart-always
+  - id: wanted-by-target
+  - id: systemd-timer-trigger
+  - id: systemd-path-trigger
+  - id: systemd-socket-trigger
+  downgrade:
+    any:
+    - id: well-known/tool/sysadmin/rustdesk/
+    - id: well-known/app/niri::source-tree
+    - type: text
+      substr: "docker.service"
+  unless:
+  - id: metadata/file/profile/identity::install-doc-basename
+
+- id: systemd-service-file
+  desc: Systemd service file with persistence directives
+  crit: notable
+  conf: 0.9
+  # Targets scripts/binaries that author/embed a .service file inline;
+  # standalone .service unit files trivially match ExecStart + WantedBy
+  # by definition and should not be flagged as their own persistence.
+  for: [shell, python, elf, go, rust, objc]
+  all:
+  - id: micro-behaviors/os/service/config::exec-start
+  any:
+  - id: restart-always
+  - id: wanted-by-target
+  - id: micro-behaviors/os/service/config::systemd-keyword
+  downgrade:
+    any:
+    - id: well-known/tool/sysadmin/rustdesk/
+    - id: micro-behaviors/os/service/config::exec-start-expected-core
+    - id: exec-start-expected-system
+
+- id: systemd-user-persistence
+  desc: Configures a user-level systemd service
+  crit: notable
+  conf: 0.9
+  all:
+  - id: micro-behaviors/os/service/config::systemd-user-service-directory-path
+  any:
+  - id: micro-behaviors/os/service/control::systemctl-word
+  - id: systemctl-enable
+  - id: systemctl-enable-nonservice-unit
+  - id: service-extension
+  - id: micro-behaviors/os/service/config::exec-start
+  - id: restart-always
+  - id: wanted-by-target
+
+- id: systemd-remote-watchdog-persistence
+  desc: User systemd watchdog with auto-restart and process killing
+  crit: hostile
+  conf: 0.96
+  for: [shell]
+  all:
+  - id: systemd-user-persistence
+  - id: restart-always-text
+  - id: wanted-by-target-text
+  - id: micro-behaviors/process/terminate/command::pkill
+
+- id: systemd-timer-persistence
+  desc: Systemd timer-based persistence
+  crit: notable
+  conf: 0.9
+  all:
+  - id: systemd-timer-trigger
+  any:
+  - id: timer-unit-field
+  - id: micro-behaviors/os/service/config::exec-start
+  - id: systemd-timer-unit-path
+
+- id: systemd-path-persistence
+  desc: Systemd path-triggered persistence
+  crit: suspicious
+  conf: 0.88
+  all:
+  - id: systemd-path-trigger
+  any:
+  - id: micro-behaviors/os/service/config::exec-start
+  - id: systemd-path-unit-path
+
+- id: systemd-socket-persistence
+  desc: Systemd socket-activated persistence
+  crit: suspicious
+  conf: 0.88
+  all:
+  - id: systemd-socket-trigger
+  any:
+  - id: socket-service-field
+  - id: micro-behaviors/os/service/config::exec-start
+  - id: systemd-socket-unit-path
+
+- id: exec-start-dangerous-path
+  desc: ExecStart from transient or device path
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: exec-start-boot
+  - id: exec-start-var
+  - id: exec-start-tmp
+  - id: exec-start-dev
+
+- id: systemd-no-blank-lines
+  desc: Systemd unit lacks blank line separators
+  crit: notable
+  conf: 0.85
+  for: [systemd]
+  all:
+  - id: micro-behaviors/os/service/config::exec-start
+  unless:
+  - id: micro-behaviors/os/service/config::blank-line-separator
+  - id: micro-behaviors/os/service/config::documentation-exists
+  - id: micro-behaviors/os/service/config::unit-description-exists
+  - id: metadata/package/testing/harness/unit/
+  - id: metadata/package/testing/
+  - id: well-known/app/kpango-dotfiles::kpango-dotfiles-source-path
+  - id: well-known/app/kpango-dotfiles::kpango-dotfiles-systemd-path
+
+- id: systemd-has-docs-or-comments
+  desc: Systemd unit has documentation or comments
+  crit: notable
+  any:
+  - id: micro-behaviors/os/service/config::unit-description-exists
+  - id: micro-behaviors/os/service/config::documentation-exists
+  - id: comment-exists
+  - id: micro-behaviors/os/service/config::after-exists
+  - id: condition-exists
+  - id: standard-output-exists
+- id: systemd-no-docs-or-comments
+  desc: Systemd unit is undocumented and lacks comments
+  crit: suspicious
+  conf: 0.7
+  for: [systemd]
+  all:
+  - id: micro-behaviors/os/service/config::exec-start
+  unless:
+  - id: objectives/persistence/system/service/systemd/
+  - id: metadata/package/testing/
+
+- id: unit-dependency-exists
+  desc: Unit has structural dependencies
+  crit: notable
+  any:
+  - id: micro-behaviors/os/service/config::after-exists
+  - id: systemd-before-exists
+  - id: requires-exists
+
+- id: systemd-has-dependency-or-env
+  desc: Systemd unit declares dependencies or environment
+  crit: notable
+  any:
+  - id: micro-behaviors/os/service/config::install-wanted-by-exists
+  - id: micro-behaviors/os/service/config::after-exists
+  - id: systemd-before-exists
+  - id: requires-exists
+  - id: micro-behaviors/os/service/config::service-type-minimal
+  - id: default-deps-no
+  - id: service-environment-exists
+  - id: bus-name-exists
+
+- id: systemd-suspicious-service-file
+  desc: Suspiciously minimal or obfuscated systemd service
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: exec-start-dangerous-path
+  - id: systemd-no-docs-or-comments
+  - id: systemd-forking-no-deps
+- id: hidden-temp-systemd-persistence
+  desc: Hidden temp payload systemd persistence
+  crit: hostile
+  conf: 0.98
+  for: [elf, shell, python]
+  all:
+  - id: systemd-worker-service-path
+  - id: micro-behaviors/os/service/control::systemctl-word
+  any:
+  - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+  - id: objectives/evasion/file-hiding/dotfile-create::hidden-staging-file
+  - id: micro-behaviors/fs/chmod/executable/mode
+  needs: 2
+- id: systemd-dropin-path
+  desc: Systemd service drop-in path
+  crit: notable
+  conf: 0.84
+  unless:
+  - id: metadata/package/testing/presence/harness::go-test-file
+  - id: well-known/app/openssh/
+  - id: well-known/app/omarchy::source-tree
+  any:
+  - id: systemd-dropin-path--rx-1
+  - id: systemd-dropin-path--rx-2
+
+- id: native-unit-authoring
+  # A compiled binary that embeds the directives of a systemd unit as plain
+  # strings (ExecStart plus an autostart/auto-respawn directive) is writing a
+  # unit file at runtime to persist itself — notable persistence program
+  # purpose. The structured `.service` composites above cover parsed unit files;
+  # this targets the binary that authors one.
+  desc: Native binary authors a systemd persistence unit
+  crit: notable
+  conf: 0.8
+  for: [elf]
+  all:
+  - id: micro-behaviors/os/service/config::exec-start
+  any:
+  - id: restart-always-text
+  - id: wanted-by-target-text
+  - id: micro-behaviors/os/service/config::wanted-by-multi-user-text
+
+- id: native-arm-systemd-respawn-implant
+  desc: Native ARM implant authors a self-respawning systemd unit
+  crit: hostile
+  conf: 0.99
+  mbc: B0030
+  for: [elf]
+  all:
+  - id: native-unit-authoring
+  - id: metadata/arch/iot::arm
+  - id: micro-behaviors/fs/proc/info/path::process-self-exe-path
+  - id: restart-always-text
+
+- id: native-arm-systemd-shell-staging-implant
+  desc: Native ARM implant combines systemd persistence with shell staging
+  crit: hostile
+  conf: 0.99
+  attack: T1543.002,T1059.004,T1074.001
+  mbc: B0030
+  for: [elf]
+  all:
+  - id: native-unit-authoring
+  - id: metadata/arch/iot::arm
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+  - id: micro-behaviors/fs/path/temp::native-transient-staging-directory
+
+- id: native-mips-shell-persistence
+  desc: Self-locating MIPS shell implant with systemd persistence
+  crit: hostile
+  conf: 0.99
+  attack: T1543.002,T1059.004,T1105
+  mbc: B0030
+  for: [elf]
+  all:
+  - id: native-unit-authoring
+  - id: micro-behaviors/fs/proc/info/path::process-self-exe-path
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+  - id: metadata/arch/iot::mips
+
+- id: native-arm-source-query-persistence
+  desc: Native ARM bot persists with encoded Source-query flooding
+  crit: hostile
+  conf: 0.99
+  attack: T1543.002,T1498.001,T1059.004
+  mbc: B0030
+  for: [elf]
+  all:
+  - id: native-unit-authoring
+  - id: objectives/impact/dos/attack/botnet::xor29-source-engine-query-payload
+  - id: metadata/arch/iot::arm
+  - id: micro-behaviors/fs/proc/info/path::process-self-exe-path
+
+- id: native-systemd-persistent-stealer
+  # A compiled binary that authors a systemd unit to relaunch itself across
+  # reboots AND harvests credentials or installs an eBPF hiding rootkit is an
+  # autonomous persistent implant, not a service installer. The stealer/rootkit
+  # leg supplies the malicious intent the bare persistence directives lack.
+  desc: Installs systemd persistence for stealer
+  crit: hostile
+  conf: 0.95
+  for: [elf]
+  all:
+  - id: native-unit-authoring
+  any:
+  - id: objectives/credential-access/theft/multi-app::multi-app-credential-stealer
+  - id: objectives/credential-access/discord/token::native-discord-token-grabber
+  - id: objectives/evasion/kernel-hide/ebpf::bpf-hidden-object-names
+  - id: objectives/command-and-control/channel/tor/bundle::tor-expert-bundle
+- id: native-systemd-iot-bot-persistence
+  desc: Native systemd persistence for IoT bot
+  crit: hostile
+  conf: 0.97
+  for: [elf]
+  all:
+  - id: native-unit-authoring
+  any:
+  - id: objectives/command-and-control/botnet/iot::huawei-upnp-encoded-download-exec
+  - id: objectives/anti-static/obfuscation/encoding/content::encoded-downloader-pattern
+  - id: objectives/persistence/system/init/boot::linux-init-script
+  - id: micro-behaviors/os/sysinfo/platform/string::multi-arch-bot-suffix-cluster
+  - id: objectives/evasion/masquerade/process/name::daemon-helper-name-masquerade
+  - id: micro-behaviors/fs/path/device/special::multi-watchdog-device-cluster

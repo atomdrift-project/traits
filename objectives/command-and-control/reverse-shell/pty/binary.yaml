@@ -1,0 +1,138 @@
+defaults:
+  platforms:
+  - linux
+  - macos
+  for:
+  - elf
+  - macho
+  mbc: B0024
+  attack: T1059.004
+composite_rules:
+- id: pty-backdoor
+  desc: PTY backdoor (interactive remote shell)
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  scope: leaf
+  near_bytes: 32768
+  all:
+  - id: micro-behaviors/process/tty/pty::pty-allocation-symbols
+  - id: micro-behaviors/communications/socket/connect::connect
+  - id: micro-behaviors/process/fd/dup::dup2
+  - id: micro-behaviors/process/create/shell/
+  unless:
+  # socat/gawk/sudo/startpar are grouped into one exception; busybox, the musl
+  # loader and libc itself are baseline (can't be exception members) so stay
+  # listed individually.
+  - id: well-known/tool/sysadmin/unix-benign::benign-native-shell-tools
+  # GNU Awk's documented coprocess PTY/network implementation also exists in
+  # its pgawk and dgawk variants; preserve detection for unidentified ELFs.
+  - id: well-known/tool/development/gnu-awk::gnu-awk-pty-binary
+  - id: well-known/tool/sysadmin/busybox::busybox-binary
+  - id: metadata/binary/linking/runtime::musl-loader-basename
+  - id: micro-behaviors/dylib/library/libc::is-libc-binary
+  - id: well-known/lib/bun-runtime/
+  - id: well-known/lib/opentui/
+  - id: well-known/app/codeplane/
+  - id: well-known/tool/sysadmin/container/
+- id: pty-backdoor-full
+  desc: Full PTY backdoor with terminal control and outbound connection
+  crit: hostile
+  conf: 0.98
+  for:
+  - elf
+  scope: leaf
+  near_bytes: 32768
+  all:
+  - id: micro-behaviors/process/tty/pty::pty-allocation-symbols
+  - id: micro-behaviors/process/tty/pty::terminal-attribute-control
+  - id: micro-behaviors/communications/socket/connect::connect
+  - id: micro-behaviors/process/fd/dup::dup2
+  - id: micro-behaviors/process/create/shell/
+  unless:
+  # socat/gawk/sudo/startpar are grouped into one exception; busybox, the musl
+  # loader and libc itself are baseline (can't be exception members) so stay
+  # listed individually.
+  - id: well-known/tool/sysadmin/unix-benign::benign-native-shell-tools
+  # GNU Awk's documented coprocess PTY/network implementation also exists in
+  # its pgawk and dgawk variants; preserve detection for unidentified ELFs.
+  - id: well-known/tool/development/gnu-awk::gnu-awk-pty-binary
+  - id: well-known/tool/sysadmin/busybox::busybox-binary
+  - id: metadata/binary/linking/runtime::musl-loader-basename
+  - id: micro-behaviors/dylib/library/libc::is-libc-binary
+  - id: well-known/lib/bun-runtime/
+  - id: well-known/lib/opentui/
+  - id: well-known/app/codeplane/
+  - id: well-known/tool/sysadmin/container/
+- id: pty-bind-shell
+  desc: PTY bind shell (listens for connections)
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  scope: leaf
+  near_bytes: 32768
+  all:
+  - id: micro-behaviors/process/tty/pty::pty-allocation-symbols
+  - id: micro-behaviors/communications/socket/listen::accept-func
+  - id: micro-behaviors/communications/socket/bind/function::bind
+  - id: micro-behaviors/process/fd/dup::dup2
+  - id: micro-behaviors/process/create/shell/
+  unless:
+  # Stock shells/privileged tools (socat, gawk, sudo, startpar) legitimately
+  # combine socket + PTY + exec — grouped into one exception. sudo's use_pty
+  # monitoring allocates a PTY and execs under it; it is not a bind shell.
+  # busybox/musl-loader/libc are baseline (can't join the exception) so stay
+  # listed separately.
+  - id: well-known/tool/sysadmin/unix-benign::benign-native-shell-tools
+  # GNU Awk's documented coprocess PTY/network implementation also exists in
+  # its pgawk and dgawk variants; preserve detection for unidentified ELFs.
+  - id: well-known/tool/development/gnu-awk::gnu-awk-pty-binary
+  - id: well-known/tool/sysadmin/busybox::busybox-binary
+  - id: metadata/binary/linking/runtime::musl-loader-basename
+  - id: micro-behaviors/dylib/library/libc::is-libc-binary
+  - id: well-known/lib/bun-runtime/
+  - id: well-known/lib/opentui/
+  - id: well-known/app/codeplane/
+  - id: well-known/tool/sysadmin/container/
+
+  # PTY shell supporting both reverse (connect) and bind (accept) modes in
+  # a single ELF binary. Legitimate PTY programs pick one direction:
+  # terminal emulators never connect outbound; sshd listens but uses
+  # posix_openpt not grantpt+unlockpt; tmux/screen allocate PTYs but
+  # never connect. A binary with all of these is an implant.
+  # Downgrade on usage/help strings — implants don't ship user-facing docs.
+- id: pty-dual-mode-backdoor
+  desc: PTY shell with both reverse and bind shell modes
+  crit: hostile
+  conf: 0.93
+  for: [elf]
+  scope: leaf
+  size_min: 32768
+  near_bytes: 65536
+  mbc: B0022,B0024
+  all:
+  - id: micro-behaviors/process/tty/pty::grantpt
+  - id: micro-behaviors/process/tty/pty::unlockpt
+  - id: micro-behaviors/process/fd/dup::dup2
+  - id: micro-behaviors/process/create/direct::execve-import
+  - id: micro-behaviors/communications/socket/connect::connect
+  - id: micro-behaviors/communications/socket/listen::accept-func
+  - id: micro-behaviors/communications/socket/bind/function::bind
+  any:
+  - id: micro-behaviors/process/daemonize/detach::setsid-import
+  - id: micro-behaviors/process/daemonize/detach::fork-new-session
+  unless:
+  # socat/gawk/sudo/startpar grouped into one exception; busybox/musl/libc are
+  # baseline and stay listed individually.
+  - id: well-known/tool/sysadmin/unix-benign::benign-native-shell-tools
+  - id: well-known/tool/development/gnu-awk::gnu-awk-pty-binary
+  - id: well-known/tool/sysadmin/busybox::busybox-binary
+  - id: metadata/binary/linking/runtime::musl-loader-basename
+  - id: micro-behaviors/dylib/library/libc::is-libc-binary
+  downgrade:
+    any:
+    - id: micro-behaviors/ui/help/
+    - id: metadata/signed/platform/
+    - id: well-known/lib/bun-runtime/

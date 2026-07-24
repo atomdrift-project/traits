@@ -1,0 +1,448 @@
+defaults:
+  platforms:
+  - unix
+  - windows
+  for: [scripts, binaries]
+  attack: T1552.001
+  crit: suspicious
+traits:
+- id: aws-config-dup
+  desc: AWS credential directory reference
+  crit: notable
+  conf: 0.75
+  for:
+  - shell
+  - python
+  - ruby
+  - perl
+  - javascript
+  - typescript
+  if:
+    type: string_literal
+    exact: .aws
+  unless:
+  - id: well-known/lib/aws-sdk-ruby
+  - id: metadata/library/data/
+  - id: well-known/tool/detection/security-scanner/
+  - id: well-known/tool/detection/proxy-sandbox
+  - id: objectives/credential-access/cloud/token/files/
+  - id: well-known/app/akm::akm-stash-safety-sensitive-dirs
+  - id: objectives/credential-access/theft/keywords::kiro-auth-token-filename
+- id: aws-access-key
+  desc: AWS access key ID pattern
+  conf: 0.85
+  if:
+    type: text
+    # Require an AWS-specific field name so MinIO, Ceph, and other S3-compatible
+    # test credentials named e.g. MINIO_ACCESS_KEY are not called AWS keys.
+    regex: '(?i)\baws[_-]access[_-]key([_-]id)?\b\s*[:=]\s*["'']?AKIA[0-9A-Z]{16}'
+  unless:
+  - type: text
+    substr: AKIAIOSFODNN7EXAMPLE
+  - type: text
+    regex: AKIA[0-9A-Z]{12}EXAMPLE
+  - type: text
+    substr: AKIAI6X4TYCIXM2B7MUQ
+  - id: metadata/package/testing/
+  - id: well-known/tool/development/go-toolchain::go-module-source-path
+  - id: well-known/tool/detection/redaction::sensitive-data-scanner
+  # Secret scanners intentionally carry credential regexes as data; a
+  # catalog entry is not a credential present in the scanned artifact.
+  - id: well-known/tool/detection/mcp-fence::context
+  # Loom deliberately embeds a fake AWS-shaped honeytoken to detect whether an
+  # agent reads or exfiltrates canary data.  It is test input, not a credential.
+  - id: well-known/tool/detection/llm-scanner::loom-canary-context
+  # ELF core dumps capture the crashed process environ (HOME=, SHLVL=,
+  # AWS_ACCESS_KEY_ID=, …). A key string there is incidental memory, not a
+  # credential the package is harvesting or shipping for use.
+  - type: value
+    path: elf.type
+    exact: core
+- id: github-classic-pat
+  desc: GitHub classic personal access token literal
+  crit: notable
+  conf: 0.88
+  for: [python, javascript, typescript]
+  unless:
+  - id: well-known/tool/detection/sast::python-secret-rule-catalog
+  - id: objectives/credential-access/api-harvest/catalog::redaction-credentials-marker
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+  # UI/documentation placeholders commonly use a run of x characters; they
+  # are not GitHub credentials and should not satisfy the token detector.
+  - type: string_literal
+    regex: 'ghp_x{8,}'
+  if:
+    type: string_literal
+    regex: 'ghp_(?!x{8,})[A-Za-z0-9]{36}'
+- id: github-fine-grained-pat
+  desc: "GitHub fine-grained personal access token"
+  crit: notable
+  conf: 0.88
+  for: [python, javascript, typescript]
+  unless:
+  - id: well-known/tool/detection/sast::python-secret-rule-catalog
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+  if:
+    type: string_literal
+    regex: 'github_pat_[A-Za-z0-9_]{30,}'
+- id: azure-config
+  desc: Azure CLI token cache path
+  conf: 0.85
+  for:
+  - shell
+  - python
+  - ruby
+  - perl
+  - javascript
+  - typescript
+  if:
+    type: string_literal
+    regex: '/\.azure/(accessTokens\.json|msal_token_cache(\.json)?)\b'
+  unless:
+  - id: well-known/app/skypilot::skypilot-source-file
+- id: dotenv-request
+  desc: HTTP request for .env file
+  conf: 0.85
+  if:
+    type: text
+    substr: GET /.env
+  unless:
+  - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+- id: aws-iam-credential-access-path
+  desc: AWS IAM security credentials metadata path
+  crit: notable
+  conf: 0.7
+  attack: T1552.005
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  if:
+    type: string_literal
+    substr: iam/security-credentials
+  unless:
+  - id: metadata/library/data/
+  - id: well-known/tool/detection/security-scanner/
+  - id: well-known/lib/mongodb/
+- id: jvm-aws-iam-credential-path
+  desc: JVM AWS IAM credential path
+  crit: suspicious
+  conf: 0.9
+  attack: T1552.005
+  for:
+  - class
+  - jar
+  if:
+    type: hex
+    pattern: 69 61 6D 2F 73 65 63 75 72 69 74 79 2D 63 72 65 64 65 6E 74 69 61 6C 73
+  unless:
+  - id: metadata/package/files/system-package::container-image-tar-name
+- id: jvm-gcp-metadata-host
+  desc: JVM GCP metadata host
+  crit: suspicious
+  conf: 0.9
+  attack: T1552.005
+  for:
+  - class
+  - jar
+  if:
+    type: hex
+    pattern: 6D 65 74 61 64 61 74 61 2E 67 6F 6F 67 6C 65 2E 69 6E 74 65 72 6E 61 6C
+  unless:
+  - id: metadata/package/files/system-package::container-image-tar-name
+  - id: metadata/package/quality/false-positives::opensearch-gce-plugin-context
+  - id: well-known/app/opensearch::gce-metadata-service-class
+  - id: well-known/app/opensearch::gce-plugin-path
+- id: azure-metadata-header
+  desc: Azure Metadata header
+  crit: notable
+  conf: 0.7
+  attack: T1552.005
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  if:
+    type: string_literal
+    regex: Metadata:\s*true
+- id: awsie-import
+  desc: youtube-dl AWS helper import
+  crit: baseline
+  conf: 0.2
+  for:
+  - python
+  if:
+    type: text
+    substr: "from .aws import AWSIE"
+- id: aws-secretsmanager-endpoint
+  desc: AWS Secrets Manager endpoint
+  crit: notable
+  conf: 0.88
+  for: [javascript, typescript, python, shell]
+  if:
+    type: text
+    regex: 'secretsmanager\.[a-z0-9-]+\.amazonaws\.com|secretsmanager\.ListSecrets'
+- id: aws-ssm-parameters-endpoint
+  desc: AWS SSM parameters endpoint
+  crit: notable
+  conf: 0.86
+  for: [javascript, typescript, python, shell]
+  if:
+    type: text
+    regex: 'ssm\.[a-z0-9-]+\.amazonaws\.com|AmazonSSM\.DescribeParameters'
+- id: azure-keyvault-token-scope
+  desc: Azure Key Vault token scope
+  crit: notable
+  conf: 0.88
+  for: [javascript, typescript, python, shell]
+  if:
+    type: text
+    substr: https://vault.azure.net/.default
+- id: gcp-secretmanager-api
+  desc: GCP Secret Manager API
+  crit: notable
+  conf: 0.88
+  for: [javascript, typescript, python, shell]
+  if:
+    type: text
+    regex: 'secretmanager\.googleapis\.com|google\.cloud\.secretmanager'
+- id: gcp-cloudkms-api
+  desc: GCP Cloud KMS API
+  crit: notable
+  conf: 0.84
+  for: [javascript, typescript, python, shell]
+  if:
+    type: text
+    substr: cloudkms.googleapis.com
+- id: python-refresh-token-json-get
+  desc: Python reads refresh_token JSON key
+  crit: component
+  conf: 0.94
+  attack: T1528
+  for: [python]
+  if:
+    type: text
+    regex: '\.get\s*\(\s*["'']refresh_token["'']\s*\)'
+- id: python-token-set-add
+  desc: Python adds token to set
+  crit: component
+  conf: 0.82
+  for: [python]
+  if:
+    type: text
+    regex: '\.add\s*\(\s*token\s*\)'
+- id: python-print-token
+  desc: Python prints token variable
+  crit: component
+  conf: 0.82
+  for: [python]
+  if:
+    type: text
+    regex: '\bprint\s*\(\s*token\s*\)'
+- id: imds-defensive-block-comment-text
+  desc: Defensive IMDS block comment
+  crit: component
+  conf: 0.86
+  for: [python, javascript, typescript, shell]
+  if:
+    type: text
+    substr: Always-blocked floor
+- id: imds-defensive-block-helper-name
+  desc: Defensive IMDS block helper
+  crit: component
+  conf: 0.86
+  for: [python, javascript, typescript, shell]
+  if:
+    type: text
+    substr: _is_always_blocked_url
+composite_rules:
+- id: js-recursive-cloud-credential-scan
+  desc: Recursive cloud credential path scan
+  crit: notable
+  conf: 0.94
+  for: [javascript, typescript]
+  all:
+  - id: micro-behaviors/fs/directory/traverse::node-recursive-dirent-walk
+  any:
+  - id: metadata/file/string/cloud::gcp-default-credentials
+  - id: objectives/discovery/cloud/metadata::metadata-harvesting
+- id: js-ci-container-aware-cloud-credential-scan
+  desc: CI/container-aware cloud credential scan
+  crit: notable
+  conf: 0.94
+  for: [javascript, typescript]
+  all:
+  - id: js-recursive-cloud-credential-scan
+  any:
+  - id: micro-behaviors/os/env/vars/cicd/
+  - id: micro-behaviors/os/container/runtime::dockerenv
+  - id: micro-behaviors/fs/proc/container::container-self-cgroup
+- id: multi-cloud-imds-exfil
+  desc: Multi-cloud metadata access with HTTP exfiltration
+  crit: hostile
+  conf: 0.97
+  attack: T1552.005
+  for: [javascript, typescript, shell, python]
+  near_lines: 80
+  all:
+  - id: aws-imds-access
+  - id: micro-behaviors/communications/http/request/client::http-request
+  any:
+  - id: gcp-metadata-access
+  - id: gcp-metadata-access
+  - id: micro-behaviors/communications/http/request/client::js-fetch-call
+- id: python-json-refresh-token-harvest
+  desc: Python harvests refresh tokens from JSON files
+  crit: hostile
+  conf: 0.97
+  attack: T1528
+  for: [python]
+  all:
+  - id: python-refresh-token-json-get
+  - id: micro-behaviors/data/serialize/json::json-load-call
+  - id: micro-behaviors/fs/enumerate/directory::python-json-glob
+  - id: micro-behaviors/fs/file/open::generic-dup
+  any:
+  - id: python-token-set-add
+  - id: python-print-token
+- id: aws-imds-access
+  desc: AWS instance metadata credential access
+  crit: suspicious
+  conf: 0.95
+  attack: T1552.005
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  - class
+  - jar
+  any:
+  - id: aws-iam-credential-access-path
+  - id: metadata/file/string/cloud::aws-iam-credentials-metadata-path
+  - id: jvm-aws-iam-credential-path
+  unless:
+  - id: well-known/app/aui-agent-builder/
+  - id: metadata/package/documentation/
+  - id: metadata/package/testing/
+  - id: imds-defensive-block-comment-text
+  - id: imds-defensive-block-helper-name
+  - id: well-known/lib/mongodb::mongodb-azure-provider-base-url
+  - id: well-known/lib/stacksjs-ts-cloud::ts-cloud-aws-runtime-context
+- id: jvm-cloud-metadata-token-harvest
+  desc: JVM cloud metadata token harvest
+  crit: hostile
+  conf: 0.98
+  attack: T1552.005
+  for: [class, jar]
+  all:
+  - id: jvm-aws-iam-credential-path
+  - id: jvm-gcp-metadata-host
+  scope: leaf
+- id: multi-cloud-secret-service-targeting
+  desc: Multi-cloud secret service targeting
+  crit: hostile
+  conf: 0.97
+  attack: T1552.005
+  mbc: E1552
+  needs: 3
+  any:
+  - id: aws-secretsmanager-endpoint
+  - id: aws-ssm-parameters-endpoint
+  - id: azure-keyvault-token-scope
+  - id: micro-behaviors/communications/http/oauth::microsoft-login
+  - id: gcp-secretmanager-api
+  - id: gcp-cloudkms-api
+  downgrade:
+    any:
+    - id: objectives/discovery/cloud/metadata/
+    - id: metadata/package/testing/
+- id: gcp-metadata-access
+  desc: GCP service-account metadata access
+  crit: suspicious
+  conf: 0.95
+  attack: T1552.005
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  any:
+  - id: metadata/file/string/cloud::gcp-service-account-token-path
+  - id: metadata/file/string/cloud::gcp-service-accounts-metadata-path
+  - id: metadata/file/string/cloud::gcp-default-service-account-email-path
+  unless:
+  - id: objectives/discovery/cloud/metadata/
+  - id: well-known/lib/nextjs::next-server-build-path
+  # Bundled cloud SQL / GCP client SDKs inside editor extensions are product
+  # features (connect to Cloud SQL), not credential stealers.
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: metadata/library/structure::js-large-minified-bundle
+  - id: well-known/app/devdb::extension-context
+  - id: well-known/app/dbcode::extension-context
+- id: azure-imds-access
+  desc: Azure instance metadata identity request
+  crit: suspicious
+  conf: 0.95
+  attack: T1552.005
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  any:
+  - id: metadata/file/string/cloud::azure-managed-identity-token-path
+  - id: azure-metadata-header
+  unless:
+  - id: well-known/lib/llm/provider::openai-workload-identity-source
+  - id: well-known/app/dbcode::snowflake-sdk-bundle
+  - id: metadata/library/cloud-sdk::azure-identity-js-sdk
+  - id: metadata/package/quality/false-positives::kailash-sdk-context
+  - id: metadata/package/quality/false-positives::kailash-wheel-basename
+  - id: metadata/package/quality/false-positives::kailash-source-member-path
+  - id: well-known/app/vscode-marketplace::m365-agents-toolkit-vsix
+  - id: well-known/tool/offensive/decepticon::authorized-redteam-context
+  - id: well-known/lib/zepben::azure-managed-identity-helper
+- id: aws-credential-theft
+  desc: AWS credential theft
+  conf: 0.85
+  any:
+  - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+  - id: aws-access-key
+  all:
+  - id: objectives/credential-access/cloud/token/files::aws-config-dup
+  unless:
+  - id: objectives/credential-access/cloud/token/files/
+- id: gcp-credential-theft
+  desc: Reads a GCP credential file path
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: micro-behaviors/fs/path/sensitive/credentials::gcloud-credentials
+  - id: micro-behaviors/fs/read/file
+  near_bytes: 512
+  any:
+  - id: metadata/file/string/cloud::gcp-default-credentials
+  unless:
+  - id: objectives/discovery/cloud/metadata/
+  - id: metadata/binary/metrics/size::massive-executable
+  - id: well-known/app/eeg-security/
+  - id: well-known/lib/google-auth
+  - id: well-known/tool/detection/agent-sentry/
+  - id: well-known/app/restic::restic-binary-name
+- id: kubernetes-serviceaccount-abuse
+  desc: Kubernetes token with API access
+  crit: suspicious
+  conf: 0.96
+  attack: T1552.007
+  all:
+  - id: micro-behaviors/os/container/runtime::serviceaccount-files
+  any:
+  - id: micro-behaviors/os/container/runtime::api-enumeration
+  - id: micro-behaviors/os/container/runtime::pod-exec
+  unless:
+  - id: metadata/package/quality/false-positives::benign-app-fp-context

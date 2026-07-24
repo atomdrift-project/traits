@@ -1,0 +1,190 @@
+defaults:
+  for: [javascript, typescript]
+  platforms: [unix, windows]
+  attack: T1557
+traits:
+  - id: jsonrpc-envelope
+    desc: JSON-RPC 2.0 protocol envelope
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: jsonrpc.{0,10}2\.0
+  - id: readline-stdin-interface
+    desc: readline interface on process.stdin
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: readline\.createInterface\(
+  - id: stdin-line-handler
+    desc: Handles stdin lines via event
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      regex: \.on\(\s*["']line["']
+  - id: mcp-installer-tool-name
+    desc: MCP tool exposes an installer operation
+    crit: notable
+    conf: 0.95
+    if:
+      type: string_literal
+      exact: install_mcp
+  - id: mcp-install-command-field
+    desc: MCP response supplies an install command field
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      substr: install_command
+  - id: mcp-installer-operation-text
+    desc: Contains an MCP installer operation
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      substr: install_mcp
+  - id: mcp-install-parameters-text
+    desc: MCP installer accepts package parameters
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: '(mcp_id.{0,120}env_vars|env_vars.{0,120}mcp_id)'
+  - id: remote-mcp-list-fetch
+    desc: Fetches a remote MCP package list
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      substr: fetchBundledMcps
+  - id: mcp-launcher-token-environment
+    desc: MCP launcher uses an access-token key
+    crit: notable
+    conf: 0.96
+    if:
+      type: string_literal
+      exact: TOOL_TOKEN
+  - id: mcp-token-environment-text
+    desc: MCP launcher references an access token
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      substr: TOOL_TOKEN
+  - id: mcp-portal-token-config
+    desc: MCP config carries portal token
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'TOOL_TOKEN[\s\S]{0,180}PORTAL_URL'
+composite_rules:
+  - id: mcp-launch-npx-command
+    desc: Configured MCP server uses npx
+    crit: notable
+    conf: 0.94
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-config-npx-command
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key--mcpservers
+  - id: stdin-http-relay
+    desc: Stdin-to-HTTP relay proxy
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: jsonrpc-envelope
+      - id: micro-behaviors/process/fd/stdio::js-stdin-read
+      - id: readline-stdin-interface
+    any:
+      - id: micro-behaviors/communications/http/post::axios-post-call
+      - id: micro-behaviors/communications/http/post::fetch-post-call
+      - id: micro-behaviors/communications/http/post::http-request-post
+    unless:
+      - id: well-known/app/tencent-codebuddy::codebuddy-marker
+      - id: well-known/app/guangnao-agent-cli::guangnao-agent-cli-context
+  - id: mcp-mitm-proxy
+    desc: MCP man-in-the-middle proxy
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-call-tool-response
+      - id: readline-stdin-interface
+    any:
+      - id: micro-behaviors/communications/http/post::axios-post-call
+      - id: micro-behaviors/communications/http/post::fetch-post-call
+      - id: micro-behaviors/communications/http/post::http-request-post
+  - id: mcp-tunnel-exfil
+    desc: MCP proxy via tunnel service
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-call-tool-response
+      - id: stdin-line-handler
+    any:
+      - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-tunnel
+      - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-free-app-endpoint
+      - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-io-endpoint
+  - id: mcp-remote-install-command-exec
+    desc: MCP server executes a portal-supplied install command
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1195.002
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-server-constructor
+      - id: mcp-install-command-field
+      - id: micro-behaviors/process/create/shell/bridge::child-process-require-compiled
+      - id: micro-behaviors/process/create/shell/bridge::child-process-compiled-computed-call
+    any:
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/client::fetch-json-body
+  - id: mcp-remote-npx-secret-launch
+    desc: Remote MCP list launches npx with access secrets
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1195.002
+    scope: archive
+    all:
+      - id: remote-mcp-list-fetch
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key--mcpservers
+      - id: mcp-launch-npx-command
+      - id: mcp-launcher-token-environment
+  - id: mcp-obfuscated-remote-install
+    desc: Obfuscated MCP server executes remote install data
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1195.002
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-sdk-server-module-import
+      - id: mcp-installer-operation-text
+      - id: mcp-install-parameters-text
+      - id: micro-behaviors/process/create/shell/bridge::child-process-require-compiled
+      - id: micro-behaviors/process/create/shell/bridge::child-process-compiled-computed-call
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+  - id: mcp-remote-secret-process-config
+    desc: Remote MCP config carries an access token
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1195.002
+    scope: archive
+    all:
+      - id: remote-mcp-list-fetch
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key--mcpservers
+      - id: micro-behaviors/communications/ipc/mcp::mcp-server-command-args-fields
+      - id: mcp-token-environment-text
+      - id: micro-behaviors/process/create/shell/bridge::child-process-compiled-computed-call
+  - id: mcp-obfuscated-tokenized-detached-launch
+    desc: Obfuscated MCP launcher tokenizes detached child
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1059.007,T1557
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-server-constructor
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key--mcpservers
+      - id: mcp-portal-token-config
+      - id: mcp-token-environment-text
+      - id: objectives/command-and-control/dropper/execution/network-stage::detached-stdio-obfuscated-options
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::any-name-mangling

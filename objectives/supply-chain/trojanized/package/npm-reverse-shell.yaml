@@ -1,0 +1,125 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript, package.json, archives]
+  attack: T1195.002
+
+composite_rules:
+  - id: npm-hollow-netcat-reverse-shell
+    desc: Hollow npm package contains netcat reverse shell
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/command-and-control/reverse-shell/dup::reverse-shell-netcat
+  - id: npm-hollow-hosted-reverse-shell
+    desc: Hollow npm package contains hosted reverse shell
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/command-and-control/dropper/delivery/pipe::node-hosted-reverse-shell-curl-pipe
+
+  - id: npm-noop-dist-wrapper-with-encoded-runtime-dependency
+    desc: No-op dist wrapper with encoded dependency
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1027,T1140
+    mbc: B0024,C0043
+    for: [javascript, package.json, archives]
+    scope: outer
+    all:
+      - id: metadata/package/scripts::no-op-build-script
+      - id: metadata/package/manifest/entrypoint::main-dist-entrypoint
+      - id: metadata/registry::brand-new-package
+      - id: micro-behaviors/data/encode/payload::large-base64-payload
+
+  - id: npm-noop-dist-wrapper-with-data-stager
+    desc: No-op dist wrapper with encoded data
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1027,T1140
+    mbc: B0024,C0043
+    for: [javascript, package.json, archives]
+    scope: outer
+    all:
+      - id: metadata/package/scripts::no-op-build-script
+      - id: metadata/package/quality/source::has-multiple-entries
+      - id: metadata/package/manifest/freeform::pkg-skeleton-small
+      - id: micro-behaviors/data/encode/payload::large-base64-payload
+
+  - id: npm-noop-dist-wrapper-with-data-dependency
+    # A package that advertises a dist entry but ships no dist runtime, hides
+    # that omission behind a no-op build, and adds a data/block-named runtime
+    # dependency is a hollow supply-chain package.  The archive absence gate
+    # prevents this from firing on normal prebuilt packages whose build script
+    # merely prints that artifacts are already present.
+    desc: Hollow no-op package adds a data-like runtime dependency
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1027
+    mbc: B0024
+    for: [npm]
+    scope: archive
+    unless:
+      - id: metadata/package/files/included::javascript-dist-tree-artifact
+    all:
+      - id: metadata/package/scripts::no-op-build-script
+      - id: objectives/supply-chain/trojanized/package::data-or-block-runtime-dependency
+      - id: metadata/package/manifest/entrypoint::main-dist-entrypoint
+      - id: objectives/supply-chain/install-hook/scripts/prepare::prepare-runs-package-manager-build
+
+  - id: npm-noop-dist-wrapper-with-build-hook
+    desc: Hollow package has no-op prepare build hook
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1027
+    mbc: B0024
+    for: [npm]
+    scope: archive
+    unless:
+      - id: metadata/package/files/included::javascript-dist-tree-artifact
+    all:
+      - id: metadata/package/scripts::no-op-build-script
+      - id: objectives/supply-chain/trojanized/package::data-or-block-runtime-dependency
+      - id: objectives/supply-chain/install-hook/scripts/prepare::prepare-runs-package-manager-build
+      - id: metadata/package/quality/source::has-multiple-entries
+
+  - id: npm-remote-parser-vm-loader
+    desc: npm package runs an obfuscated remote parser in a VM
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1027,T1105,T1059.007
+    mbc: B0024,B0032
+    # This is an npm-package behavior.  A generic archive such as an APK can
+    # contain all four ingredients in unrelated dependencies, so it must not
+    # be treated as an npm package container.
+    for: [javascript, package.json, npm]
+    # A remote-parser loader is a single-file behavior; package-wide pooling
+    # creates false positives from unrelated bundled dependencies.
+    scope: leaf
+    # APK analysis can promote descendant npm evidence to the outer archive;
+    # keep this npm-specific loader off Android package aggregates.
+    unless:
+      - id: metadata/package/files/mobile-package::android-apk-archive-layout
+      # An Alpine/Wolfi APK is a system package container, not an npm package;
+      # its bundled JavaScript dependencies must not be pooled as one loader.
+      - id: metadata/package/files/system-package::alpine-versioned-apk-filename
+      - id: metadata/package/files/system-package::alpine-apk-compressed-package
+    all:
+      - id: micro-behaviors/communications/http/request/client::https-get
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
+      - id: micro-behaviors/process/interpreter/vm::vm-runInContext
+      - id: micro-behaviors/data/source/dynamic/load::node-variable-require-call
+
+traits:
+  - id: data-or-block-runtime-dependency
+    desc: Data/block-named runtime dependency
+    crit: notable
+    conf: 0.86
+    for: [package.json]
+    if:
+      type: value
+      path: dependencies
+      regex: '(?i)"(data|block)[-_][A-Za-z0-9._-]+"'

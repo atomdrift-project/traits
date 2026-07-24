@@ -1,0 +1,107 @@
+# Self-Deletion Detection - Python
+# MBC: F0007 (Self Deletion)
+# ATT&CK: T1070.004
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  mbc: "F0007"
+  attack: "T1070.004"
+traits:
+  - id: self-delete-python
+    desc: Python source deletes its own file
+    crit: suspicious
+    conf: 0.66
+    if:
+      # Match a parsed Python call, not the same text embedded in a generated
+      # updater script. The latter is a cleanup behavior of the generated
+      # child and is not this source file deleting itself.
+      type: tree-sitter
+      kind: call
+      regex: 'os\.remove\s*\(\s*__file__\s*\)'
+    unless:
+      - id: metadata/package/quality/false-positives-shell::python-windows-package-updater
+  - id: init-py-overwrite-path
+    desc: __init__.py overwrite path construction
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'init_path\s*=.{0,80}__init__\.py'
+  - id: open-init-path-write
+    desc: Writes replacement init module
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: 'open(init_path, "w").write'
+  - id: package-dir-from-file
+    desc: Package directory from __file__
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: 'pkg_dir\s*=.{0,80}__file__'
+  - id: pycache-cleanup-path
+    desc: __pycache__ cleanup path
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      substr: "__pycache__"
+  - id: package-metadata-removal-call
+    desc: Removes package metadata directory
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(dist-info|egg-info)[\s\S]{0,80}shutil\.rmtree'
+  - id: package-metadata-removal-call-target
+    desc: Removes named package metadata directory
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: 'shutil\.rmtree[\s\S]{0,80}(dist-info|egg-info)'
+  - id: package-path-from-file
+    desc: Python path derived from source location
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: '__file__[\s\S]{0,120}(dirname|parent)'
+composite_rules:
+  - id: package-init-self-cleanup
+    desc: Package init overwritten and cache removed
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: init-py-overwrite-path
+      - id: open-init-path-write
+      - id: package-dir-from-file
+      - id: pycache-cleanup-path
+      - id: micro-behaviors/fs/directory/delete::shutil-rmtree
+    any:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: micro-behaviors/fs/file/write/direct::py-open-write-inline
+
+  - id: package-metadata-self-removal
+    desc: Import-time removal of package metadata and bytecode cache
+    crit: hostile
+    conf: 0.98
+    platforms: [unix]
+    attack: "T1070.004,T1195.002"
+    all:
+      - id: pycache-cleanup-path
+      - id: micro-behaviors/fs/directory/delete::shutil-rmtree
+      - id: package-self-location
+    any:
+      - id: package-metadata-removal-call
+      - id: package-metadata-removal-call-target
+    near_lines: 12
+  - id: package-self-location
+    desc: Python package derives cleanup paths from its own source location
+    crit: component
+    conf: 0.85
+    any:
+      - id: package-dir-from-file
+      - id: package-path-from-file

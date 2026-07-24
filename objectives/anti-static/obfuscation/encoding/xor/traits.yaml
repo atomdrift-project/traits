@@ -1,0 +1,154 @@
+defaults:
+  platforms: [linux, macos, windows]
+  for: [elf, macho, pe]
+  mbc: B0032
+  attack: T1027
+traits:
+  - id: xor-decode-symbol
+    desc: xor_decode string-decrypt routine
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: symbol
+      exact: xor_decode
+  - id: decode-xor-symbol
+    desc: decode_xor string-decrypt routine
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: symbol
+      exact: decode_xor
+  - id: xor-decrypt-symbol
+    desc: xor_decrypt string-decrypt routine
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: symbol
+      exact: xor_decrypt
+  - id: decrypt-xor-symbol
+    desc: decrypt_xor string-decrypt routine
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: symbol
+      exact: decrypt_xor
+  - id: xor-string-symbol
+    desc: xor_string decrypt routine
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: symbol
+      regex: xor_string
+    unless:
+      - id: well-known/app/mysql-router
+  - id: xor-key-0x37
+    desc: XOR key 0x37 repeated
+    crit: suspicious
+    conf: 0.55
+    for: [elf]
+    if:
+      type: text
+      regex: '(xor|\^)\s*0x37'
+  - id: csharp-char-xor-loop
+    desc: C# char XOR decode loop
+    crit: suspicious
+    conf: 0.93
+    for: [csharp]
+    if:
+      type: text
+      regex: 'Convert\.ToInt32\(\w+\[\w+\]\)\s*\^\s*[1-9]\d?'
+  - id: csharp-byte-xor-mod-loop
+    desc: C# byte XOR modulo loop
+    crit: suspicious
+    conf: 0.92
+    for: [csharp]
+    if:
+      type: metrics
+      field: ast.xor_mod_loop_count
+      min: 1
+  - id: csharp-utf8-key-bytes-call
+    desc: C# UTF8 key byte conversion
+    crit: notable
+    conf: 0.78
+    for: [csharp]
+    if:
+      type: text
+      regex: 'System\.Text\.Encoding\.UTF8\.GetBytes\s*\('
+  - id: torchscript-debug-pickle-basename
+    desc: TorchScript debug pickle file
+    crit: component
+    conf: 0.95
+    for: [python]
+    if:
+      type: basename
+      regex: '\.debug_pkl$'
+  - id: websocket-mask-key-code
+    desc: WebSocket mask key handling code
+    crit: component
+    conf: 0.8
+    for: [python]
+    if:
+      type: text
+      substr: "mask_key"
+composite_rules:
+  - id: native-xor-rwx-loader
+    desc: Native PE XOR decoder with RWX allocation
+    crit: hostile
+    conf: 0.96
+    for: [pe, dll]
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/data/encode/xor::xor-byte-decoder-loop
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: micro-behaviors/mem/alloc/executable::virtualalloc-rwx-commit-x86-direct
+    any:
+      - id: metadata/binary/resource::executable-rsrc-section
+      - id: metadata/hardening/memory::wx-section
+  - id: xor-decode-loop
+    desc: XOR decryption loop pattern
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: xor-decode-symbol
+      - id: decode-xor-symbol
+      - id: xor-decrypt-symbol
+      - id: decrypt-xor-symbol
+      - id: xor-string-symbol
+    unless:
+      - id: well-known/app/mysql-router
+  - id: string-decrypt
+    desc: String decryption capability
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: xor-decode-loop
+      - id: csharp-char-xor-loop
+      - id: csharp-byte-xor-mod-loop
+  - id: csharp-byte-array-xor-decode
+    desc: C# byte-array XOR decoder
+    crit: suspicious
+    conf: 0.9
+    for: [csharp]
+    all:
+      - id: csharp-byte-xor-mod-loop
+      - id: csharp-utf8-key-bytes-call
+  - id: python-xor-decode
+    desc: Python XOR decode with dynamic execution
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    all:
+      - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+      - id: micro-behaviors/data/decode/hex::hex-decode-int-16
+    any:
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+      - id: micro-behaviors/process/interpreter/python::eval-builtin
+      - id: micro-behaviors/process/interpreter/python::compile-exec-mode
+      - id: micro-behaviors/data/serialize/unsafe::marshal-loads
+
+    unless:
+    - id: well-known/tool/detection/malware-config-parser
+    - id: well-known/app/calvyn-code
+    # TorchScript mobile-model debug pickles — benign ML quantization internals.
+    - id: torchscript-debug-pickle-basename
+    - id: websocket-mask-key-code

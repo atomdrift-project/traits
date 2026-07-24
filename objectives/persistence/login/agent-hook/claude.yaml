@@ -1,0 +1,57 @@
+# Persistence by hijacking an AI coding agent's hook system.
+#
+# Claude Code (and similar agents) run configured hooks on session lifecycle
+# events. Writing a `SessionStart` hook whose entry runs a shell command makes
+# that command execute every time the agent starts a session — a recurring,
+# user-invisible re-execution trigger (event-triggered persistence). Seen in
+# obfuscated npm droppers that assemble a settings.json hooks block at runtime.
+# ATT&CK: T1546 (event-triggered execution)  MBC: B0024
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript, shell, python]
+  attack: T1546
+
+composite_rules:
+  - id: claude-session-hook-command-install
+    desc: Configures Claude session hook command
+    crit: notable
+    conf: 0.9
+    all:
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-session-hook
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-hooks-config-key
+      - id: objectives/command-and-control/remote-command/keywords::command-dup
+
+  # A planted SessionStart hook whose command is a curl/wget network call =
+  # event-triggered beacon on every agent session. JS-capable (the dropper
+  # assembles the hooks block in Node), unlike the shell-only command-install
+  # rule above. Genuine hook integrations implement the hook I/O protocol, so
+  # downgrade there.
+  - id: claude-session-hook-network-beacon
+    desc: AI agent session hook beacons to network
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-session-hook--sessionstart
+      - id: micro-behaviors/communications/http/download/shell::shell-curl-wget-url-fetch
+    any:
+      - id: micro-behaviors/fs/path/application/config::claude-config-directory
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+    downgrade:
+      any:
+        - id: micro-behaviors/communications/ipc/agent-hook::agent-hook-updated-input
+        - id: micro-behaviors/communications/ipc/agent-hook::agent-hook-output-block
+        - id: micro-behaviors/communications/ipc/agent-hook::agent-hook-permission-decision
+
+  - id: ai-agent-session-memory-sync-persistence
+    desc: AI agent session hook syncs memory
+    crit: hostile
+    conf: 0.96
+    scope: archive
+    ref: sha256:ffbf482c4b6c5a57944da3576001f383e4cb61bce3ed008b813487357e49e107
+    all:
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-session-hook--sessionstart
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-hooks-config-key
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-memory-sync-command
+    any:
+      - id: micro-behaviors/fs/path/application/config::claude-config-directory
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text

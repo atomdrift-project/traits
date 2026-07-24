@@ -1,0 +1,96 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1119
+
+traits:
+  - id: browser-auth-route-pattern-name
+    desc: Names an authentication route matcher
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      word: AUTH_URL_PATTERN
+
+  - id: browser-auth-route-terms
+    desc: Matches several authentication route terms
+    crit: component
+    conf: 0.88
+    count_min: 4
+    if:
+      type: text
+      regex: '\b(auth|login|session|token)\b'
+
+  - id: auth-response-name-fields
+    desc: References multiple explicit user-name fields
+    crit: component
+    conf: 0.92
+    count_min: 2
+    if:
+      type: text
+      regex: '\b(firstName|lastName|userName)\b'
+
+  - id: auth-response-email-fields
+    desc: References user-email response fields
+    crit: component
+    conf: 0.92
+    count_min: 1
+    if:
+      type: text
+      regex: '\b(userEmail|emailAddress|primaryEmail|workEmail)\b'
+
+  - id: auth-provider-store-key
+    desc: References a named authentication-provider store
+    crit: notable
+    conf: 0.94
+    if:
+      type: literal
+      kind: string
+      exact: okta-token-storage
+
+  - id: auth-storage-read-call
+    desc: Reads entries from enumerated browser storage
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'getItem\(\s*["\x27](access_token|refresh_token|okta-token-storage)["\x27]'
+
+  - id: identity-normalizer-call
+    desc: Normalizes identities from browser data
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: normalizeIdentity
+
+composite_rules:
+  - id: browser-auth-response-identity-interception
+    desc: Intercepts authentication responses to harvest user identity
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: browser-auth-route-pattern-name
+      - id: browser-auth-route-terms
+      - id: auth-response-name-fields
+      - id: auth-response-email-fields
+      - id: micro-behaviors/process/hook/xhr::fetch-hook
+      - id: micro-behaviors/communications/http/client/response-body::fetch-response-clone-json
+    any:
+      - id: micro-behaviors/process/hook/xhr::xhr-response-json-intercept
+      - id: micro-behaviors/process/hook/xhr::open-hook
+      - id: micro-behaviors/process/hook/xhr::send-hook
+
+  - id: browser-auth-storage-identity-scan
+    desc: Scans browser auth stores for user identity
+    crit: suspicious
+    conf: 0.98
+    attack: T1119,T1539
+    all:
+      - id: micro-behaviors/communications/http/oauth::access-token
+      - id: micro-behaviors/communications/http/oauth::refresh-token
+      - id: auth-provider-store-key
+      - id: auth-storage-read-call
+    any:
+      - id: micro-behaviors/data/db/web-storage::browser-storage-sweep-loop
+      - id: micro-behaviors/communications/http/cookies::document-cookie-split-iterate

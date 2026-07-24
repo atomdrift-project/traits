@@ -1,0 +1,523 @@
+# Node.js Inline Runtime Reconnaissance and Exfil
+# Detects Node.js code in npm lifecycle hooks that performs system recon + exfiltration
+# ATT&CK: T1059.007, T1082, T1041
+# MBC: E1041
+defaults:
+  platforms: [unix, windows]
+  for: [package.json]
+  crit: suspicious
+  conf: 0.85
+
+traits:
+  # === Node.js Runtime Detection in Lifecycle Hooks ===
+- id: node-inline-eval
+  desc: Lifecycle hook executes inline Node.js code
+  crit: suspicious
+  conf: 0.92
+  attack: "T1059.007"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "node\\s+-e\\s*['\"]const"
+  unless:
+    # ADHDev's preinstall inline node is a Node-version/platform guard.
+    - id: well-known/app/adhdev::adhdev-daemon-package
+
+- id: node-inline-eval-postinstall
+  desc: postinstall executes inline Node.js code
+  crit: suspicious
+  conf: 0.92
+  attack: "T1059.007"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: "node\\s+-e\\s*['\"]const"
+  unless:
+  - id: metadata/package/scripts/
+  ref: sha256:456f6483c9c64c940c3bb3182a1f2794c4d1d9be5e8d5cd8412e8ef6d45892f6
+
+  # === System Reconnaissance APIs ===
+- id: js-os-platform
+  desc: JavaScript detects operating system platform
+  crit: component
+  conf: 0.88
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "os.platform()"
+
+- id: js-os-arch
+  desc: JavaScript detects CPU architecture
+  crit: component
+  conf: 0.88
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "os.arch()"
+
+- id: js-require-child-process
+  desc: JavaScript requires child_process module
+  crit: component
+  conf: 0.85
+  attack: "T1059.007"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "require\\(['\"]child_process['\"]\\)"
+
+- id: js-require-https
+  desc: JavaScript requires https module
+  crit: suspicious
+  conf: 0.82
+  attack: "T1071.001"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "require\\(['\"]https['\"]\\)"
+
+- id: js-require-https-postinstall
+  desc: postinstall inline Node requires https
+  crit: suspicious
+  conf: 0.9
+  attack: "T1071.001"
+  ref: sha256:456f6483c9c64c940c3bb3182a1f2794c4d1d9be5e8d5cd8412e8ef6d45892f6
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: "require\\(['\"]https['\"]\\)"
+
+  # === Command Execution Patterns ===
+- id: js-execsync-command
+  desc: JavaScript executes system command
+  crit: suspicious
+  conf: 0.93
+  attack: "T1059.007"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "execSync\\s*\\([^)]{0,100}"
+
+  # Cross-platform system info commands
+- id: js-execsync-systeminfo
+  desc: JavaScript runs Windows systeminfo command
+  crit: suspicious
+  conf: 0.96
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "systeminfo"
+
+- id: js-execsync-passwd
+  desc: JavaScript reads /etc/passwd file
+  crit: suspicious
+  conf: 0.98
+  attack: "T1005"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "cat /etc/passwd"
+
+- id: js-execsync-whoami
+  desc: JavaScript runs whoami command
+  crit: component
+  conf: 0.9
+  attack: "T1033"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "whoami"
+
+  # Platform-based branching
+- id: js-platform-win32-check
+  desc: JavaScript branches on Windows platform
+  crit: component
+  conf: 0.85
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "platform\\s*===\\s*['\"]win32['\"]"
+
+- id: js-arch-x64-check
+  desc: JavaScript checks for x64 architecture
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "arch\\s*===\\s*['\"]x64['\"]"
+
+- id: js-require-package-json
+  desc: JavaScript reads package.json for metadata
+  crit: notable
+  conf: 0.8
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "require\\(['\"]\\./package\\.json['\"]\\)"
+
+  # === Data Exfiltration Patterns ===
+- id: js-https-request
+  desc: Preinstall inline Node uses HTTPS request
+  crit: suspicious
+  conf: 0.92
+  attack: "T1071.001"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "https.request"
+
+- id: js-https-request-postinstall
+  desc: postinstall inline Node uses HTTPS request
+  crit: suspicious
+  conf: 0.92
+  attack: "T1071.001"
+  ref: sha256:456f6483c9c64c940c3bb3182a1f2794c4d1d9be5e8d5cd8412e8ef6d45892f6
+  if:
+    type: value
+    path: "scripts.postinstall"
+    substr: "https.request"
+
+- id: postinstall-docker-root-host-mount
+  desc: postinstall Docker mounts host root filesystem
+  crit: suspicious
+  conf: 0.96
+  attack: "T1611"
+  ref: sha256:618e8537cbfbd9e1fa533c915642f61025823167579517490d232193c0765b3e
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: '\bdocker\s+run\b[\s\S]{0,120}(-v|--volume)\s+["'']?/:/host\b'
+
+- id: postinstall-host-root-file-probes
+  desc: postinstall probes host files via /host
+  crit: suspicious
+  conf: 0.97
+  attack: "T1005"
+  ref: sha256:618e8537cbfbd9e1fa533c915642f61025823167579517490d232193c0765b3e
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: '/host/etc/(hostname|shadow)\b'
+
+- id: postinstall-host-shadow-file-read
+  desc: postinstall reads host shadow file
+  crit: suspicious
+  conf: 0.98
+  attack: "T1005"
+  ref: sha256:75babdbc7d2c174783506b7a08fe66fba58f66f1c5c31e65ac46bc0b83cbab4f
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: '/host/etc/shadow\b'
+
+- id: postinstall-host-root-write-test
+  desc: postinstall writes through /host mount
+  crit: suspicious
+  conf: 0.96
+  attack: "T1611"
+  ref: sha256:618e8537cbfbd9e1fa533c915642f61025823167579517490d232193c0765b3e
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: '>\s*/host/tmp/[^"''\s;&]{1,80}'
+
+- id: js-querystring-stringify
+  desc: Preinstall inline Node URL-encodes form data
+  crit: suspicious
+  conf: 0.87
+  attack: "T1041"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: "querystring.stringify"
+
+- id: js-post-params-recon
+  desc: JavaScript POSTs reconnaissance data
+  crit: suspicious
+  conf: 0.95
+  attack: "T1041"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    regex: "package:.{0,50}platform:.{0,50}arch:"
+
+  # === OOB Callback Detection ===
+- id: js-oastify-host
+  desc: JavaScript references OASTify OOB service
+  crit: suspicious
+  conf: 0.96
+  attack: "T1048.003"
+  if:
+    type: value
+    path: "scripts.preinstall"
+    substr: oastify.com
+- id: postinstall-os-host-env-object
+  desc: postinstall collects OS host env
+  crit: suspicious
+  conf: 0.96
+  attack: "T1082"
+  ref: sha256:456f6483c9c64c940c3bb3182a1f2794c4d1d9be5e8d5cd8412e8ef6d45892f6
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: 'os\.platform\(\)[\s\S]{0,160}os\.hostname\(\)'
+- id: postinstall-run-hostname-field
+  desc: postinstall runs hostname command
+  crit: suspicious
+  conf: 0.95
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: 'hostname\s*:\s*run\s*\(\s*[''"]hostname\b'
+- id: postinstall-env-object-field
+  desc: postinstall stores process.env
+  crit: suspicious
+  conf: 0.95
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    regex: '\benv\s*:\s*process\.env\b'
+- id: postinstall-etc-hosts-read
+  desc: postinstall reads /etc/hosts
+  crit: suspicious
+  conf: 0.95
+  attack: "T1005"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    substr: "/etc/hosts"
+- id: postinstall-cloud-init-read
+  desc: postinstall reads cloud-init log
+  crit: suspicious
+  conf: 0.95
+  attack: "T1005"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    substr: "/var/log/cloud-init-output.log"
+- id: postinstall-opt-listing
+  desc: postinstall lists /opt
+  crit: suspicious
+  conf: 0.94
+  attack: "T1082"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    substr: "ls -la /opt/"
+- id: postinstall-root-npmrc-read
+  desc: postinstall reads root .npmrc
+  crit: suspicious
+  conf: 0.97
+  attack: "T1552.001"
+  if:
+    type: value
+    path: "scripts.postinstall"
+    substr: "/root/.npmrc"
+- id: desc-dependency-confusion
+  desc: 'desc dependency confusion'
+  crit: suspicious
+  conf: 0.92
+  attack: "T1195.002"
+  if:
+    type: value
+    path: "description"
+    regex: "(dependency\\.confusion|dep.confusion|dependendency.confusion)"
+    case_insensitive: true
+
+  # === Typosquatting / Namespace Impersonation ===
+- id: jscom-unity-impersonation
+  desc: "Package impersonates Unity namespace"
+  crit: suspicious
+  conf: 0.94
+  attack: "T1195.002"
+  if:
+    type: value
+    path: "name"
+    regex: "^com\\.unity\\."
+  unless:
+  - id: metadata/package/manifest/ecosystem::unity-package-manager-manifest
+
+composite_rules:
+  # Hostile: Cross-platform recon + OOB exfiltration
+- id: node-cross-platform-recon-exfil
+  desc: Cross-platform system recon with OOB exfiltration
+  crit: hostile
+  conf: 0.97
+  attack: "T1041"
+  mbc: "E1041"
+  all:
+  - id: node-inline-eval
+  - id: js-require-child-process
+  - id: js-require-https
+  - id: js-platform-win32-check
+  - id: js-https-request
+  - id: js-oastify-host
+  any:
+  - id: js-execsync-systeminfo
+  - id: js-execsync-passwd
+  - id: js-execsync-whoami
+- id: node-inline-exec-sysinfo
+  desc: Inline Node.js execution collects system info
+  crit: hostile
+  conf: 0.95
+  attack: "T1082"
+  mbc: "E1041"
+  all:
+  - id: node-inline-eval
+  - id: js-os-platform
+  any:
+  - id: js-os-arch
+  - id: js-execsync-command
+  - id: js-execsync-systeminfo
+  - id: js-execsync-passwd
+  - id: js-execsync-whoami
+
+- id: postinstall-inline-node-oidc-webhook-exfil
+  desc: postinstall inline Node steals CI OIDC token
+  crit: hostile
+  conf: 0.99
+  attack: "T1195.002,T1552.001,T1041"
+  mbc: "E1041"
+  ref: sha256:ba3ce255b31237ae1aa1d759860cdf9737ede413fd6f81abdc5cc7b097489cbb
+  all:
+  - id: node-inline-eval-postinstall
+  - id: postinstall-host-env-object
+  - id: js-require-https-postinstall
+  - id: js-https-request-postinstall
+  - id: objectives/credential-access/env/secrets/cicd::npm-script-github-actions-oidc-request
+  - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+- id: postinstall-run-hostname-env-object
+  desc: postinstall collects hostname and env
+  crit: suspicious
+  conf: 0.96
+  attack: "T1082"
+  all:
+  - id: postinstall-run-hostname-field
+  - id: postinstall-env-object-field
+- id: postinstall-host-env-object
+  desc: postinstall builds host env object
+  crit: suspicious
+  conf: 0.96
+  attack: "T1082"
+  any:
+  - id: postinstall-os-host-env-object
+  - id: postinstall-run-hostname-env-object
+- id: postinstall-host-file-profile-object
+  desc: postinstall collects host files
+  crit: suspicious
+  conf: 0.97
+  attack: "T1082,T1005"
+  all:
+  - id: postinstall-etc-hosts-read
+  - id: postinstall-cloud-init-read
+  any:
+  - id: postinstall-opt-listing
+  - id: postinstall-root-npmrc-read
+- id: postinstall-host-profile-ngrok-post
+  desc: postinstall posts host profile
+  crit: hostile
+  conf: 0.985
+  attack: "T1195.002,T1041,T1082"
+  mbc: "E1041"
+  all:
+  - id: node-inline-eval-postinstall
+  - id: postinstall-host-env-object
+  - id: postinstall-host-file-profile-object
+  - id: micro-behaviors/communications/http/post::npm-script-node-http-post
+  - id: objectives/exfiltration/oob/endpoint::ngrok-free
+- id: postinstall-docker-host-profile-exfil
+  desc: postinstall exfils Docker host filesystem probe results
+  crit: hostile
+  conf: 0.995
+  attack: "T1195.002,T1611,T1041"
+  mbc: "E1041"
+  ref: sha256:618e8537cbfbd9e1fa533c915642f61025823167579517490d232193c0765b3e
+  all:
+  - id: node-inline-eval-postinstall
+  - id: postinstall-docker-root-host-mount
+  - id: postinstall-host-shadow-file-read
+  - id: micro-behaviors/communications/http/post::npm-script-node-http-post
+  - id: objectives/exfiltration/oob/endpoint::pipedream-npm-script
+- id: postinstall-docker-host-shadow-access
+  desc: postinstall Docker reads host shadow file
+  crit: hostile
+  conf: 0.99
+  attack: "T1195.002,T1611,T1005"
+  mbc: "E1005"
+  ref: sha256:75babdbc7d2c174783506b7a08fe66fba58f66f1c5c31e65ac46bc0b83cbab4f
+  all:
+  - id: node-inline-eval-postinstall
+  - id: postinstall-docker-root-host-mount
+  - id: postinstall-host-shadow-file-read
+- id: node-oob-recon
+  desc: Node.js code performs recon with OOB callback
+  crit: suspicious
+  conf: 0.94
+  attack: "T1048.003"
+  all:
+  - id: node-inline-eval
+  - id: js-oastify-host
+  any:
+  - id: js-os-platform
+  - id: js-os-arch
+  - id: js-execsync-command
+  # Inline node -e preinstall that reads hostname AND username and references an
+  # out-of-band callback domain (interactsh/oastify/webhook) is a host-profile
+  # exfiltration beacon — the canonical dependency-confusion recon payload. The
+  # OOB domain is matched across all OAST TLDs (oast.me/pro/live/fun/site/online)
+  # so swapping the collaborator host does not evade it.
+- id: node-inline-host-user-oob-exfil
+  desc: Inline node preinstall exfiltrates hostname and username to OOB callback
+  crit: hostile
+  conf: 0.985
+  attack: "T1195.002, T1041, T1082, T1033"
+  mbc: "E1041"
+  all:
+  - id: node-inline-eval
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::preinstall-node-os-hostname
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::preinstall-node-os-userinfo
+  any:
+  - id: js-oastify-host
+  - id: objectives/supply-chain/recon-exfil/oast/host-profile::interactsh-oast-domain
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::preinstall-webhook-site-url
+- id: depconf-exfil
+  desc: Dependency confusion package with data exfiltration
+  crit: hostile
+  conf: 0.96
+  attack: "T1195.002"
+  all:
+  - id: desc-dependency-confusion
+  - id: jscom-unity-impersonation
+  any:
+  - id: node-inline-eval
+  - id: js-https-request
+  - id: js-oastify-host
+  - id: js-querystring-stringify
+  - id: js-require-package-json
+  - id: js-arch-x64-check
+- id: unity-oob-callback
+  desc: Impersonated Unity package with OOB callback
+  crit: hostile
+  conf: 0.93
+  attack: "T1195.002"
+  all:
+  - id: jscom-unity-impersonation
+  - id: js-oastify-host
+  # Postinstall variant: same detection on postinstall hook
+- id: postinstall-inline-exec-recon
+  desc: Postinstall hook executes inline Node.js with system recon
+  crit: hostile
+  conf: 0.95
+  attack: "T1059.007"
+  all:
+  - id: node-inline-eval-postinstall
+  - id: js-require-child-process
+  any:
+  - id: js-execsync-systeminfo
+  - id: js-execsync-passwd

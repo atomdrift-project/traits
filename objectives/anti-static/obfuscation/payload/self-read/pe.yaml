@@ -1,0 +1,223 @@
+# PE Self-Reading Overlay Extraction
+# Detects binaries that open and read themselves to extract appended payload data
+# ATT&CK: T1027.009 (Embedded Payloads)
+defaults:
+  platforms: [windows]
+  for: [pe]
+  attack: "T1027.009"
+  mbc: "B0032"
+traits:
+- id: ftell-import
+  desc: References the CRT ftell file-position routine
+  crit: component
+  if:
+    type: import
+    exact: ftell
+- id: vmware-tools-marker
+  desc: VMware Tools marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    exact: VMware Tools
+# Builder stubs carve their embedded payload from inside a section behind a
+# placeholder sentinel (e.g. `[[UNIQUE]]`) that the generator patches per build,
+# instead of appending a structural PE overlay that has_overlay/entropy checks
+# would catch. Double-bracketed all-caps tokens are a builder-placeholder
+# convention that almost never appears in legitimately compiled code.
+- id: builder-placeholder-sentinel
+  desc: Bracketed builder placeholder sentinel
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    regex: '\[\[[A-Z][A-Z0-9_]{2,20}\]\]'
+composite_rules:
+# Benign-context umbrella: signed/installer/packed distributions that
+# legitimately self-read their own image. Referenced as a single unless: leg.
+- id: self-read-recognized-distribution-marker
+  desc: Recognized signed or installer binary
+  crit: component
+  conf: 0.9
+  any:
+  - id: metadata/binary/vendor::windows-system-implementer-dll
+  - id: metadata/binary/debug::msqry32-pdb-basename
+  - id: metadata/signed/platform::microsoft
+  - id: vmware-tools-marker
+  - id: metadata/signed/leaf::python-software-foundation
+  - id: metadata/binary/installer/sfx::7zip-sfx-archive-profile
+  - id: metadata/binary/installer/family::known-benign-installer
+  - id: well-known/lib/protection/vmware-thinapp::thinapp-packed-runtime
+  - id: well-known/app/fastfetch::fastfetch-windows-component
+  - id: well-known/lib/vulkan::loader-dll
+- id: self-read-file-import-chain
+  desc: Self-reading module-path import chain
+  crit: component
+  conf: 0.8
+  any:
+  - id: self-read-file-import-chain-ansi
+  - id: self-read-file-import-chain-wide
+- id: self-read-file-import-chain-ansi
+  desc: ANSI module-path self-read import chain
+  crit: component
+  conf: 0.8
+  all:
+  - id: micro-behaviors/os/module/load::get-module-filename-ansi
+  - id: micro-behaviors/fs/file/open::file-create-win
+  - id: micro-behaviors/fs/file/read::read-file
+  any:
+  - id: micro-behaviors/fs/file/handle::set-file-pointer-ex
+  - id: micro-behaviors/fs/sync/fsync::get-file-size
+- id: self-read-file-import-chain-wide
+  desc: Unicode module-path self-read import chain
+  crit: component
+  conf: 0.8
+  all:
+  - id: micro-behaviors/os/module/load::get-module-filename-dup
+  - id: micro-behaviors/fs/file/open::file-create-win
+  - id: micro-behaviors/fs/file/read::read-file
+  any:
+  - id: micro-behaviors/fs/file/handle::set-file-pointer-ex
+  - id: micro-behaviors/fs/sync/fsync::get-file-size
+- id: self-read-crt-open
+  desc: References CRT file-open routines used as a self-read building block
+  crit: component
+  conf: 0.82
+  any:
+  - id: micro-behaviors/fs/file/open::fopen
+  - id: micro-behaviors/fs/file/open::fopen64
+  - id: micro-behaviors/fs/file/open::fopen-text
+- id: self-read-crt-read
+  desc: References CRT file-read routines used as a self-read building block
+  crit: component
+  conf: 0.82
+  any:
+  - id: micro-behaviors/fs/file/read::fread
+  - id: micro-behaviors/fs/file/read::read
+  - id: micro-behaviors/fs/file/read::fread-text
+- id: self-read-crt-seek
+  desc: References CRT file-position routines used as a self-read building block
+  crit: component
+  conf: 0.82
+  any:
+  - id: micro-behaviors/fs/file/binary::fseek-func
+  - id: micro-behaviors/fs/file/binary::fseek-text
+  - id: ftell-import
+- id: self-read-crt-chain
+  desc: CRT self-open via module path
+  crit: component
+  conf: 0.82
+  all:
+  - id: micro-behaviors/os/module/load::get-module-filename-ansi
+  - id: self-read-crt-open
+  - id: self-read-crt-read
+  - id: self-read-crt-seek
+- id: self-read-file-chain
+  desc: Self-reads appended PE data through file APIs
+  crit: notable
+  conf: 0.8
+  all:
+  - id: self-read-file-import-chain
+  - id: metadata/binary/layout::large-overlay-64k
+  unless:
+  - id: well-known/tool/reverse-engineering/frida/
+- id: versioned-service-binary
+  desc: Versioned service installation markers
+  crit: baseline
+  conf: 0.75
+  all:
+  - id: metadata/package/versioning::pe-version-resource
+  any:
+  - id: objectives/persistence/system/service/install::service-install-and-start
+  - id: micro-behaviors/os/service/control::service-control-dispatch
+- id: self-read-overlay-access
+  desc: Self-read overlay access chain
+  crit: component
+  conf: 0.82
+  any:
+  - id: self-read-file-chain
+  - id: self-read-crt-chain
+- id: self-read-executable-thread-payload
+  desc: Self-read PE payload made executable and threaded
+  crit: hostile
+  conf: 0.98
+  attack: T1027.009,T1055,T1620
+  all:
+  - id: self-read-file-import-chain
+  - id: micro-behaviors/data/embedded/payload/header::inline-pe-signature-check
+  - id: micro-behaviors/mem/protect/modify::virtual-memory-allocation-protection-api-pair
+  - id: micro-behaviors/process/thread/create::create-thread
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/reverse-engineering/
+- id: self-read-executable-thread-anti-debug
+  desc: Self-read executable payload with anti-debug gate
+  crit: hostile
+  conf: 0.99
+  attack: T1027.009,T1620,T1622
+  all:
+  - id: self-read-file-import-chain
+  - id: micro-behaviors/data/embedded/payload/header::inline-pe-signature-check
+  - id: micro-behaviors/mem/protect/modify::virtual-memory-allocation-protection-api-pair
+  - id: micro-behaviors/process/thread/create::create-thread
+  - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/reverse-engineering/
+- id: pe-overlay-self-extractor
+  desc: PE reads its own appended payload
+  crit: suspicious
+  conf: 0.88
+  unless:
+  - id: metadata/binary/installer/family/
+  - id: metadata/binary/installer/family::kankan-nsis-installer
+  - id: metadata/binary/installer/sfx::7zsfx-config-marker
+  - id: metadata/binary/installer/script::nsis-sfx-deadbeef-magic
+  - id: metadata/document/office/container/
+  - id: well-known/app/npcap::npcap-installer
+  - id: well-known/app/npcap::npcap-installer-context
+  all:
+  - id: metadata/binary/layout::large-overlay-64k
+  - id: self-read-overlay-access
+  any:
+  - id: metadata/binary/layout::high-entropy-overlay
+  - id: metadata/binary/layout::overlay-dominates-third
+  size_max: 5000000
+  downgrade:
+    any:
+    - id: metadata/signed/platform/
+    - id: metadata/lang/compiler/systems/
+# Overlay-independent variant of pe-overlay-self-extractor: the stub reads its
+# own image and locates the embedded payload by a builder placeholder sentinel
+# inside a section, so has_overlay/overlay-entropy never trip. The self-read
+# chain plus an unreplaced builder marker is the tell of a generator-built stub.
+- id: self-read-marker-delimited-payload
+  desc: Self-reads image and carves payload at a builder sentinel
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: self-read-overlay-access
+  - id: builder-placeholder-sentinel
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/app/npcap::npcap-installer
+  - id: well-known/app/npcap::npcap-installer-context
+  - id: metadata/binary/installer/sfx/
+# A builder stub that carves an embedded payload from its own image AND ships a
+# multipart HTTP uploader is a self-extracting dropper / exfil bot: it extracts a
+# sentinel-delimited payload and phones it (or collected files) home. No
+# legitimate program combines sentinel-self-extraction with a multipart uploader,
+# so the conjunction is hostile even without a structural overlay.
+- id: self-extracting-payload-uploader
+  desc: Self-extracts a sentinel-delimited payload and uploads over HTTP
+  crit: hostile
+  conf: 0.93
+  all:
+  - id: self-read-marker-delimited-payload
+  - id: micro-behaviors/communications/http/upload::multipart-form-data-upload
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/

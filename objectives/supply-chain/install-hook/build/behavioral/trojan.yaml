@@ -1,0 +1,1225 @@
+# Build System Trojan Detection
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# Detects malicious code in build scripts that run automatically during install/build
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: "T1195.002"
+traits:
+  # ============================================================
+  # PYTHON: setup.py / pyproject.toml trojans
+  # ============================================================
+  - id: setup-codex-environment-script
+    desc: Codex environment setup helper
+    crit: component
+    conf: 0.9
+    for: [python]
+    if:
+      type: text
+      regex: 'Set up ignored files that should be shared with Codex worktrees|Codex environment setup:'
+  - id: setup-py-subprocess-run
+    desc: "Custom build_ext class runs subprocess.run"
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: 'class\s+\w+\s*\([^)]{0,80}\bbuild_ext\b[^)]{0,80}\):[\s\S]{0,400}subprocess\.run\('
+  - id: setup-py-subprocess-popen
+    desc: "setup.py build_ext runs subprocess.Popen"
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: '(\bcmdclass\b|\bbuild_ext\b)[\s\S]{0,500}subprocess\.Popen'
+    unless:
+      - id: metadata/package/files/system-package::os-python-runtime-path
+  - id: setup-py-subprocess-call
+    desc: setup.py install class with subprocess
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: 'class\s+\w*Install\w*\s*\([^)]{0,160}\binstall\b[^)]{0,160}\)[\s\S]{0,600}subprocess\.'
+    unless:
+      - id: metadata/lang/javascript-features::sourcemap-sources-content
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/build/pip::python-packaging-tool-tests
+      - id: metadata/build/pip::setuptools-package-index
+      - id: metadata/build/pip::setuptools-easy-install-source
+  - id: setup-call-subprocess
+    desc: setup() call near subprocess usage
+    crit: notable
+    conf: 0.85
+    size_max: 30000
+    for: [python]
+    if:
+      type: text
+      regex: 'setup\s*\([\s\S]{0,500}subprocess\.'
+    downgrade:
+      any:
+        - id: metadata/package/testing/presence/harness::pytest-module
+    unless:
+      - id: well-known/app/open-webui-computer/
+  # Atomic: setup.py curl/wget with exec
+  - id: setup-py-curl-exec-call
+    desc: setup.py curl/wget downloads then exec()
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}(curl|wget)[\s\S]{0,200}exec'
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/lib/conda-package/
+      - id: well-known/tool/sysadmin/alpine-packages/
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-datadog-agent-package
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-datadog-gitlab-projects-py
+  # Atomic: setup.py curl/wget with eval
+  - id: setup-py-curl-eval-call
+    desc: setup.py curl/wget downloads then eval()
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}(curl|wget)[\s\S]{0,200}eval'
+  # Atomic: setup.py urlopen with exec
+  - id: setup-py-urlopen-exec-call
+    desc: setup.py urlopen downloads then exec()
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}urlopen[\s\S]{0,200}exec'
+    unless:
+      - id: well-known/tool/detection/pipguard::pipguard-defensive-scanner-source
+  # Atomic: setup.py urlopen with eval
+  - id: setup-py-urlopen-eval-call
+    desc: setup.py urlopen downloads then eval()
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}urlopen[\s\S]{0,200}eval'
+  # Atomic: setup.py urlopen with os.system
+  - id: setup-py-urlopen-ossystem-call
+    desc: setup.py urlopen downloads then os.system()
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}urlopen[\s\S]{0,200}os\.system'
+  - id: setup-py-requests-exec
+    desc: setup.py requests.get then exec
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}requests\.get[\s\S]{0,200}exec'
+  - id: setup-py-requests-eval
+    desc: setup.py requests.get then eval
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(setup\.py|cmdclass)[\s\S]{0,500}requests\.get[\s\S]{0,200}eval'
+  - id: setup-py-or-cmdclass-marker
+    desc: setup.py path marker
+    crit: component
+    conf: 0.86
+    for: [python]
+    if:
+      type: path
+      regex: '(^|[\\/])setup\.py$'
+  - id: setup-platform-computed-command-branch
+    desc: setup hook branches to computed command
+    crit: component
+    conf: 0.88
+    for: [python]
+    if:
+      type: text
+      regex: '\w+\s*=\s*\[[^\]]{0,120}\(\)[^\]]{0,120}\]\s+if\s+\w+\s+else\s+\[[^\]]{0,160}\]'
+  - id: setup-install-or-build-class
+    desc: setup.py install or build class
+    crit: component
+    conf: 0.86
+    for: [python]
+    if:
+      type: text
+      regex: '(?m)^\s*class\s+\w+\s*\(.{0,80}\b(install|build(_ext)?)\b.{0,80}\)\s*:'
+  - id: setup-requests-network-api
+    desc: setup.py requests network API
+    crit: component
+    conf: 0.86
+    for: [python]
+    if:
+      type: text
+      regex: 'requests\.(get|post|request)'
+  - id: setup-urllib-network-api
+    desc: setup.py urllib network API
+    crit: component
+    conf: 0.86
+    for: [python]
+    if:
+      type: text
+      regex: 'urllib\.request|urlopen'
+  - id: setup-socket-network-api
+    desc: setup.py socket network API
+    crit: component
+    conf: 0.86
+    for: [python]
+    if:
+      type: text
+      regex: 'socket\.(socket|create_connection|connect)'
+  - id: setup-py-wget-tmp-sh
+    desc: setup.py wget downloads shell script to /tmp
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: 'wget\s+https?://.{1,60}\.sh\s+-O\s+/tmp/.{1,40}\.sh'
+  - id: setup-py-chmod-bash-tmp-sh
+    desc: setup.py chmods and runs /tmp shell script
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: 'chmod\s+777\s+/tmp/.{1,40}\.sh\s+&&\s+bash\s+/tmp/.{1,40}\.sh'
+  # ============================================================
+  # JAVASCRIPT: package.json script trojans
+  # ============================================================
+  - id: npm-preinstall-curl
+    desc: preinstall script with curl/wget
+    crit: suspicious
+    conf: 0.95
+    for: [package.json]
+    if:
+      type: text
+      regex: '"preinstall"\s*:\s*"[^"]{0,200}(curl|wget|fetch)'
+    unless:
+      - id: well-known/app/vscode-marketplace::oxc-vscode-package-name
+      - id: metadata/package/testing/presence/manifest::has-karma
+  - id: npm-postinstall-curl
+    desc: postinstall script with curl/wget
+    crit: suspicious
+    conf: 0.95
+    for: [package.json]
+    if:
+      type: text
+      regex: '"postinstall"\s*:\s*"[^"]{0,200}(curl|wget|fetch)'
+    unless:
+      - type: value
+        path: scripts.postinstall
+        substr: stackpath.bootstrapcdn.com/twitter-bootstrap
+      - id: metadata/package/scripts/
+  - id: npm-install-exec
+    desc: install script executes external code
+    crit: suspicious
+    conf: 0.95
+    for: [package.json]
+    if:
+      type: text
+      regex: '"(pre|post)?install"\s*:\s*"[^"]{0,100}(eval|sh -c)'
+    unless:
+      - id: well-known/app/vscode-marketplace::oxc-vscode-package-name
+      - id: metadata/package/testing/presence/manifest::has-karma
+  - id: npm-script-pipe-sh
+    desc: npm script pipes to shell
+    crit: suspicious
+    conf: 0.95
+    for: [package.json]
+    if:
+      type: text
+      regex: '"(pre|post)?install"\s*:\s*"[^"]{0,200}\|\s*(sh|shell|zsh)'
+    unless:
+      - id: well-known/app/vscode-marketplace::oxc-vscode-package-name
+      - id: metadata/package/testing/presence/manifest::has-karma
+  - id: npm-preinstall-base64
+    desc: preinstall script decodes base64 data
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    if:
+      type: value
+      path: scripts.preinstall
+      regex: '(?i)(base64\s*(-d|--decode)|atob\s*\(|Buffer\.from\s*\([^,]+,\s*["'']base64["''])'
+  - id: npm-install-base64
+    desc: install script decodes base64 data
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    if:
+      type: value
+      path: scripts.install
+      regex: '(?i)(base64\s*(-d|--decode)|atob\s*\(|Buffer\.from\s*\([^,]+,\s*["'']base64["''])'
+  - id: npm-postinstall-base64
+    desc: postinstall script decodes base64 data
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    if:
+      type: value
+      path: scripts.postinstall
+      regex: '(?i)(base64\s*(-d|--decode)|atob\s*\(|Buffer\.from\s*\([^,]+,\s*["'']base64["''])'
+  # ============================================================
+  # RUST: build.rs trojans
+  # ============================================================
+  - id: rust-build-rs-shell-command
+    desc: build.rs with shell Command execution
+    crit: suspicious
+    conf: 0.75
+    for: [rust]
+    if:
+      type: text
+      regex: '(build\.rs|fn main)[\s\S]{0,300}Command::new\s*\(\s*"(sh|shell)"'
+  - id: rust-build-rs-network
+    desc: build.rs with network call
+    crit: suspicious
+    conf: 0.8
+    for: [rust]
+    if:
+      type: text
+      regex: '(build\.rs|build script)[\s\S]{0,500}(reqwest|hyper|curl)::get'
+  - id: rust-build-rs-file
+    desc: File is named build.rs
+    crit: component
+    conf: 0.99
+    for: [rust]
+    if:
+      type: value
+      path: file.basename
+      exact: build.rs
+  - id: cargo-build-script-declared
+    desc: Cargo build script declared
+    crit: component
+    conf: 0.9
+    for: [cargo.toml]
+    if:
+      type: text
+      regex: '(?m)^\s*build\s*=\s*["'']build\.rs["'']'
+  - id: rust-build-rs-env-reqwest-http
+    desc: build.rs sends environment via reqwest
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: 'std::env::(vars|var(_os)?)[\s\S]{0,300}reqwest[\s\S]{0,120}(post|put|send)'
+  - id: rust-build-rs-env-curl-command
+    desc: build.rs shells env to curl
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: >-
+        std::env::var\w*(?!\s*\(\s*"OUT_DIR"\s*\))[\s\S]{0,290}Command::new\s*\(\s*"curl"
+  - id: rust-build-rs-env-wget-command
+    desc: build.rs shells env to wget
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: >-
+        std::env::(vars|var(_os)?)[\s\S]{0,300}Command::new\s*\(\s*"wget"
+  - id: rust-build-rs-target-dir
+    desc: build.rs target directory reference
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      substr: '.join("target")'
+  - id: rust-build-rs-command-path
+    desc: build.rs runs computed binary path
+    crit: component
+    conf: 0.95
+    for: [rust]
+    if:
+      type: text
+      substr: "Command::new(&binary_path)"
+  - id: rust-build-rs-start-arg
+    desc: build.rs launches start mode
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      substr: '.arg("start")'
+  - id: rust-build-rs-wait-loop-start
+    desc: build.rs waits for binary then starts
+    crit: suspicious
+    conf: 0.95
+    for: [rust]
+    if:
+      type: text
+      substr: "while [ ! -f '{b}' ]; do sleep 1; done; sleep 2; '{b}' start"
+  - id: rust-build-rs-command-output
+    desc: build.rs captures command output
+    crit: component
+    conf: 0.88
+    for: [rust]
+    if:
+      type: text
+      substr: ".output()"
+  - id: rust-build-rs-command-status
+    desc: build.rs waits on command status
+    crit: component
+    conf: 0.86
+    for: [rust]
+    if:
+      type: text
+      regex: 'Command::new.{0,200}\.status\s*\('
+  - id: rust-build-out-dir-reference
+    desc: build.rs references Cargo OUT_DIR
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      regex: '(std::)?env::var\s*\(\s*"OUT_DIR"\s*\)|\bOUT_DIR\b'
+  - id: rust-build-rs-oob-endpoint
+    desc: build.rs references OOB endpoint
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      regex: 'https?://[a-z0-9-]+\.(oastify\.com|interactsh\.com|burpcollaborator\.net|webhook\.site)\b'
+  - id: rust-build-rs-host-profile-fields
+    desc: build.rs builds host profile fields
+    crit: component
+    conf: 0.9
+    for: [rust]
+    count_min: 3
+    if:
+      type: literal
+      kind: string
+      regex: '^(hostname|user|cwd|manifest_dir|project_name|git_remote|internal_ips|dns_servers)$'
+  - id: rust-build-rs-include-bytes-call
+    desc: build.rs embeds file bytes
+    crit: component
+    conf: 0.86
+    for: [rust]
+    if:
+      type: text
+      substr: "include_bytes!("
+  - id: rust-build-rs-include-windows-binary
+    desc: build.rs embeds Windows binary bytes
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      regex: '(?i)include_bytes!\s*\(\s*".{0,180}\.(exe|dll)"'
+  - id: rust-build-rs-include-unix-library
+    desc: build.rs embeds Unix library bytes
+    crit: component
+    conf: 0.88
+    for: [rust]
+    if:
+      type: text
+      regex: 'include_bytes!\s*\(\s*".{0,180}\.(so|dylib)"'
+  - id: rust-build-rs-include-payload-name
+    desc: build.rs embeds named payload bytes
+    crit: component
+    conf: 0.88
+    for: [rust]
+    if:
+      type: text
+      regex: '(?i)include_bytes!\s*\(\s*".{0,180}(payload|stage|loader)'
+  - id: rust-build-rs-file-create
+    desc: build.rs creates file
+    crit: component
+    conf: 0.86
+    for: [rust]
+    if:
+      type: text
+      substr: "File::create("
+  - id: rust-build-rs-copy-call
+    desc: build.rs copies file
+    crit: component
+    conf: 0.84
+    for: [rust]
+    if:
+      type: text
+      substr: "fs::copy("
+  - id: rust-build-rs-command-new-path-var
+    desc: build.rs executes path variable
+    crit: component
+    conf: 0.86
+    for: [rust]
+    if:
+      type: text
+      regex: 'Command::new\s*\(\s*&?[A-Za-z0-9_]{1,40}_path\s*\)'
+  - id: rust-build-rs-payload-path-var
+    desc: build.rs references payload path variable
+    crit: component
+    conf: 0.86
+    for: [rust]
+    if:
+      type: text
+      regex: '\b(payload|stage|loader)_path\b'
+  - id: rust-build-rs-binary-path-var
+    desc: build.rs references binary path variable
+    crit: component
+    conf: 0.86
+    for: [rust]
+    if:
+      type: text
+      regex: '\b(binary|exe|tool)_path\b'
+  - id: rust-build-rs-rustc-link-search-native
+    desc: build.rs emits native link search path
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      substr: "cargo:rustc-link-search=native="
+  - id: rust-build-rs-rustc-link-lib
+    desc: build.rs emits native link library
+    crit: component
+    conf: 0.9
+    for: [rust]
+    if:
+      type: text
+      substr: "cargo:rustc-link-lib="
+  - id: rust-proc-macro-entrypoint
+    # Require a real attribute at line start so comments like
+    # `// ... a #[proc_macro] is not allowed ...` in build.rs do not count.
+    desc: Rust proc macro entrypoint
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: '(?m)^\s*#\s*\[\s*proc_macro(_derive|_attribute)?\s*\]|proc_macro::TokenStream'
+  # ============================================================
+  # MAKEFILE: trojan targets
+  # ============================================================
+  # Atomic: Makefile curl/wget piped to a shell interpreter. Keep one
+  # canonical matcher for sh, bash, and shell rather than overlapping atoms.
+  - id: makefile-curl-pipe-shell
+    desc: Makefile pipes download to shell
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: text
+      regex: '(?m)^\t(curl|wget).{0,50}\|.{0,20}\b(shell|bash|sh)\b'
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: objectives/command-and-control/channel/deaddrop/url::security-rule-runtime-script-floating-url
+      - id: metadata/file/extension/identity::markdown-file-basename
+      - type: text
+        regex: '^#!'
+      - type: text
+        substr: golangci-lint.run/install.sh
+      - type: basename
+        regex: '^[Jj]ustfile$'
+      - type: basename
+        regex: '.*\.(ya?ml|json|toml)$'
+        case_insensitive: true
+    not:
+      - substr: "uses: actions/"
+      - substr: "curl http://npmjs.org/install.sh"
+      - substr: golangci-lint.run/install.sh
+      - substr: astral.sh # uv installer (well-known Python package manager)
+      - substr: rustup.rs # rustup bootstrap installer
+      - substr: "curl -sS https://webinstall.dev/k9s | bash"
+      - substr: "curl https://getmic.ro | bash"
+      - substr: "https://dot.net/v1/dotnet-install.sh | bash"
+  # Atomic: Makefile curl/wget piped to eval
+  - id: makefile-curl-pipe-eval
+    desc: Makefile downloads and pipes to eval
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: text
+      # Require a Makefile recipe tab so embedded docs/regex corpora in
+      # native binaries (e.g. package-manager content sniffers) do not match.
+      regex: '(^|\n)\t(curl|wget).{0,50}\|.{0,20}eval'
+    unless:
+      - type: text
+        regex: '^#!'
+      - type: basename
+        regex: '.*\.(ya?ml|json|toml)$'
+        case_insensitive: true
+      - id: well-known/tool/development/aube::aube-node-platform-package-loader
+  - id: makefile-hidden-target
+    desc: Makefile with suspicious hidden command
+    crit: suspicious
+    conf: 0.8
+    for: [shell]
+    if:
+      type: text
+      regex: '^\.[a-z]+:[\s\S]{0,100}(curl|wget|nc )'
+    unless:
+      - type: text
+        regex: '^#!'
+  - id: rust-build-sha256-pin-constant
+    desc: build.rs declares pinned SHA-256 archive hash
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: '(?m)\bconst\s+\w*SHA256\w*\s*:\s*&str\s*=\s*"[0-9a-fA-F]{64}"'
+  - id: rust-build-sha256-checksum-compare
+    desc: build.rs compares downloaded archive SHA-256
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: 'assert_eq!\s*\(\s*\w*(digest|hash|checksum)\w*\s*,\s*\w*SHA256\w*'
+  - id: rust-build-tar-extract-command
+    desc: build.rs extracts tar archive
+    crit: component
+    conf: 0.88
+    for: [rust]
+    if:
+      type: text
+      regex: 'Command::new\s*\(\s*"tar"\s*\)'
+  - id: openrewrite-python-package-marker
+    desc: OpenRewrite Python package marker
+    crit: component
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      substr: "openrewrite"
+composite_rules:
+  - id: npm-script-base64
+    desc: NPM lifecycle script decodes base64 data
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    any:
+      - id: npm-preinstall-base64
+      - id: npm-install-base64
+      - id: npm-postinstall-base64
+
+  - id: setup-obfuscated-shell-check-output
+    desc: setup hook executes obfuscated shell command
+    crit: hostile
+    conf: 0.96
+    scope: leaf
+    unless:
+      - id: metadata/package/testing/presence/harness::test-fixture-directory
+    all:
+      - id: setup-py-or-cmdclass-marker
+      - id: micro-behaviors/process/create/subprocess::check-output
+      - id: micro-behaviors/process/create/subprocess::shell-true
+      - id: micro-behaviors/data/string/conversion::python-chr-loop-string-builder
+    any:
+      - id: metadata/build/package::setup-cmdclass-install
+      - id: metadata/build/package::setup-cmdclass-build-py
+      - id: metadata/build/package::setup-cmdclass-develop
+  - id: setup-computed-platform-shell-command
+    desc: setup hook runs computed platform shell command
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    scope: leaf
+    all:
+      - id: setup-py-or-cmdclass-marker
+      - id: micro-behaviors/process/create/subprocess::check-output
+      - id: micro-behaviors/process/create/subprocess::shell-true
+      - id: setup-platform-computed-command-branch
+    any:
+      - id: metadata/build/package::setup-cmdclass-install
+      - id: metadata/build/package::setup-cmdclass-build-py
+      - id: metadata/build/package::setup-cmdclass-develop
+  # Decomposed from a windowed regex `(setup\.py|cmdclass)[\s\S]{0,500}requests\.get
+  # [\s\S]{0,200}os\.system`. The common `requests.get` literal forced a ±4096 PikeVM
+  # window at every occurrence; substr/symbol/path atoms gate via single Aho-Corasick
+  # passes instead. File-scoped on setup.py (same idiom as setup-py-wget-tmp-bash).
+  # Proximity belongs only on the two positional calls; the setup.py path atom is a
+  # file-level gate with no byte offset, so keeping it out of the near_bytes group
+  # avoids inflating the span (the original coupled requests.get -> os.system <=200B).
+  - id: requests-get-near-os-system
+    desc: requests.get result executed via os.system nearby
+    crit: component
+    conf: 0.9
+    for: [python]
+    near_bytes: 300
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/process/create/system::python-os-system
+  - id: setup-py-requests-ossystem
+    desc: setup.py requests.get then os.system
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    all:
+      - id: metadata/build/pip::root-setup-py
+      - id: requests-get-near-os-system
+  - id: setup-py-os-system-file
+    desc: setup.py invokes os.system
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    scope: leaf
+    near_bytes: 4096
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/build/pip::python-packaging-tool-tests
+      - id: setup-py-clean-command-removes-build-artifacts
+    # `python-os-system` already covers both `os.system(...)` and the obfuscated
+    # `__import__("os").system(...)` form (see its regex). The bare
+    # `dunder-import-call` leg (any `__import__`) was removed: it fired on the
+    # benign `__import__("os").path.exists("README.md")` idiom common in setup.py
+    # long_description handling, mislabeling it as an os.system invocation.
+    all:
+      - id: metadata/build/pip::root-setup-py
+      - id: micro-behaviors/process/create/system::python-os-system
+  - id: python-setup-encoded-dropper
+    desc: setup.py decodes and executes downloaded payload
+    crit: hostile
+    conf: 0.98
+    for: [python]
+    platforms: [unix]
+    scope: file
+    all:
+      - id: metadata/build/pip::setup-py
+      - id: metadata/build/pip::packaging-setuptools-import
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+      - id: objectives/anti-static/obfuscation/payload/encoded::decoded-curl-command
+      - id: objectives/anti-static/obfuscation/payload/encoded::decoded-local-execution
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-make-executable
+      - id: metadata/build/package::setup-cmdclass-install
+  - id: setup-py-clean-command-removes-build-artifacts
+    desc: setup.py clean removes build artifacts
+    crit: notable
+    conf: 0.9
+    for: [python]
+    all:
+      - id: metadata/build/pip::root-setup-py
+      - id: micro-behaviors/process/create/system::python-os-system
+    if:
+      type: text
+      regex: 'os\.system\([^\n]{0,80}rm\s+-[^\n]{0,80}(\./)?build[^\n]{0,80}(\./)?dist[^\n]{0,120}\.egg-info'
+  # === Composite: setup.py curl/wget execution ===
+  - id: setup-py-curl-exec
+    desc: setup.py curl/wget downloads then executes
+    crit: suspicious
+    conf: 0.95
+    unless:
+      - id: well-known/tool/detection/
+      - id: metadata/package/files/dependency::node-modules-path
+      - id: metadata/package/files/dependency::node-modules-nested-package-json
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-langfuse-package
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-apicurio-registry-ui-package
+    any:
+      - id: setup-py-curl-exec-call
+      - id: setup-py-curl-eval-call
+  # === Composite: setup.py urlopen execution ===
+  - id: setup-py-urlopen-exec
+    desc: setup.py urlopen downloads then executes
+    crit: suspicious
+    conf: 0.95
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/app/vscode-marketplace::oxc-vscode-package-name
+      - id: metadata/package/testing/presence/manifest::has-karma
+    any:
+      - id: setup-py-urlopen-exec-call
+      - id: setup-py-urlopen-eval-call
+      - id: setup-py-urlopen-ossystem-call
+  - id: setup-py-wget-tmp-bash
+    desc: setup.py downloads shell script to /tmp and runs it
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/build/pip::setup-py
+      - id: setup-py-wget-tmp-sh
+      - id: setup-py-chmod-bash-tmp-sh
+    any:
+      - id: micro-behaviors/process/create/system::python-os-system
+      - id: micro-behaviors/process/interpreter/python::dunder-import-call
+  # === Composite: Makefile curl/wget execution ===
+  - id: makefile-curl-exec
+    desc: Makefile downloads and executes
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: makefile-curl-pipe-shell
+      - id: makefile-curl-pipe-eval
+  - id: setup-py-network-known-package-profile
+    desc: Known setup.py network package profile
+    crit: notable
+    conf: 0.9
+    any:
+      - id: objectives/supply-chain/install-hook/build/behavioral::openrewrite-python-package-marker
+      - id: metadata/package/files/system-package::os-python-runtime-path
+      - id: metadata/package/documentation::python-openerdirector-install-doc
+      - id: setup-codex-environment-script
+  # === Python Build Trojan ===
+  - id: setup-py-network-in-install
+    desc: Network API used from setup install or build class
+    crit: suspicious
+    conf: 0.9
+    scope: leaf
+    all:
+      - id: setup-py-or-cmdclass-marker
+      - id: setup-install-or-build-class
+    any:
+      - id: setup-requests-network-api
+      - id: setup-urllib-network-api
+      - id: setup-socket-network-api
+    unless:
+      - id: setup-py-network-known-package-profile
+      - id: metadata/package/testing/
+  - id: python-setup-trojan
+    desc: Python setup.py trojan
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    scope: leaf
+    any:
+      - id: setup-py-os-system-file
+      - id: setup-py-curl-exec
+      - id: setup-py-urlopen-exec
+      - id: setup-py-wget-tmp-bash
+      - id: setup-py-requests-exec
+      - id: setup-py-requests-eval
+      - id: setup-py-requests-ossystem
+      - id: setup-py-network-in-install
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/lib/conda-package/
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-datadog-gitlab-projects-py
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-google-cloud-sdk-package
+      - id: metadata/package/quality/source::source-archive-member
+      - id: setup-py-network-known-package-profile
+      - id: metadata/package/testing/
+  # === NPM Build Trojan ===
+  - id: npm-install-trojan
+    desc: NPM package install trojan
+    crit: hostile
+    conf: 0.95
+    any:
+      - id: npm-preinstall-curl
+      - id: npm-postinstall-curl
+      - id: npm-install-exec
+      - id: npm-script-pipe-sh
+      - id: npm-script-base64
+    unless:
+      - id: well-known/tool/detection/
+  # === Rust Build Trojan ===
+  - id: rust-build-verified-native-source-download
+    desc: build.rs downloads verified native source archive
+    crit: component
+    conf: 0.94
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: micro-behaviors/process/create/direct::rust-command-curl-wget
+      - id: micro-behaviors/communications/url/external/github::github-archive-ref-download
+      - id: micro-behaviors/dylib/library/family::cmake-build-ref
+      - id: rust-build-sha256-pin-constant
+      - id: rust-build-sha256-checksum-compare
+      - id: rust-build-tar-extract-command
+  - id: rust-build-rs-download-command
+    desc: build.rs invokes curl or wget
+    crit: notable
+    conf: 0.86
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: micro-behaviors/process/create/direct::rust-command-curl-wget
+  - id: rust-build-rs-http-client
+    desc: build.rs uses Rust HTTP client
+    crit: notable
+    conf: 0.88
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+    any:
+      - id: micro-behaviors/communications/http/lib/reqwest::rust-reqwest
+      - id: micro-behaviors/communications/http/lib/crate::ureq-crate
+  - id: rust-build-rs-network-download
+    desc: build.rs performs network download
+    crit: notable
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+    any:
+      - id: rust-build-rs-download-command
+      - id: rust-build-rs-http-client
+  - id: rust-build-rs-external-artifact-download
+    desc: build.rs downloads external build artifact
+    crit: suspicious
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-rs-network-download
+    any:
+      - id: micro-behaviors/communications/url/external/github::github-release-download
+      - id: micro-behaviors/communications/url/external/github::github-archive-ref-download
+  - id: rust-build-rs-http-post
+    desc: Cargo build script sends HTTP POST
+    crit: notable
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+    any:
+      - id: micro-behaviors/communications/http/post
+  - id: rust-build-rs-env-http-post
+    desc: build.rs posts environment data
+    crit: suspicious
+    conf: 0.94
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: micro-behaviors/os/env/access::std-env-var
+      - id: rust-build-rs-http-post
+    unless:
+    - id: metadata/package/files/system-package::debian-missing-sources-vendored-crate
+  - id: rust-build-rs-include-native-bytes
+    desc: build.rs embeds native payload bytes
+    crit: suspicious
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-include-bytes-call
+    any:
+      - id: rust-build-rs-include-windows-binary
+      - id: rust-build-rs-include-unix-library
+      - id: rust-build-rs-include-payload-name
+  - id: rust-build-rs-write-out-dir
+    desc: build.rs writes staged file to OUT_DIR
+    crit: component
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-out-dir-reference
+    any:
+      - id: micro-behaviors/fs/file/write/direct::fs-write
+      - id: micro-behaviors/fs/file/write/direct::rust-write-all
+      - id: rust-build-rs-file-create
+  - id: rust-build-rs-copy-out-dir
+    desc: build.rs copies staged file to OUT_DIR
+    crit: component
+    conf: 0.88
+    for: [rust]
+    all:
+      - id: rust-build-out-dir-reference
+      - id: rust-build-rs-copy-call
+  - id: rust-build-rs-exec-staged-path
+    desc: build.rs executes staged local path
+    crit: notable
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-command-new-path-var
+    any:
+      - id: rust-build-rs-payload-path-var
+      - id: rust-build-rs-binary-path-var
+  - id: rust-proc-macro-process-exec
+    desc: Rust proc macro spawns process
+    crit: notable
+    conf: 0.92
+    for: [rust]
+    all:
+      - id: rust-proc-macro-entrypoint
+      - id: micro-behaviors/process/create/direct::rust-process-command
+  - id: rust-proc-macro-env-http-post
+    desc: Rust proc macro posts environment data
+    crit: suspicious
+    conf: 0.94
+    for: [rust]
+    all:
+      - id: rust-proc-macro-entrypoint
+      - id: rust-build-rs-env-http-post
+  - id: rust-build-rs-post-exfil
+    desc: build.rs posts data to external endpoint
+    crit: hostile
+    conf: 0.96
+    mbc: E1041
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-env-http-post
+    any:
+      - id: rust-build-rs-http-post
+      - id: rust-build-rs-command-output
+      - id: micro-behaviors/os/env/access::std-env-var
+  - id: rust-build-rs-oob-host-profile-exfil
+    desc: build.rs posts host profile to OOB endpoint
+    crit: hostile
+    conf: 0.98
+    mbc: E1041
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-oob-endpoint
+      - id: rust-build-rs-http-post
+      - id: rust-build-rs-host-profile-fields
+    any:
+      - id: micro-behaviors/os/env/access::std-env-var
+      - id: rust-build-rs-command-output
+      - id: objectives/exfiltration/stealer/host-profile/socket::rust-network-profile-source
+  - id: rust-build-rs-staged-payload-write
+    desc: build.rs stages payload bytes in OUT_DIR
+    crit: suspicious
+    conf: 0.94
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-out-dir-reference
+      - id: rust-build-rs-include-native-bytes
+    any:
+      - id: rust-build-rs-write-out-dir
+      - id: rust-build-rs-copy-out-dir
+      - id: micro-behaviors/fs/file/write/direct::fs-write
+      - id: micro-behaviors/fs/file/write/direct::rust-write-all
+  - id: rust-build-rs-staged-payload-exec
+    desc: build.rs stages and executes payload
+    crit: hostile
+    conf: 0.98
+    mbc: E1059
+    for: [rust]
+    all:
+      - id: rust-build-rs-staged-payload-write
+      - id: rust-build-rs-exec-staged-path
+    any:
+      - id: rust-build-rs-command-status
+      - id: rust-build-rs-command-output
+      - id: micro-behaviors/process/create/direct::rust-spawn
+      - id: micro-behaviors/fs/chmod/executable/mode::rust-executable-permissions
+  - id: rust-build-rs-native-link-staging
+    desc: build.rs stages native library for Cargo linker
+    crit: notable
+    conf: 0.92
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-rustc-link-search-native
+      - id: rust-build-rs-rustc-link-lib
+    any:
+      - id: rust-build-rs-include-native-bytes
+    unless:
+      - id: well-known/app/openai-codex/
+      - id: rust-build-rs-write-out-dir
+      - id: rust-build-rs-copy-out-dir
+  - id: rust-proc-macro-compile-time-exec
+    desc: Rust proc macro performs compile-time execution
+    crit: suspicious
+    conf: 0.92
+    mbc: E1059
+    for: [rust]
+    all:
+      - id: rust-proc-macro-entrypoint
+      - id: rust-proc-macro-process-exec
+    unless:
+      # Proc macros commonly invoke rustfmt to format generated code.  That is
+      # build tooling, not an install-time payload.
+      - id: micro-behaviors/process/create/direct::rustfmt-process-command
+  - id: rust-proc-macro-compile-time-exfil
+    desc: Rust proc macro exfiltrates build environment
+    crit: hostile
+    conf: 0.98
+    mbc: E1041
+    for: [rust]
+    all:
+      - id: rust-proc-macro-entrypoint
+      - id: rust-proc-macro-env-http-post
+  - id: rust-build-trojan
+    desc: Rust build.rs trojan
+    crit: notable
+    conf: 0.85
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+    any:
+      - id: rust-build-rs-shell-command
+      - id: rust-build-rs-download-command
+      - id: rust-build-rs-network
+      - id: rust-build-rs-env-exfil
+      - id: rust-build-rs-target-start
+      - id: rust-build-rs-delayed-target-start
+      - id: rust-build-rs-post-exfil
+      - id: rust-build-rs-staged-payload-exec
+      - id: rust-build-rs-native-link-staging
+    unless:
+      - id: objectives/supply-chain/install-hook/build/behavioral/
+  - id: rust-build-rs-target-start
+    desc: build.rs executes package binary
+    crit: suspicious
+    conf: 0.96
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-target-dir
+      - id: rust-build-rs-command-path
+      - id: rust-build-rs-start-arg
+  - id: rust-build-rs-delayed-target-start
+    desc: build.rs delays package binary execution
+    crit: suspicious
+    conf: 0.98
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-target-dir
+      - id: rust-build-rs-wait-loop-start
+    any:
+      - id: micro-behaviors/process/daemonize/detach::background-ampersand-hidden
+      - id: micro-behaviors/process/daemonize/detach::redirect-dev-null
+  - id: rust-build-rs-env-exfil
+    desc: build.rs exfiltrates environment
+    crit: suspicious
+    conf: 0.9
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+    any:
+      - id: rust-build-rs-env-reqwest-http
+      - id: rust-build-rs-env-curl-command
+      - id: rust-build-rs-env-wget-command
+  - id: rust-build-rs-telegram-curl-beacon
+    desc: build.rs curl Telegram beacon
+    crit: hostile
+    conf: 0.99
+    for: [rust]
+    all:
+      - id: rust-build-rs-file
+      - id: rust-build-rs-command-output
+      - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+      - id: micro-behaviors/communications/messaging/send::chat-send-message
+    any:
+      - id: rust-build-rs-download-command
+      - id: micro-behaviors/communications/http/download/curl::curl-keyword
+  - id: cargo-build-hook-post-exfil
+    desc: Cargo build hook posts environment data
+    crit: hostile
+    conf: 0.97
+    mbc: E1041
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: cargo-build-script-declared
+      - id: rust-build-rs-post-exfil
+  - id: cargo-archive-build-rs-post-exfil
+    desc: Cargo archive build.rs posts environment data
+    crit: hostile
+    conf: 0.97
+    mbc: E1041
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: metadata/build/archive::archive-cargo-crate-build-script
+      - id: rust-build-rs-post-exfil
+    unless:
+      - id: cargo-build-script-declared
+  - id: cargo-build-hook-staged-payload-exec
+    desc: Cargo build hook stages and executes native payload
+    crit: hostile
+    conf: 0.98
+    mbc: E1059
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: cargo-build-script-declared
+      - id: rust-build-rs-staged-payload-exec
+    any:
+      - id: metadata/build/archive::archive-native-binary-entry
+      - id: metadata/build/archive::archive-platform-native-binary-entry
+  - id: cargo-archive-build-rs-staged-payload-exec
+    desc: Cargo archive build.rs stages and executes native payload
+    crit: hostile
+    conf: 0.98
+    mbc: E1059
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: metadata/build/archive::archive-cargo-crate-build-script
+      - id: rust-build-rs-staged-payload-exec
+    any:
+      - id: metadata/build/archive::archive-native-binary-entry
+      - id: metadata/build/archive::archive-platform-native-binary-entry
+    unless:
+      - id: cargo-build-script-declared
+  - id: cargo-build-hook-native-link-staging
+    desc: Cargo build hook links staged native library
+    crit: suspicious
+    conf: 0.94
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: cargo-build-script-declared
+      - id: rust-build-rs-native-link-staging
+    any:
+      - id: metadata/build/archive::archive-native-binary-entry
+      - id: metadata/build/archive::archive-platform-native-binary-entry
+  - id: cargo-archive-build-rs-native-link-staging
+    desc: Cargo archive build.rs links staged native library
+    crit: suspicious
+    conf: 0.94
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: metadata/build/archive::archive-cargo-crate-build-script
+      - id: rust-build-rs-native-link-staging
+    any:
+      - id: metadata/build/archive::archive-native-binary-entry
+      - id: metadata/build/archive::archive-platform-native-binary-entry
+    unless:
+      - id: cargo-build-script-declared
+  - id: cargo-proc-macro-compile-time-exec
+    desc: Cargo proc macro performs compile-time execution
+    crit: suspicious
+    conf: 0.94
+    mbc: E1059
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: metadata/package/manifest/name::cargo-lib-proc-macro
+      - id: rust-proc-macro-compile-time-exec
+  - id: cargo-proc-macro-compile-time-exfil
+    desc: Cargo proc macro exfiltrates build environment
+    crit: hostile
+    conf: 0.98
+    mbc: E1041
+    for: [rust, archives]
+    scope: archive
+    all:
+      - id: metadata/package/manifest/name::cargo-lib-proc-macro
+      - id: rust-proc-macro-compile-time-exfil
+  # === Any Build System Trojan ===
+  - id: build-system-trojan
+    desc: Build system trojan (any language)
+    crit: hostile
+    conf: 0.95
+    mbc: "E1059"
+    any:
+      - id: python-setup-trojan
+      - id: npm-install-trojan
+      - id: rust-build-trojan
+      - id: rust-build-rs-telegram-curl-beacon
+      - id: rust-build-rs-post-exfil
+      - id: rust-build-rs-staged-payload-exec
+      - id: cargo-archive-build-rs-post-exfil
+      - id: cargo-archive-build-rs-staged-payload-exec
+      - id: rust-proc-macro-compile-time-exfil
+      - id: makefile-curl-exec

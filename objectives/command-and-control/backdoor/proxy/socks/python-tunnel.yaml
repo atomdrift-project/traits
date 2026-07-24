@@ -1,0 +1,69 @@
+# Python SOCKS5 reverse-tunnel detector
+# Generic SOCKS protocol use is neutral.  These objective rules require the
+# handshake plus explicit inbound relay mechanics before reporting a tunnel.
+# ATT&CK: T1572 (Protocol Tunneling), T1090.001 (Internal Proxy)
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1572
+
+traits:
+- id: struct-unpack-bbb
+  desc: SOCKS5 handshake version/method parse
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: "struct\\.unpack\\(.{0,10}BBB"
+
+- id: bridge-relay-method
+  desc: Bridge/relay data forwarding method
+  crit: component
+  conf: 0.85
+  if:
+    type: symbol
+    regex: ^_?bridge$
+
+- id: custom-connection-carveouts
+  desc: Custom connection exception classes
+  crit: component
+  conf: 0.88
+  count_min: 2
+  if:
+    type: text
+    regex: 'class\s+(Connection\w+Error|Exit\w*Exception|Close\w*Exception)\b'
+
+composite_rules:
+- id: socks5-reverse-tunnel
+  desc: Python SOCKS5 reverse tunnel proxy
+  crit: suspicious
+  conf: 0.94
+  size_max: 32768
+  all:
+  - id: micro-behaviors/communications/proxy/socks::socks5-proto
+  - id: struct-unpack-bbb
+  - id: bridge-relay-method
+  - id: micro-behaviors/communications/socket/connect::socket-accept-call
+  any:
+  - id: micro-behaviors/communications/socket/connect::socket-connect-call
+  - id: custom-connection-carveouts
+  unless:
+  - id: well-known/lib/pysocks::pysocks-socks-module
+  - id: well-known/lib/txtorcon::library-member-path
+
+- id: python-proxy-backdoor
+  desc: Python proxy backdoor with credentials
+  crit: suspicious
+  conf: 0.95
+  size_max: 32768
+  all:
+  - id: micro-behaviors/communications/proxy/socks::socks
+  - id: struct-unpack-bbb
+  any:
+  - id: micro-behaviors/communications/proxy/auth::proxy-credential-literal-assignment
+  - id: micro-behaviors/process/hook/interception::python-socket-class-replacement
+  - id: custom-connection-carveouts
+  - id: micro-behaviors/communications/socket/connect::socket-accept-call
+  unless:
+  - id: well-known/lib/pysocks::pysocks-socks-module
+  - id: well-known/lib/txtorcon::library-member-path

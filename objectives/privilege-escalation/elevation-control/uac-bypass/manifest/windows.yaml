@@ -1,0 +1,58 @@
+# Windows Manifest Privilege Escalation
+# ATT&CK: T1548.002 (Abuse Elevation Control Mechanism: UAC)
+#
+# Atomic manifest string traits in micro-behaviors/os/privilege/manifest/windows.yaml
+# Composites detect suspicious use of manifest attributes combined with other indicators.
+defaults:
+  attack: T1548.002
+  platforms: [windows]
+  for: [pe, dll]
+composite_rules:
+  - id: unsigned-auto-elevate
+    desc: Auto-elevation without trusted signature
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/privilege/manifest::auto-elevate
+    unless:
+      - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
+      - id: metadata/binary/vendor::microsoft-corp-marker-rdata
+      - id: metadata/signed/platform/
+  - id: admin-manifest-network
+    desc: Admin manifest with network activity
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/privilege/manifest::admin-manifest
+      - id: micro-behaviors/communications/http/request/client::http-client
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
+        - id: metadata/package/versioning::pe-version-resource
+  - id: admin-manifest-shell-no-version
+    desc: Admin manifest with shell and no version info
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/privilege/manifest::admin-manifest
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+    unless:
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+
+  # requireAdministrator on a magic-stripped UPX crypt stub is escalation
+  # setup for the in-memory loader, not a normal installed helper.
+  - id: admin-scrambled-upx-crypt-elevation
+    desc: Admin elevation on magic-stripped UPX crypt loader
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/os/privilege/manifest::require-administrator
+      - id: objectives/anti-static/pack/upx::scrambled-upx-header
+      - id: objectives/command-and-control/dropper/execution/loader::giant-rwx-upx1
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    unless:
+      - id: objectives/anti-static/pack/upx::upx-magic-bytes
+      - id: metadata/signed/platform/
+      - id: metadata/signed/developer/

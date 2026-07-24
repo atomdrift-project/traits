@@ -1,0 +1,289 @@
+# ELF Binary Anomaly Detection
+# Detects structural anomalies common in packed/obfuscated ELF binaries
+# ATT&CK: T1027.002 (Software Packing)
+defaults:
+  platforms: [linux, android]
+  for: [elf]
+traits:
+  - id: elf32-class
+    desc: "ELF32 class marker"
+    crit: component
+    conf: 1.0
+    if:
+      type: metrics
+      field: elf.class_bits
+      min: 32
+      max: 32
+  - id: elf32-sectionless-header
+    desc: "ELF32 header omits section table"
+    crit: component
+    conf: 0.95
+    mbc: "F0001"
+    attack: "T1027.002"
+    if:
+      type: hex
+      pattern: "00 00 00 00 00 00 10 07 00 34 00 20 00 02 00 28 00 00 00 00"
+      offset: 32
+  - id: elf64-sectionless-header
+    desc: "ELF64 header omits section table"
+    crit: component
+    conf: 0.95
+    mbc: "F0001"
+    attack: "T1027.002"
+    if:
+      type: hex
+      pattern: "00 00 00 00 00 00 00 00 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 00 00 ?? ??"
+      offset: 40
+  - id: rwx-segment
+    desc: 'ELF has writable+EXE segment (W^X violation)'
+    crit: suspicious
+    conf: 0.7
+    attack: "T1055"
+    if:
+      id: metadata/hardening/memory::wx-section
+    unless:
+      - id: well-known/lib/jna::native-dispatch-library
+      - id: metadata/binary/vendor/
+      - id: metadata/binary/vendor/
+      - id: well-known/tool/sysadmin/unix-benign/
+      - id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+      - id: metadata/package/testing/presence/harness::binary-test-directory
+      - type: path
+        regex: '(^|[\\/])tutorials[\\/]stm32[\\/]|\.stldr$'
+    downgrade:
+      any:
+        - id: well-known/lib/jruby/
+  - id: upx-packer-string
+    desc: UPX executable packer signature string
+    crit: component
+    conf: 1.0
+    if:
+      type: text
+      substr: UPX executable packer
+  - id: upx-tool-basename
+    desc: UPX tool basename
+    crit: notable
+    conf: 1.0
+    if:
+      type: path
+      basename: true
+      exact: upx
+  - id: upx-magic-raw
+    desc: UPX magic bytes in ELF
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      substr: "UPX!"
+
+composite_rules:
+  - id: upx-packed-elf
+    desc: "UPX-packed ELF binary"
+    crit: notable
+    conf: 0.85
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: upx-packer-string
+    unless:
+      - id: upx-tool-basename
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-overall-entropy
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+      - id: metadata/binary/anomaly/section-header::elf-no-section-headers
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic
+      - id: micro-behaviors/data/embedded/payload/native::linux-loader-breadcrumbs
+      - id: metadata/binary/anomaly/format::compact-large-load-memory-image
+  - id: elf32-no-section-headers
+    desc: "ELF32 has no section headers"
+    crit: component
+    conf: 0.95
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: elf32-class
+      - id: elf32-sectionless-header
+  - id: elf64-no-section-headers
+    desc: "ELF64 has no section headers"
+    crit: component
+    conf: 0.95
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: metadata/binary/metrics/structural::elf64-class
+      - id: elf64-sectionless-header
+  - id: no-section-headers
+    desc: "No section headers"
+    crit: notable
+    conf: 0.8
+    mbc: "F0001"
+    attack: "T1027.002"
+    any:
+      - id: metadata/binary/anomaly/section-header::elf-no-section-headers
+      - id: elf32-no-section-headers
+      - id: elf64-no-section-headers
+  - id: stripped-packed
+    desc: "Packed ELF binary"
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-overall-entropy
+    unless:
+      - id: upx-packer-string
+      - id: metadata/arch/iot::mips
+      - id: metadata/binary/metrics/structural::mips-high-overall-entropy
+      - id: micro-behaviors/mem/alloc/map::mips-mmap-syscall
+  - id: mips-sectionless-packed-loader
+    desc: Sectionless high-entropy MIPS memory loader
+    crit: suspicious
+    conf: 0.97
+    mbc: "F0001"
+    attack: "T1027.002,T1620"
+    platforms: [linux]
+    all:
+      - id: metadata/arch/iot::mips
+      - id: metadata/binary/metrics/structural::mips-high-overall-entropy
+      - id: no-section-headers
+      - id: micro-behaviors/mem/alloc/map::mips-memory-map-and-cache-flush
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/sysadmin/unix-benign/
+  - id: packed-linux-memory-temp-loader
+    desc: "Packed Linux ELF with memory/temp loader breadcrumbs"
+    crit: hostile
+    conf: 0.9
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+      - id: micro-behaviors/data/embedded/payload/native::linux-loader-breadcrumbs
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/layout::legacy-watcom-packed-utility
+  - id: concealed-packed-loader
+    desc: "Concealed sectionless packed ELF loader"
+    crit: hostile
+    conf: 0.92
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+    any:
+      - id: metadata/binary/metrics/structural::few-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::noisy-avg-string-length
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic
+      - id: micro-behaviors/data/embedded/payload/native::linux-loader-breadcrumbs
+      - id: metadata/binary/anomaly/format::compact-large-load-memory-image
+    needs: 2
+    unless:
+      - id: upx-packer-string
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/layout::legacy-watcom-packed-utility
+  - id: expanded-memory-packed-loader
+    desc: "Sectionless packed ELF expands into a large memory image"
+    crit: hostile
+    conf: 0.88
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+      - id: metadata/binary/anomaly/format::compact-large-load-memory-image
+    any:
+      - id: metadata/binary/metrics/structural::few-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::noisy-avg-string-length
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic
+      - id: micro-behaviors/data/embedded/payload/native::linux-loader-breadcrumbs
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/layout::legacy-watcom-packed-utility
+  - id: overmapped-sectionless-packed-elf
+    desc: "Sectionless packed ELF with oversized LOAD memory image"
+    crit: hostile
+    conf: 0.94
+    mbc: "F0001"
+    attack: "T1027.002"
+    size_max: 262144
+    all:
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+      - id: objectives/anti-static/obfuscation/payload/elf-struct::load-segment-exceeds-small-file
+    any:
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic
+      - id: metadata/binary/metrics/structural::few-functions
+      - id: metadata/binary/metrics/structural::no-functions
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/layout::legacy-watcom-packed-utility
+  - id: upx-marked-sectionless-loader
+    desc: "UPX-marked sectionless high-entropy ELF loader"
+    crit: hostile
+    conf: 0.92
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: upx-magic-raw
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+    any:
+      - id: objectives/anti-static/obfuscation/payload/elf-struct::load-segment-exceeds-small-file
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/metrics/structural::few-functions
+      - id: metadata/binary/metrics/structural::no-functions
+    needs: 2
+    unless:
+      - id: upx-tool-basename
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/layout::legacy-watcom-packed-utility
+  - id: sectionless-packed-elf-loader
+    desc: "Sectionless packed ELF loader with an oversized load image"
+    crit: hostile
+    conf: 0.9
+    mbc: "F0001"
+    attack: "T1027.002"
+    size_max: 262144
+    all:
+      - id: no-section-headers
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-entropy
+      - id: objectives/anti-static/obfuscation/payload/elf-struct::load-segment-exceeds-small-file
+    any:
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic
+      - id: metadata/binary/metrics/structural::few-functions
+      - id: metadata/binary/metrics/structural::no-functions
+    unless:
+      - id: upx-magic-raw
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/layout::legacy-watcom-packed-utility
+  - id: mirai-like
+    desc: "Mirai-like IoT malware pattern: static + stripped + exotic arch + packed"
+    crit: hostile
+    conf: 0.9
+    mbc: "F0001"
+    attack: "T1027.002"
+    all:
+      - id: no-section-headers
+      - id: metadata/arch/iot::exotic-arch
+      - id: objectives/command-and-control/botnet/iot::mirai-variant
+    any:
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic
+  - id: iot-target
+    desc: "IoT target architecture (exotic arch + static)"
+    crit: notable
+    conf: 0.7
+    attack: "T1583.005"
+    all:
+      - id: metadata/arch/iot::exotic-arch
+    any:
+      - id: metadata/binary/linking/static::static-linked
+      - id: metadata/binary/linking/static::static-linked-heuristic

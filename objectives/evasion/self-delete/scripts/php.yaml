@@ -1,0 +1,97 @@
+defaults:
+  platforms: [unix, windows]
+  for: [php]
+  crit: notable
+  attack: T1070.004
+traits:
+  # A bare __FILE__ reference is normal in PHP libraries (for example, to
+  # locate an adjacent resource or determine a MIME type).  Keep the atom
+  # tied to a deletion call so that ordinary path discovery is not treated as
+  # self-deletion.
+  - id: self-delete-file-constant
+    desc: unlink() targets PHP __FILE__ path
+    crit: notable
+    conf: 0.92
+    if:
+      type: tree-sitter
+      kind: call
+      regex: '^unlink\s*\(\s*__FILE__'
+  - id: self-delete-argv-path
+    desc: unlink() targets PHP argv zero path
+    crit: notable
+    conf: 0.9
+    if:
+      type: tree-sitter
+      kind: call
+      regex: '^unlink\s*\(\s*\$argv\s*\[\s*0\s*\]'
+  - id: self-delete-server-path
+    desc: unlink() targets PHP script filename
+    crit: notable
+    conf: 0.92
+    if:
+      type: tree-sitter
+      kind: call
+      regex: '^unlink\s*\(\s*\$_SERVER\[[''\"]SCRIPT_FILENAME'
+  - id: self-delete-directory-path
+    desc: rmdir() targets PHP script directory
+    crit: notable
+    conf: 0.9
+    if:
+      type: tree-sitter
+      kind: call
+      regex: '^rmdir\s*\(\s*dirname\s*\(\s*__FILE__'
+composite_rules:
+  - id: self-script-path-ref
+    desc: Deletion call targets running PHP script path
+    crit: notable
+    conf: 0.92
+    any:
+      - id: self-delete-file-constant
+      - id: self-delete-argv-path
+      - id: self-delete-server-path
+      - id: self-delete-directory-path
+  - id: php-recursive-delete
+    desc: PHP self-path recursive deletion
+    crit: suspicious
+    all:
+      - id: micro-behaviors/fs/enumerate/directory::php-scandir
+      - id: micro-behaviors/fs/delete/directory::php-rmdir
+      - id: micro-behaviors/fs/delete/file::php-unlink
+      # Self-deletion targets the running script (__FILE__/SCRIPT_FILENAME/argv0).
+      # Without this, scandir+rmdir+unlink is just directory cleanup (lifecycle
+      # plumbing in tests, build commands, cache clearers) — a neutral fs
+      # capability, not evasion/self-delete.
+      - id: self-script-path-ref
+    unless:
+      - id: metadata/package/testing/harness/unit/
+      - id: metadata/library/web-frameworks/
+      - id: metadata/file/magic/identity::php-archive
+      - id: well-known/app/wordpress-plugins/
+      - id: well-known/app/egroupware/
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+  - id: php-staged-self-destruct
+    desc: PHP staged self-destruct
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: self-script-path-ref
+      - id: micro-behaviors/fs/delete/file::php-unlink
+      - id: micro-behaviors/fs/delete/directory::php-rmdir
+    any:
+      - id: micro-behaviors/fs/path/location::hidden-dir-literal
+      - id: micro-behaviors/fs/temp/directory::sys-get-temp-dir
+    unless:
+      - id: well-known/app/egroupware/
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/presence/harness::php-test-or-fixture-path
+      - id: objectives/evasion/self-delete/scripts/
+  - id: php-staged-self-destruct-recognized-app-marker
+    desc: PHP app cleanup marker
+    crit: notable
+    conf: 0.95
+    any:
+      - id: well-known/app/egroupware::egroupware-vfs-helper
+      - id: well-known/app/egroupware::egroupware-filemanager-cli
+      - id: well-known/app/civicrm::civicrm-upgrade-form
+      - id: well-known/app/phpolygon

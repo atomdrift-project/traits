@@ -1,0 +1,65 @@
+# IoT command-injection via WiFi/admin parameters. Targets the
+# `ssid=...|reboot` / `passwd=...&kill` style config-form abuses seen on
+# embedded devices. The composite fires on the shell-metachar pattern in
+# config-string context and is suppressed when the file is plainly JS/TS
+# (variable declarations, type annotations, simple assignments) — those
+# look superficially similar but are not injection sinks.
+defaults:
+  platforms: [unix, windows]
+  crit: notable
+  conf: 0.8
+  for: [scripts]
+traits:
+- id: iot-param-injection--rx-1
+  desc: ssid=/pass= followed by shell metachar
+  crit: component
+  for: [shell, javascript, typescript]
+  if:
+    type: literal
+    kind: string
+    regex: '(?i)\b(ssid|pass)\b\s*[:=].{0,20}([;\|&`]|\$\()'
+  unless:
+  - id: metadata/lang/scripted::js-key-assignment-declaration
+  - id: metadata/lang/scripted/
+  - id: metadata/lang/scripted::plain-js-identifier-assignment
+  - id: well-known/tool/sysadmin/kubernetes/iac::kubernetes-iac-path
+  - id: well-known/tool/dual-use/rclone::rclone-copy-cmd
+- id: iot-param-injection--rx-2
+  desc: admin=/user= followed by shell metachar
+  crit: component
+  for: [shell, javascript, typescript]
+  if:
+    type: literal
+    kind: string
+    regex: '(?i)(^|[^:A-Za-z0-9_])["'']?(admin|user)["'']?\s*[:=]\s*.{0,20}([;\|&`]|\$\()'
+  unless:
+  - id: metadata/lang/scripted::js-key-assignment-declaration
+  - id: metadata/lang/scripted/
+  - id: metadata/lang/scripted::plain-js-identifier-assignment
+  - id: well-known/tool/sysadmin/kubernetes/iac::kubernetes-iac-path
+  - id: well-known/tool/dual-use/rclone::rclone-copy-cmd
+- id: http-tftp-download-fallback
+  desc: HTTP download falls back to TFTP
+  crit: notable
+  if:
+    type: text
+    # A generic `curl ... || echo "FAILED"` is ordinary error handling, not a
+    # transfer fallback. Require the distinct TFTP retrieval mechanism.
+    regex: '(?i)(wget|curl).{0,80}\|\|.{0,80}tftp'
+  unless:
+  - type: text
+    substr: command -v curl >/dev/null 2>&1 || command -v wget
+composite_rules:
+- id: iot-param-injection
+  desc: Shell-metachar in IoT config parameter
+  crit: notable
+  conf: 1.0
+  any:
+  - id: iot-param-injection--rx-1
+  - id: iot-param-injection--rx-2
+  # Suppress when the file is clearly JS/TS source rather than an embedded
+  # device config form.
+  unless:
+  - id: metadata/lang/scripted::js-key-assignment-declaration
+  - id: metadata/lang/scripted/
+  - id: metadata/lang/scripted::plain-js-identifier-assignment

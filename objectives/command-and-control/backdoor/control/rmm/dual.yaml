@@ -1,0 +1,104 @@
+defaults:
+  platforms: [windows]
+  for: [batch, powershell, pe, dll, csharp, oledoc]
+  attack: "T1219"
+
+traits:
+  - id: simplehelp-rmm-marker
+    desc: SimpleHelp RMM marker
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)(SimpleHelp|SimpleGateway|SimpleService\.exe|customer\.jar)'
+  - id: silent-rmm-config
+    desc: Silent RMM access configuration
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)(RequireSessionConfirmation=false|AllowScripting=true|AllowRecovery=true)'
+  - id: screenconnect-clickonce-application-url
+    desc: ScreenConnect ClickOnce URL
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'ScreenConnect\.Client\.application\?'
+      case_insensitive: true
+  - id: screenconnect-clickonce-host-param
+    desc: ScreenConnect ClickOnce host parameter
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: 'ScreenConnect\.Client\.application\?[^\r\n]{0,180}h='
+      case_insensitive: true
+  - id: screenconnect-clickonce-port-param
+    desc: ScreenConnect ClickOnce port parameter
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: 'ScreenConnect\.Client\.application\?[^\r\n]{0,180}p=[0-9]{2,5}'
+      case_insensitive: true
+  - id: screenconnect-clickonce-key-param
+    desc: ScreenConnect ClickOnce key parameter
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: 'ScreenConnect\.Client\.application\?[^\r\n]{0,180}k='
+      case_insensitive: true
+
+composite_rules:
+  - id: screenconnect-clickonce-session-url
+    desc: ScreenConnect ClickOnce session URL
+    crit: notable
+    conf: 0.96
+    all:
+      - id: screenconnect-clickonce-application-url
+      - id: screenconnect-clickonce-host-param
+      - id: screenconnect-clickonce-port-param
+      - id: screenconnect-clickonce-key-param
+
+  - id: screenconnect-external-ip-launcher
+    desc: ScreenConnect launcher uses external IPv4 endpoint
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: screenconnect-clickonce-session-url
+      - id: micro-behaviors/communications/http/url/external-ip::url-external-ip-query-port-binary
+    unless:
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-signed-launcher-context
+  - id: screenconnect-suspicious-tld-launcher
+    desc: ScreenConnect launcher directed to suspicious TLD
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: screenconnect-clickonce-session-url
+    any:
+      - id: micro-behaviors/communications/http/url/tld::tld-su
+
+  - id: screenconnect-tampered-session-launcher
+    desc: Tampered signed ScreenConnect session launcher
+    crit: hostile
+    conf: 0.98
+    attack: "T1219,T1553.002"
+    all:
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-family
+      - id: screenconnect-clickonce-session-url
+      - id: metadata/signed/certificate/identity::pe-signature-digest-mismatch
+    unless:
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-signed-launcher-context
+
+  - id: dual-rmm-remote-access-stack
+    desc: Dual RMM remote access stack
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: simplehelp-rmm-marker
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-product-marker
+    any:
+      - id: silent-rmm-config
+      - id: objectives/persistence/system/service/install::rmm-safeboot-service-persistence

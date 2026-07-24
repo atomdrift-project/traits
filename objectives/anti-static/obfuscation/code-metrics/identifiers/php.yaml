@@ -1,0 +1,276 @@
+# PHP-Specific Metrics-Based Obfuscation Detection
+# Detects PHP webshell and malware obfuscation patterns
+defaults:
+  platforms: [windows, unix]
+  for: [php]
+  attack: "T1027"
+  mbc: "B0032"
+traits:
+  # === PHP-Specific Obfuscation Patterns ===
+  - id: php-encoded-strings
+    desc: "High-entropy PHP strings suggesting obfuscation"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: strings.avg_entropy
+      min: 4.5
+    unless:
+      - type: metrics
+        field: strings.total
+        max: 3
+      # UTF-8 translation text can have high string entropy without being an
+      # encoded payload.  Keep entropy-based detection for ASCII source, where
+      # it is a useful obfuscation signal.
+      - type: metrics
+        field: text.high_byte_ratio
+        min: 0.05
+      - id: well-known/app/moodle-stubs/
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+      # Directory ref covers WordPress core/plugin context in one slot.
+      - id: metadata/library/web-frameworks/
+      - id: metadata/package/quality/false-positives/
+      # PEM key material is structured cryptographic configuration, not PHP
+      # string obfuscation.
+      - type: text
+        regex: '-----BEGIN [A-Z0-9 ]+ KEY-----'
+      # Vendored ParagonIE sodium_compat uses dense high-entropy crypto
+      # constants, not obfuscated payloads.
+      - type: text
+        substr: 'ParagonIE_Sodium'
+  - id: php-obfuscated-vars
+    desc: "Obfuscated PHP variable names"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: metrics
+      field: identifiers.avg_entropy
+      min: 3.2
+    unless:
+      - id: metadata/lang/source/
+      - id: metadata/package/manifest/compat::php-manual-empty-function-stubs
+      - type: metrics
+        field: identifiers.total
+        max: 64
+      # Descriptive CamelCase names (e.g. PmWiki's $EnableCommonEnhancements)
+      # carry high Shannon entropy yet are long. True obfuscation pairs high
+      # entropy with SHORT names, so exempt long-identifier source.
+      - type: metrics
+        field: identifiers.avg_length
+        min: 12
+    downgrade:
+      # PHP interfaces and abstract classes have inherently high identifier
+      # entropy from dense method-signature parameters
+      # (`function findBy(array $criteria, ?array $orderBy = null)`).
+      # That's API surface, not obfuscation. Downgrade in framework /
+      # interface contexts so it reports as component instead of suspicious.
+      any:
+        - id: metadata/library/web-frameworks/
+        - id: metadata/library/web-frameworks/
+        - id: micro-behaviors/data/source/syntax/keyword::php-interface-or-abstract-class
+  - id: php-single-long-line
+    desc: PHP source contains very long line
+    crit: notable
+    conf: 0.9
+    if:
+      type: metrics
+      field: text.max_line_length
+      min: 5000
+    unless:
+      - id: metadata/package/manifest/compat::php-manual-empty-function-stubs
+      - id: objectives/discovery/system/fingerprint/info::rendered-phpinfo-dump
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers/
+  - id: php-numeric-bool-table
+    desc: PHP numeric boolean table
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'return\s+array\(\d+\s*=>\s*\\(true|false)'
+  - id: php-numeric-array-table
+    desc: PHP numeric array table
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'return\s+array\(\d+\s*=>\s*array\('
+  - id: php-numeric-string-table
+    desc: PHP numeric string table
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'return\s+array\(\d+\s*=>\s*[''"]'
+  - id: php-short-string-map-table
+    desc: PHP short string map table
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'return\s+array\(''[^'']{1,4}''\s*=>\s*''[^'']{1,4}'''
+  - id: php-unicode-key-table
+    desc: PHP Unicode key table
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'return\s+array\(''\P{ASCII}{1,4}''\s*=>'
+  - id: php-unicode-regexp-table
+    desc: PHP generated Unicode regexp table
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: unicode.org/Public/UNIDATA
+  - id: php-inline-svg-resource-string
+    desc: PHP inline SVG resource string
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: 'public\s+static\s+\$[A-Za-z_]\w*\s*=\s*[''"]<svg\b[^\n]{1000,}</svg>[''"]\s*;'
+  - id: php-inline-image-data-uri
+    desc: PHP inline image data URI string
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: 'data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/]{1000,}={0,2}'
+  # A long line built from a dense run of `'key' => value,` array pairs is a
+  # data table (locale/translation maps, HTML-entity maps, composer installed.php,
+  # MIME/region catalogs), not an obfuscation blob. Real obfuscation long-lines
+  # are eval/base64/concatenation chains, which do not carry dozens of array
+  # pairs.
+  - id: php-array-data-table
+    desc: PHP dense array-pair data table
+    crit: component
+    conf: 0.9
+    count_min: 30
+    if:
+      type: text
+      regex: '["''][^"'']{1,80}["'']\s*=>'
+  - id: php-many-short-functions
+    desc: "Many one-line PHP functions"
+    crit: notable
+    conf: 0.75
+    if:
+      type: metrics
+      field: functions.one_liners
+      min: 8
+      min_size: 4096
+    unless:
+      - type: basename
+        regex: '\.stub\.php$'
+      - id: metadata/package/manifest/compat::php-manual-empty-function-stubs
+      - id: well-known/lib/symfony::package-doc
+      - type: text
+        regex: '^\s*interface\s+[A-Za-z_][A-Za-z0-9_]*'
+      - type: metrics
+        field: text.whitespace_ratio
+        min: 0.2
+      # Deobfuscation layers are uniformly tiny; a handful of one-liner helpers
+      # in a file whose functions average several lines is ordinary code, not
+      # obfuscation. Exempt source with substantial average function length.
+      - type: metrics
+        field: functions.avg_length_lines
+        min: 6
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+  - id: php-high-non-ascii-ratio
+    desc: "High non-ASCII byte ratio in PHP source"
+    crit: notable
+    conf: 0.95
+    if:
+      type: metrics
+      field: text.non_ascii_ratio
+      min: 0.75
+    unless:
+      - id: metadata/library/web-frameworks/
+      - id: metadata/library/web-frameworks/
+  - id: php-non-ascii-name
+    desc: "Non-ASCII identifier"
+    crit: notable
+    conf: 0.9
+    if:
+      # Identifier-scoped (covers both PHP variables `$ѕystem` and bareword
+      # names `nаme`) — matches the cached identifier facts, never UTF-8
+      # string content, so it can't FP on legitimately non-ASCII literals.
+      # Replaces two tree-sitter rules (node: variable_name + node: name).
+      type: symbol
+      kind: identifier
+      regex: "[^\\x00-\\x7F]"
+    unless:
+      # Packed PHP archives (phar) append a binary/compressed manifest after
+      # the `__HALT_COMPILER()` stub marker. That tail is mis-parsed into
+      # spurious high-byte "identifier" tokens (e.g. /bin/phar.phar), not
+      # hand-written non-ASCII identifier obfuscation. Exempt phar archives.
+      # (ID is dir::id — the `phar` filename is not part of the trait ID, so the
+      # previous metadata/file/magic/phar::php-archive ref was dangling/dead.)
+      - id: metadata/file/magic/identity::php-archive
+  - id: php-non-ascii-subscript
+    desc: "Unquoted non-ASCII PHP array index"
+    crit: suspicious
+    conf: 0.98
+    if:
+      # Match a non-ASCII token at the start of the bracket expression. A
+      # tree-sitter subscript node includes nested array literals and quoted
+      # localized keys, so matching that whole node mislabels UI translations
+      # as identifier obfuscation. Non-ASCII variable/name tokens are covered
+      # separately by php-non-ascii-name.
+      type: text
+      regex: "\\$[A-Za-z_]\\w*\\[\\s*[^'\"\\]\\r\\n]{0,40}[^\\x00-\\x7F][^'\"\\]\\r\\n]{0,40}\\]"
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+      - id: well-known/lib/symfony::package-doc
+      # Packed PHP archives (phar) append a binary/compressed manifest after
+      # the `__HALT_COMPILER()` stub marker. That tail is mis-parsed into
+      # spurious high-byte subscript tokens (e.g. /bin/phar.phar), not real
+      # non-ASCII subscript obfuscation. Exempt phar archives. (dir::id — the
+      # `phar` filename is not part of the ID; the prior ref was dangling.)
+      - id: metadata/file/magic/identity::php-archive
+  - id: unicode-cid-conversion-table
+    desc: Unicode to CID conversion table marker
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: "unicode to cid conversion table"
+composite_rules:
+  - id: php-long-line-recognized-marker
+    desc: PHP generated long-line data marker
+    crit: component
+    conf: 0.9
+    any:
+      - id: well-known/lib/guzzle
+      - id: well-known/lib/phpseclib
+      - id: well-known/lib/symfony::package-doc
+      - id: metadata/library/web-frameworks::wordpress-imagely-ngg-context
+      - id: php-numeric-bool-table
+      - id: php-numeric-array-table
+      - id: php-numeric-string-table
+      - id: php-short-string-map-table
+      - id: php-unicode-key-table
+      - id: php-unicode-regexp-table
+      - id: php-inline-svg-resource-string
+      - id: php-inline-image-data-uri
+      - id: php-array-data-table
+      - id: well-known/lib/tcpdf::tcpdf-font-file
+      - id: unicode-cid-conversion-table
+
+  - id: php-webshell-pattern
+    desc: "PHP webshell pattern detected"
+    crit: suspicious
+    conf: 0.95
+    needs: 2
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-encoded-strings
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-single-long-line
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-obfuscated-vars
+  - id: php-encoded-payload
+    desc: "PHP with encoded payload"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-encoded-strings
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-obfuscated-vars
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-many-short-functions

@@ -1,0 +1,217 @@
+# Browser Cookie Access - JavaScript/Browser-side
+# Detects access to browser document.cookie DOM API and URL parameter harvesting
+# ATT&CK: T1539 (Steal Web Session Cookie)
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript, html]
+  attack: "T1539"
+  mbc: "C0002"
+traits:
+  - id: cookie-helper-function-definitions
+    desc: Defines set get and clear cookie helpers
+    crit: notable
+    conf: 0.8
+    count_min: 3
+    if:
+      type: symbol
+      regex: '^(setCookie|clearCookie|getCookie)$'
+
+  - id: linkedin-session-cookie-name
+    desc: References LinkedIn li_at session cookie
+    crit: notable
+    conf: 0.99
+    if:
+      type: literal
+      exact: li_at
+
+  - id: cookie-value-json-payload
+    desc: Serializes named cookie data in JSON
+    crit: component
+    conf: 0.94
+    for: [javascript, typescript]
+    if:
+      type: text
+      case_insensitive: true
+      regex: 'JSON\.stringify\s*\([^)]{0,80}\b(li_at|JSESSIONID|cookies?)\b[^)]{0,80}\)'
+
+  - id: cookie-value-body-field
+    desc: Places named cookie data in request field
+    crit: component
+    conf: 0.94
+    for: [javascript, typescript]
+    if:
+      type: text
+      case_insensitive: true
+      regex: '\b(body|data|payload)\s*:\s*[^,}\n]{0,60}\bcookies?\b'
+
+  - id: cookie-backend-sync-function
+    desc: Synchronizes cookies with remote backend
+    crit: notable
+    conf: 0.95
+    if:
+      type: function
+      exact: syncCookieToBackend
+
+  - id: session-cookie-name
+    desc: References a named session cookie
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: "['\\\"]__session['\\\"]"
+
+  - id: google-auth-cookie-short-name
+    desc: Google short authentication cookie name
+    crit: notable
+    conf: 0.98
+    if:
+      type: text
+      regex: "['\\\"](SID|HSID|SSID)['\\\"]"
+
+  - id: google-auth-cookie-long-name
+    desc: Google long authentication cookie name
+    crit: notable
+    conf: 0.98
+    if:
+      type: text
+      regex: "['\\\"](APISID|SAPISID|__Secure-[13]PSID|__Host-GAPS)['\\\"]"
+
+  - id: cookiebot-consent-state
+    desc: Reads Cookiebot consent state
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: Cookiebot(\?\.|\.)consent
+
+  - id: document-cookie-read
+    desc: Accesses browser document.cookie property
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      kind: member
+      exact: document.cookie
+    unless:
+      - id: metadata/library/axios::axios-class
+      - id: metadata/library/axios::axios-version
+      - id: metadata/document/html::doctype
+
+  - id: document-cookie-split-iterate
+    desc: Iterates all cookies via document.cookie.split
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      substr: document.cookie.split
+    unless:
+      - id: metadata/library/axios::axios-class
+      - id: metadata/library/axios::axios-version
+      - id: metadata/document/html::doctype
+
+  - id: document-cookie-match
+    desc: "Regex scans cookies via document.cookie.match"
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      substr: document.cookie.match
+    unless:
+      - id: metadata/library/axios::axios-class
+      - id: metadata/library/axios::axios-version
+      - id: metadata/document/html::doctype
+
+  - id: tiktok-webid-cookie-match
+    desc: Matches TikTok webid cookie
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'document\.cookie\.match\s*\([^)]{0,120}s_v_web_id'
+
+  - id: document-cookie-write
+    desc: "Sets browser cookie via document.cookie assign"
+    crit: notable
+    conf: 0.65
+    if:
+      type: text
+      substr: document.cookie=
+    unless:
+      - id: metadata/library/axios::axios-class
+      - id: metadata/library/axios::axios-version
+
+  - id: browser-page-cookie-read
+    desc: Reads browser cookies with Puppeteer
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      substr: page.cookies
+
+
+  # Benign-context markers that downgrade the url-param-to-cookie tracking
+  # composite below (legitimate cookie helpers / minified cookie libraries).
+  - id: cookie-url-param-benign-token-marker
+    desc: Benign x-user-token cookie parameter
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: x-user-token=
+  - id: cookie-url-param-benign-minified-helper
+    desc: Benign minified cookie-helper write pattern
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: document.cookie=e+"="+o+c}
+
+composite_rules:
+  - id: linkedin-session-cookie-value-request
+    desc: Includes LinkedIn cookie data in request payload
+    crit: notable
+    conf: 0.94
+    for: [javascript, typescript]
+    any:
+      - id: cookie-value-json-payload
+      - id: cookie-value-body-field
+
+  - id: google-auth-cookie-name
+    desc: Google authentication cookie name
+    crit: notable
+    conf: 0.98
+    any:
+      - id: google-auth-cookie-short-name
+      - id: google-auth-cookie-long-name
+
+  # A cookie value leaving the browser is security-relevant even when it is
+  # part of an explicitly authorized integration.  Cookie-presence checks used
+  # to authenticate first-party requests do not establish this behavior.
+  - id: linkedin-session-cookie-backend-sync
+    desc: LinkedIn cookie value backend synchronization code
+    crit: notable
+    conf: 0.98
+    for: [javascript, typescript]
+    all:
+      - id: chrome-cookies-get-all
+      - id: linkedin-session-cookie-name
+      - id: linkedin-session-cookie-value-request
+      - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+
+  # Captures URL query parameters into cookies — the standard attribution /
+  # analytics pattern (UTM, gclid, affiliate IDs). Neutral and commonly benign;
+  # credential-skimming verdicts live in objectives/collection/stealer/browser/,
+  # whose hostile composites combine cookie reads with an actual exfil sink.
+  - id: js-cookie-with-url-params
+    desc: Writes URL query params to cookies (attribution tracking)
+    crit: notable
+    conf: 0.85
+    all:
+      - id: micro-behaviors/communications/http/url/query::browser-location-search-read
+      - id: document-cookie-write
+    downgrade:
+      any:
+        - id: cookie-url-param-benign-token-marker
+        - id: cookie-url-param-benign-minified-helper
+        - id: metadata/package/testing/
+        - id: metadata/signed/platform/

@@ -1,0 +1,111 @@
+# Raw DNS Packet Construction - Python
+# Detects manual DNS protocol implementation bypassing standard libraries
+# ATT&CK: T1071.004 (Application Layer Protocol: DNS)
+# MBC: C0011 (DNS Communication)
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  crit: notable
+  conf: 0.85
+traits:
+  # DNS header construction via struct.pack
+  - id: struct-pack-dns-header
+    desc: DNS header construction with struct.pack
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: "struct\\.pack\\s*\\(\\s*[\"']!H{4,6}[\"']"
+    unless:
+      - id: micro-behaviors/communications/dns/raw/
+      - id: well-known/tool/development/pymobiledevice3
+  - id: dns-query-evidence-class
+    desc: DNSQueryEvidence class reference
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: DNSQueryEvidence
+  - id: dns-record-evidence-class
+    desc: DNSRecordEvidence class reference
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: DNSRecordEvidence
+  - id: dns-policy-evidence-function
+    desc: DNS policy evidence function
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: _dns_policy_evidence
+  # DNS qtype/qclass packing (A record = 1, IN class = 1)
+  - id: struct-pack-dns-qtype
+    desc: DNS qtype/qclass fields packed
+    conf: 0.85
+    if:
+      type: text
+      regex: "struct\\.pack\\s*\\(\\s*[\"']!HH[\"'].{0,20}1\\s*,\\s*1"
+  # TCP DNS length prefix
+  - id: struct-pack-tcp-dns-len
+    desc: TCP DNS length prefix construction
+    conf: 0.85
+    if:
+      type: text
+      regex: "struct\\.pack\\s*\\(\\s*[\"']!H[\"'].{0,30}len\\s*\\("
+  # Manual qname label encoding
+  - id: dns-label-encoding
+    desc: DNS label length-prefix encoding
+    # `bytes([len(x)])` is the generic length-prefix framing idiom shared by every
+    # binary protocol; only a DNS building block when paired (needs:2) with a real
+    # DNS marker (header pack, qtype, qname terminator) in python-dns-construction.
+    crit: component
+    conf: 0.9
+    size_max: 50000
+    if:
+      type: text
+      regex: "bytes\\s*\\(\\s*\\[\\s*len\\s*\\(\\s*\\w+\\s*\\)\\s*\\]\\s*\\)"
+    downgrade:
+      any:
+        - id: metadata/package/testing/presence/harness/
+        - id: metadata/package/testing/scripted/
+        - id: well-known/tool/detection/security-scanner::wpsecscan-check-module
+  # Function naming patterns
+  - id: dns-query-function
+    desc: DNS query builder function names
+    conf: 0.75
+    if:
+      type: text
+      regex: "def\\s+(build_dns|create_dns|dns_query|make_dns)\\w*\\s*\\("
+  # qname with null terminator
+  - id: dns-qname-terminator
+    desc: DNS qname null terminator pattern
+    conf: 0.8
+    if:
+      type: text
+      regex: "qname\\s*\\+[=]?\\s*b[\"']\\\\x00[\"']"
+composite_rules:
+  - id: dns-trust-surface-evidence-collector
+    desc: DNS trust surface evidence collector context
+    crit: component
+    conf: 0.9
+    all:
+      - id: dns-query-evidence-class
+      - id: dns-record-evidence-class
+      - id: dns-policy-evidence-function
+  - id: python-dns-construction
+    desc: Manual DNS packet construction in Python
+    crit: suspicious
+    conf: 0.9
+    attack: "T1071.004"
+    mbc: "C0011"
+    needs: 2
+    any:
+      - id: struct-pack-dns-header
+      - id: struct-pack-dns-qtype
+      - id: dns-label-encoding
+      - id: dns-qname-terminator
+      - id: dns-query-function
+    unless:
+      - id: micro-behaviors/communications/dns/raw/

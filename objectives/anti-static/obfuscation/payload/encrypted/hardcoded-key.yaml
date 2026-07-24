@@ -1,0 +1,134 @@
+# Hardcoded-key + ciphertext co-located in a single source module.
+#
+# Real encryption protects content from someone who doesn't have the key.
+# When the key, salt, and ciphertext are all declared as module-level
+# constants in the same file, the AES layer is not protecting anything —
+# it's obfuscation, designed to keep a static analyser from reading the
+# payload. The pattern has no benign use case for shipped library code.
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript, python]
+  attack: T1027.013
+  mbc: B0032
+traits:
+  - id: js-passphrase-literal-const
+    desc: Module-level passphrase string constant
+    crit: component
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?im)^\s*(const|let|var)\s+\w*(KEY|PASSPHRASE)\w*\s*=\s*["''][^"'']{6,80}["'']'
+  - id: js-salt-literal-const
+    desc: Module-level salt string constant
+    crit: component
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?im)^\s*(const|let|var)\s+\w*(SALT|AES_SALT)\w*\s*=\s*["''][^"'']{4,80}["'']'
+  - id: py-passphrase-literal-assign
+    desc: Module-level passphrase string in Python
+    crit: component
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: '(?im)^[A-Za-z_][A-Za-z0-9_]*(KEY|PASSPHRASE)[A-Za-z0-9_]*\s*=\s*["''][^"'']{6,80}["'']'
+  - id: aes-gcm-triplet-blob
+    desc: AES-GCM iv:tag:data base64 triplet
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '[A-Za-z0-9+/]{12,32}={0,2}:[A-Za-z0-9+/]{16,32}={0,2}:[A-Za-z0-9+/]{200,}={0,2}'
+  - id: js-final-encoded-text-const
+    desc: '*FINAL_ENCODED* constant declaration'
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?im)^\s*(const|let|var)\s+\w*FINAL_ENCODED\w*\s*='
+  - id: js-ciphertext-const
+    desc: Ciphertext variable declaration
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    # Require a literal RHS. Runtime crypto code often names the result of an
+    # encrypt() call `ciphertext`; the obfuscated-payload marker is a hardcoded
+    # blob assigned directly to a constant.
+    if:
+      type: text
+      regex: '(?im)^\s*(const|let|var)\s+\w*CIPHERTEXT\w*\s*=\s*["'']'
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/presence/fixture/
+  - id: js-encrypted-text-const
+    desc: '*ENCRYPTED_TEXT* constant declaration'
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?im)^\s*(const|let|var)\s+\w*ENCRYPTED_TEXT\w*\s*='
+  - id: js-payload-blob-const
+    desc: '*PAYLOAD_BLOB* constant declaration'
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?im)^\s*(const|let|var)\s+\w*PAYLOAD_BLOB\w*\s*='
+  - id: py-final-encoded-text-const
+    desc: '*FINAL_ENCODED* constant declaration'
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: '(?im)^\s*\w*FINAL_ENCODED\w*\s*=\s*[a-zA-Z]{0,2}["'']'
+  - id: py-ciphertext-const
+    desc: '*CIPHERTEXT* constant declaration'
+    crit: notable
+    conf: 0.85
+    for: [python]
+    # Require a literal RHS: the obfuscation pattern is a constant assigned to an
+    # encoded blob (CIPHERTEXT = "base64..."), not live crypto where a local like
+    # `ciphertext_and_tag = aesccm.encrypt(...)` is assigned a function result.
+    if:
+      type: text
+      regex: '(?im)^\s*\w*CIPHERTEXT\w*\s*=\s*[a-zA-Z]{0,2}["'']'
+    unless:
+    - id: well-known/tool/detection/malware-config-parser
+  - id: py-encrypted-text-const
+    desc: '*ENCRYPTED_TEXT* constant declaration'
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: '(?im)^\s*\w*ENCRYPTED_TEXT\w*\s*=\s*[a-zA-Z]{0,2}["'']'
+composite_rules:
+  - id: hardcoded-key-with-large-blob
+    desc: Hardcoded key sits beside large ciphertext blob
+    crit: hostile
+    conf: 0.97
+    near_lines: 30
+    any:
+      - id: js-passphrase-literal-const
+      - id: js-salt-literal-const
+      - id: py-passphrase-literal-assign
+    all:
+      - id: ciphertext-blob-present
+  - id: ciphertext-blob-present
+    desc: Encrypted payload blob present
+    crit: component
+    any:
+      - id: micro-behaviors/data/encode/payload::large-encoded-blob-literal
+      - id: aes-gcm-triplet-blob
+      - id: micro-behaviors/data/encode/payload::large-base64-string-literals
+    unless:
+      - id: metadata/file/format/
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/library/structure::js-large-module-bundle

@@ -1,0 +1,166 @@
+# LNK Whitespace Obfuscation
+# CVE/ZDI: ZDI-CAN-25373
+# ATT&CK: T1027.010 (Command Obfuscation)
+#
+# Attackers abuse LNK shortcut files by inserting excessive whitespace
+# (spaces, tabs, newlines) to hide malicious command-line arguments
+# from visual inspection. The target command is padded far to the right
+# so it's not visible in the properties dialog.
+defaults:
+  platforms: [windows]
+  attack: "T1027.010"
+  for: [lnk]
+traits:
+  # === Excessive whitespace with command switch patterns ===
+  # More specific patterns that require both whitespace AND command context
+  - id: whitespace-cmd-exe
+    desc: Excessive whitespace before cmd.exe invocation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: '[ ]{50,}cmd\.exe'
+      case_insensitive: true
+  - id: whitespace-powershell-exe
+    desc: Excessive whitespace before powershell.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: '[ ]{50,}powershell\.exe'
+      case_insensitive: true
+  - id: whitespace-script-host
+    desc: Excessive whitespace before script hosts
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: '[ ]{50,}(wscript|cscript)\.exe'
+      case_insensitive: true
+  - id: tab-padded-command
+    desc: Tab-padded command obfuscation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: '\t{20,}(cmd|powershell)\.exe'
+      case_insensitive: true
+      # === LNK-specific argument hiding ===
+  - id: lnk-argument-padding
+    desc: LNK argument field with excessive padding
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(/c|/k|-c)[ ]{30,}\S'
+      case_insensitive: true
+      # === Encoded command after whitespace ===
+  - id: hidden-encoded-command
+    desc: "b64/encoded command after whitespace padding"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      # Whitespace + -enc flag + base64
+      regex: '[ ]{30,}-enc\s+[A-Za-z0-9+/]{20,}'
+      case_insensitive: true
+      # === KV-based LNK detection (uses structured LNK parsing) ===
+  - id: lnk-args-whitespace-run-50
+    desc: LNK arguments contain long whitespace run
+    crit: component
+    conf: 0.95
+    if:
+      type: metrics
+      field: lnk.args_max_whitespace_run
+      min: 50
+  - id: lnk-args-leading-spaces-50
+    desc: LNK arguments start with many spaces
+    crit: component
+    conf: 0.95
+    if:
+      type: metrics
+      field: lnk.args_leading_spaces
+      min: 50
+  - id: lnk-args-leading-tabs-50
+    desc: LNK arguments start with many tabs
+    crit: component
+    conf: 0.95
+    if:
+      type: metrics
+      field: lnk.args_leading_tabs
+      min: 50
+  - id: lnk-args-whitespace-total-100
+    desc: LNK arguments contain heavy whitespace padding
+    crit: component
+    conf: 0.95
+    if:
+      type: metrics
+      field: lnk.args_whitespace_total
+      min: 100
+composite_rules:
+  # LNK whitespace metrics emitted by expose are pure counts:
+  # args_leading_spaces / args_leading_tabs / args_whitespace_total /
+  # args_max_whitespace_run. Thresholds (e.g. ">= 50 for CVE-2025-9491")
+  # live in the trait `min:` clauses below, not in expose.
+
+  # Helper: whitespace hiding technique detected
+  - id: whitespace-hiding-comp
+    desc: Whitespace-based command hiding
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: whitespace-cmd-exe
+      - id: whitespace-powershell-exe
+      - id: whitespace-script-host
+        # Helper: extended whitespace patterns
+  - id: whitespace-hiding-extended
+    desc: Extended whitespace hiding patterns
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: whitespace-hiding-comp
+      - id: tab-padded-command
+        # Helper: command argument indicators
+  - id: argument-indicators
+    desc: Command argument padding or encoding
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-argument-padding
+      - id: hidden-encoded-command
+        # Main composite: both hiding + argument pattern
+  - id: lnk-whitespace-exploit
+    desc: LNK whitespace obfuscation exploit pattern
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: whitespace-hiding-extended
+      - id: argument-indicators
+  - id: cve-2025-9491-padding-shape
+    desc: CVE-2025-9491 padding shape
+    crit: suspicious
+    conf: 0.94
+    any:
+      - id: lnk-args-leading-spaces-50
+      - id: lnk-args-leading-tabs-50
+      - id: lnk-args-whitespace-total-100
+  - id: cve-2025-9491-argument-padding
+    desc: CVE-2025-9491 LNK argument padding
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: lnk-args-whitespace-run-50
+      - id: cve-2025-9491-padding-shape
+  - id: cve-2025-9491-command-target
+    desc: CVE-2025-9491 command target
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: objectives/command-and-control/dropper/lnk/target
+  - id: cve-2025-9491-command-interpreter-padding
+    desc: CVE-2025-9491 interpreter padding
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: cve-2025-9491-argument-padding
+      - id: cve-2025-9491-command-target

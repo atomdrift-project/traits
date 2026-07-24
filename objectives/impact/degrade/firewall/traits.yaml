@@ -1,0 +1,170 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  attack: T1562.004
+traits:
+  - id: ufw-reset
+    desc: Resets UFW firewall rules
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+    if:
+      type: text
+      regex: \bufw\s+--force\s+reset\b
+  - id: iptables-flush
+    desc: Flushes iptables rules
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    unless:
+      - id: objectives/impact/degrade/firewall::openvpn-sample-firewall-script
+      - type: text
+        substr: 'jq -r ''(.web + .api + .git)[]'''
+      - type: text
+        substr: Setup steps for local e2e testing environment
+      - type: text
+        substr: sudo systemctl stop docker
+      - id: objectives/impact/degrade/firewall::github-actions-lxd-e2e-setup
+      - id: well-known/tool/sysadmin/munin/
+      - id: well-known/app/openai-codex/
+    if:
+      type: text
+      # Bare `-F` (all chains) is the degrade signal. Chain-scoped forms like
+      # `iptables -F FORWARD` are ordinary NAT/firewall reconfiguration.
+      regex: \biptables\s+-F\b(?!\s+[A-Za-z])
+  - id: iptables-delete-all
+    desc: Deletes all iptables rules
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string_literal
+      regex: \biptables\s+(-X|-Z)\b
+  - id: iptables-policy-accept-dup
+    desc: iptables default policy ACCEPT
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    unless:
+      - id: objectives/impact/degrade/firewall::openvpn-sample-firewall-script
+      - type: text
+        substr: Setup steps for local e2e testing environment
+      - type: text
+        substr: sudo systemctl stop docker
+      - id: objectives/impact/degrade/firewall::github-actions-lxd-e2e-setup
+    if:
+      type: string_literal
+      regex: \biptables\s+-P\s+(INPUT|OUTPUT|FORWARD)\s+ACCEPT\b
+  - id: ip6tables-flush
+    desc: Flushes ip6tables rules
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string_literal
+      regex: \bip6tables\s+-F\b
+  - id: iptables-service-disable
+    desc: Disables iptables services
+    crit: suspicious
+    conf: 0.9
+    ref: sha256:4f2559adefb2c0f7a7efa5d9395565bb1a0e4e9f5ce62a8b8be433facbb2d3be
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: '\bsystemctl\s+(stop|disable)\s+ip6?tables\b'
+  - id: netsh-firewall-off-dup
+    desc: Disables Windows firewall via netsh
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - pe
+    if:
+      type: text
+      regex: netsh\s+(firewall.{0,80}disable|advfirewall.{0,80}state\s+off)
+      case_insensitive: true
+  - id: netsh-firewall-allowedprogram
+    desc: Netsh firewall add allowedprogram exception
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [batch, pe]
+    if:
+      type: text
+      regex: 'netsh\s+firewall\s+add\s+allowedprogram'
+      case_insensitive: true
+composite_rules:
+  - id: disabled
+    desc: Firewall disabled
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: objectives/impact/degrade/firewall::ufw-disable
+      - id: ufw-reset
+      - id: iptables-flush
+      - id: ip6tables-flush
+      - id: objectives/impact/degrade/firewall::nft-flush
+      - id: micro-behaviors/os/firewall/firewalld::firewalld-stop
+      - id: objectives/impact/degrade/firewall::netsh-firewall-off-dup
+      - id: objectives/impact/degrade/firewall::windows-firewall-profile-disable
+    unless:
+      - id: well-known/app/openai-codex/
+      - id: micro-behaviors/os/firewall/firewalld::vagrant-test-firewalld-stop
+  - id: opened
+    desc: Firewall rules cleared and opened
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/impact/degrade/firewall::iptables-policy-accept-dup
+    any:
+      - id: iptables-flush
+      - id: iptables-delete-all
+  - id: persisted-empty-iptables-rules
+    desc: Cleared iptables rules persisted
+    crit: suspicious
+    conf: 0.9
+    ref: sha256:4f2559adefb2c0f7a7efa5d9395565bb1a0e4e9f5ce62a8b8be433facbb2d3be
+    for: [scripts, binaries]
+    all:
+      - id: micro-behaviors/os/firewall/iptables::iptables-save-system-rules
+    any:
+      - id: micro-behaviors/os/firewall/iptables::iptables-flush-flag
+      - id: micro-behaviors/os/firewall/iptables::iptables-delete-chain-flag
+  - id: persisted-empty-ip6tables-rules
+    desc: Cleared ip6tables rules persisted
+    crit: suspicious
+    conf: 0.9
+    ref: sha256:4f2559adefb2c0f7a7efa5d9395565bb1a0e4e9f5ce62a8b8be433facbb2d3be
+    for: [scripts, binaries]
+    all:
+      - id: micro-behaviors/os/firewall/iptables::ip6tables-save-system-rules
+    any:
+      - id: micro-behaviors/os/firewall/iptables::ip6tables-flush-flag
+      - id: micro-behaviors/os/firewall/iptables::ip6tables-delete-chain-flag
+  - id: persisted-empty-dualstack-firewall
+    desc: Cleared IPv4 and IPv6 firewall persisted
+    crit: suspicious
+    conf: 0.92
+    ref: sha256:4f2559adefb2c0f7a7efa5d9395565bb1a0e4e9f5ce62a8b8be433facbb2d3be
+    for: [scripts, binaries]
+    all:
+      - id: persisted-empty-iptables-rules
+      - id: persisted-empty-ip6tables-rules
+  - id: security-degrader
+    desc: Disables multiple security controls
+    crit: hostile
+    conf: 0.95
+    for:
+      - shell
+    all:
+      - id: disabled
+      - id: micro-behaviors/fs/attributes/chattr::chattr-command
+    any:
+      - id: objectives/evasion/kernel-hide/userspace::ld-so-preload-clear
+      - id: objectives/evasion/kernel-hide/userspace::ld-so-preload-chattr

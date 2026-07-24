@@ -1,0 +1,65 @@
+# Junk Data and Entropy Manipulation
+defaults:
+  for: [binaries]
+  platforms: [linux, macos, windows]
+
+traits:
+  - id: junk-base64-test-data
+    desc: Base64 test data junk code indicator
+    crit: suspicious
+    conf: 0.99
+    if:
+      type: text
+      substr: "Base64 encoding test data for junk code"
+
+  - id: artificially-low-entropy
+    desc: Artificially low entropy from padding
+    crit: notable
+    conf: 0.8
+    size_min: 500000
+    if:
+      type: metrics
+      field: binary.overall_entropy
+      max: 2.5
+    unless:
+      - id: metadata/lang/compiler/systems/
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/lang/compiler/systems::go-pe-symtab
+
+  - id: massive-string-count
+    desc: Massive string count junk padding
+    crit: notable
+    conf: 0.9
+    size_max: 100000000
+    if:
+      type: metrics
+      field: binary.string_count
+      min: 90000
+    # Benign high-string-count runtimes (Go/Rust/Electron/ffmpeg/minikube). NOT
+    # metadata/binary/framework/: a decoy-stuffed loader rips framework/SDK strings
+    # precisely to fake those markers, so excluding on them would defeat detection
+    # of the very technique this trait exists to catch.
+    unless:
+      - id: well-known/lib/electron/
+      - id: well-known/lib/ffmpeg/
+      - id: well-known/tool/sysadmin/kubernetes/minikube/
+      - id: metadata/lang/compiler/systems/
+      - id: metadata/lang/compiler/native::gcc-cpp-frontend-executable
+      # Generated Pulumi .NET providers contain tens of thousands of API
+      # schema identifiers; that is product data, not junk padding.
+      - id: well-known/app/pulumi::pulumi-dotnet-provider
+
+composite_rules:
+  - id: artificial-entropy-reduction
+    desc: Artificial entropy reduction via massive junk string padding
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: massive-string-count
+      - id: artificially-low-entropy
+    any:
+      - id: junk-base64-test-data
+      - id: metadata/binary/metrics/size::large-file-1mb
+
+    unless:
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape/

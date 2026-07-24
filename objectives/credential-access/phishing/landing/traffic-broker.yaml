@@ -1,0 +1,146 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, html]
+  attack: T1566.002
+  mbc: B0030
+  crit: suspicious
+  conf: 0.9
+
+traits:
+  - id: click-endpoint-with-email
+    desc: Click redirect carries email
+    conf: 0.94
+    if:
+      type: text
+      regex: 'https?://.{1,160}/click\?.{0,240}[&?]email='
+
+  - id: dating-campaign-click-params
+    desc: Dating campaign click parameters
+    conf: 0.9
+    if:
+      type: text
+      regex: '[?&]s1=[a-z0-9]{2,16}.{0,180}[?&]s3=[a-z0-9:]{4,40}.{0,180}[?&]v=dating'
+
+  - id: browser-profile-query-fields
+    desc: Browser profile query fields
+    conf: 0.93
+    if:
+      type: text
+      # `sc` is a common search/source parameter (for example Baidu search
+      # URLs), not a fingerprint field. Keep only the less ambiguous profile
+      # names so ordinary search templates do not inflate the field count.
+      regex: '[^&]&(ph|vd|fp|ft|tz|lg|ua|gyro)='
+    count_min: 4
+    unless:
+      - type: text
+        substr: 'ft=music'
+      # Video-CDN playback URLs (TikTok/`ttcdn`, etc.) carry `&ft=<token>`,
+      # `&sc=`, `&vd=` alongside `mime_type=video_*`; these collide with the
+      # fingerprint-field names and inflate the count. A fingerprint-collection
+      # landing page does not ship video-playback query strings.
+      - type: text
+        substr: 'mime_type=video'
+
+  - id: parklogic-router-endpoint
+    desc: ParkLogic traffic router endpoint
+    conf: 0.92
+    if:
+      type: text
+      substr: "https://router.parklogic.com/"
+
+  - id: browser-profile-router-fields
+    desc: Browser profile fields posted to traffic router
+    conf: 0.93
+    if:
+      type: text
+      regex: 'adBlockingDetected[\s\S]{0,500}timezoneBrowser[\s\S]{0,500}webdriver[\s\S]{0,500}gpu'
+
+  - id: xhr-response-location-redirect
+    desc: XHR response-driven browser redirect
+    conf: 0.93
+    if:
+      type: text
+      regex: 'responseText\.startsWith\(["'']http["'']\)[\s\S]{0,400}window\.location\.replace\s*\('
+
+  - id: constructed-location-redirect
+    desc: Constructed window location redirect
+    # Building-block for phishing composites; alone this is common in
+    # authenticated frameworks (e.g. Aura no-access redirects).
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: 'redirectURL\s*=[\s\S]{0,600}window\.location\s*=\s*redirectURL'
+    unless:
+      - type: text
+        substr: handleNoAccessException
+      - type: text
+        substr: 'markup://aura:noAccess'
+
+  - id: fake-compliance-link-cluster
+    desc: Fake compliance link cluster
+    conf: 0.9
+    if:
+      type: text
+      regex: 'href=["''].{1,180}/privacy["''][\s\S]{0,600}href=["''].{1,180}/unsub\?'
+
+composite_rules:
+  - id: profiled-click-redirect
+    desc: Browser-profiled click redirect
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: objectives/discovery/system/fingerprint/browser::browser-encoded-fingerprint-profile
+      - id: click-endpoint-with-email
+      - id: browser-profile-query-fields
+    any:
+      - id: micro-behaviors/ui/window/manage/dom::browser-location-external-assign
+      - id: micro-behaviors/ui/window/manage/dom::browser-location-external-href-replace
+      - id: constructed-location-redirect
+
+  - id: propagated-query-click-redirect
+    desc: Propagated query click redirect
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-query-propagated-redirect
+      - id: click-endpoint-with-email
+      - id: dating-campaign-click-params
+    any:
+      - id: micro-behaviors/ui/window/manage/dom::browser-location-external-assign
+      - id: micro-behaviors/ui/window/manage/dom::browser-location-external-href-replace
+      - id: constructed-location-redirect
+
+  - id: traffic-broker-profile-harvest
+    desc: Traffic broker profile harvest
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: objectives/discovery/system/fingerprint/browser::browser-encoded-fingerprint-profile
+      - id: browser-profile-query-fields
+      - id: fake-compliance-link-cluster
+    any:
+      - id: click-endpoint-with-email
+      - id: dating-campaign-click-params
+
+  - id: parklogic-profiled-response-redirect
+    desc: ParkLogic browser profile used for response redirect
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: parklogic-router-endpoint
+      - id: browser-profile-router-fields
+      - id: xhr-response-location-redirect
+    any:
+      - id: objectives/anti-static/obfuscation/payload/encoded::js-base64-blob
+      - id: micro-behaviors/data/encoded::base64-token
+
+  - id: parklogic-profiled-response-html-injection
+    desc: ParkLogic browser profile used to inject router HTML
+    crit: hostile
+    conf: 0.97
+    attack: T1185,T1566.002
+    all:
+      - id: parklogic-router-endpoint
+      - id: browser-profile-router-fields
+      - id: micro-behaviors/ui/window/manage/dom::browser-innerhtml-assignment

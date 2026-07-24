@@ -1,0 +1,154 @@
+defaults:
+  platforms: [windows, unix]
+  # These rules describe Lua source syntax.  Applying them to arbitrary text
+  # treats escaped bytes embedded in other languages (for example OCaml's
+  # generated Unicode tables) as Lua obfuscation.  The content-specific
+  # loader rules below carry the narrower content-based exception for
+  # extensionless or mislabeled Lua payloads.
+  for: [lua]
+  attack: T1027
+traits:
+  - id: lua-packed-return-function-loader
+    desc: Packed Lua return-function loader
+    crit: suspicious
+    conf: 0.94
+    # A payload can be mislabeled with a non-Lua extension and be classified
+    # by content heuristics as another source type.  This matcher is still
+    # keyed to Lua syntax, so accepting C keeps the trait's identity honest.
+    for: [lua, javascript, text, c]
+    size_min: 50000
+    if:
+      type: text
+      regex: '(?s)^return\(function\(\.\.\.\).{0,512}?return\(function\([A-Za-z,]{20,120}\)'
+
+  - id: lua-indexed-string-permutation-decoder
+    desc: Lua indexed string permutation decoder
+    crit: suspicious
+    conf: 0.93
+    for: [lua, javascript, text, c]
+    size_min: 50000
+    if:
+      type: text
+      regex: 'for [A-Za-z]=1,#[A-Za-z],1 do [A-Za-z]=[A-Za-z]\.\.[A-Za-z]\[[A-Za-z]\['
+
+  - id: lua-index-loop-concat
+    desc: Lua indexed loop concatenates values
+    crit: component
+    conf: 0.94
+    for: [lua, javascript, text]
+    size_min: 50000
+    if:
+      type: text
+      regex: 'for\s+[A-Za-z_]\w*\s*=\s*1\s*,\s*#[A-Za-z_]\w*\s*,\s*1\s*do'
+
+  - id: lua-indexed-concat
+    desc: Lua concatenates an indexed value
+    crit: component
+    conf: 0.94
+    for: [lua, javascript, text]
+    size_min: 50000
+    if:
+      type: text
+      regex: '[A-Za-z_]\w*\s*=\s*[A-Za-z_]\w*\.\.\s*[A-Za-z_]\w*\s*\[\s*[A-Za-z_]\w*\s*\['
+
+  - id: lua-decimal-escape-string-table
+    desc: Decimal-escaped Lua string table
+    crit: suspicious
+    conf: 0.94
+    size_min: 50000
+    count_min: 100
+    if:
+      type: text
+      regex: '\\[0-9]{3}'
+
+  - id: lua-large-encoded-string-table
+    desc: Large Lua encoded-looking string table
+    crit: suspicious
+    conf: 0.94
+    size_min: 50000
+    count_min: 100
+    if:
+      type: text
+      # Base64 / URL-safe alphabet quoted tokens. Length 8+ catches short
+      # obfuscator chunks; identifier filters below drop ORM/fixture keys.
+      regex: '"[A-Za-z0-9+/=_-]{8,}"'
+    not:
+      # Plain identifiers and English words are field keys / copy, not
+      # encoded payload tables (e.g. Orbit sample DB dumps).
+      - regex: '"[a-z]{8,}"'
+      - regex: '"[a-z]+(-[a-z0-9]+)+"'
+      - regex: '"[a-z][a-z0-9]*(_[a-z0-9]+)+"'
+      - regex: '"[a-z]+([A-Z][a-z0-9]*)+"'
+      - regex: '"[A-Z][a-z]+([A-Z][a-z0-9]*)*"'
+    unless:
+      # Extensionless HTML pages often embed large base64-like JSON values.
+      # Those are application state, not Lua string-table obfuscation.
+      - type: text
+        regex: '(?is)^\s*<!doctype\s+html'
+
+  - id: lua-large-single-line-dispatch
+    desc: Large one-line Lua dispatch
+    crit: suspicious
+    conf: 0.9
+    size_min: 50000
+    if:
+      type: metrics
+      field: text.total_lines
+      max: 3
+
+  - id: lua-environment-proxy-loader
+    desc: Lua environment and proxy loader
+    crit: suspicious
+    conf: 0.95
+    for: [lua, javascript, text]
+    if:
+      type: text
+      # Call syntax excludes language-grammar prose/regexes while retaining
+      # loaders that invoke all three environment/proxy primitives.
+      regex: '(?s)getfenv\s*\([^)]{0,120}\).*?newproxy\s*\([^)]{0,120}\).*?setmetatable\s*\('
+
+composite_rules:
+  - id: lua-indexed-string-table-reassembly
+    desc: Indexed Lua string-table reassembly
+    crit: suspicious
+    conf: 0.95
+    for: [lua, javascript, text]
+    size_min: 50000
+    all:
+      - id: lua-index-loop-concat
+      - id: lua-indexed-concat
+
+  - id: packed-lua-loader-obfuscation
+    desc: Packed Lua loader obfuscation
+    crit: hostile
+    conf: 0.96
+    for: [lua, javascript, text, c]
+    all:
+      - id: lua-packed-return-function-loader
+      - id: lua-indexed-string-permutation-decoder
+
+  - id: lua-obfuscated-string-dispatch
+    desc: Indexed strings plus one-line Lua dispatch
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: lua-indexed-string-table-reassembly
+      - id: lua-large-single-line-dispatch
+
+  - id: lua-escaped-string-dispatch
+    desc: Indexed strings plus escaped Lua payload
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140
+    all:
+      - id: lua-indexed-string-table-reassembly
+      - id: lua-decimal-escape-string-table
+
+  - id: lua-environment-proxy-obfuscated-loader
+    desc: Escaped Lua environment/proxy loader
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: lua-environment-proxy-loader
+      - id: lua-decimal-escape-string-table
+      - id: lua-indexed-string-table-reassembly

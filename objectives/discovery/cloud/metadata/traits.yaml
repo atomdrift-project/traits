@@ -1,0 +1,101 @@
+defaults:
+  attack: T1552.005
+  platforms: [windows, unix]
+  for: [go, python, javascript, java, class, jar, pe, elf]
+traits:
+  - id: aws-user-data
+    desc: AWS EC2 user-data endpoint
+    crit: suspicious
+    conf: 0.85
+    entropy_max: 7.8
+    if:
+      type: text
+      regex: '(https?://)?169\.254\.169\.254/latest/user-data/?\b'
+    unless:
+      - type: text
+        substr: github.com/aws/aws-sdk-go
+      - type: text
+        substr: github.com/aws/aws-sdk-go-v2/
+      - type: text
+        substr: github.com/aws/smithy-go
+    downgrade:
+      any:
+        - id: objectives/discovery/cloud/metadata/
+        - id: metadata/binary/metrics/size::massive-executable
+  - id: ssrf-cloud-metadata-block-comment
+    desc: SSRF cloud metadata block comment
+    crit: baseline
+    conf: 0.95
+    if:
+      type: text
+      substr: Block link-local and cloud metadata addresses to prevent SSRF
+  - id: blocked-hosts-symbol
+    desc: Blocked hosts set symbol
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)blocked[_-]?host(name)?s?\b'
+    unless:
+      - type: trait
+        id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  - id: zig-packed-cloud-request-ids
+    desc: Zig packed cloud request IDs
+    crit: component
+    conf: 0.9
+    platforms: [unix]
+    for: [zig]
+    count_min: 3
+    if:
+      type: symbol
+      kind: identifier
+      regex: '^PACKED_GET_[A-Z_]+$'
+  - id: zig-cloud-metadata-probe-func
+    desc: Zig cloud metadata probe func
+    crit: suspicious
+    conf: 0.92
+    platforms: [unix]
+    for: [zig]
+    if:
+      type: text
+      regex: '\bfn\s+probeCloudMetadata\s*\('
+  - id: zig-cloud-response-logs
+    desc: Zig cloud metadata response logs
+    crit: component
+    conf: 0.9
+    platforms: [unix]
+    for: [zig]
+    count_min: 3
+    if:
+      type: literal
+      regex: '^(cloud (meta|identity)|gcp meta|azure meta) response'
+composite_rules:
+  - id: metadata-harvesting
+    desc: Cloud metadata harvesting
+    crit: suspicious
+    conf: 0.9
+    mbc: B0046
+    any:
+      - id: metadata/file/string/cloud::aws-metadata-endpoint
+      - id: objectives/credential-access/cloud/token/files::gcp-metadata-access
+      - id: metadata/file/string/cloud::gcp-default-service-account-email-path
+      - id: metadata/file/string/cloud::azure-metadata-endpoint
+    unless:
+      - id: metadata/package/testing/
+    downgrade:
+      any:
+        - id: objectives/discovery/cloud/metadata/
+  - id: zig-packed-cloud-metadata-sweep
+    desc: Zig packed cloud metadata sweep
+    crit: hostile
+    conf: 0.98
+    platforms: [unix]
+    for: [zig]
+    all:
+      - id: zig-packed-cloud-request-ids
+      - id: zig-cloud-metadata-probe-func
+      - id: zig-cloud-response-logs
+      - id: objectives/anti-static/obfuscation/encoding/xor::zig-runtime-xor-packed-arrays
+    any:
+      - id: micro-behaviors/communications/socket/connect::zig-tcp-connect-host
+      - id: cloud-metadata-access

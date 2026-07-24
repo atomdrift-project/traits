@@ -1,0 +1,82 @@
+defaults:
+  platforms: [unix, windows]
+  for: [php]
+  crit: suspicious
+  conf: 0.9
+  attack: T1027
+  mbc: B0032
+
+traits:
+  - id: uuid-literal
+    desc: UUID literal present in PHP source
+    crit: component
+    conf: 0.95
+    if:
+      type: string_literal
+      regex: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+
+  - id: uuid-xor-array-index
+    desc: UUID XOR decryption with modulo array index
+    conf: 0.88
+    if:
+      type: text
+      regex: '\^\s*(ord\s*\(\s*)?\$\w+\s*\[\s*\$\w+\s*%\s*strlen'
+
+  - id: array-map-xor-decrypt
+    desc: Array-map XOR byte callback
+    conf: 0.85
+    size_max: 500000
+    if:
+      type: text
+      regex: "array_map\\s*\\(.{0,100}\\b(ord|chr)\\s*\\([^)]{0,40}\\)\\s*\\^"
+
+  - id: packed-hex-xor-key
+    desc: pack(H*) value before XOR operation
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: pack\s*\(\s*["']H\*["'][\s\S]{0,300}\^
+    unless:
+      - type: text
+        regex: "unpack\\s*\\(\\s*['\"]H\\*['\"].{0,80}pack\\s*\\(\\s*['\"]v\\*?['\"]"
+      - id: well-known/lib/phpseclib
+      - id: well-known/lib/firebase-jwt
+
+  - id: xor-before-packed-hex-key
+    desc: XOR operation before pack(H*) value
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: \^[\s\S]{0,300}pack\s*\(\s*["']H\*["']
+    unless:
+      - type: text
+        regex: "unpack\\s*\\(\\s*['\"]H\\*['\"].{0,80}pack\\s*\\(\\s*['\"]v\\*?['\"]"
+      - id: well-known/lib/phpseclib
+      - id: well-known/lib/firebase-jwt
+
+# serialize-call removed: a bare PHP `(un)serialize(` call is neutral object
+# serialization (ubiquitous in WordPress/Laravel/etc.), not XOR obfuscation. It
+# was an orphan baseline (no composite referenced it) that mislabeled benign PHP
+# with an obfuscation/encoding/xor web-UI feature. The canonical capability home
+# is micro-behaviors/data/serialize/object/php.yaml::{serialize-symbol,unserialize}.
+
+composite_rules:
+  - id: uuid-xor-key
+    desc: UUID constant used as XOR decryption key
+    crit: suspicious
+    conf: 0.95
+    near_bytes: 512
+    all:
+      - id: uuid-literal
+    any:
+      - id: uuid-xor-array-index
+      - id: array-map-xor-decrypt
+      - id: packed-hex-xor-key
+      - id: xor-before-packed-hex-key
+      - id: objectives/anti-static/obfuscation/string/dynamic::dynamic-function-chr-arith
+      - id: objectives/anti-static/obfuscation/string/dynamic::chr-concat-function-name
+      - id: micro-behaviors/process/interpreter/eval::dynamic-function-execution
+    unless:
+      - id: metadata/library/uuidv5::php-uuidv5-implementation

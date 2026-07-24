@@ -1,0 +1,130 @@
+defaults:
+  for: [pkginfo]
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: "T1195.002"
+traits:
+  - id: summary-mentions-victim
+    desc: Package summary explicitly mentions victims
+    conf: 0.9
+    if:
+      type: value
+      path: summary
+      substr: victim
+      case_insensitive: true
+  - id: summary-poc-research-1
+    desc: Summary claims proof of concept research
+    crit: component
+    conf: 0.88
+    if:
+      type: value
+      path: summary
+      regex: "(proof.of.concept|\\bpoc\\b|security.research)"
+      case_insensitive: true
+  - id: summary-poc-research-2
+    desc: Summary claims bug bounty confusion
+    crit: component
+    conf: 0.88
+    unless:
+      - id: metadata/package/quality/false-positives-scanner::installtime-audit-defensive-scanner-context
+    if:
+      type: value
+      path: summary
+      regex: '(bug[\s_-]*bounty|dependency[\s_-]*confusion)'
+      case_insensitive: true
+  - id: summary-confirms-install
+    desc: "Summary confirms package installation"
+    conf: 0.9
+    if:
+      type: value
+      path: summary
+      regex: "confirm.{0,30}install"
+      case_insensitive: true
+  - id: summary-beacon
+    desc: Summary mentions beacon functionality
+    crit: component
+    conf: 0.9
+    if:
+      type: value
+      path: summary
+      regex: "\\bbeacon\\b"
+      case_insensitive: true
+
+  - id: python-vendor-sdk-namespace-path
+    desc: Python package ships Alibaba SDK namespace
+    crit: notable
+    conf: 0.98
+    for: [python]
+    if:
+      type: path
+      regex: '(^|[\\/])aliyunsdkcore[\\/]'
+
+  - id: pypi-generic-cloud-client-name
+    desc: PyPI package uses generic cloud-client name
+    crit: component
+    conf: 0.9
+    if:
+      type: value
+      path: name
+      exact: acloud-client
+
+composite_rules:
+  # A bare "proof of concept" claim is common in legitimate academic/research
+  # software, so it only counts toward depconf when paired with a confirmer
+  # (victim mention, install callback, beacon). Bug-bounty/dependency-confusion
+  # wording alone is still only a component because scanners and research tools
+  # commonly describe those concepts without performing the attack.
+  - id: poc-claim-corroborated
+    desc: Proof-of-concept claim with depconf marker
+    crit: component
+    conf: 0.9
+    all:
+      - id: summary-poc-research-1
+    any:
+      - id: summary-mentions-victim
+      - id: summary-confirms-install
+      - id: summary-beacon
+  - id: summary-poc-research
+    desc: Summary claims dependency confusion research
+    crit: component
+    conf: 0.9
+    any:
+      - id: summary-poc-research-2
+      - id: poc-claim-corroborated
+
+  - id: pypi-sdk-namespace-dependency-confusion
+    desc: Generic PyPI package shadows vendor SDK namespace
+    crit: hostile
+    conf: 0.98
+    for: [python-sdist]
+    scope: archive
+    all:
+      - id: pypi-generic-cloud-client-name
+      - id: python-vendor-sdk-namespace-path
+      - id: objectives/supply-chain/credential-theft/package::python-user-agent-helper-import
+  - id: metadata-only-research-http-wheel
+    desc: Empty wheel claims research and needs HTTP client
+    # Metadata-only research wheels and dependency-confusion placeholders can
+    # be intentionally empty.  Without executable or install-time behavior,
+    # this is analyst context rather than evidence of an attack.
+    crit: notable
+    conf: 0.92
+    for: [whl]
+    all:
+      - id: metadata/package/metrics::tiny-wheel-archive-content
+      - id: metadata/package/dependencies::pypi-http-client-dependency
+      - id: metadata/package/manifest/description::desc-poc-research-2
+      - id: metadata/package/files/wheel-sdist::wheel-dist-info-member
+    unless:
+      - id: metadata/package/files/wheel-sdist::wheel-runtime-code-member
+  - id: pypi-research-http-inflated-metadata
+    desc: PyPI metadata claims research with inflated HTTP dependency
+    # A research claim plus an inflated version is ambiguous: security
+    # placeholder packages use this shape to reserve internal names.  Keep it
+    # visible, but do not infer hostile intent without code or an install hook.
+    crit: notable
+    conf: 0.9
+    all:
+      - id: metadata/package/dependencies::pypi-http-client-dependency
+      - id: metadata/package/manifest/description::desc-poc-research-2
+      - id: metadata/package/versioning::pkginfo-inflated-version

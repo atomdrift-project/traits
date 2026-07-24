@@ -1,0 +1,136 @@
+defaults:
+  platforms: [unix, windows]
+  for: [package.json, javascript]
+traits:
+# A curl/wget beacon carrying victim identifiers as request parameters
+# (`--data-urlencode "user=…" "host=…"`). >=2 distinct identity fields = a
+# fingerprint beacon, not a normal API call. Catches the spawned-curl exfil
+# used by the @403name/ether-js typosquat (clickfix-callback).
+- id: curl-beacon-victim-fields
+  desc: curl beacons victim user/host fields
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript, shell]
+  count_min: 2
+  if:
+    type: text
+    regex: "--data(-urlencode)?[\\s\"']{1,3}(user|hostname?|bid|uid)="
+composite_rules:
+  - id: python-package-profiled-install-beacon
+    desc: Python package profiles the host and installs an HTTP-capable dependency
+    crit: hostile
+    conf: 0.96
+    attack: "T1195.002,T1041"
+    mbc: E1041
+    all:
+      - id: objectives/execution/autoinstall/pip::subprocess-requests-install
+      - id: objectives/discovery/system/profile::python-device-host-profile-fields
+      - id: micro-behaviors/communications/http/request/client::request-python
+    unless:
+      - id: metadata/package/testing/
+  # Victim recon (user/hostname collection in a small npm package) beaconed out
+  # via a curl identity beacon = host fingerprint exfiltration.
+  - id: npm-victim-curl-beacon-exfil
+    desc: NPM victim identifiers beaconed via curl
+    crit: hostile
+    conf: 0.96
+    attack: T1041
+    mbc: E1041
+    all:
+      - id: npm-victim-id-recon
+      - id: curl-beacon-victim-fields
+  - id: npm-victim-id-recon
+    desc: NPM package collects victim identifiers
+    crit: notable
+    conf: 0.9
+    all:
+      - id: objectives/discovery/system/fingerprint/hardware::js-victim-id
+      - id: metadata/file/metrics::javascript-small-file-5k
+    scope: archive
+    unless:
+      - id: metadata/lang/compiler/systems/
+      - id: metadata/lang/compiler/systems::go-version-string
+      - id: metadata/package/manifest/repository/
+      - id: metadata/package/dependencies::platform-optional-native-wrapper
+      - id: micro-behaviors/os/service/legitimate::npm-native-binary-wrapper
+      - id: objectives/supply-chain/recon-exfil/install-hook::parcel-cpu-count-worker
+  - id: npm-victim-exfil-transport
+    desc: NPM victim exfil transport
+    crit: component
+    conf: 0.94
+    any:
+      - id: objectives/exfiltration/http/upload::node-collect-exfil
+      - id: objectives/exfiltration/http/upload::node-stealthy-exfil
+      - id: objectives/exfiltration/http/upload::curl-file-upload-exfil
+      - id: objectives/exfiltration/messaging/webhook::webhook-c2-channel
+      - id: objectives/exfiltration/messaging/webhook::discord-host-fingerprint-exfiltration
+  - id: npm-victim-id-exfil
+    desc: NPM victim identifiers with exfiltration
+    crit: hostile
+    conf: 0.99
+    attack: T1020
+    mbc: E1041
+    all:
+      - id: npm-victim-id-recon
+      - id: npm-victim-exfil-transport
+    unless:
+      - id: metadata/package/manifest/publishing::is-private
+      - id: metadata/package/manifest/name/
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: npm-victim-id-fetch-exfil
+    desc: NPM victim identifiers sent in an authenticated account request
+    crit: hostile
+    conf: 0.99
+    attack: "T1020,T1041"
+    mbc: E1041
+    for: [archives]
+    scope: archive
+    all:
+      - id: npm-victim-id-recon
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/client::bearer-authorization-prefix
+      - id: micro-behaviors/communications/http/endpoints::accounts-endpoint-path
+      - id: objectives/exfiltration/http/hardcoded-key::request-body-marker
+    unless:
+      - id: metadata/package/manifest/publishing::is-private
+  - id: npm-victim-id-oob-exfil
+    desc: NPM victim identifiers exfiltrated to OOB
+    crit: hostile
+    conf: 0.98
+    attack: T1048
+    mbc: E1041
+    all:
+      - id: npm-victim-id-recon
+      - id: micro-behaviors/communications/http/request/client::https-request
+    any:
+      - id: objectives/exfiltration/oob/endpoint
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/manifest/publishing::is-private
+  - id: npm-hollow-preinstall-encoded-recon-exfil
+    desc: Hollow npm preinstall runs encoded recon beacon
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1041"
+    mbc: E1041
+    for: [package.json, javascript, archives]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
+      - id: objectives/supply-chain/install-hook/scripts/lifecycle::preinstall-runs-node-local-script
+      - id: objectives/discovery/system/fingerprint/hardware::js-encoded-recon-beacon
+  - id: python-dask-package-runtime-recon-exfil
+    desc: Python Dask package runtime recon exfil
+    crit: hostile
+    conf: 0.98
+    attack: T1041
+    mbc: E1041
+    for: [python]
+    ref: sha256:f641c73a90cccdd02a5c5c29a1f550adb4cdfd260d05403d99db4b379db070ff
+    all:
+      - id: micro-behaviors/data/plugin::dask-worker-plugin-subclass
+      - id: micro-behaviors/data/plugin::dask-worker-state-task-access
+      - id: micro-behaviors/os/sysinfo/performance/monitoring::dask-task-memory-attribution
+      - id: micro-behaviors/communications/http/telemetry::dask-ingest-samples-endpoint
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call

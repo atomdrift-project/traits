@@ -1,0 +1,129 @@
+# Modify Existing Service - Linux Privilege Escalation
+# MBC: F0011 (Modify Existing Service)
+# ATT&CK: T1543.002 (Create or Modify System Process: Systemd Service)
+#
+# Modifying an existing systemd service or init script to execute
+# attacker-controlled code with root privileges.
+# Atomic service path/config traits are in micro-behaviors/os/service/config/linux.yaml
+defaults:
+  mbc: "F0011"
+  attack: "T1543.002"
+  platforms: [unix]
+traits:
+- id: systemd-temp-exec-payload--rx-6
+  desc: Systemd ExecStart /tmp payload
+  crit: component
+  conf: 0.85
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)Exec(Start|Stop|StartPre)\s*=\s*[^\n]{0,240}/tmp/'
+  count_max: 1015976
+- id: systemd-temp-exec-payload--var-tmp
+  desc: Systemd ExecStart var-tmp payload
+  crit: component
+  conf: 0.85
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)Exec(Start|Stop|StartPre)\s*=\s*[^\n]{0,240}/var/tmp/'
+- id: systemd-temp-exec-payload--dev-shm
+  desc: Systemd ExecStart dev-shm payload
+  crit: component
+  conf: 0.85
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)Exec(Start|Stop|StartPre)\s*=\s*[^\n]{0,240}/dev/shm'
+- id: systemd-temp-exec-payload--port-1200
+  desc: Systemd ExecStart port 1200
+  crit: component
+  conf: 0.85
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)Exec(Start|Stop|StartPre)\s*=\s*[^\n]{0,240}1200'
+- id: systemd-download-exec-payload--rx-10
+  desc: Systemd ExecStart curl payload
+  crit: component
+  conf: 0.85
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)Exec(Start|Stop|StartPre)\s*=\s*[^\n]{0,240}\bcurl\b'
+  count_max: 1015980
+- id: systemd-download-exec-payload--wget
+  desc: Systemd ExecStart wget payload
+  crit: component
+  conf: 0.85
+  for: [shell, python]
+  if:
+    type: text
+    regex: '(?m)Exec(Start|Stop|StartPre)\s*=\s*[^\n]{0,240}\bwget\b'
+- id: vagrant-plugins-marker
+  desc: Vagrant plugin source marker
+  crit: notable
+  conf: 0.9
+  for: [shell, ruby]
+  if:
+    type: text
+    substr: VagrantPlugins
+composite_rules:
+  # Service path + daemon reload + systemctl: modifying system service state.
+- id: systemd-service-modification
+  desc: Systemd service modification and reload
+  crit: notable
+  conf: 0.9
+  all:
+  - id: micro-behaviors/os/service/config::systemd-service-path
+  - id: micro-behaviors/os/service/config::daemon-reload
+  any:
+  - id: systemd-temp-exec-payload
+  - id: systemd-download-exec-payload
+  downgrade:
+    any:
+    - id: metadata/signed/platform/
+    - id: objectives/anti-analysis/emulator-detect/vendor-strings
+    - type: text
+      substr: "docker.service"
+  # Init script write + shell execution
+- id: init-script-hijack
+  desc: Init script modification with execution
+  crit: notable
+  conf: 0.85
+  all:
+  - id: micro-behaviors/os/service/config::init-script-path
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh
+  unless:
+  - id: micro-behaviors/os/service/config::sysv-init-script-header
+  - id: objectives/persistence/system/init/boot::openrc-init-script-header
+  - id: metadata/package/files/included::install-uninstall-shell-basename
+  - id: vagrant-plugins-marker
+  - id: well-known/app/egroupware/
+  - id: well-known/app/pihole::pihole-artifact
+- id: systemd-temp-exec-payload
+  desc: Systemd unit executes temp payload
+  crit: suspicious
+  conf: 0.85
+  for: [shell, python]
+  downgrade:
+    any:
+    - id: micro-behaviors/os/service/legitimate::installer-script
+    - id: metadata/package/files/included::install-uninstall-shell-basename
+  any:
+  - id: systemd-temp-exec-payload--rx-6
+  - id: systemd-temp-exec-payload--var-tmp
+  - id: systemd-temp-exec-payload--dev-shm
+  - id: systemd-temp-exec-payload--port-1200
+- id: systemd-download-exec-payload
+  desc: Systemd unit downloads payload
+  crit: suspicious
+  conf: 0.85
+  for: [shell, python]
+  downgrade:
+    any:
+    - id: micro-behaviors/os/service/legitimate::installer-script
+    - id: metadata/package/files/included::install-uninstall-shell-basename
+  any:
+  - id: systemd-download-exec-payload--rx-10
+  - id: systemd-download-exec-payload--wget

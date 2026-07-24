@@ -1,0 +1,332 @@
+defaults:
+  platforms: [unix]
+  for: [shell]
+traits:
+- id: wget-output-stdout
+  desc: "wget output to stdout flag"
+  crit: component
+  if:
+    type: text
+    regex: '\bwget(\.exe)?\b[^\n]{0,160}\s-O\s*-(\s|$)'
+- id: execute-dot-slash
+  desc: "./ execution pattern"
+  crit: component
+  conf: 0.6
+  attack: T1059.004
+  if:
+    type: text
+    regex: '(^|\n|[;&|]{1,2}|\bnohup\s+)\s*\./[a-zA-Z0-9_][a-zA-Z0-9_.-]+'
+- id: inline__curl-silent-stdout__any_1
+  desc: "Curl silent download pattern 1"
+  crit: component
+  unless:
+  - id: well-known/app/coingecko::benign-coingecko-price-api
+  if:
+    type: text
+    regex: 'curl(\.exe)?\s+[^|&\n]{0,120}-s[^|&\n]{0,120}(https?://|ftp://)'
+  not:
+  - substr: api.coingecko.com/api/v3/simple/price
+  - substr: curl --unix-socket
+  - regex: 'puts\s+["''][^"''\n]{0,120}curl\s+--unix-sock(et)?'
+- id: inline__curl-silent-stdout__any_2
+  desc: "Curl silent download pattern 2"
+  crit: component
+  unless:
+  - id: well-known/app/coingecko::benign-coingecko-price-api
+  if:
+    type: text
+    regex: 'curl(\.exe)?\s+[^|&\n]{0,120}--silent[^|&\n]{0,120}(https?://|ftp://)'
+  not:
+  - substr: api.coingecko.com/api/v3/simple/price
+  - substr: curl --unix-socket
+  - regex: 'puts\s+["''][^"''\n]{0,120}curl\s+--unix-sock(et)?'
+# Download-and-execute: a remote fetch piped straight into a shell
+# (`curl … | bash`). Scoped to the script/source languages where loaders embed
+# this as a string handed to a process-exec API (Node child_process, Ruby system,
+# Python subprocess, Go os/exec). Anchored on the curl/wget+pipe+shell triad so
+# a stray "| sh" does not fire.
+- id: curl-download-pipe-shell
+  desc: Remote download piped into a shell
+  crit: notable
+  conf: 0.9
+  for: [shell, python, javascript, typescript, ruby, go, rust]
+  unless:
+  - id: objectives/command-and-control/dropper/execution/pipe/
+  - id: objectives/execution/interpreter/script/download::curl-pipe-rustup-installer
+  - id: well-known/app/localai/
+  - type: text
+    substr: pub struct BashTool
+  - type: text
+    substr: Destructive commands require user confirmation
+  - type: text
+    regex: '"slug":"[^"]+"|"sections":\[\{"id":'
+  - type: text
+    regex: 'https://rclone\.org/install\.sh\s*\|\s*bash\b'
+  - type: text
+    regex: 'https://astral\.sh/uv/install\.sh\s*\|\s*(sh|bash)\b'
+  if:
+    # Require whitespace + >=4 non-pipe chars (the URL / flags) between the
+    # downloader and the pipe, so a bare mention of "curl|bash" in a comment or
+    # doc string does NOT match — only a real `curl <url/flags> | bash`.
+    type: text
+    regex: '(curl|wget)(\.exe)?\s+[^\n|]{4,200}\|\s*(/usr/bin/|/bin/)?(bash|sh)\b'
+- id: curl-pipe-rclone-installer
+  desc: rclone installer piped to bash
+  crit: notable
+  conf: 0.9
+  for: [shell, python, javascript, typescript, ruby, go, rust, dockerfile]
+  if:
+    type: text
+    regex: 'https://rclone\.org/install\.sh\s*\|\s*bash\b'
+- id: curl-pipe-install-sh-url
+  desc: Remote install.sh URL in shell pipe
+  crit: component
+  conf: 0.86
+  for: [shell, python, javascript, typescript, ruby, go, rust]
+  if:
+    type: text
+    regex: '(curl|wget)(\.exe)?\s+[^\n|]{0,160}/install\.sh[^\n|]{0,80}\|'
+- id: printf-wget-pipe-bash-loader
+  desc: printf-built wget pipe bash loader
+  crit: suspicious
+  conf: 0.9
+  attack: T1105
+  if:
+    type: text
+    regex: 'printf\s+["''][\s\S]{0,320}\bwget\b[\s\S]{0,240}\|\s*bash\b'
+- id: random-sleep-fetch-loop
+  desc: randomized sleep fetch loop
+  crit: suspicious
+  conf: 0.88
+  attack: T1027
+  if:
+    type: text
+    regex: 'while\s+true\s*;?\s*do[\s\S]{0,160}sleep\s+\$\(\(\s*RANDOM\s*%[\s\S]{0,260}\bwget\b'
+- id: chmod-777-local-exec
+  desc: chmod 777 before local execution
+  crit: suspicious
+  conf: 0.88
+  attack: T1222.002
+  if:
+    type: text
+    regex: '\bchmod\s+777\b[\s\S]{0,80}\./[A-Za-z0-9._-]+'
+- id: miner-hijack-config
+  desc: Hijacking other miner configurations
+  crit: suspicious
+  if:
+    type: text
+    substr: 'kill_list.patterns'
+- id: miner-config-poisoning
+  desc: Poisoning other miner configurations
+  crit: suspicious
+  if:
+    type: text
+    substr: 'hijacked_${_hhex}'
+- id: python-inline-socket-listener
+  desc: Inline Python background socket listener
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: "python3?\\s+-c\\s+[\"'].{0,50}socket\\.socket.{0,50}bind.{0,50}listen.{0,50}os\\.fork"
+- id: composer-installer-pipe-marker
+  desc: Composer installer pipe marker
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    substr: getcomposer.org/installer
+composite_rules:
+- id: curl-pipe-obvious-installer
+  desc: Remote install.sh piped into shell
+  crit: notable
+  conf: 0.86
+  for: [shell, python, javascript, typescript, ruby, go, rust]
+  all:
+  - id: curl-pipe-install-sh-url
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  unless:
+  - id: micro-behaviors/os/service/legitimate::installer-script
+  - id: metadata/file/extension/identity::markdown-file-basename
+  - id: well-known/tool/development/aube::aube-lifecycle-scanner-source
+- id: process-api-call
+  desc: Process API invocation
+  crit: component
+  conf: 0.9
+  any:
+  - id: micro-behaviors/process/create/exec
+  - id: micro-behaviors/process/create/system::ruby-system
+- id: process-curl-pipe-shell-call
+  desc: Process API executes shell pipe
+  crit: component
+  conf: 0.92
+  for: [python, javascript, typescript, ruby, go, rust]
+  all:
+  - id: process-api-call
+  - id: curl-download-pipe-shell
+  near_bytes: 768
+# A curl|bash download-exec string that the host program executes via a
+# process/exec API is remote code execution staged from library/app code —
+# never a legitimate pattern for a published package. Language-AGNOSTIC: the
+# `micro-behaviors/process/create/` leg matches Node child_process, Ruby
+# system/exec, Python subprocess, and Go os/exec alike, so the same loader is
+# caught in JS, Ruby, Python, Go, etc. Anchors the @403name/ether-js typosquat
+# (Stage 2: `curl -sSfL <c2>/api/payload/ | /bin/bash`).
+- id: spawned-curl-pipe-shell-rce
+  desc: Spawned curl-pipe-shell remote code execution
+  crit: hostile
+  conf: 0.97
+  attack: "T1059.004"
+  for: [python, javascript, typescript, ruby, go, rust]
+  all:
+  - id: curl-download-pipe-shell
+  - id: process-curl-pipe-shell-call
+  unless:
+  - id: micro-behaviors/os/service/legitimate/
+  - id: metadata/library/structure::js-dist-asset-bundle
+  - id: metadata/library/structure::js-large-module-bundle
+  - id: micro-behaviors/os/service/legitimate::ci-cd-pipeline
+- id: python-inline-mutex-hostile
+  desc: Hostile Python inline socket mutex script
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: python-inline-socket-listener
+  - id: micro-behaviors/os/sysinfo/network::ss
+- id: hostile-miner-hijack
+  desc: Known hostile miner hijacking behavior
+  crit: hostile
+  any:
+  - id: miner-hijack-config
+  - id: miner-config-poisoning
+- id: xmr-miner-config-hijack
+  desc: Monero miner configuration hijack chain
+  crit: hostile
+  conf: 0.98
+  attack: T1496
+  all:
+  - id: miner-hijack-config
+  - id: miner-config-poisoning
+  any:
+  - id: micro-behaviors/communications/http/url/domain::xmr-host-with-port
+  - id: micro-behaviors/communications/socket/tcp::stratum-port-3333
+  needs: 2
+- id: evasive-xmr-config-poisoner
+  desc: Evasive Monero miner config poisoner
+  crit: hostile
+  conf: 0.97
+  attack: T1496
+  all:
+  - id: xmr-miner-config-hijack
+  - id: objectives/evasion/indicator-removal/history::histfile-devnull
+- id: shell-fetch-exec-bash
+  desc: Shell script downloads and executes via pipe to bash
+  crit: hostile
+  conf: 0.98
+  attack: T1105
+  unless:
+  - id: well-known/tool/development/ghcup::ghcup-bootstrap-pipe
+  - id: metadata/package/quality/source::source-archive-member
+  - id: well-known/tool/development/npm-toolchain::npm-install-script-path
+  - id: well-known/app/omarchy::source-tree
+  all:
+  - id: micro-behaviors/process/create/shell/spawn::bash-exec
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  any:
+  - id: curl-silent-stdout
+  - id: wget-silent-stdout
+- id: shell-fetch-exec-curl
+  desc: Shell script downloads via curl and executes via pipe
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  unless:
+  - id: well-known/tool/development/ghcup::ghcup-bootstrap-pipe
+  - id: metadata/package/quality/source::source-archive-member
+  - id: well-known/tool/development/npm-toolchain::npm-install-script-path
+  - id: well-known/app/omarchy::source-tree
+  all:
+  - id: micro-behaviors/communications/http/download/curl::curl-cmd
+  - id: curl-silent-stdout
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  any:
+  - id: micro-behaviors/process/create/shell/spawn::bash-exec
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh
+- id: shell-fetch-exec-wget
+  desc: Shell script downloads via wget and executes via pipe
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  unless:
+  - id: metadata/package/quality/source::source-archive-member
+  all:
+  - id: micro-behaviors/communications/http/download/curl::wget-cmd
+  - id: wget-silent-stdout
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  any:
+  - id: micro-behaviors/process/create/shell/spawn::bash-exec
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh
+- id: generated-wget-bash-loop-loader
+  desc: Generated wget bash loop loader
+  crit: hostile
+  conf: 0.97
+  attack: T1105
+  all:
+  - id: printf-wget-pipe-bash-loader
+  - id: random-sleep-fetch-loop
+  - id: chmod-777-local-exec
+  - id: execute-dot-slash
+  - id: micro-behaviors/fs/directory/delete::rm-rf
+  any:
+  - id: objectives/evasion/indicator-removal/logs::history-c
+  - id: micro-behaviors/process/daemonize/detach::background-ampersand-hidden
+- id: wget-silent-stdout
+  desc: "wget quiet output to stdout"
+  crit: notable
+  conf: 0.9
+  mbc: C0002
+  attack: T1105
+  all:
+  - id: micro-behaviors/communications/http/download/curl::wget-cmd
+  - id: micro-behaviors/communications/http/download/cli::wget-q-flag
+  - id: wget-output-stdout
+  unless:
+  - id: micro-behaviors/os/package-manager/apt::gpg-import-pipe
+  - id: micro-behaviors/os/package-manager/apt::apt-key-add-pipe
+  - id: micro-behaviors/os/package-manager/apt::gpg-dearmor-pipe
+  - id: micro-behaviors/os/package-manager/apt::tee-keyring-pipe
+- id: curl-silent-stdout
+  desc: "Shell text contains a curl silent-output command"
+  crit: notable
+  conf: 0.9
+  mbc: C0002
+  attack: T1105
+  size_max: 5000
+  any:
+  - id: inline__curl-silent-stdout__any_1
+  - id: inline__curl-silent-stdout__any_2
+  unless:
+  - id: composer-installer-pipe-marker
+  - id: metadata/file/catalog/identity/
+  - id: metadata/file/catalog/identity::platform-domain
+  - id: well-known/app/coingecko::benign-coingecko-price-api
+  - id: micro-behaviors/communications/http/download/curl::curl-output-file
+  - id: micro-behaviors/communications/http/download/curl::curl-output-redirect
+- id: package-readme-curl-shell-delivery
+  desc: Package README documents a remote shell installer
+  # A README install command is an analyst-relevant observation, but it does
+  # not establish that the package executes the command or that the endpoint
+  # is malicious.  Runtime/install-hook composites provide the intent signal.
+  crit: notable
+  conf: 0.9
+  for: [tar, zip]
+  all:
+  - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-bash-text
+  - id: objectives/supply-chain/trojanized/app/installer::readme-remote-shell-install-command
+  unless:
+  - id: metadata/package/quality/source::official-claude-installer-command
+  - id: metadata/package/quality/source::azion-cli-official-source-context
+  - id: metadata/package/quality/source::julius-skills-source-context
+  - id: metadata/package/quality/source::julius-skills-installer-document-context
+  - id: well-known/app/vscode-marketplace::m365-agents-toolkit-vsix
+  - id: metadata/package/quality/false-positives::dcc-mcp-core-official-installer-context

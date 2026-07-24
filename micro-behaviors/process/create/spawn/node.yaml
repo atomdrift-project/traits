@@ -1,0 +1,265 @@
+# Node.js Process Spawning Capabilities
+# Capabilities related to child_process.spawn() and process management
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+traits:
+  # === Detached spawn execution indicators ===
+  - id: detached-true
+    desc: Detached process spawn option
+    crit: notable
+    conf: 0.85
+    mbc: "F0011"
+    attack: "T1059"
+    if:
+      type: text
+      regex: 'detached\s*:\s*true'
+  - id: detached-dynamic
+    desc: Detached spawn with dynamic value
+    crit: notable
+    conf: 0.8
+    mbc: "F0011"
+    attack: "T1059"
+    if:
+      type: text
+      regex: 'detached\s*:\s*process\.'
+  - id: windowshide-option
+    desc: Node.js windowsHide spawn option
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: 'windowsHide\s*:\s*true'
+  - id: windowshide-obfuscated-true
+    desc: windowsHide set via obfuscated true
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'windowsHide[''"]\s*:\s*!\s*!\s*\[\s*\]'
+    unless:
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: windowshide-obfuscated-expression
+    desc: Obfuscated windowsHide expression
+    # This is a process-creation capability. Obfuscating the boolean is useful
+    # triage context, but does not by itself establish hostile intent: bundled
+    # applications commonly run their helper processes without a console.
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '[''"]?windowsHide[''"]?\s*:\s*!\s*\([^)]{1,120}\)'
+  - id: shell-false
+    desc: "shell: false option"
+    crit: baseline
+    conf: 0.85
+    if:
+      type: text
+      regex: 'shell\s*:\s*false'
+  - id: shell-true
+    desc: "shell: true option"
+    crit: notable
+    conf: 0.9
+    attack: "T1059"
+    if:
+      type: text
+      regex: 'shell\s*:\s*true'
+  - id: shell-obfuscated-dynamic
+    desc: "shell option via obfuscated alias"
+    crit: notable
+    conf: 0.9
+    attack: "T1059"
+    if:
+      type: text
+      regex: 'shell[''"]\s*:\s*_0x[a-fA-F0-9]{4,}\['
+  # === Silent I/O patterns ===
+  - id: stdio-ignore
+    desc: Spawns a child with standard I/O ignored
+    crit: notable
+    conf: 0.85
+    mbc: "F0005"
+    if:
+      type: text
+      regex: "stdio\\s*:\\s*(\\[[^\\]]{0,220}['\"]ignore['\"]|['\"]ignore['\"])"
+  # === Shell spawn patterns ===
+  - id: spawn-bash
+    desc: Spawns bash shell process
+    crit: notable
+    conf: 0.85
+    mbc: "C0017"
+    attack: "T1059.004"
+    if:
+      type: text
+      regex: "spawn\\(['\"]bash['\"]"
+  - id: child-process-member-spawn
+    desc: Node child_process spawns external process
+    crit: notable
+    conf: 0.85
+    unless:
+      - id: metadata/library/structure/
+    if:
+      # Migrated from a tree-sitter call query to a `kind: call`
+      # match on the pre-extracted call fact (no per-member
+      # tree-sitter cursor walk; same call-name semantics).
+      type: symbol
+      kind: call
+      regex: '\.spawn$'
+  - id: node-interpreter-target
+    desc: Spawns the Node.js interpreter
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: symbol
+      kind: call
+      regex: '^(child_process\.)?spawn$'
+      arg:
+        kind: string
+        exact: node
+  # === Node.js self-execution ===
+  - id: process-execpath-spawn
+    desc: Spawn using process.execPath
+    crit: notable
+    conf: 0.9
+    mbc: "B0024"
+    attack: "T1059.007"
+    unless:
+      - id: metadata/package/testing/harness/runtime::test-basename-spec
+    if:
+      type: text
+      # A process.execPath lookup alone is commonly used to identify the
+      # current VS Code/Node executable.  Require the self-spawn call that
+      # gives this atom its stated meaning.
+      regex: '\b(spawn|spawnSync|fork)\s*\(\s*process\.execPath\b'
+  - id: node-self-eval-argument
+    desc: Node self-spawn runs inline eval
+    crit: notable
+    conf: 0.94
+    attack: "T1059.007"
+    # Spawning the current Node interpreter with `-e` is useful context on its
+    # own, but becomes hostile only when paired with remote fetch/eval staging.
+    unless:
+      - id: metadata/package/testing/
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/scripted/
+      - id: metadata/package/files/dependency::node-modules-path
+      - id: micro-behaviors/process/interpreter/vm/
+      - id: objectives/command-and-control/dropper/execution/network-stage::auto-retry-helper
+    if:
+      type: text
+      regex: 'spawn\s*\(\s*process\.execPath[\s\S]{0,260}[''"]-e[''"]'
+  - id: process-argv-slice-self-reexec
+    desc: Self re-exec via process.argv.slice(1)
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: 'process\.argv\s*\.\s*slice\s*\(\s*1\s*\)'
+  # Daemon self-respawn: spawn(process.execPath, [__filename, ...]) re-launches
+  # the SAME script that is already running — the supervisor/suicide-respawn
+  # pattern (RSS-budget restart, cycle timeout, crash recovery). The spawned
+  # target is the current module, NOT a freshly written or downloaded payload,
+  # so this is daemonization rather than dropping. Used to exclude benign
+  # self-supervising daemons from the dropper composites.
+  - id: node-self-respawn
+    desc: Daemon respawns its own script via execPath
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'spawn\s*\(\s*process\.execPath\s*,\s*\[\s*(__filename|process\.argv\s*\[\s*1\s*\])'
+  - id: process-env-daemonized-flag
+    desc: __DAEMONIZED environment flag
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "__DAEMONIZED"
+  - id: node-java-process-target
+    desc: Node targets Java launcher process
+    crit: notable
+    conf: 0.86
+    attack: "T1059.007"
+    if:
+      type: text
+      regex: 'spawn\s*\([^)]{0,160}(javaw?\.exe|javaw?[''"])'
+  - id: node-jar-launch-argument
+    desc: Node passes Java JAR argument
+    crit: notable
+    conf: 0.88
+    attack: "T1059.007"
+    if:
+      type: text
+      regex: '[''"]-jar[''"]|[^\w]-jar\s+[^''"\s]{1,160}\.jar'
+  - id: node-lazy-daemon-entry-resolution
+    desc: Resolves lazy Node.js broker entrypoint
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: 'resolveDefaultBrokerEntry|brokerEntry\s*\?\?'
+  - id: node-bearer-health-probe
+    desc: Node bearer-authenticated health probe
+    crit: component
+    conf: 0.84
+    if:
+      type: text
+      regex: 'fetch\s*\([^;]{0,500}/health[^;]{0,500}Authorization\s*:'
+  - id: fork-call
+    desc: child_process fork of a script path
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      regex: '\bfork\(\s*(path\b|__dirname|["\x27\x60])'
+composite_rules:
+  - id: detached-ignored-unref-spawn
+    desc: Spawns detached child and calls unref()
+    crit: notable
+    conf: 0.9
+    all:
+      - id: detached-true
+      - id: stdio-ignore
+    any:
+      - id: micro-behaviors/process/daemonize/detach::node-handle-unref-call
+      - id: micro-behaviors/process/daemonize/detach::node-handle-unref-text
+      - id: windowshide-option
+  # A detached fork survives the parent and runs an independent script — unlike
+  # a normal worker/fork pool, which stays attached. `silent`/`stdio:'ignore'`
+  # further hides its output. This is the fork-based sibling of the spawn combo.
+  - id: detached-fork
+    desc: Detached fork of a script
+    crit: notable
+    conf: 0.9
+    near_lines: 8
+    all:
+      - id: fork-call
+      - id: detached-true
+  - id: node-lazy-daemon-spawn
+    desc: Node lazy daemon spawn
+    crit: notable
+    conf: 0.9
+    all:
+      - id: detached-ignored-unref-spawn
+      - id: node-lazy-daemon-entry-resolution
+    any:
+      - id: process-execpath-spawn
+      - id: node-bearer-health-probe
+  - id: child-process-alias-spawn
+    desc: Node.js child_process alias spawn
+    crit: notable
+    conf: 0.85
+    mbc: C0017
+    all:
+      - id: metadata/import/builtin::require-child-process
+      - id: child-process-member-spawn
+  - id: detached-self-reexec
+    desc: Detached self re-exec behavior
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: process-env-daemonized-flag
+      - id: micro-behaviors/os/env/vars/access::js-process-env-spread

@@ -1,0 +1,236 @@
+defaults:
+  platforms:
+    - linux
+    - macos
+    - windows
+  for: [scripts, binaries]
+traits:
+  - id: localappdata
+    desc: Windows LOCALAPPDATA lookup
+    crit: baseline
+    conf: 0.75
+    attack: T1033
+    for:
+      - python
+      - javascript
+    if:
+      type: string_literal
+      substr: LOCALAPPDATA
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/harness/
+  - id: dsenableroot
+    desc: macOS enable root user
+    crit: suspicious
+    conf: 0.85
+    attack: T1087.001
+    for:
+      - macho
+      - shell
+    if:
+      type: text
+      substr: dsenableroot
+  - id: finger
+    desc: Finger command for user info
+    crit: suspicious
+    conf: 0.75
+    attack: T1033
+    if:
+      type: text
+      regex: (/usr/bin/)?finger (-(l|m|s)|@[A-Za-z0-9._-]{2,})
+  - id: last-cmd
+    desc: Last command for login history
+    crit: suspicious
+    conf: 0.8
+    attack: T1033
+    for:
+      - shell
+    if:
+      type: string_literal
+      regex: '(^|[\n;&|]\s*)last\s+-[a-zA-Z]'
+    unless:
+      - type: text
+        regex: \{\s{0,32}"version"\s{0,4}:\s{0,4}3\s{0,4},\s{0,32}"(file|sources)"
+      - type: text
+        regex: '^\s{0,8}\{\s{0,8}"[A-Za-z0-9_.-]{1,48}"\s{0,8}:'
+  - id: last-cmd-bin
+    desc: Last command path for login history
+    crit: notable
+    conf: 0.85
+    attack: T1033
+    for:
+      - elf
+      - macho
+    if:
+      type: text
+      regex: (^|/)last\s+-
+  - id: w-cmd
+    desc: W command for user sessions
+    crit: suspicious
+    conf: 0.75
+    attack: T1033
+    for:
+      - shell
+    if:
+      type: text
+      regex: (^|[\s;&|`$"'(])/(usr/)?bin/w\b
+    unless:
+      - id: metadata/package/files/system-package::dpkg-maintainer-script
+  - id: whoami
+    desc: Shell whoami command execution
+    crit: notable
+    conf: 0.85
+    attack: T1033
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: exec(Sync)?\(['\"]whoami['\"]
+  - id: id
+    desc: Shell id command execution
+    crit: notable
+    conf: 0.85
+    attack: T1033
+    for:
+      - javascript
+      - typescript
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+    if:
+      type: text
+      regex: exec(Sync)?\(['\"]id['\"]
+  - id: npm-whoami
+    desc: npm whoami command execution
+    crit: suspicious
+    conf: 0.9
+    attack: T1033
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: exec(Sync)?\(['\"]npm whoami['\"]
+  - id: js-execsync-param-helper
+    desc: JavaScript helper executes command parameter
+    crit: component
+    conf: 0.88
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: 'function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*cmd\s*\)[\s\S]{0,180}execSync\s*\(\s*cmd\b'
+  - id: js-helper-whoami-call
+    desc: JavaScript helper called with whoami command
+    crit: component
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: '\b[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*["'']whoami["'']\s*\)'
+  - id: js-helper-id-call
+    desc: Calls JavaScript helper with id argument
+    crit: component
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: '\b[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*["'']id["'']\s*\)'
+composite_rules:
+  - id: username-env
+    desc: USERNAME environment variable
+    crit: notable
+    conf: 0.75
+    attack: T1033
+    any:
+      - id: micro-behaviors/os/env/vars/user-info::username-var
+      - id: micro-behaviors/os/env/vars/user-info::user-var
+      - id: micro-behaviors/os/env/vars/user-info::logname-var
+    unless:
+      - id: metadata/library/python-runtime::python-runtime
+  - id: whoami-via-rot13-subprocess
+    desc: whoami command decoded via ROT13
+    crit: suspicious
+    conf: 0.95
+    attack: T1033
+    for:
+      - python
+    all:
+      - id: micro-behaviors/data/encode/rot13::rot13-whoami
+      - id: micro-behaviors/process/create/subprocess::check-output
+    any:
+      - id: micro-behaviors/process/create/subprocess::shell-true
+      - id: micro-behaviors/data/encode/rot13::python-rot13-decoder
+  - id: js-wrapped-whoami-exec
+    desc: JavaScript wrapper executes whoami
+    crit: notable
+    conf: 0.92
+    attack: T1033
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: js-execsync-param-helper
+      - id: js-helper-whoami-call
+  - id: js-wrapped-id-exec
+    desc: JavaScript wrapper executes id
+    crit: notable
+    conf: 0.92
+    attack: T1033
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: js-execsync-param-helper
+      - id: js-helper-id-call
+  - id: active-enum-cmds
+    desc: Active user enumeration commands
+    crit: notable
+    conf: 0.8
+    attack: T1033
+    any:
+      - id: micro-behaviors/process/user/query::whoami-cmd
+      - id: js-wrapped-whoami-exec
+      - id: js-wrapped-id-exec
+      - id: whoami-via-rot13-subprocess
+      - id: micro-behaviors/os/security/directory-service::dscl-cli
+      - id: finger
+      - id: last-cmd
+      - id: last-cmd-bin
+      - id: w-cmd
+  - id: passive-user-lookup
+    desc: POSIX user lookup functions
+    crit: notable
+    conf: 0.4
+    attack: T1033
+    for:
+      - elf
+      - macho
+    any:
+      - id: micro-behaviors/process/user/query::getpwnam
+      - id: micro-behaviors/process/identity/query::get-uid
+      - id: micro-behaviors/process/user/query::getpwuid
+  - id: enumeration-detected
+    desc: User enumeration activity
+    crit: suspicious
+    conf: 0.9
+    attack: T1033
+    mbc: B0046
+    size_max: 5000
+    all:
+      - id: active-enum-cmds
+    any:
+      - id: passive-user-lookup
+      - id: username-env
+      - id: micro-behaviors/os/env/vars/access::getenv-home
+      - id: micro-behaviors/os/env/vars/access::env-dot-home
+      - id: micro-behaviors/os/env/vars/access::dollar-home
+    unless:
+      - id: metadata/package/testing/scripted/
+      - id: metadata/package/testing/presence/harness::unittest-module
+      - id: well-known/tool/sysadmin/container::podman-distribution

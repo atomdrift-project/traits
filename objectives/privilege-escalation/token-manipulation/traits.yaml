@@ -1,0 +1,375 @@
+defaults:
+  for:
+  - pe
+  - dll
+  - rust
+  platforms:
+  - windows
+traits:
+- id: lpverb-field
+  desc: lpVerb field for ShellExecute
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: lpVerb
+- id: shell-execute-call
+  desc: ShellExecute API call
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: ShellExecute
+- id: shell-executeex-call
+  desc: ShellExecuteEx API call
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: ShellExecuteEx
+- id: wts-query-user-token-symbol
+  desc: WTS session user token query
+  crit: notable
+  conf: 0.9
+  if:
+    type: symbol
+    exact: WTSQueryUserToken
+- id: urlmon-dll-basename
+  desc: URLMon DLL filename
+  crit: notable
+  conf: 0.95
+  if:
+    type: path
+    basename: true
+    exact: urlmon.dll
+- id: token-impersonation-module-source
+  desc: Token impersonation command module in source
+  crit: notable
+  conf: 0.95
+  for: [c, cpp]
+  if:
+    type: text
+    substr: token manipulation and impersonation
+- id: token-vault-steal-command-source
+  desc: Token vault steal or impersonate command
+  crit: notable
+  conf: 0.94
+  attack: T1134.001
+  for: [c, cpp]
+  if:
+    type: text
+    regex: steal token from specified process|impersonate stolen token
+- id: token-credential-logon-command-source
+  desc: Token creation from user credentials
+  crit: notable
+  conf: 0.94
+  attack: T1134.003
+  for: [c, cpp]
+  if:
+    type: text
+    regex: make token from user credentials|LOGON_NEW_CREDENTIALS
+- id: token-privilege-command-source
+  desc: Token privilege enable or enumeration command
+  crit: notable
+  conf: 0.9
+  attack: T1134
+  for: [c, cpp]
+  if:
+    type: text
+    regex: list all privileges from current token|enable a privilege
+- id: kerberos-ticket-command-source
+  desc: Kerberos ticket abuse command set in source
+  crit: notable
+  conf: 0.94
+  attack: T1550.003
+  for: [c, cpp]
+  if:
+    type: text
+    regex: list Kerberos tickets|purge a Kerberos ticket|import Kerberos ticket into a logon session
+composite_rules:
+- id: privilege-adjusted-process-launch
+  desc: Adjusts token privileges then launches a process
+  crit: hostile
+  conf: 0.96
+  attack: T1134.001,T1106
+  all:
+  - id: micro-behaviors/os/privilege/token::open-process-token
+  - id: micro-behaviors/os/privilege/token::lookup-privilege-value
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  any:
+  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: micro-behaviors/process/create/spawn::create-process-w
+  - id: micro-behaviors/process/create/exec::shell-execute
+  - id: micro-behaviors/process/create/shell/spawn::win-shellexecute
+  needs: 1
+  unless:
+  - id: metadata/signed/platform/
+  - id: well-known/tool/sysadmin/
+  # NativeAOT statically links the .NET runtime, whose startup/import surface
+  # contains token-adjustment and process-launch APIs plus privilege strings.
+  # Keep the hostile chain for ordinary PE code, but do not convict a
+  # recognizable NativeAOT runtime solely on those shared implementation
+  # details.
+  - id: metadata/lang/compiler/aot
+
+- id: token-impersonation-assisted-process-injection
+  desc: Process-token impersonation combined with targeted remote injection
+  crit: hostile
+  conf: 0.99
+  attack: T1134.001,T1055,T1057
+  mbc: B0033
+  all:
+  - id: micro-behaviors/os/privilege/token::dynamic-process-token-impersonation
+  - id: micro-behaviors/process/enumerate/snapshot::dynamic-toolhelp-process-traversal
+  - id: objectives/evasion/process/injection/memory::process-inject-api
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/signed/leaf::microsoft-corporation
+  - id: well-known/tool/reverse-engineering/
+  - id: well-known/tool/sysadmin/
+
+- id: packed-anti-debug-token-adjustment
+  desc: Packed PE adjusts token privileges while performing anti-debug loader setup
+  crit: hostile
+  conf: 0.97
+  attack: T1134.001,T1027,T1622
+  all:
+  - id: micro-behaviors/os/privilege/token::lookup-privilege-value-any
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+  - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+  - id: objectives/anti-static/pack/runtime::unpacking-api-pattern
+  - id: objectives/anti-static/obfuscation/payload/section::large-high-entropy-gfx-section
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/sysadmin/
+
+- id: anti-analysis-token-manipulation-suite
+  desc: Elevated anti-analysis token manipulation suite
+  crit: hostile
+  conf: 0.98
+  attack: T1134,T1622
+  all:
+  - id: micro-behaviors/os/privilege/token::duplicate-token-ex
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  - id: micro-behaviors/os/privilege/manifest::require-administrator
+  - id: objectives/anti-analysis/sandbox-detect/suite::named-native-anti-analysis-check-cluster
+
+- id: runas-verb
+  desc: ShellExecute or Start-Process runas elevation
+  crit: notable
+  conf: 0.9
+  all:
+  - id: micro-behaviors/os/privilege/elevation::runas-string
+  any:
+  - id: lpverb-field
+  - id: shell-execute-call
+  - id: shell-executeex-call
+  - id: micro-behaviors/process/create/start-process::start-process-call
+  unless:
+  - id: objectives/privilege-escalation/token-manipulation/
+  - id: metadata/binary/metrics/threshold::many-exports-100
+- id: dynamic-token-privilege-recognized-marker
+  desc: Recognized token privilege marker
+  crit: notable
+  conf: 0.8
+  any:
+  - id: well-known/tool/sysadmin/taskkill::taskkill-marker
+  - id: metadata/binary/installer/script::nsis
+  - id: micro-behaviors/os/privilege/token::nsis7z-dll-basename
+  - id: well-known/lib/advanced-inf::advanced-inf-setup-context
+  - id: metadata/package/quality/false-positives::benign-token-privilege-context
+  - id: metadata/binary/installer/family::known-benign-installer
+  - id: well-known/app/drivers::nvidia-streamer-rxcore
+  - id: well-known/tool/sysadmin/sandboxie::signed-sandboxie-component
+- id: dynamic-token-privilege-chain
+  desc: Dynamic token privilege adjustment chain
+  crit: notable
+  conf: 0.88
+  attack: T1134.001
+  all:
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  needs: 3
+  any:
+  - id: micro-behaviors/os/privilege/token::open-process-token-any
+  - id: micro-behaviors/os/privilege/token::lookup-privilege-value-any
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+  downgrade:
+    any:
+    - id: metadata/signed/platform/
+    - id: metadata/binary/vendor::microsoft-corp-versioninfo
+    - id: well-known/app/startallback::startallback-basename
+  unless:
+  - id: objectives/privilege-escalation/token-manipulation/
+  - id: metadata/binary/metrics/threshold::many-exports-100
+  - id: metadata/library/python-runtime::python-runtime
+- id: privilege-adjustment-indicator
+  desc: Token privilege adjustment indicator
+  crit: component
+  conf: 0.82
+  unless:
+  - id: metadata/binary/metrics/threshold::many-exports-100
+  any:
+  - id: micro-behaviors/os/privilege/token::lookup-privilege-value-any
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+  - id: micro-behaviors/os/privilege/token::rtl-adjust-privilege
+  - id: runas-verb
+- id: direct-ntdll-privilege-adjustment
+  desc: Direct ntdll privilege adjustment
+  crit: suspicious
+  conf: 0.9
+  attack: T1134.001
+  all:
+  - id: micro-behaviors/os/privilege/token::rtl-adjust-privilege
+  - id: micro-behaviors/os/syscall/invoke::ntdll-import
+  downgrade:
+    any:
+    - id: metadata/signed/platform/
+    - id: metadata/binary/vendor::microsoft-corp-versioninfo
+  unless:
+  - id: objectives/privilege-escalation/token-manipulation/
+  - id: metadata/binary/metrics/threshold::many-exports-100
+  - id: well-known/tool/sysadmin/chroot-win/
+- id: token-spawn-api-chain
+  desc: User-token process spawn chain
+  crit: notable
+  conf: 0.84
+  attack: T1134
+  unless:
+  - id: metadata/binary/metrics/threshold::many-exports-100
+  all:
+  - id: micro-behaviors/os/privilege/token::open-process-token-source
+  - id: micro-behaviors/os/privilege/token::duplicate-token-ex-source
+  - id: micro-behaviors/process/create/spawn::create-process-with-token-source
+- id: token-manipulation-cluster-recognized-marker
+  desc: Recognized token manipulation marker
+  crit: notable
+  conf: 0.86
+  any:
+  - id: metadata/signed/platform::microsoft
+  - id: metadata/binary/vendor::microsoft-corp-versioninfo
+  - id: well-known/lib/windows-vault::windows-vaultcli-component
+  - id: metadata/signed/developer::vmware
+  - id: metadata/binary/framework::dotnet-singlefilehost-runtime
+  - id: metadata/binary/installer/script::inno-setup
+  - id: urlmon-dll-basename
+- id: source-token-impersonation-suite
+  desc: Source code implements stolen-token impersonation
+  crit: suspicious
+  conf: 0.95
+  attack: T1134
+  for: [c, cpp]
+  all:
+  - id: token-impersonation-module-source
+  any:
+  - id: token-vault-steal-command-source
+  - id: token-credential-logon-command-source
+  - id: token-privilege-command-source
+  needs: 2
+- id: source-token-and-kerberos-abuse-suite
+  desc: Source code combines token abuse with Kerberos ticket actions
+  crit: hostile
+  conf: 0.97
+  attack: T1134
+  for: [c, cpp]
+  all:
+  - id: source-token-impersonation-suite
+  - id: kerberos-ticket-command-source
+- id: token-manipulation-cluster
+  desc: Token access and duplication cluster
+  crit: notable
+  conf: 0.86
+  attack: T1134
+  all:
+  - id: micro-behaviors/os/privilege/token::open-process-token-any
+  needs: 2
+  any:
+  - id: micro-behaviors/os/privilege/token::token-duplication-api
+  - id: micro-behaviors/os/privilege/token::token-secondary-access-api
+  unless:
+  - id: objectives/privilege-escalation/token-manipulation/
+- id: token-spawn-privilege-adjust
+  desc: Token spawn with privilege manipulation
+  crit: notable
+  conf: 0.9
+  attack: T1134
+  all:
+  - id: token-spawn-api-chain
+  - id: privilege-adjustment-indicator
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  downgrade:
+    any:
+    - id: metadata/package/license
+    - id: metadata/signed/platform/
+    - id: metadata/lang/compiled::autoit-compiled-script
+- id: interactive-user-token-spawn-cluster
+  desc: Interactive user token spawn cluster
+  crit: suspicious
+  conf: 0.93
+  attack: T1134
+  all:
+  - id: token-spawn-api-chain
+  - id: micro-behaviors/os/env/access::create-environment-block
+  - id: privilege-adjustment-indicator
+  any:
+  - id: micro-behaviors/os/env/access::destroy-environment-block
+  - id: micro-behaviors/os/privilege/token::open-thread-token-any
+  - id: micro-behaviors/os/privilege/token::get-token-information-any
+  downgrade:
+    any:
+    - id: metadata/signed/platform::microsoft-windows
+    - id: metadata/lang/compiled::autoit-compiled-script
+  unless:
+  - id: objectives/privilege-escalation/token-manipulation::wts-query-user-token-symbol
+  - id: metadata/signed/developer::opera-norway-as
+  - id: metadata/signed/developer::google-llc
+  - id: metadata/signed/developer::adobe-inc.
+  - id: well-known/tool/browser/
+- id: system-token-theft-winlogon
+  desc: SYSTEM token theft via winlogon
+  crit: hostile
+  conf: 0.97
+  attack: T1134
+  all:
+  - id: token-spawn-api-chain
+  - id: dynamic-token-privilege-chain
+  - id: objectives/evasion/masquerade/process/name::winlogon-name
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  downgrade:
+    any:
+    - id: metadata/signed/platform/
+    - id: metadata/binary/vendor::microsoft-corp-versioninfo
+- id: system-token-theft-lsass
+  desc: Steals and impersonates a LocalSystem token obtained from LSASS
+  crit: hostile
+  conf: 0.98
+  attack: T1134.001
+  all:
+  - id: micro-behaviors/process/enumerate/wts::wts-enumerate-processes
+  - id: objectives/privilege-escalation/process-injection::lsass-target
+  - id: micro-behaviors/os/privilege/token::open-process-token-any
+  - id: micro-behaviors/os/privilege/token::duplicate-token-ex
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  any:
+  - id: micro-behaviors/os/privilege/token::set-thread-token
+  - id: micro-behaviors/process/create/spawn::create-process-as-user
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/vendor::microsoft-corp-versioninfo
+
+- id: driver-backed-token-privilege-escalation
+  desc: Driver-backed token privilege escalation
+  crit: hostile
+  conf: 0.98
+  attack: T1134
+  all:
+  - id: micro-behaviors/os/privilege/token::open-process-token-any
+  - id: micro-behaviors/os/privilege/token::lookup-privilege-value-any
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+  - id: micro-behaviors/fs/file/handle::device-io-control-win
+  - id: metadata/binary/layout::low-entropy-large-overlay
+  any:
+  - id: objectives/evasion/anti-av/driver::antivirus-process-enumeration-routine
+  - id: micro-behaviors/os/privilege/check::is-elevated-property
+  needs: 1

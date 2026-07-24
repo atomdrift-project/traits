@@ -1,0 +1,486 @@
+defaults:
+  platforms:
+  - windows
+  - unix
+  for:
+  - scripts
+  - source
+  attack: T1552.001
+traits:
+- id: gh-auth-token-raw
+  desc: GitHub CLI token extraction (gh auth token)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: text
+    word: gh auth token
+  unless:
+  - id: objectives/credential-access/cloud/token/cli/
+  - id: metadata/package/quality/false-positives::github-cli-auth-helper-context
+  - id: micro-behaviors/os/service/legitimate/
+  - id: go-github-token-env-fallback-call
+  - id: go-github-token-discard-comment
+  - id: well-known/app/calvyn-code
+- id: git-credential-fill
+  desc: Git credential helper extraction
+  crit: suspicious
+  conf: 0.95
+  for:
+  - go
+  if:
+    type: tree-sitter
+    kind: call
+    regex: 'exec\.Command(Context)?\([^)]{0,180}"git"[^)]{0,80}"credential"[^)]{0,80}"fill"'
+  unless:
+  - id: metadata/package/testing/presence/harness::git-tests-directory
+  - id: well-known/lib/huggingface::hub-utils-package-file
+  - id: metadata/package/quality/false-positives::cargo-binstall-github-auth-helper-context
+  - type: text
+    substr: if there's no password
+  - type: text
+    substr: fill the provided credential
+  - type: text
+    substr: sub credential_fill
+  - id: metadata/lang/compiled::go-command-usage-line
+  - id: well-known/tool/development/go-toolchain::go-toolchain-distribution
+# A single `aws sts get-caller-identity` is the canonical "am I authenticated"
+# probe run by virtually every AWS CI/deploy/provisioning script — a notable
+# credential-context capability, not suspicious alone. The harvest intent comes
+# from mass-cloud-credential-harvest (many distinct cloud probes co-occurring).
+- id: aws-sts-identity
+  desc: "AWS identity probe"
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: aws\s+sts\s+get-caller-identity(\s+\*)?
+  not:
+  - exact: aws sts get-caller-identity *
+  unless:
+  - id: well-known/tool/detection/security-scanner/
+  - id: well-known/app/skypilot::skypilot-source-file
+  - id: well-known/app/skypilot::skypilot-kubeconfig-helper
+  - id: well-known/app/skypilot::skypilot-source-file
+- id: gcloud-auth-list
+  desc: GCP active account probe (gcloud auth list)
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    # Match a command-execution context, not a schema/docstring example.
+    regex: '(?i)subprocess\.(run|Popen|check_output)[^\n]{0,120}gcloud\s+auth\s+list'
+  unless:
+  - id: well-known/tool/detection/security-scanner/
+- id: az-account-show
+  desc: Azure CLI account query
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: az\s+account\s+show(\s+\*)?
+  not:
+  - exact: az account show *
+  unless:
+  - id: well-known/tool/detection/security-scanner/
+
+- id: aws-secretsmanager-list
+  desc: AWS Secrets Manager list secrets
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: aws\s+secretsmanager\s+list-secrets
+  unless:
+  - id: well-known/tool/detection/security-scanner/
+
+- id: aws-secretsmanager-get
+  desc: AWS Secrets Manager get secret
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: aws\s+secretsmanager\s+get-secret-value
+  unless:
+  - id: well-known/tool/detection/security-scanner/
+  # Docstring/README examples documenting cmd:// backend capabilities.
+  - type: text
+    regex: 'e\.g\.\s+``[^`]{0,80}aws\s+secretsmanager\s+get-secret-value'
+  - type: text
+    regex: '(?m)^\s*#+\s+[^\n]{0,120}aws\s+secretsmanager\s+get-secret-value'
+
+  - type: text
+    regex: az\s+account\s+show\s+--output\s+tsv\s+--query\s+['"]name['"]
+- id: kubectl-config-view
+  desc: kubectl raw kubeconfig read
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: kubectl\s+config\s+view.{0,160}--raw
+  unless:
+  - id: well-known/tool/detection/security-scanner/
+  - id: well-known/app/skypilot::skypilot-source-file
+  - id: well-known/app/skypilot::skypilot-kubeconfig-helper
+- id: kubectl-client-certificate-data
+  desc: Kubernetes client certificate field
+  crit: component
+  conf: 0.95
+  ref: sha256:e4445eaa3155940f60991241a809409aa70b708303a0d07aa35b2e3d2bf76885
+  if:
+    type: text
+    substr: client-certificate-data
+- id: kubectl-client-key-data
+  desc: Kubernetes client private key field
+  crit: component
+  conf: 0.97
+  ref: sha256:e4445eaa3155940f60991241a809409aa70b708303a0d07aa35b2e3d2bf76885
+  if:
+    type: text
+    substr: client-key-data
+- id: kubectl-certificate-authority-data
+  desc: Kubernetes certificate authority field
+  crit: component
+  conf: 0.92
+  ref: sha256:e4445eaa3155940f60991241a809409aa70b708303a0d07aa35b2e3d2bf76885
+  if:
+    type: text
+    substr: certificate-authority-data
+- id: shell-base64-decode-to-cert-file
+  desc: Shell decodes certificate to file
+  crit: component
+  conf: 0.9
+  for:
+  - shell
+  ref: sha256:e4445eaa3155940f60991241a809409aa70b708303a0d07aa35b2e3d2bf76885
+  if:
+    type: text
+    regex: 'base64\s+--decode\s*>\s*["''].{0,120}\.(crt|key)["'']'
+- id: heroku-auth-token
+  desc: Heroku token extraction (heroku auth:token)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: text
+    substr: heroku auth:token
+- id: doppler-me
+  desc: Doppler secrets manager identity probe
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: \bdoppler\s+me\b
+- id: gh-auth-token-split
+  desc: GitHub CLI token extraction (split arguments)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - go
+  - rust
+  - java
+  - csharp
+  if:
+    type: text
+    regex: '"gh"[,\s]+"auth"[,\s]+"token"'
+  unless:
+  - id: micro-behaviors/os/service/legitimate/
+  - id: go-github-token-env-fallback-call
+  - id: go-github-token-discard-comment
+- id: go-github-token-env-fallback-call
+  desc: Go GitHub token env fallback call
+  crit: component
+  conf: 0.94
+  for:
+  - go
+  if:
+    type: text
+    substr: GetGitHubTokenFromEnv
+- id: go-github-token-required-error
+  desc: Go GitHub token required error
+  crit: component
+  conf: 0.94
+  for:
+  - go
+  if:
+    type: text
+    substr: ErrGitHubTokenRequired
+- id: go-github-token-discard-comment
+  desc: Go GitHub token discard comment
+  crit: component
+  conf: 0.94
+  for:
+  - go
+  if:
+    type: text
+    substr: token value is intentionally discarded
+- id: go-github-finding-type-secret
+  desc: Go GitHub finding type secret
+  crit: component
+  conf: 0.94
+  for:
+  - go
+  if:
+    type: text
+    substr: FindingTypeSecret
+- id: aws-sts-split
+  desc: AWS identity probe (split arguments)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - go
+  - rust
+  - java
+  - csharp
+  if:
+    type: text
+    regex: '"aws"[,\s]+"sts"[,\s]+"get-caller-identity"'
+- id: gcloud-auth-split
+  desc: GCP active account probe (split arguments)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - go
+  - rust
+  - java
+  - csharp
+  if:
+    type: text
+    regex: '"gcloud"[,\s]+"auth"[,\s]+"list"'
+  unless:
+  - type: text
+    substr: '--format=value(account,status)'
+- id: az-account-split
+  desc: Azure identity probe (split arguments)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - go
+  - rust
+  - java
+  - csharp
+  if:
+    type: text
+    regex: '"az"[,\\s]+"account"[,\\s]+"show"'
+- id: kubectl-config-split
+  desc: "Kubernetes credential extraction (split args)"
+  crit: suspicious
+  conf: 0.9
+  for:
+  - go
+  - rust
+  - java
+  - csharp
+  if:
+    type: text
+    regex: '"kubectl"[,\s]+"config"[,\s]+"view"(?s:.{0,120})"--raw"'
+  unless:
+  - id: metadata/package/testing/presence/harness::go-test-file
+- id: docker-config-path-literal
+  desc: Docker credential config path
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \.docker.{0,10}config\.json
+- id: gh-auth-tempfile
+  desc: GitHub auth token stored in tempfile
+  crit: component
+  conf: 0.95
+  for:
+  - shell
+  if:
+    type: text
+    substr: GH_TOKEN=$(mktemp)
+- id: gh-auth-cleanup-trap
+  desc: GitHub auth token cleanup trap
+  crit: component
+  conf: 0.95
+  for:
+  - shell
+  if:
+    type: text
+    substr: trap cleanup_token EXIT
+- id: gh-auth-token-path-handoff
+  desc: GitHub auth token passed by path
+  crit: component
+  conf: 0.95
+  for:
+  - shell
+  if:
+    type: text
+    substr: --token-path "$GH_TOKEN"
+- id: docker-config-auth-evidence--auths
+  desc: Docker config auths field
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '["'']auths["'']\s*:'
+- id: docker-config-auth-evidence--credsstore
+  desc: Docker auth config evidence (credsStore)
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '["'']credsStore["'']\s*:'
+- id: docker-config-auth-evidence--credhelpers
+  desc: Docker auth config evidence (credHelpers)
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '["'']credHelpers["'']\s*:'
+composite_rules:
+- id: docker-config-auth-evidence
+  desc: Docker auth config evidence
+  crit: component
+  conf: 0.9
+  any:
+  - id: docker-config-auth-evidence--auths
+  - id: docker-config-auth-evidence--credsstore
+  - id: docker-config-auth-evidence--credhelpers
+- id: docker-config-json
+  desc: Docker credential file access
+  crit: component
+  conf: 0.9
+  near_bytes: 256
+  all:
+  - id: docker-config-path-literal
+  any:
+  - id: micro-behaviors/fs/file/read
+  - id: micro-behaviors/fs/read/file
+  unless:
+  - id: well-known/tool/sysadmin/container/
+  - id: well-known/tool/detection/security-scanner/
+  - id: micro-behaviors/os/container/oci/
+  - id: micro-behaviors/os/container/image/
+  - id: micro-behaviors/os/container/image/
+  - id: metadata/lang/source::python-protobuf-stub
+  - id: metadata/lang/source::python-mypy-protobuf-generated
+- id: docker-config-auth-marker
+  desc: Docker config auth field access
+  crit: suspicious
+  conf: 0.92
+  near_bytes: 512
+  all:
+  - id: docker-config-json
+  any:
+  - id: docker-config-auth-evidence
+- id: release-notes-token-tempfile-handoff
+  desc: Release notes passes GitHub token by tempfile
+  crit: component
+  conf: 0.95
+  for:
+  - shell
+  all:
+  - id: gh-auth-tempfile
+  - id: gh-auth-cleanup-trap
+  - id: gh-auth-token-path-handoff
+- id: mass-cloud-credential-harvest
+  desc: Mass cloud credential harvesting (2+ operations)
+  crit: hostile
+  conf: 0.95
+  needs: 2
+  unless:
+  - id: objectives/credential-access/cloud/token/cli/
+  - id: objectives/credential-access/cloud/token/cli/
+  any:
+  - id: gh-auth-token-raw
+  - id: gh-auth-token-split
+  - id: objectives/supply-chain/credential-theft/cli/token::gh-auth-token
+  - id: micro-behaviors/process/create/vcs/git::go-git-credential-helper
+  - id: aws-sts-identity
+  - id: aws-sts-split
+  - id: gcloud-auth-list
+  - id: gcloud-auth-split
+  - id: az-account-show
+  - id: az-account-split
+  - id: aws-secretsmanager-list
+  - id: aws-secretsmanager-get
+  - id: kubectl-config-view
+  - id: kubectl-config-split
+  - id: micro-behaviors/os/security/auth/cloud::vercel-whoami
+  - id: heroku-auth-token
+  - id: micro-behaviors/os/security/auth/cloud::vault-token-lookup
+  - id: doppler-me
+- id: kubernetes-client-key-materialization
+  desc: Kubernetes client key materialization
+  crit: hostile
+  conf: 0.99
+  ref: sha256:e4445eaa3155940f60991241a809409aa70b708303a0d07aa35b2e3d2bf76885
+  all:
+  - id: kubectl-config-view
+  - id: kubectl-client-key-data
+  - id: kubectl-client-certificate-data
+  - id: shell-base64-decode-to-cert-file
+- id: kubernetes-client-cert-bundle-materialization
+  desc: Kubernetes client certificate bundle materialization
+  crit: hostile
+  conf: 0.99
+  ref: sha256:e4445eaa3155940f60991241a809409aa70b708303a0d07aa35b2e3d2bf76885
+  all:
+  - id: kubernetes-client-key-materialization
+  - id: kubectl-certificate-authority-data
+- id: go-github-token-env-fallback-helper
+  desc: Go GitHub token helper with env fallback
+  crit: component
+  conf: 0.94
+  for:
+  - go
+  all:
+  - id: go-github-token-env-fallback-call
+  - id: go-github-token-required-error
+- id: go-github-token-security-probe
+  desc: Go GitHub token security probe
+  crit: component
+  conf: 0.94
+  for:
+  - go
+  all:
+  - id: go-github-token-discard-comment
+  - id: go-github-finding-type-secret
+- id: registry-token-theft
+  desc: Package registry credential file access (2+ registries)
+  crit: hostile
+  conf: 0.95
+  needs: 2
+  near_bytes: 8192
+  unless:
+  - id: well-known/tool/sysadmin/container/
+  - id: well-known/tool/detection/security-scanner/
+  - id: well-known/tool/detection/threat-intel/
+  - id: metadata/lang/source::python-protobuf-stub
+  - id: metadata/lang/source::python-mypy-protobuf-generated
+  - id: well-known/tool/detection/agent-sentry/
+  - id: well-known/lib/conda-package/
+  any:
+  - id: objectives/supply-chain/credential-theft/registry/
+  - id: docker-config-json
+- id: sandbox-aware-credential-harvest
+  desc: Credential harvest with remote environment evasion
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: metadata/library/vscode::remote-name
+  any:
+  - id: gh-auth-token-raw
+  - id: objectives/supply-chain/credential-theft/cli/token::gh-auth-token
+  - id: micro-behaviors/process/create/vcs/git::go-git-credential-helper
+  - id: aws-sts-identity
+  - id: gcloud-auth-list
+  - id: az-account-show
+- id: vscode-cloud-cli-dropper
+  desc: VSCode cloud CLI harvest triggers package dropper
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: mass-cloud-credential-harvest
+  - id: metadata/library/vscode::remote-name
+  - id: objectives/command-and-control/dropper/delivery/download::package-runner-fallback-dropper
+
+- id: aws-secretsmanager-mass-theft
+  desc: Automated mass AWS secrets manager extraction
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: aws-secretsmanager-list
+  - id: aws-secretsmanager-get

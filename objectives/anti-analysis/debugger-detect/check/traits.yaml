@@ -1,0 +1,207 @@
+defaults:
+  attack: T1622
+  platforms:
+  - unix
+  - windows
+  for: [scripts, binaries]
+traits:
+- id: ptrace-traceme
+  desc: PTRACE_TRACEME constant
+  crit: suspicious
+  mbc: B0001.m01
+  conf: 0.7
+  if:
+    type: string_literal
+    substr: PTRACE_TRACEME
+  platforms:
+  - unix
+- id: pt-deny-attach
+  desc: PT_DENY_ATTACH constant
+  crit: suspicious
+  mbc: B0001.m01
+  conf: 0.7
+  if:
+    type: string_literal
+    substr: PT_DENY_ATTACH
+  platforms:
+  - macos
+- id: tracerpid-string
+  desc: TracerPid string (debugger detection)
+  crit: component
+  conf: 0.7
+  # for: kept disjoint from the native (kernel::ptrace-debugger → elf/c/python)
+  # and JVM (java-tracerpid-check → class/jar/java) TracerPid atoms so the same
+  # substring isn't a duplicate-overlapping atom across tiers.
+  for: [javascript, lua, perl, php, ruby, shell]
+  if:
+    type: text
+    substr: TracerPid
+  platforms:
+  - linux
+- id: dotnet-runtime-debug-helper
+  for: [elf, so]
+  desc: Dotnet runtime debugger helper library
+  crit: notable
+  conf: 0.95
+  if:
+    type: path
+    basename: true
+    regex: '^lib(coreclr|clrjit|mscordaccore)\.so$'
+- id: dotnet-runtime-debug-helper-marker
+  desc: Dotnet runtime debugger helper marker
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    substr: libmscordaccore.so
+- id: fatal-launcher-text
+  desc: Python launcher fatal error text
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: Fatal error in launcher
+- id: appended-archive-missing-text
+  desc: Missing appended archive text
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    substr: Unable to find an appended archive.
+composite_rules:
+- id: overlay-debugger-process-launcher
+  desc: Overlay loader checks debugger before process launch
+  crit: hostile
+  conf: 0.97
+  attack: T1057,T1497.001
+  all:
+  - id: objectives/anti-static/obfuscation/payload/self-read::pe-overlay-self-extractor
+  - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+  - id: micro-behaviors/process/enumerate/snapshot::process32-traversal-text
+  - id: micro-behaviors/process/create/shell/spawn::win-shellexecute
+  - id: objectives/anti-static/obfuscation/decoders::xor-decoded-virtual-protect-api
+- id: process-inspection
+  desc: Process inspection pattern (potential anti-debug)
+  crit: suspicious
+  conf: 0.75
+  mbc: B0001
+  platforms:
+  - linux
+  all:
+  - id: micro-behaviors/os/syscall/invoke::ptrace-dup
+  unless:
+  - id: well-known/tool/reverse-engineering/frida/
+  - id: well-known/tool/reverse-engineering/dotnet-debugger::remote-coreclr-debugger-runtime
+  - id: micro-behaviors/fs/proc/info/path::process-self-status
+  - id: micro-behaviors/fs/proc/info/path::process-self-maps
+  - id: tracerpid-string
+  - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+- id: ptrace-traceme-or-deny
+  desc: PTRACE_TRACEME or PT_DENY_ATTACH anti-debugging constants
+  crit: suspicious
+  mbc: B0001.m01
+  conf: 0.8
+  any:
+  - id: ptrace-traceme
+  - id: pt-deny-attach
+  unless:
+  - id: metadata/signed/platform::apple
+- id: win-debugger-detect
+  desc: Windows debugger detection API usage
+  crit: suspicious
+  mbc: B0001
+  conf: 0.9
+  platforms:
+  - windows
+  size_min: 20000
+  size_max: 2000000
+  needs: 2
+  any:
+  - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
+  - id: micro-behaviors/process/debug/detect::check-remote-debugger
+  - id: micro-behaviors/os/syscall/raw::nt-query-info-ssn
+  downgrade:
+    any:
+    - id: objectives/anti-analysis/debugger-detect/check/
+  unless:
+  - id: well-known/tool/sysadmin/logapi::logapi-pipe-marker
+  - id: well-known/app/elevate::elevate-tool-context
+  - id: objectives/anti-analysis/debugger-detect/check/
+  - id: metadata/lang/compiler/native::mingw-sjlj-gthread-runtime
+  - id: well-known/lib/glib/
+  - id: well-known/lib/jline/
+- id: launcher-error-marker
+  desc: Windows launcher runtime error text
+  crit: component
+  conf: 0.95
+  all:
+  - id: fatal-launcher-text
+  - id: appended-archive-missing-text
+- id: win-debugger-recognized-marker
+  desc: Recognized Windows debugger helper marker
+  crit: component
+  conf: 0.95
+  any:
+  - id: metadata/binary/vendor::is-microsoft-named
+  - id: metadata/binary/vendor::microsoft-corp-marker
+  - id: metadata/binary/metrics/structural::many-exports
+  - id: metadata/binary/metrics/structural::many-functions
+  - id: metadata/lang/compiler/native::vcruntime-import
+  - id: micro-behaviors/process/lifecycle/runtime-init::msvc-crt-startup-imports
+  - id: metadata/binary/framework::java-launcher-proxy-exports
+  - id: metadata/lang/compiler/native::mingw-gthread-atom-assertion
+  - id: well-known/lib/glib::glib-gthread-library
+  - id: well-known/lib/jline::jansi-runtime-context
+  - id: metadata/build/pip::setuptools-launcher-stub
+  - id: well-known/lib/rsa-bsafe::rsa-bsafe-crypto-library
+  - id: metadata/binary/debug::pdb-absolute-path
+  - id: metadata/binary/layout::pe-embedded
+  - id: metadata/binary/linking/runtime::cosmopolitan-marker
+  - id: metadata/binary/linking/runtime::ape-binary-marker
+  - id: metadata/lang/compiler/native::python-msvc-extension
+  - id: micro-behaviors/fs/temp/pyinstaller::onefile-temp-bootstrap
+  - id: metadata/binary/linking/api-set::api-set-forwarder-dll
+  - id: launcher-error-marker
+  - id: well-known/tool/reverse-engineering/x64dbg::x64dbg-release-component
+  - id: metadata/package/testing/presence/harness::binary-test-directory
+  - id: well-known/app/fastfetch::fastfetch-windows-component
+  unless:
+  - id: metadata/binary/layout::overlay-dominates-third
+- id: anti-debug-full
+  desc: Multiple anti-debugging techniques
+  crit: suspicious
+  mbc: B0001
+  conf: 0.85
+  needs: 2
+  any:
+  - id: ptrace-traceme-or-deny
+  - id: process-inspection
+  - id: win-debugger-detect
+  - id: micro-behaviors/os/linker/env::ld-debug
+  unless:
+  - id: metadata/binary/framework/
+  - id: dotnet-runtime-debug-helper
+  - id: dotnet-runtime-debug-helper-marker
+  - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+  - id: well-known/lib/electron/
+- id: anti-debug-obfuscation-memory-protection
+  desc: Direct ptrace with string obfuscation and memory protection
+  crit: hostile
+  conf: 0.85
+  attack: T1027
+  mbc: B0001
+  platforms: [linux, macos]
+  for: [elf, macho, so, dylib]
+  all:
+  - id: process-inspection
+  - id: objectives/anti-static/obfuscation/string/
+  - id: micro-behaviors/mem/protect/modify::mprotect-import
+  unless:
+  - id: well-known/app/drivers/
+  - id: well-known/lib/nvidia-cudnn/
+  - id: well-known/lib/deb-package/
+  - id: well-known/tool/reverse-engineering/frida/
+  - id: well-known/tool/reverse-engineering/dotnet-debugger::remote-coreclr-debugger-runtime
+  - id: well-known/lib/benign-runtime-bundles/
+  - id: metadata/binary/framework::dotnet-ilasm-coreclr-binary
+  - id: metadata/file/string/identity::chrome-crashpad-handler-basename

@@ -1,0 +1,149 @@
+defaults:
+  for: [powershell]
+  platforms: [windows]
+traits:
+  - id: encodedcommand-invocation-raw
+    desc: PowerShell EncodedCommand invocation
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.001
+    for: [data, batch, powershell, oledoc]
+    if:
+      type: text
+      regex: '(?i)\bpowershell(\.exe)?\b[^\r\n]{0,180}-(EncodedCommand|enc)\b'
+    unless:
+      - type: path
+        regex: '^Azure\.Core\.[0-9][^/]*\.nupkg/lib/net10\.0/Azure\.Core\.dll$'
+      - id: metadata/file/profile/identity::ansible-python-package-path
+      - id: well-known/app/businessdev-albuild/
+      - id: well-known/app/colorscripts-enhanced::package-context
+      - id: well-known/lib/bun-runtime::runtime-context
+  - id: encodedcommand-flag-native
+    desc: PowerShell EncodedCommand flag in native script
+    crit: component
+    conf: 0.86
+    attack: T1059.001
+    for: [data, batch, powershell, oledoc]
+    if:
+      type: text
+      # The flag must stand alone on the command line (preceded by start or
+      # whitespace), not be the tail of a hyphenated identifier such as
+      # `sanitize-reasoning-enc`.
+      regex: '(?i)(^|\s)-(EncodedCommand|enc)\b'
+    unless:
+      - id: well-known/app/vscode/
+      - id: metadata/signed/platform::microsoft
+      - id: metadata/package/quality/false-positives::microsoft-office-support-bundle-context
+      - type: path
+        regex: '^Azure\.Core\.[0-9][^/]*\.nupkg/lib/net10\.0/Azure\.Core\.dll$'
+      - id: metadata/file/profile/identity::ansible-python-package-path
+      - id: well-known/app/businessdev-albuild/
+      - id: well-known/app/colorscripts-enhanced::package-context
+  # String/template literals only — JSDoc/type-doc mentions of the flag are not
+  # command construction. OpenCode Swarm embeds EncodedCommand in sandbox wrappers.
+  - id: encodedcommand-flag-js
+    desc: PowerShell EncodedCommand flag in script literal
+    crit: component
+    conf: 0.86
+    attack: T1059.001
+    platforms: [unix, windows]
+    for: [javascript, typescript]
+    if:
+      type: literal
+      regex: '(?i)-(EncodedCommand|enc)\b'
+    unless:
+      - id: well-known/app/opencode-swarm/
+      - id: well-known/app/vscode/
+  - id: hidden-process-object
+    desc: Hidden .NET process launch object
+    crit: notable
+    conf: 0.88
+    attack: T1564.003
+    if:
+      type: text
+      regex: '(?i)New-Object\s+System\.Diagnostics\.Process'
+  - id: create-no-window
+    desc: Process CreateNoWindow enabled
+    crit: notable
+    conf: 0.86
+    attack: T1564.003
+    if:
+      type: text
+      substr: StartInfo.CreateNoWindow = $true
+  - id: windowstyle-hidden
+    desc: ProcessWindowStyle Hidden configuration
+    crit: notable
+    conf: 0.9
+    attack: T1564.003
+    for: [powershell, batch]
+    if:
+      type: text
+      substr: ProcessWindowStyle]::Hidden
+
+  # Split 'Hi'+'dde'+'n' (or similar) so static scanners miss WindowStyle Hidden.
+  - id: hidden-windowstyle-string-concat
+    desc: Concatenated Hidden window-style fragments
+    crit: suspicious
+    conf: 0.92
+    attack: T1564.003
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '''Hi''\s*\+\s*''dde''\s*\+\s*''n'''
+
+  # Short -ep bypass flag (batch set-vars and one-liners), distinct from the
+  # full powershell.exe -ExecutionPolicy Bypass command-line form below.
+  - id: ep-bypass-flag
+    desc: PowerShell -ep bypass flag
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.001
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)-ep\s+bypass\b'
+
+  - id: executionpolicy-bypass
+    desc: PowerShell execution-policy bypass
+    crit: suspicious
+    conf: 0.94
+    attack: T1059.001
+    if:
+      type: text
+      # Require an executable command line; documentation comments must not
+      # be treated as an execution-policy bypass.
+      regex: '(?im)^(?!\s*#)\s*powershell(\.exe)?\b[^\r\n]{0,100}-(ExecutionPolicy|EP)\s+Bypass\b'
+    unless:
+      - id: metadata/package/testing/presence/fixture/
+composite_rules:
+  - id: encodedcommand-flag-raw
+    desc: PowerShell EncodedCommand flag
+    crit: suspicious
+    conf: 0.86
+    attack: T1059.001
+    any:
+      - id: encodedcommand-flag-native
+      - id: encodedcommand-flag-js
+  - id: encodedcommand-bypass
+    desc: PowerShell encoded command with bypass
+    crit: suspicious
+    conf: 0.94
+    attack: T1059.001
+    all:
+      - id: encodedcommand-invocation-raw
+      - id: executionpolicy-bypass
+    unless:
+      - id: metadata/file/profile/identity::ansible-python-package-path
+
+  - id: hidden-powershell-execution
+    desc: Hidden PowerShell execution flow
+    crit: suspicious
+    conf: 0.95
+    attack: T1059.001
+    all:
+      - id: encodedcommand-bypass
+    any:
+      - id: hidden-process-object
+      - id: create-no-window
+      - id: windowstyle-hidden
+    needs: 2

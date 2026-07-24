@@ -1,0 +1,119 @@
+# JScript/WSH reflective loaders that reassemble a payload from many
+# string-returning functions, decode it with char-code arithmetic, and execute
+# it through a hidden WScript.Shell Run (often `conhost --headless powershell
+# -Command "iex $env:..."` driving an in-memory [Reflection.Assembly]::Load).
+# Detection anchors on the obfuscation SHAPE — the payload, command, and
+# Reflection calls are all encoded and never appear as literal strings.
+defaults:
+  platforms: [windows]
+  for: [javascript]
+  attack: T1027
+  mbc: B0032
+traits:
+  - id: js-hta-application-element
+    desc: JScript contains an HTA application element
+    crit: notable
+    conf: 0.98
+    if:
+      type: text
+      regex: '(?i)<hta:\s*application\b'
+  - id: embedded-encrypted-byte-array
+    desc: JScript embedded encrypted byte payload array
+    crit: notable
+    conf: 0.97
+    if:
+      type: text
+      substr: 'EncryptedBytes=['
+  - id: embedded-secret-key-byte-array
+    desc: JScript embedded decryption key byte array
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      substr: 'KeyBytes=['
+  - id: alternating-xor-stage-decoder
+    desc: Alternating XOR embedded JScript decoder
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '\^\([^)]{1,80}%2===0\?.{1,80}:.{1,80}\)'
+composite_rules:
+  - id: js-encrypted-byte-array-function-loader
+    desc: Encrypted byte arrays decoded into a Function-based JScript stage
+    crit: hostile
+    conf: 0.98
+    attack: "T1027, T1059.007, T1140"
+    all:
+      - id: embedded-encrypted-byte-array
+      - id: embedded-secret-key-byte-array
+      - id: alternating-xor-stage-decoder
+      - id: micro-behaviors/process/interpreter/eval::js-charcode-constructor-stage
+  - id: js-fragmented-payload-wsh-loader
+    desc: Fragmented script payload decoded with char-code arithmetic and run via WSH
+    crit: hostile
+    conf: 0.95
+    attack: T1059.007
+    # Hundreds of bare string-returning functions (the payload chunked to defeat
+    # string scanners) + a modular char-code decode loop + WSH execution (hidden
+    # Run or an obfuscated ActiveX ProgID). The combination is a multi-stage
+    # in-memory loader; no benign module fragments a blob across 30+ string
+    # returners and then arithmetically decodes and launches it.
+    all:
+      - id: micro-behaviors/data/source/function/return::js-function-return-string-dense
+      - id: objectives/anti-static/obfuscation/encoding/arithmetic::js-fromcharcode-mod-256-decode
+    any:
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run-hidden-window
+      - id: objectives/execution/activex/com::activex-object-computed-progid
+  - id: js-obfuscated-activex-environment-loader
+    desc: Obfuscated ActiveX environment-staged payload loader
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.001,T1059.007
+    all:
+      - id: objectives/execution/activex/com::activex-object-aliased-constructor
+      - id: objectives/execution/activex/com::activex-indirect-environment-staging
+      - id: micro-behaviors/data/decode/xor::charcode-modulo-key-index
+      - id: objectives/execution/interpreter/script/wsh::wscript-scriptfullname
+    any:
+      - id: objectives/execution/activex/com::activex-indirect-hidden-run
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run-hidden-window
+  - id: js-cjk-environment-reflective-loader
+    desc: CJK-obfuscated JScript stages a payload through WSH and launches it hidden
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.001,T1059.007,T1564.003,T1620
+    # The encoded strings are inert on their own.  This combination requires
+    # the repeated decoded environment staging, WSH object creation, hidden
+    # execution, and self-reference visible in a multi-stage loader.
+    all:
+      - id: objectives/anti-static/obfuscation/encoding/cjk::cjk-ideograph-encoded-blob
+      - id: micro-behaviors/data/decode/custom::js-charcode-mask-unescape-decoder
+      - id: objectives/execution/interpreter/vbscript/interpreter::wscript-createobject-dup
+      - id: micro-behaviors/os/env/access::wsh-environment-method-text
+      - id: micro-behaviors/os/env/access::wsh-environment-indexed-staging
+      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: objectives/execution/interpreter/script/wsh::wscript-scriptfullname
+  - id: js-hta-wmi-loader
+    desc: HTA hides a remote PowerShell WMI loader
+    crit: hostile
+    conf: 0.99
+    attack: "T1027,T1047,T1059.001,T1059.007,T1564.003,T1620"
+    all:
+      - id: js-hta-application-element
+      - id: metadata/file/metrics::js-many-very-long-strings
+      - id: metadata/file/metrics::multiple-lines-over-1000-chars
+      - id: objectives/execution/wmi::js-hidden-process-create-sequence
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+    any:
+      - id: micro-behaviors/data/decode/base64::decoded-text-carrier
+      - id: micro-behaviors/os/env/access::wsh-environment-item-assignment
+  - id: js-chunked-string-wmi-hidden-loader
+    desc: Chunked-string JavaScript WMI hidden loader
+    crit: hostile
+    conf: 0.99
+    attack: "T1027.002,T1047,T1059.007,T1564.003"
+    all:
+      - id: micro-behaviors/data/source/string::js-string-append-cluster
+      - id: objectives/execution/wmi::wmi-hidden-startup-process
+      - id: micro-behaviors/process/interpreter/jscript::activex-object

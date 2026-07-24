@@ -1,0 +1,175 @@
+defaults:
+  platforms: [windows, unix]
+  for: [scripts, binaries]
+traits:
+- id: dropbox-api-domain
+  desc: Dropbox API domain
+  crit: component
+  mbc: E1567
+  attack: T1567
+  conf: 0.8
+  if:
+    type: text
+    substr: api.dropbox.com
+- id: dropbox-content-domain
+  desc: Dropbox content API domain
+  crit: component
+  mbc: E1567
+  attack: T1567
+  conf: 0.8
+  if:
+    type: text
+    substr: content.dropboxapi.com
+- id: dropbox-files-endpoint
+  desc: Dropbox files API path
+  crit: component
+  mbc: E1567
+  attack: T1567
+  conf: 0.82
+  if:
+    type: text
+    regex: /2/(files|sharing|users)/|/1/fileops/
+- id: dropbox-upload-method
+  desc: Dropbox upload method
+  # Uploading to Dropbox is a legit cloud capability (rclone, backup tools, the
+  # Dropbox SDK); not suspicious by itself. Exfil intent comes from the composite
+  # that pairs it with collected/staged data.
+  crit: notable
+  mbc: E1567
+  attack: T1567
+  conf: 0.8
+  if:
+    type: text
+    regex: dropbox.{0,50}upload
+  unless:
+  - id: objectives/credential-access/cloud/token/oauth::sharex-uploaderslib-assembly
+  - id: objectives/exfiltration/cloud/object-store/
+  - id: metadata/package/testing/presence/harness::example-directory
+  - id: metadata/package/testing/harness/runtime/
+- id: cloudflare-r2-upload-method--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: '\b(PUT|putObject)\b.{0,180}(r2\.cloudflarestorage\.com|R2_ACCESS_KEY|CLOUDFLARE_R2)'
+  count_max: 1021181
+- id: cloudflare-r2-upload-method--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: '\b(PutObject|Upload)\b.{0,180}(r2\.cloudflarestorage\.com|R2_ACCESS_KEY|CLOUDFLARE_R2)'
+  count_max: 1021182
+- id: dropbox-syncwithdropbox-call
+  desc: syncWithDropbox call marker
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    substr: syncWithDropbox
+- id: dropbox-encryptvaultdata-call
+  desc: encryptVaultData call marker
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    substr: encryptVaultData
+- id: dropbox-uploadtodropbox-call
+  desc: uploadToDropbox call marker
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    substr: uploadToDropbox
+composite_rules:
+  - id: encrypted-vault-dropbox-sync
+    desc: Encrypted vault Dropbox sync
+    crit: component
+    conf: 0.88
+    near_bytes: 800
+    all:
+      - id: dropbox-syncwithdropbox-call
+      - id: dropbox-encryptvaultdata-call
+      - id: dropbox-uploadtodropbox-call
+
+  - id: s3-upload
+    desc: S3 upload of targeted credential material
+    crit: suspicious
+    mbc: E1567.002
+    attack: T1567.002
+    conf: 0.9
+    scope: leaf
+    unless:
+      - id: well-known/tool/sysadmin/alpine-packages/
+      - id: well-known/tool/dual-use/rclone::rclone-package-path
+      - id: well-known/lib/aws-crt/
+      - id: well-known/lib/aws-crt::jar-package-path
+      - id: well-known/lib/aws-crt::native-library-path
+    any:
+      - id: micro-behaviors/communications/http/services/aws-s3::amazonaws-domain
+      - id: micro-behaviors/communications/http/services/aws-s3::regional-bucket-domain
+    all:
+      - id: micro-behaviors/communications/http/services/aws-s3::upload-api
+      - id: objectives/collection/file-targeting/filter::credential-files
+  - id: dropbox-api
+    desc: Dropbox API access
+    crit: suspicious
+    mbc: E1567
+    attack: T1567
+    conf: 0.9
+    needs: 2
+    any:
+      - id: dropbox-api-domain
+      - id: dropbox-content-domain
+      - id: dropbox-files-endpoint
+      - id: dropbox-upload-method
+    unless:
+      - id: objectives/exfiltration/cloud/object-store/
+      - id: metadata/package/testing/presence/harness::example-directory
+      - id: metadata/package/testing/harness/runtime/
+  - id: gdrive-api
+    desc: Google Drive API access
+    crit: notable
+    mbc: E1567
+    attack: T1567
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/http/services/google::googleapis-drive
+    unless:
+      - id: objectives/credential-access/cloud/token/oauth::sharex-uploaderslib-assembly
+      - id: metadata/package/testing/
+  - id: cloudflare-r2-upload
+    desc: Cloudflare R2 object upload
+    crit: suspicious
+    mbc: E1567.002
+    attack: T1567.002
+    conf: 0.92
+    all:
+      - id: micro-behaviors/communications/http/url/cloud::cloudflare-r2-url
+    any:
+      - id: cloudflare-r2-upload-method
+      - id: objectives/credential-access/env/secrets/cloud-access::env-r2-access-key
+      - id: objectives/credential-access/env/secrets/cloud-access::env-cloudflare-token
+  - id: cloudflare-r2-secret-exfil
+    desc: Cloud credentials uploaded to R2
+    crit: hostile
+    mbc: E1567.002
+    attack: T1567.002
+    conf: 0.97
+    all:
+      - id: cloudflare-r2-upload
+    any:
+      - id: objectives/credential-access/env/secrets/cloud-access::node-aws
+      - id: objectives/credential-access/env/secrets/cloud-access::node-cloud
+      - id: objectives/discovery/cloud/metadata::metadata-harvesting
+  - id: cloudflare-r2-upload-method
+    desc: Cloudflare R2 object upload
+    crit: notable
+    conf: 0.86
+    mbc: E1567.002
+    attack: T1567.002
+    any:
+      - id: cloudflare-r2-upload-method--rx-1
+      - id: cloudflare-r2-upload-method--rx-2

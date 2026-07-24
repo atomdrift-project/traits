@@ -1,0 +1,307 @@
+# JavaScript Eval Detection
+# MBC: B0009.016 (Dynamic Execution)
+# ATT&CK: T1059.007
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+traits:
+  # Node's Module._compile is a runtime code-compilation capability. Keep
+  # this neutral; remote-response and package context belong in objectives.
+  - id: module-compile-marker
+    desc: Contains a _compile runtime-code marker
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      substr: '_compile'
+
+  - id: js-async-function-constructor
+    desc: JavaScript AsyncFunction compiles code
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: symbol
+      kind: call
+      exact: AsyncFunction
+      arg:
+        kind: identifier
+  - id: js-eval-variable-argument
+    desc: JavaScript eval executes a variable argument
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      kind: call
+      exact: eval
+      arg:
+        kind: identifier
+  - id: js-eval-call-expression-arg
+    desc: JavaScript eval executes a call result
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      kind: call
+      exact: eval
+      arg:
+        kind: call
+  - id: function-ctor-call-expr-arg
+    desc: Builds JavaScript function from call result
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      kind: call
+      exact: Function
+      arg: {kind: call}
+  - id: js-new-function-constructor
+    desc: Calls JavaScript's new Function constructor
+    crit: notable
+    conf: 0.7
+    if:
+      # Match the executable constructor node rather than comments or string
+      # literals that merely document `new Function(...)`.
+      type: tree-sitter
+      language: javascript
+      query: |
+        (new_expression
+          constructor: (identifier) @name
+          (#eq? @name "Function"))
+    unless:
+      - type: text
+        substr: "new Function('return this')"
+      - type: text
+        substr: 'new Function("return this")'
+      # gettext/plural-form evaluators compile `nplurals` formulas as
+      # `new Function("n", "return " + formula)` — not dynamic malware eval.
+      - type: text
+        substr: 'new Function("n", "return "'
+      - type: text
+        substr: "new Function('n', 'return '"
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/library/jquery/
+  - id: js-function-constructor
+    desc: Constructs a JavaScript function dynamically
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      kind: call
+      exact: Function
+    unless:
+      - id: micro-behaviors/data/source/dynamic/eval::new-function-return-this
+      # gettext plural-formula compilers (see js-new-function-constructor).
+      - type: text
+        substr: 'new Function("n", "return "'
+      - type: text
+        substr: "new Function('n', 'return '"
+  - id: js-new-function-variable-argument
+    desc: Function constructor receives identifier
+    crit: notable
+    conf: 0.85
+    if:
+      # The JavaScript fact extractor records this `new Function(name)` form
+      # in the call facts, but the symbol matcher indexes imports/exports and
+      # misses constructor calls.  Match the source form directly so the
+      # capability is retained for loader composites.
+      type: text
+      regex: 'new\s+Function\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\)'
+  - id: js-commonjs-module-wrapper
+    desc: CommonJS text evaluation wrapper
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'new\s+Function\s*\(\s*["'']require["'']\s*,\s*["'']exports["'']\s*,\s*text\s*\)'
+  - id: js-indirect-function-constructor
+    desc: Function constructor via prototype chain
+    crit: notable
+    conf: 0.9
+    # `[].constructor.constructor`, `"".constructor.constructor`,
+    # `({}).constructor.constructor` all resolve to the Function constructor
+    # without ever writing the literal token `Function`/`eval`. This indirection
+    # is an evasion idiom used to keep the dynamic-execution sink out of reach of
+    # static `Function(`/`eval(` greps; legitimate code reaches Function directly.
+    if:
+      type: text
+      regex: '\.constructor\s*\.\s*constructor\b'
+    unless:
+      - id: metadata/library/structure::js-large-minified-bundle
+  - id: js-empty-function-charcode-property
+    desc: Empty function has char-coded property
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\(function\(\)\{\}\)\[String\.fromCharCode'
+  - id: js-computed-charcode-call
+    desc: Computed call through character-coded property
+    crit: notable
+    conf: 0.92
+    attack: T1059.007
+    if:
+      type: text
+      # A function-valued property is selected with a runtime character-code
+      # string and immediately called with an identifier payload.  The atom
+      # describes the capability; decoder-plus-execution intent is inferred by
+      # objective composites.
+      regex: 'String\.fromCharCode\s*\([^;\]]{1,180}\)\s*\]\s*\('
+
+  - id: js-base64-decoded-property
+    desc: Base64 conversion inside computed property
+    crit: notable
+    conf: 0.88
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\[\s*Buffer\.from\([^;\n]{0,40}["'']base64["'']'
+
+  - id: js-eval-raw
+    desc: Executes JavaScript dynamically with eval()
+    crit: notable
+    conf: 0.7
+    if:
+      # Migrated from a tree-sitter query to a `kind: call` match on
+      # the pre-extracted call fact (no per-member cursor walk).
+      type: symbol
+      kind: call
+      exact: 'eval'
+    unless:
+      - id: metadata/lang/compiled::erlang-module-marker
+      - type: text
+        substr: eval(path)
+      - id: metadata/package/testing/harness/runtime::v8-native-intrinsic-call
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/harness/runtime/
+      - type: text
+        substr: "function eval_template"
+    downgrade:
+      any:
+        - id: metadata/package/testing/harness/fixture::embedded-unit-test-fixture
+
+  - id: js-eval-variable-text
+    desc: Calls eval() with an identifier argument
+    crit: notable
+    conf: 0.9
+    attack: T1059.007
+    # Large scripts can exceed the AST scanner guard. Keep the source fallback
+    # limited to a plain identifier argument so ordinary eval expressions are
+    # not confused with the decoded-stage loader shape.
+    if:
+      type: text
+      regex: '\beval\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]{0,80}\s*\)'
+    unless:
+      - type: symbol
+        kind: call
+        exact: eval
+        arg:
+          kind: identifier
+
+  - id: js-member-eval-call
+    desc: JavaScript member eval call
+    crit: notable
+    conf: 0.9
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\.eval\s*\('
+  - id: js-eval-tostring-result
+    desc: eval() executes toString() result
+    crit: notable
+    conf: 0.88
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/library/structure::google-tag-manager-bundle
+    if:
+      type: text
+      regex: '\beval\s*\(\s*[\w$.]+\.toString\s*\(\s*\)\s*\)'
+  - id: js-eval-object-property
+    desc: eval() executes object property
+    # The call shape is a real dynamic-execution capability, but it does not
+    # establish attacker intent by itself.  Keep suspicious/hostile severity
+    # in the objective composites that add remote-response or loader context.
+    crit: notable
+    conf: 0.75
+    attack: T1059.007
+    ref: sha256:3136a698ee6023e879bec6a1ff24d69f9ece7db5195e520acd82fed5b3efa220
+    if:
+      type: text
+      regex: '(^|[^.$A-Za-z0-9_])eval\s*\(\s*[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\s*\)'
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/library/runtime::angularjs-bundle
+      - id: metadata/package/files/system-package::julia-runtime-path
+      - id: well-known/lib/benign-runtime-bundles::node-source-tree
+      - id: well-known/lib/nextjs/
+      - id: well-known/app/civicrm/
+      - id: well-known/app/bruno::app-bundle
+      - id: metadata/library/runtime::websharper-runtime-marker
+      - type: text
+        substr: CriticalCmdDialog
+    not:
+      - regex: '(?i)eval\s*\(\s*window\.(game|softgames)[A-Za-z0-9_$]*\s*\)'
+  - id: js-eval-response-text
+    desc: JavaScript eval executes responseText property
+    crit: notable
+    conf: 0.9
+    attack: T1059.007
+    if:
+      type: text
+      regex: '(^|[^.$A-Za-z0-9_])eval\s*\(\s*[A-Za-z_$][\w$]*\.responseText'
+  - id: js-indirect-eval
+    desc: Indirect eval via comma operator ((0,eval))
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: '\(\s*0\s*,\s*eval\s*\)\s*\('
+    # `(0,eval)(...)` is a standard transpiler/bundler idiom for global-scope
+    # eval; suppress it on large minified bundles to avoid noise, matching the
+    # js-new-function-constructor precedent above. Dropper composites use the
+    # component fragment in supply-chain/hidden-payload/encoding instead, which
+    # carries no bundle exclusion so megabyte single-line packers still match.
+    unless:
+      - id: metadata/library/structure::js-large-minified-bundle
+  - id: js-indirect-eval-variable
+    desc: Indirect eval executes an identifier value
+    crit: notable
+    conf: 0.9
+    # This is narrower than the general indirect-eval capability: the comma
+    # operator feeds a named decoded buffer directly into the execution sink.
+    # Keep it visible in large files because packed loaders are commonly single
+    # large lines and the surrounding decoder is what makes the combination
+    # hostile.
+    if:
+      type: text
+      regex: '\(\s*0\s*,\s*eval\s*\)\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]{0,80}\s*\)'
+  - id: js-eval-alias-assignment
+    desc: Variable aliases JavaScript eval
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\b(var|let|const)\s+[A-Za-z_$][A-Za-z0-9_$]{0,40}\s*=\s*eval\s*[;,]'
+
+composite_rules:
+  - id: js-base64-decoded-computed-call
+    desc: Calls a method selected from Base64-decoded text
+    crit: notable
+    conf: 0.92
+    attack: T1059.007
+    near_bytes: 256
+    all:
+      - id: js-base64-decoded-property
+      - id: micro-behaviors/data/source/property/computed::js-computed-property-call
+
+  - id: js-charcode-constructor-stage
+    desc: Char-coded constructor property call
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    near_bytes: 512
+    all:
+      - id: js-empty-function-charcode-property
+      - id: js-computed-charcode-call

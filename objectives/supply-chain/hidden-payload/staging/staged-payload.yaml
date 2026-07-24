@@ -1,0 +1,244 @@
+# Staged payload delivery patterns in npm packages
+# Detects packages that prepare infrastructure for future payload delivery
+defaults:
+  platforms: [unix, windows]
+  attack: T1195.002
+traits:
+  # Native Node addons routinely keep a commented build/Release or obj.target
+  # fallback next to the active require.  Restrict this atom to the generated
+  # dist/ layout used by staged JavaScript payloads.
+  - id: commented-require-dist
+    desc: Commented-out require of dist payload
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: text
+      regex: '//\s*(const|let|var).{0,40}require\(.{0,60}dist/'
+    unless:
+      - id: well-known/lib/re2::node-re2-native-addon-require
+  - id: indexed-base64-shard-lines
+    desc: Indexed base64 shard marker lines
+    crit: component
+    conf: 0.92
+    for: [javascript, data]
+    if:
+      type: text
+      regex: '(?m)^z9:\d{1,6}:[A-Za-z0-9+/=]{16,}$'
+  - id: cli-install-subcommand
+    desc: CLI exposes an install subcommand
+    crit: component
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bcommand\s*={2,3}\s*["'']install["''][\s\S]{0,80}\binstall\s*\(\s*\)'
+
+composite_rules:
+  # A package-relative file that is read, Base64-decoded, and eval'ed is
+  # executable payload staging, even when the carrier itself is opaque.
+  - id: package-relative-base64-eval-loader
+    desc: Reads and evals a Base64 package-relative payload
+    crit: hostile
+    conf: 0.99
+    for: [javascript, typescript]
+    near_lines: 130
+    attack: T1027,T1059.007,T1195.002
+    mbc: B0032
+    all:
+      - id: micro-behaviors/fs/file/read::read-package-relative-file
+      - id: micro-behaviors/data/decode/base64::buffer-from-base64
+      - id: micro-behaviors/process/interpreter/eval::js-eval-call-expression-arg
+
+  - id: archive-hidden-base64-agent-materialization
+    desc: Archive materializes a Base64 payload into an executable agent
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    for: [archives]
+    all:
+      - id: metadata/package/files/encoding::large-b64-file
+      - id: objectives/persistence/system/cron/schedule::cron-with-base64
+  - id: archive-hidden-base64-cron-agent
+    desc: Archive combines a staged Base64 payload with detached cron persistence
+    crit: hostile
+    conf: 0.99
+    scope: archive
+    for: [archives]
+    all:
+      - id: metadata/package/files/encoding::large-b64-file
+      - id: objectives/persistence/system/cron/schedule::cron-with-base64
+      - id: objectives/persistence/system/cron/schedule::crontab-add
+      - id: micro-behaviors/process/daemonize/detach::nohup-shell-launch
+  - id: build-surface-claimed
+    desc: Package claims generated build output
+    crit: component
+    conf: 0.82
+    any:
+      - id: metadata/package/files/package-json::files-dist-ref
+      - id: metadata/package/manifest/entrypoint::main-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::types-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::module-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::pkg-exports-dist-direct
+      - id: metadata/package/manifest/entrypoint::bin-dist-entrypoint
+      - id: commented-require-dist
+  - id: declares-build-pipeline
+    desc: Package declares build pipeline script
+    crit: component
+    conf: 0.78
+    any:
+      - id: metadata/package/scripts::has-build-script-build
+      - id: metadata/package/scripts::has-build-script-compile
+      - id: metadata/package/scripts::has-build-script-prepare
+      - id: metadata/package/scripts::has-build-script-prepack
+      - id: metadata/package/scripts::has-build-script-prepublish
+      - id: metadata/package/scripts::has-build-script-prepublish-only
+      - id: metadata/package/scripts::has-build-script-package
+      - id: metadata/package/scripts::has-build-script-package-web
+      - id: metadata/package/scripts::has-build-script-compile-web
+  - id: no-build-script
+    desc: Package has no recognizable build pipeline
+    crit: component
+    conf: 0.8
+    for: [package.json]
+    all:
+      - id: build-surface-claimed
+    unless:
+      - id: objectives/supply-chain/hidden-payload/staging/
+      - id: metadata/package/manifest/freeform/
+      - id: metadata/package/testing/presence/fixture/
+  - id: phantom-dist-directory
+    desc: Files field lists dist/ without declared entrypoints or build script
+    crit: suspicious
+    conf: 0.88
+    for: [package.json]
+    all:
+      - id: metadata/package/files/package-json::files-dist-ref
+      - id: no-build-script
+    unless:
+      - id: metadata/package/manifest/entrypoint::main-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::types-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::module-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::pkg-exports-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::pkg-exports-dist-direct
+      - id: metadata/package/manifest/entrypoint::bin-dist-entrypoint
+      - id: metadata/package/manifest/freeform/
+  - id: dist-entrypoint-install-loader
+    desc: Dist package runs source install loader
+    crit: suspicious
+    conf: 0.93
+    for: [package.json]
+    all:
+      - id: metadata/package/manifest/entrypoint::main-dist-entrypoint
+      - id: metadata/package/manifest/entrypoint::types-dist-entrypoint
+      - id: metadata/package/files/package-json::files-dist-ref
+      - id: objectives/supply-chain/install-hook/scripts/lifecycle::postinstall-runs-ts-node-local-script
+  - id: staged-payload-delivery
+    desc: Staged payload delivery infrastructure
+    crit: hostile
+    conf: 0.92
+    for: [javascript]
+    all:
+      - id: commented-require-dist
+    any:
+      - id: metadata/package/dependencies::npm-no-dependencies-field
+      - id: metadata/package/quality/empty::npm-no-author
+  - id: obfuscated-decrypt-write-hidden-launch
+    desc: Obfuscated JavaScript stages decoded content and hidden-launches it
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1105,T1059.007
+    mbc: B0032,F0011
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
+      - id: micro-behaviors/fs/write/file/mode::node-obfuscated-write-mode
+      - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-expression
+  - id: node-sharded-base64-json-materializer
+    desc: Node rebuilds base64 JSON shards
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/fs/enumerate/directory::fs-readdir
+      - id: micro-behaviors/fs/file/read::read-node
+      - id: micro-behaviors/data/source/syntax/array::js-array-sort-call
+      - id: micro-behaviors/data/source/syntax/array::js-array-empty-join-call
+      - id: micro-behaviors/data/decode/base64::node-json-parse-buffer
+      - id: micro-behaviors/data/decode/base64::node-base64-tostring-token
+  - id: npm-cli-sharded-json-payload-dropper
+    desc: npm CLI hidden shard dropper
+    crit: hostile
+    conf: 0.94
+    scope: archive
+    for: [archives]
+    all:
+      - id: metadata/package/manifest/entrypoint::has-bin-field
+      - id: indexed-base64-shard-lines
+      - id: node-sharded-base64-json-materializer
+      - id: micro-behaviors/data/decode/base64::node-base64-json-file-materializer
+      - id: cli-install-subcommand
+  - id: npm-gist-api-eval-loader
+    desc: npm package loads and evals GitHub Gist API content
+    crit: hostile
+    conf: 0.96
+    scope: archive
+    for: [archives]
+    all:
+      - id: metadata/package/files/included::package-json-basename
+      - id: objectives/command-and-control/channel/deaddrop/github::github-gist-api-eval-deaddrop
+      - id: micro-behaviors/os/module/load::dynamic-import-string-literal
+    any:
+      - id: objectives/command-and-control/dropper/delivery/fetch-eval::fetch-eval-remote-code
+      - id: objectives/command-and-control/dropper/delivery/fetch-eval::fetch-content-field-eval-loader
+      - id: micro-behaviors/communications/http/url/github::gist-github-host-url
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/manifest::test-fixtures
+  # Decoy-loader: a benign-looking package whose only real action is to eagerly
+  # import a separately-published "optional" dependency at module init and
+  # swallow any load error, so the actual payload ships (and updates) in the
+  # sibling package while the carrier stays clean to static review. The empty
+  # catch (silent swallow) is the discriminator vs. legitimate optional-dep
+  # loading, which logs or surfaces the failure. scope:archive pools the JS
+  # behavior with the package.json manifest field across the npm tarball.
+  - id: optional-dep-fire-forget-loader
+    desc: Eagerly loads an optional dependency at init and swallows errors
+    # The behavior is an execution capability, but is not by itself proof of
+    # a decoy carrier; the hostile composite below adds the manifest-hiding
+    # evidence needed for that conclusion.
+    crit: notable
+    conf: 0.85
+    scope: archive
+    for: [archives]
+    all:
+      - id: micro-behaviors/os/module/load::eager-import-error-swallowed
+      - id: metadata/package/dependencies::has-optional-deps
+  # Hostile tier — the full decoy profile. Beyond the loader behavior, the
+  # manifest CONCEALS the runtime code-dependency: the package declares zero
+  # runtime `dependencies` (only devDependencies) yet eagerly executes an
+  # "optional" dependency at import. A genuine consumer of that module would
+  # list it under `dependencies`; hiding it in `optionalDependencies` keeps the
+  # carrier installable and clean-looking while the payload ships in the sibling
+  # package. `unless` clears maintained packages that carry real provenance
+  # (repository / homepage / author email), which decoy carriers omit.
+  - id: optional-dep-decoy-loader
+    desc: Decoy carrier hides a runtime dep as optional and runs it at import
+    crit: hostile
+    conf: 0.9
+    scope: archive
+    for: [archives]
+    all:
+      - id: micro-behaviors/os/module/load::eager-import-error-swallowed
+      - id: metadata/package/dependencies::has-optional-deps
+      - id: metadata/package/dependencies::npm-no-runtime-many-devdeps
+    unless:
+      - id: metadata/library/data::parcel-watcher-native-loader
+      - id: metadata/package/manifest/repository/
+      - id: metadata/package/manifest/homepage::has-homepage-field
+      - id: metadata/package/manifest/author/identity::has-author-email
+      - id: well-known/lib/nextjs/
+      - id: well-known/app/neurolink::benign-archive-context
+      - id: well-known/app/neurolink::action-dist-bedrock-marker

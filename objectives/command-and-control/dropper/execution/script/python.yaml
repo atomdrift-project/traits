@@ -1,0 +1,125 @@
+# Python Script Dropper Patterns
+# Detects Python scripts that download and execute remote payloads
+# ATT&CK: T1059.006 (Python), T1105 (Ingress Tool Transfer)
+defaults:
+  attack: T1105
+  mbc: B0024
+  platforms: [unix, windows]
+  for: [python]
+traits:
+  - id: curl-slo-variable-output
+    desc: Python curl writes variable path
+    crit: suspicious
+    conf: 0.9
+    platforms: [unix]
+    if:
+      type: text
+      regex: 'curl\s+-sLo\s+\{?[A-Za-z_][A-Za-z0-9_]*\}?'
+  - id: chmod-variable-output
+    desc: Python chmods variable path
+    crit: component
+    conf: 0.9
+    platforms: [unix]
+    if:
+      type: text
+      regex: '&&\s*chmod\s+\+x\s+\{?[A-Za-z_][A-Za-z0-9_]*\}?'
+  - id: echo-config-piped-to-var
+    desc: Echoed config piped to variable
+    crit: component
+    conf: 0.9
+    platforms: [unix]
+    if:
+      type: text
+      regex: "echo\\s+['\"]\\{?[A-Za-z_][A-Za-z0-9_]*\\}?['\"]\\s*\\|"
+  - id: requests-get-variable-url
+    desc: Python requests.get variable URL
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: 'requests\.get\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)'
+  - id: inline-wget-download-exec
+    desc: Python inline wget download execute
+    crit: suspicious
+    conf: 0.9
+    platforms: [unix]
+    if:
+      type: string_literal
+      regex: 'wget\s+https?://.{10,300}&&.{0,50}(tar|chmod|\./)'
+    unless:
+      - id: well-known/app/mgmt::mgmt-source-tree
+composite_rules:
+  - id: appdata-exe-write-path
+    desc: Writes EXE under APPDATA
+    crit: suspicious
+    conf: 0.92
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/fs/path/application/executable::appdata-exe-path
+      - id: micro-behaviors/fs/write/file/direct::write-exe
+    near_lines: 40
+    unless:
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+      - id: metadata/library/finance::dartlab-finance-context
+  - id: shell-curl-chmod-dropper
+    desc: Python shell subprocess curl chmod dropper
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/process/create/subprocess::shell-true
+      - id: curl-slo-variable-output
+      - id: chmod-variable-output
+  - id: detached-stdin-config-dropper
+    desc: Python detached stdin config dropper
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: shell-curl-chmod-dropper
+      - id: echo-config-piped-to-var
+      - id: micro-behaviors/process/create/subprocess::subprocess-detached-session
+    any:
+      - id: micro-behaviors/fs/file/delete::py-remove
+      - id: micro-behaviors/fs/directory/delete::shutil-rmtree
+  # Python subprocess executing a download-and-pipe-to-shell pattern
+  # e.g., subprocess.run("curl ... | shell", shell=True)
+  - id: subprocess-download-execute
+    desc: Python subprocess download-and-execute dropper
+    crit: hostile
+    conf: 0.95
+    near_lines: 20
+    all:
+      - id: micro-behaviors/process/create/subprocess::process-execution
+      - id: objectives/command-and-control/dropper/delivery/pipe::download-pipe-exec
+    any:
+      - id: micro-behaviors/process/create/subprocess::shell-true
+  # Python file with subprocess shell=True and curl|shell
+  # Broader: catches cases where methods composite doesn't fire but raw subprocess does
+  - id: shell-true-curl-pipe
+    desc: Python shell=True with curl pipe to interpreter
+    crit: hostile
+    conf: 0.95
+    near_lines: 20
+    all:
+      - id: micro-behaviors/process/create/subprocess::shell-true
+      - id: objectives/command-and-control/dropper/delivery/pipe::download-pipe-exec
+  - id: python-download-appdata-startfile
+    desc: Python downloads EXE to APPDATA and launches
+    crit: hostile
+    conf: 0.98
+    platforms: [windows]
+    all:
+      - id: requests-get-variable-url
+      - id: appdata-exe-write-path
+      - id: micro-behaviors/process/create/launch::startfile-exe-text
+    any:
+      - id: micro-behaviors/fs/file/write/direct::py-write
+      - id: micro-behaviors/communications/http/lib/requests::content-attribute-access
+    needs: 1
+  - id: python-os-system-wget-download-exec
+    desc: Python os.system wget download execute
+    crit: hostile
+    conf: 0.95
+    platforms: [unix]
+    all:
+      - id: micro-behaviors/process/create/system::python-os-system
+      - id: inline-wget-download-exec

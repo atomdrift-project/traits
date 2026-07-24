@@ -1,0 +1,198 @@
+defaults:
+  platforms: [windows, unix]
+  for: [python, javascript, powershell, pe, elf]
+  mbc: C0001
+  attack: T1071.004
+traits:
+  - id: dnscat-secret
+    desc: dnscat2 secret environment variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: DNSCAT_SECRET
+  - id: dnscat-name
+    desc: dnscat2 tool name reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      substr: dnscat
+      case_insensitive: true
+  - id: dnscat-session
+    desc: dnscat2 session state constant
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: SESSION_STATE_ESTABLISHED
+  - id: dnscat-packet
+    desc: dnscat2 packet debug message
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      substr: MSG packet
+  - id: iodine-name
+    desc: Iodine DNS tunnel tool reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: '(?i)\biodine\b.{0,40}\b(dns|tunnel)\b'
+  - id: dns-tunnel-phrase
+    desc: DNS tunnel terminology
+    # The phrase alone appears in legitimate tunnel/client help and crypto
+    # diagnostics. Composites still use it as context for actual DNS tunneling.
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: dns tunnel
+      case_insensitive: true
+    unless:
+      - type: text
+        substr: is not allowed in FIPS 140-only
+      - type: text
+        regex: 'route \[subcommand options\] \[dns TUNNEL HOSTNAME\]'
+  - id: dns-exfil
+    desc: DNS exfiltration terminology
+    # A phrase in documentation or a test name is not evidence that the
+    # program constructs a DNS exfiltration channel.  Keep it as incomplete
+    # context for composites that also prove a DNS-label/data path.
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: dns exfil
+      case_insensitive: true
+    unless:
+    - id: well-known/tool/offensive/pentestkit/
+    - id: well-known/tool/detection/security-scanner/
+    - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+  - id: dns-c2
+    desc: DNS C2 terminology
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: dns c2
+      case_insensitive: true
+    unless:
+    - id: well-known/tool/detection/security-scanner/
+    - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+  - id: dns-beacon
+    desc: Explicit DNS beacon phrase
+    crit: suspicious
+    conf: 0.85
+    unless:
+      - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+    if:
+      type: text
+      # Match the phrase as words. A substring matcher misclassified the
+      # benign cjdns beacon port comment as "dns beacon".
+      regex: '(?i)\bdns\s+beacon\b'
+  - id: doh-google
+    desc: Google DoH endpoint
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      substr: dns.google/dns-query
+    unless:
+      - id: well-known/lib/v8::isolate-symbol
+  - id: doh-quad9
+    desc: Quad9 DoH endpoint
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      substr: dns.quad9.net/dns-query
+    unless:
+      - id: well-known/lib/v8::isolate-symbol
+  - id: doh-json-content
+    desc: DoH JSON content type
+    crit: baseline
+    conf: 0.6
+    if:
+      type: text
+      substr: application/dns-json
+composite_rules:
+  # DNS-over-HTTPS is legitimate privacy tech; a bare endpoint/content reference
+  # (e.g. a reverse-DNS PTR lookup) is not tunneling. Kept notable — the `doh-c2`
+  # composite below combines these with actual exfil/beacon markers to reach C2.
+  - id: doh-endpoint
+    desc: Known DoH endpoint reference
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/communications/dns/doh::doh-cloudflare-json
+      - id: doh-google
+      - id: doh-quad9
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: doh-content
+    desc: DoH content-type indicator
+    crit: notable
+    conf: 0.6
+    any:
+      - id: micro-behaviors/communications/dns/doh::doh-content-type
+      - id: doh-json-content
+    unless:
+      - id: well-known/app/kilocode::kilo-code-native-runtime
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: dnscat
+    desc: dnscat2 DNS tunneling tool
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: dnscat-secret
+      - id: dnscat-name
+      - id: dnscat-session
+      - id: dnscat-packet
+  - id: iodine
+    desc: iodine DNS tunneling tool
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: dns-tunnel-phrase
+    all:
+      - id: iodine-name
+      - id: micro-behaviors/communications/proxy/tunnel::dev-net-tun
+  - id: generic-comp
+    desc: Generic DNS tunneling patterns
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: dns-c2
+      - id: micro-behaviors/communications/dns/lookup/txt::dns-txt-tool-query
+      - id: dns-beacon
+  - id: doh-c2
+    desc: DNS over HTTPS potential C2
+    crit: notable
+    conf: 0.75
+    all:
+      - id: doh-endpoint
+      - id: doh-content
+    any:
+      - id: dns-exfil
+      - id: dns-c2
+      - id: dns-beacon
+      - id: metadata/file/string/domain::long-alphanumeric-third-level-label
+    unless:
+      - id: well-known/lib/v8::isolate-symbol
+      - id: objectives/exfiltration/dns/tunnel/
+  - id: dns-txt-exec
+    desc: DNS TXT record used as C2 command channel
+    crit: hostile
+    conf: 0.9
+    mbc: C0011
+    for: [shell, python, javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/dns/lookup/txt::dns-txt-tool-query
+    any:
+      - id: micro-behaviors/process/create/shell/spawn::shell-execution
+      - id: micro-behaviors/process/create/subprocess::os-popen
+      - id: micro-behaviors/process/create/subprocess::check-output
+      - id: micro-behaviors/process/create/shell/bridge::js-exec
+      - id: micro-behaviors/process/create/shell/bridge::execSync-call

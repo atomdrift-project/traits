@@ -1,0 +1,84 @@
+defaults:
+  platforms: [windows]
+  for: [pe, dll, c, cpp]
+  attack: "T1561.002"
+
+traits:
+  - id: physical-drive-path-source
+    desc: Source references physical drive path
+    crit: component
+    conf: 0.94
+    for: [c, cpp]
+    if:
+      type: text
+      regex: 'PhysicalDrive[0-9]'
+  - id: disk-update-properties-ioctl
+    desc: Updates disk device properties
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      substr: IOCTL_DISK_UPDATE_PROPERTIES
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::dotnet-aspnetcore-crypto-runtime
+      - id: well-known/lib/benign-runtime-bundles::pinvoke-kernel32-library
+      - id: well-known/app/windows-desktop-tools::steamkit2-library
+      - id: metadata/lang/compiler/managed::delphi
+      - id: metadata/lang/source/
+  - id: delayed-delete-until-reboot
+    desc: Delays file deletion until reboot
+    crit: notable
+    conf: 0.9
+    attack: "T1485"
+    if:
+      type: text
+      regex: 'MoveFileEx[AW]?[\s\S]{0,240}MOVEFILE_DELAY_UNTIL_REBOOT'
+
+composite_rules:
+  - id: windows-writefile-call
+    desc: Windows WriteFile call
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/fs/file/write/direct::writefile-api
+      - id: micro-behaviors/fs/file/write/direct::write-file-source
+  - id: windows-physical-drive-target
+    desc: Windows physical drive target
+    crit: suspicious
+    conf: 0.94
+    any:
+      - id: objectives/impact/system/directory::mbr-target
+      - id: physical-drive-path-source
+  - id: windows-physical-drive-zero-wiper
+    desc: Windows physical drive zero wiper
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: micro-behaviors/hardware/block/device::disk-geometry-ioctl
+      - id: windows-writefile-call
+      - id: micro-behaviors/fs/file/handle::device-io-control-win
+      - id: windows-physical-drive-target
+    any:
+      - id: disk-update-properties-ioctl
+      - id: objectives/impact/degrade/system/recovery::native-restore-point-deletion
+  - id: windows-volume-file-zero-wiper
+    desc: Windows volume file zero wiper
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: micro-behaviors/fs/delete/secure::fsctl-set-zero-data
+      - id: micro-behaviors/fs/enumerate/volume::find-first-volume
+    any:
+      - id: micro-behaviors/fs/file/delete::deletefile-w
+      - id: delayed-delete-until-reboot
+      - id: objectives/evasion/indicator-removal/logs::native-usn-journal-clearing
+  - id: windows-destructive-native-wiper
+    desc: Windows destructive native wiper
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: windows-physical-drive-zero-wiper
+      - id: windows-volume-file-zero-wiper
+    any:
+      - id: objectives/impact/degrade/system/recovery::native-restore-point-deletion
+      - id: objectives/evasion/indicator-removal/logs::native-usn-journal-clearing

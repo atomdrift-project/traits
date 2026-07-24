@@ -1,0 +1,175 @@
+defaults:
+  platforms: [windows, unix, appliance]
+  for: [java, kotlin, class, java_class, jar]
+  attack: T1499
+
+traits:
+  - id: jvm-resource-exhaustion-markers
+    desc: JVM resource exhaustion markers
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: 'CPU Exhaustion|Memory Exhaustion|Filesystem Exhaustion'
+
+  - id: jvm-thread-exhaustion-markers
+    desc: JVM thread exhaustion self-label markers
+    crit: suspicious
+    conf: 0.92
+    # Match the malware's own DoS self-labeling strings, not the ordinary
+    # Executors.newFixedThreadPool JDK API (covered as a symbol by
+    # jvm-executors-threadpool-bytecode inside the bytecode composites).
+    if:
+      type: text
+      regex: 'Thread Exhaustion|dos-thread-'
+
+  - id: jvm-disk-fill-artifacts
+    desc: JVM disk fill artifacts
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'dos_artifact_|/tmp/\.sys_data_|disk-fill'
+
+  - id: jvm-perfdata-disk-fill
+    desc: JVM perfdata disk fill
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(^|[^A-Za-z])perfdata_'
+
+  - id: jvm-large-byte-array-loop
+    desc: JVM large byte allocation loop
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(for|while).{0,240}new\s+byte\[[^\]]{0,80}1024[^\]]{0,80}1024'
+
+  - id: jvm-disk-fill-bytecode
+    desc: JVM disk fill bytecode
+    crit: suspicious
+    conf: 0.91
+    for: [class, java_class, jar]
+    if:
+      type: hex
+      pattern: 2F 74 6D 70 2F 2E 73 79 73 5F 64 61 74 61 5F
+
+  - id: jvm-network-flood-marker
+    desc: JVM network flood marker
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'Connection Flood|net-flood'
+
+  - id: jvm-degrade-path-bytecode
+    desc: JVM degrade path bytecode
+    crit: suspicious
+    conf: 0.91
+    for: [class, java_class, jar]
+    unless:
+      - id: metadata/file/extension/identity::python-wheel-basename
+      - type: path
+        regex: '(?i)\.(?:zip|tar|tgz|tar\.gz)$'
+    if:
+      type: hex
+      pattern: 2F 64 65 67 72 61 64 65
+
+  - id: jvm-thread-name-bytecode
+    desc: JVM thread name bytecode
+    crit: suspicious
+    conf: 0.9
+    for: [class, java_class, jar]
+    if:
+      type: hex
+      pattern: 6D 65 6D 2D 65 61 74
+
+  - id: jvm-perfdata-hex
+    desc: JVM hsperfdata counter-name prefix
+    crit: notable
+    conf: 0.91
+    for: [class, java_class, jar]
+    if:
+      type: hex
+      pattern: 70 65 72 66 64 61 74 61 5F
+
+  - id: jvm-executors-threadpool-bytecode
+    desc: JVM fixed threadpool bytecode
+    crit: component
+    conf: 0.9
+    for: [class, java_class, jar]
+    if:
+      type: symbol
+      exact: java/util/concurrent/Executors.newFixedThreadPool
+
+composite_rules:
+  - id: jvm-cpu-memory-disk-dos
+    desc: JVM CPU memory disk DoS
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-resource-exhaustion-markers
+      - id: jvm-disk-fill-artifacts
+    any:
+      - id: jvm-thread-exhaustion-markers
+      - id: jvm-network-flood-marker
+
+  - id: jvm-threaded-socket-flood
+    desc: JVM threaded socket flood
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-thread-exhaustion-markers
+      - id: jvm-network-flood-marker
+
+  - id: jvm-threaded-resource-exhaustion
+    desc: JVM threaded resource DoS
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-thread-exhaustion-markers
+      - id: jvm-perfdata-disk-fill
+      - id: jvm-large-byte-array-loop
+
+  - id: jvm-disk-network-resource-dos
+    desc: JVM disk network DoS
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-disk-fill-artifacts
+      - id: jvm-network-flood-marker
+
+  - id: jvm-bytecode-resource-dos
+    desc: JVM bytecode resource DoS
+    crit: hostile
+    conf: 0.98
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-disk-fill-bytecode
+      - id: jvm-degrade-path-bytecode
+    any:
+      - id: jvm-thread-name-bytecode
+      - id: micro-behaviors/fs/file/write/direct::write-file
+
+  - id: jvm-bytecode-threaded-resource-dos
+    desc: JVM bytecode threaded resource DoS
+    crit: hostile
+    conf: 0.98
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-perfdata-hex
+      - id: jvm-executors-threadpool-bytecode
+      - id: micro-behaviors/data/source/arithmetic::java-math-sin-bytecode
+      - id: micro-behaviors/data/source/arithmetic::java-math-cos-bytecode
+      - id: micro-behaviors/data/source/arithmetic::java-math-tan-bytecode
+
+  - id: jvm-perfdata-threadpool-dos
+    desc: JVM perfdata threadpool DoS
+    crit: hostile
+    conf: 0.97
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-perfdata-hex
+      - id: jvm-executors-threadpool-bytecode

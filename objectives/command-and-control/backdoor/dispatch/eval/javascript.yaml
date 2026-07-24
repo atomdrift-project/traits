@@ -1,0 +1,172 @@
+# JavaScript Dynamic Code Execution
+# Detects obfuscated code execution patterns in JavaScript
+# ATT&CK: T1059.007 (JavaScript)
+defaults:
+  attack: T1059.007
+  platforms: [unix, windows]
+  for: [javascript]
+traits:
+  - id: http-post-eval-route
+    desc: HTTP POST eval route
+    crit: suspicious
+    conf: 0.97
+    attack: T1059.007,T1190
+    if:
+      type: text
+      regex: 'onPOST\s*\(\s*["''].{0,80}(eval|execute|script).{0,20}["'']'
+
+  - id: decoded-script-eval-dispatch
+    desc: Decoded script reaches eval
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      # Do not treat namespaced calls such as XQuery's util:eval() as the
+      # JavaScript eval sink.  A preceding colon is not a JavaScript call
+      # boundary for this signature.
+      regex: '((f|from)\d+|decode\w*)\s*\([^)]{0,100}\)[\s\S]{0,200}(^|[^:\w$])eval\s*\('
+    unless:
+      # Construct 3's generated runtime exposes ExecJS(a), which legitimately
+      # evaluates project expressions. Its nearby decodeURIComponent helper is
+      # not a dataflow edge into eval.
+      - id: well-known/lib/construct::html5-runtime-banner
+      - id: metadata/package/testing/presence/harness/
+
+  - id: websocket-message-eval
+    desc: Message content reaches eval
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      regex: '\beval\s*\(\s*(message|event)\.'
+
+  - id: websocket-eval-command-marker
+    desc: WebSocket handler recognizes eval commands
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: '(?i)(startsWith|includes)\(["''][\w:./_-]{0,32}(eval|exec)\('
+
+  - id: async-function-request-response-parameters
+    desc: Dynamic function receives HTTP context
+    crit: suspicious
+    conf: 0.98
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'new\s+AsyncFunction\s*\(\s*["'']require["'']\s*,\s*["'']req["'']\s*,\s*["'']res["'']'
+
+  - id: async-function-invoked-with-request-response
+    desc: Dynamic function invoked with request response
+    crit: suspicious
+    conf: 0.98
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bfn\s*\(\s*require\s*,\s*req\s*,\s*res\s*\)'
+
+  - id: response-code-field
+    desc: Hotfix response contains code field
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bhotfix\b.{0,80}[_\."''](code|script|source)'
+
+composite_rules:
+  - id: server-response-async-code-execution
+    desc: HTTP response code executes with request and response access
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1071.001
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/process/interpreter/eval::js-async-function-constructor
+      - id: objectives/anti-static/obfuscation/eval/require::async-function-require-arg
+      - id: micro-behaviors/communications/http/post::client-wrapper-post-call
+      - id: response-code-field
+    any:
+      - id: async-function-request-response-parameters
+      - id: async-function-invoked-with-request-response
+
+  - id: obfuscated-function-constructor
+    desc: Obfuscated Function constructor usage
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    all:
+      - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
+      - id: metadata/file/metrics::high-average-string-entropy
+  - id: dynamic-code-execution
+    desc: Dynamic code execution with obfuscation
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    any:
+      - id: metadata/file/metrics::high-entropy-identifiers
+      - id: metadata/file/metrics::high-average-string-entropy
+    downgrade:
+      any:
+        - id: objectives/execution/interpreter/eval/dynamic::eval-function-definition
+    unless:
+      - id: micro-behaviors/data/source/build::webpack-sourceurl-comment
+      - id: metadata/package/testing/harness/runtime/
+      # Linter test corpora (biome noGlobalEval) ship eval() edge-case fixtures
+      # under tests/specs and .snap snapshots whose diagnostic dumps read as
+      # high-entropy — not a real dynamic-execution backdoor.
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: metadata/package/testing/presence/fixture::snapshot-file
+  # A script that evaluates dynamic content AND talks to a Tor hidden service is
+  # a remote-code-execution backdoor: the C2 hands back code (an "EVAL" command)
+  # that the client runs. eval-of-a-variable + an onion address is the shape,
+  # independent of the specific dispatch protocol.
+  - id: onion-eval-c2-backdoor
+    desc: Script evals commands from Tor C2
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+      - id: micro-behaviors/communications/proxy/tor::onion-domain-reference
+
+  - id: http-decoded-eval-backdoor
+    desc: HTTP POST route decodes and executes supplied JavaScript
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1190,T1071.001
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: http-post-eval-route
+      - id: decoded-script-eval-dispatch
+      - id: micro-behaviors/process/interpreter/eval::js-member-eval-call
+
+  - id: websocket-decoded-eval-backdoor
+    desc: Message-tasked backdoor decodes and executes message content
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1071.001
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/ipc/message::js-event-on-message
+      - id: websocket-message-eval
+      - id: decoded-script-eval-dispatch
+      - id: micro-behaviors/process/interpreter/eval::js-member-eval-call
+    near_bytes: 2400
+
+  - id: websocket-command-eval-backdoor
+    desc: WebSocket command executes decoded JavaScript
+    crit: hostile
+    conf: 0.995
+    attack: T1059.007,T1071.001
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/websocket::websocket-constructor-call
+      - id: websocket-eval-command-marker
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+    near_bytes: 16000

@@ -1,0 +1,388 @@
+# Windows process-injection runtime primitives. These are the raw API
+# capabilities (memory read/write into another process, remote thread
+# creation, APC queue, thread context manipulation, suspend/resume).
+# Neutral capability tier per TAXONOMY.md — intent is inferred by the
+# composite in `objectives/evasion/process/injection/thread-hijacking.yaml`
+# and related composites, which reference these IDs across tiers.
+defaults:
+  for:
+  - pe
+  - dll
+  platforms:
+  - windows
+traits:
+- id: write-process-memory-binary
+  desc: WriteProcessMemory API reference
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  mbc: C0032
+  if:
+    type: import
+    exact: WriteProcessMemory
+  unless:
+  - id: metadata/package/quality/
+  - id: well-known/game/mod::bedrockboot-preload-injector-pdb
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: metadata/lang/compiled/
+- id: write-process-memory-source
+  desc: WriteProcessMemory API reference in source
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  mbc: C0032
+  for: [c, cpp, csharp, python, rust]
+  if:
+    type: symbol
+    exact: WriteProcessMemory
+  unless:
+  - id: well-known/tool/development/debugpy
+  - id: well-known/tool/development/debugpy::package-path-marker
+  downgrade:
+    any:
+    - type: basename
+      regex: '(?i)(debugpy|pydevd|inject_dll\.cpp)'
+    - type: text
+      regex: debugpy
+    - type: text
+      regex: pydevd_attach_to_process
+    - type: text
+      regex: pydevd
+- id: write-process-memory-script
+  desc: WriteProcessMemory API reference in script
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  mbc: C0032
+  for: [powershell, batch, vbs, javascript]
+  if:
+    type: symbol
+    exact: WriteProcessMemory
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/manifest::test-fixtures
+# Dynamically resolved / delay-loaded imports often leave only the API name as
+# a string — keep a text atom so injection composites still see the capability.
+- id: write-process-memory-text
+  desc: WriteProcessMemory API string reference
+  crit: notable
+  conf: 0.9
+  attack: T1055
+  mbc: C0032
+  for: [pe, dll, powershell, batch, vbs, javascript]
+  if:
+    type: text
+    word: WriteProcessMemory
+  unless:
+  - id: metadata/package/quality/
+  - id: well-known/game/mod::bedrockboot-preload-injector-pdb
+- id: create-remote-thread-script
+  desc: CreateRemoteThread API reference in script
+  crit: notable
+  conf: 0.94
+  attack: T1055.001
+  mbc: C0032
+  for: [powershell, batch, vbs, javascript]
+  if:
+    type: text
+    word: CreateRemoteThread
+- id: read-process-memory
+  desc: References ReadProcessMemory process read API
+  crit: notable
+  conf: 0.95
+  attack: T1005
+  if:
+    type: symbol
+    exact: ReadProcessMemory
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+- id: queue-user-apc
+  desc: QueueUserAPC API reference
+  crit: notable
+  conf: 0.95
+  attack: T1055.004
+  mbc: B0018
+  for: [pe, dll, c, cpp, powershell, batch, vbs, javascript]
+  if:
+    type: text
+    word: QueueUserAPC
+  unless:
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/package/quality/
+    - id: metadata/lang/compiled/
+    - id: metadata/signed/platform::microsoft-corporation
+    - id: well-known/app/microsoft-csharp-compiler/
+- id: set-thread-context-dup
+  desc: SetThreadContext import
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  if:
+    type: import
+    exact: SetThreadContext
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: metadata/binary/framework/
+    # Go's windows syscall runtime imports this API for its own thread
+    # management.  The import alone is not evidence of thread hijacking.
+    - id: metadata/lang/compiled::go-runtime-marker
+    - id: metadata/lang/compiler/systems::go-pe-symtab
+    - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
+- id: set-thread-context-text
+  desc: SetThreadContext dynamic API string
+  crit: notable
+  conf: 0.9
+  attack: T1055
+  mbc: C0032
+  if:
+    type: text
+    word: SetThreadContext
+  unless:
+    - id: metadata/binary/framework/
+    - id: metadata/lang/compiled::go-runtime-marker
+    - id: metadata/lang/compiler/systems::go-pe-symtab
+    - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
+- id: get-thread-context-dup
+  desc: GetThreadContext import
+  crit: notable
+  conf: 0.9
+  attack: T1005
+  if:
+    type: import
+    exact: GetThreadContext
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: metadata/binary/framework/
+    - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
+- id: get-thread-context-text
+  desc: GetThreadContext dynamic API string
+  crit: notable
+  conf: 0.9
+  attack: T1005
+  mbc: C0032
+  if:
+    type: text
+    word: GetThreadContext
+  unless:
+    - id: metadata/binary/framework/
+    - id: metadata/lang/compiled::go-runtime-marker
+    - id: metadata/lang/compiler/systems::go-pe-symtab
+    - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
+- id: go-write-process-memory-wrapper
+  desc: Go remote memory-write wrapper
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  if:
+    type: text
+    regex: '(?i)\bcallWriteProcessMemory\b'
+- id: go-get-thread-context-wrapper
+  desc: Go remote thread-context read wrapper
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  if:
+    type: text
+    regex: '(?i)\bcallGetThreadContext\b'
+- id: go-set-thread-context-wrapper
+  desc: Go remote thread-context set wrapper
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  if:
+    type: text
+    regex: '(?i)\bcallSetThreadContext\b'
+- id: go-unmap-view-wrapper
+  desc: Go call-wrapper for remote image unmapping
+  crit: notable
+  conf: 0.95
+  attack: T1055.012
+  if:
+    type: text
+    regex: '(?i)\bcallNtUnmapViewOfSection\b'
+- id: suspend-thread
+  desc: SuspendThread API reference
+  crit: notable
+  conf: 0.9
+  attack: T1055
+  if:
+    type: text
+    exact: SuspendThread
+  count_min: 3
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+  unless:
+  - type: basename
+    regex: \.pyd$
+  - id: metadata/lang/compiler/systems/
+  - id: metadata/lang/compiler/systems::go-pe-symtab
+  - id: metadata/binary/framework/
+# Note: the extended-remote-thread symbol trait
+# (`CreateRemoteThreadEx` / `NtCreateThreadEx` / `RtlCreateUserThread`) lives in
+# `objectives/evasion/fileless/memory::create-thread-sym` — injection-tier
+# composites that want it reference that ID directly, avoiding duplication here.
+- id: mavinject-injectrunning-string
+  desc: App-V mavinject /INJECTRUNNING injection flag
+  crit: suspicious
+  conf: 0.95
+  attack: T1105
+  if:
+    type: text
+    exact: /INJECTRUNNING
+- id: binaryinjector-header-ref
+  desc: binaryinjector.h source header reference
+  crit: suspicious
+  conf: 0.97
+  if:
+    type: text
+    exact: binaryinjector.h
+  unless:
+    - id: metadata/signed/platform::microsoft
+    - id: metadata/package/quality/false-positives::microsoft-office-support-bundle-context
+- id: onenote-elevation-pdb
+  desc: OneNote elevation server PDB path
+  crit: suspicious
+  conf: 0.99
+  if:
+    type: text
+    substr: onelev.pdb
+- id: native-remote-thread-create--ntcreatethreadex
+  desc: Native remote thread creation (NtCreateThreadEx)
+  crit: suspicious
+  conf: 0.97
+  for: [pe, dll, c, cpp, csharp, python]
+  if:
+    type: symbol
+    exact: NtCreateThreadEx
+  unless:
+  - id: metadata/binary/vendor::windows-system-implementer-dll
+  - id: metadata/binary/vendor::glarysoft-ltd
+  - id: well-known/lib/wine/
+  - id: well-known/app/dism-plus-plus::dism-plus-plus-main-context
+  - id: well-known/app/dism-plus-plus::dism-plus-plus-plugin-context
+- id: native-remote-thread-create--rtlcreateuserthread
+  desc: Native remote thread (RtlCreateUserThread)
+  crit: suspicious
+  conf: 0.97
+  for: [pe, dll, c, cpp, csharp, python]
+  if:
+    type: symbol
+    exact: RtlCreateUserThread
+  unless:
+  - id: metadata/binary/vendor::windows-system-implementer-dll
+  - id: metadata/binary/vendor::glarysoft-ltd
+  - id: well-known/lib/wine/
+- id: native-remote-thread-create--rtlcreateuserthread-text
+  desc: Resolved RtlCreateUserThread API string
+  crit: notable
+  conf: 0.95
+  attack: T1055.001
+  mbc: C0032
+  for: [pe, dll, c, cpp, csharp, python]
+  if:
+    type: text
+    word: RtlCreateUserThread
+  unless:
+  - id: metadata/binary/vendor::windows-system-implementer-dll
+  - id: metadata/binary/vendor::glarysoft-ltd
+  - id: well-known/lib/wine/
+# Go source uses syscall.NewLazyDLL/NewProc rather than PE imports. These are
+# neutral API atoms; intent is inferred by the Go injection composites.
+- id: go-ntcreatethreadex-wrapper
+  desc: Go NtCreateThreadEx wrapper
+  crit: notable
+  conf: 0.98
+  attack: T1055.001
+  mbc: B0013
+  for: [go]
+  if:
+    type: text
+    regex: '(?i)(NewProc\("NtCreateThreadEx"\)|func\s+NtCreateThreadEx\s*\()'
+- id: go-loadlibraryw-wrapper
+  desc: Go LoadLibraryW wrapper
+  crit: notable
+  conf: 0.97
+  attack: T1055.001
+  mbc: B0013
+  for: [go]
+  if:
+    type: text
+    regex: '(?i)(NewProc\("LoadLibraryW"\)|func\s+LoadLibraryW\s*\()'
+composite_rules:
+- id: remote-process-memory-api-cluster
+  desc: Two or more remote-process memory APIs
+  crit: notable
+  conf: 0.96
+  needs: 2
+  any:
+  - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+  - id: write-process-memory-dup
+  - id: micro-behaviors/mem/protect/modify::virtual-free-ex
+  unless:
+  - id: well-known/game/mod::bedrockboot-preload-injector-pdb
+- id: native-remote-thread-create
+  desc: Native remote thread creation API
+  crit: suspicious
+  conf: 0.97
+  attack: T1055.001
+  mbc: B0013
+  for: [pe, dll, c, cpp, csharp, python]
+  unless:
+  - id: metadata/binary/vendor/
+  - id: well-known/app/dism-plus-plus::dism-plus-plus-main-context
+  - id: well-known/app/dism-plus-plus::dism-plus-plus-plugin-context
+# The thread-context primitives below are used by the Go runtime for GC
+# stop-the-world and goroutine preemption, and by Microsoft Detours, Valve
+# games, and OllyDbg plugins — all legitimate. Downgrade when any of those
+# runtimes are present so only deliberate use (composite `thread-execution-hijacking`)
+# surfaces as a finding.
+  any:
+  - id: native-remote-thread-create--ntcreatethreadex
+  - id: native-remote-thread-create--rtlcreateuserthread
+- id: create-remote-thread-dup
+  desc: Remote thread creation API reference
+  crit: notable
+  conf: 0.98
+  attack: T1055.001
+  mbc: B0013
+  for: [pe, dll, c, cpp, csharp, python, rust]
+  any:
+  - id: micro-behaviors/process/inject/dll::create-remote-thread
+  - id: micro-behaviors/process/inject/dll::create-remote-thread-source
+  - id: native-remote-thread-create
+  downgrade:
+    any:
+    - id: metadata/package/quality/
+    - id: metadata/package/quality/
+    - id: metadata/lang/compiled/
+    - id: metadata/binary/framework/
+    - id: well-known/tool/development/debugpy::attach-helper-path
+    - id: well-known/lib/v8::isolate-symbol
+  unless:
+  - id: well-known/game/mod::bedrockboot-preload-injector-pdb
+- id: write-process-memory-dup
+  desc: WriteProcessMemory API reference
+  crit: notable
+  conf: 0.95
+  attack: T1055
+  mbc: C0032
+  for: [binaries, source, scripts]
+  any:
+  - id: write-process-memory-binary
+  - id: write-process-memory-source
+  - id: write-process-memory-script
+  - id: write-process-memory-text

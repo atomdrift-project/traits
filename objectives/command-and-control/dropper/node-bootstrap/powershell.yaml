@@ -1,0 +1,149 @@
+defaults:
+  for: [powershell]
+  platforms: [windows]
+  mbc: B0024
+  attack: T1105
+traits:
+  - id: windows-terminal-hide-loop
+    desc: Hides WindowsTerminal windows
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?s)WindowsTerminal.{0,120}ShowWindow'
+  - id: dropped-js-stage-path
+    desc: Dropped JavaScript stage path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '\\[A-Za-z]{8,16}\.js\b'
+    unless:
+      - id: well-known/tool/development/setup-php::setup-php-action-source
+      - id: well-known/tool/sysadmin/cdp::cdp-project-switcher
+  - id: hidden-node-launch
+    desc: Hidden Node start process
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'Start-Process.{0,80}(node\.exe|-FilePath.{0,40}node)'
+  - id: hidden-node-var-launch
+    desc: Hidden variable Node launch
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'node.{0,120}Start-Process.{0,100}\$[A-Za-z0-9_]+.{0,60}Hidden'
+      case_insensitive: true
+  - id: node-args-js-domain
+    desc: Node args include JS domain
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '-ArgumentList.{0,80}\.js.{0,80}\.[A-Za-z]{2,}'
+  - id: base64-get-temp-path
+    desc: Base64 UTF-16 GetTempPath staging
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      substr: RwBlAHQAVABlAG0AcABQAGEAdABo
+  - id: base64-python-embed-zip
+    desc: Base64 UTF-16 Python embed ZIP
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      substr: cAB5AHQAaABvAG4ALQAzAC4AMQAwAC4ANAAtAGUAbQBiAGUAZA
+  - id: base64-code-py-stage
+    desc: Base64 UTF-16 code.py stage
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      substr: IgBjAG8AZABlAC4AcAB5ACIA
+  - id: base64-pythonw-launch
+    desc: Base64 UTF-16 pythonw execution
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      substr: cAB5AHQAaABvAG4AdwAuAGUAeABl
+  - id: base64-invoke-webrequest-uri
+    desc: Base64 UTF-16 Invoke-WebRequest URI
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: SQBuAHYAbwBrAGUALQBXAGUAYgBSAGUAcQB1AGUAcwB0ACAALQBVAHIAaQ
+composite_rules:
+  - id: portable-node-js-stager
+    desc: PowerShell stages NodeJS payload
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: objectives/command-and-control/dropper/standalone::node-standalone-powershell
+      - id: objectives/command-and-control/dropper/staging/encrypted::ps-aes-inline-payload
+      - id: micro-behaviors/fs/write/file/direct::write-all-text
+    any:
+      - id: dropped-js-stage-path
+      - id: micro-behaviors/process/create/start-process::start-process-call
+      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+  - id: concealed-node-loader
+    desc: Hidden PowerShell Node loader
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: portable-node-js-stager
+    any:
+      - id: hidden-node-launch
+      - id: hidden-node-var-launch
+      - id: node-args-js-domain
+      - id: micro-behaviors/process/sync/mutex::global-mutex-single-instance-script
+      - id: windows-terminal-hide-loop
+      - id: objectives/evasion/process/hidden/execution::ps-user32-showwindow-dllimport
+      - id: objectives/evasion/process/hidden/execution::ps-showwindow-hide-mainwindow
+      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+      - id: metadata/file/metrics::powershell-long-line
+    needs: 3
+  - id: encrypted-node-stage-loader
+    desc: Encrypted PowerShell Node stage loader
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/command-and-control/dropper/standalone::node-dist-tokenized-url
+      - id: objectives/command-and-control/dropper/standalone::node-runtime-dir-fragmented
+      - id: objectives/command-and-control/dropper/staging/encrypted::multiple-base64-literals
+      - id: micro-behaviors/fs/write/file/direct::write-all-text
+    any:
+      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+      - id: micro-behaviors/process/daemonize/spawn::powershell-hidden
+      - id: micro-behaviors/process/create/start-process::start-process-call
+    needs: 2
+  - id: portable-python-stager
+    desc: PowerShell stages portable Python payload
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: base64-python-embed-zip
+      - id: base64-code-py-stage
+      - id: base64-pythonw-launch
+    any:
+      - id: base64-invoke-webrequest-uri
+      - id: base64-get-temp-path
+      - id: metadata/file/metrics::powershell-long-line
+    needs: 2
+  - id: concealed-python-loader
+    desc: Encoded PowerShell portable Python loader
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: portable-python-stager
+      - id: base64-invoke-webrequest-uri
+    any:
+      - id: base64-get-temp-path
+      - id: metadata/file/metrics::powershell-long-line
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::single-long-line-outlier
+    needs: 2

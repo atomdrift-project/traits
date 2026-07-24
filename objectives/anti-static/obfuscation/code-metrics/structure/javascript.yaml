@@ -1,0 +1,101 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1027.002
+  mbc: B0032
+
+traits:
+  - id: js-single-line-over-50k
+    desc: JavaScript line exceeds 50KB
+    crit: component
+    conf: 0.95
+    if:
+      type: metrics
+      field: text.max_line_length
+      min: 50000
+
+  - id: js-digit-ratio-over-30pct
+    desc: JavaScript text exceeds 30% digits
+    crit: component
+    conf: 0.85
+    if:
+      type: metrics
+      field: text.digit_ratio
+      min: 0.3
+
+  - id: js-octal-escape-stream
+    desc: Dense JavaScript octal-escape stream
+    crit: suspicious
+    conf: 0.94
+    size_min: 50000
+    count_min: 1000
+    if:
+      type: text
+      regex: '\\[0-9]{3}'
+    # Generated bundles commonly inline WOFF/WOFF2 data; its byte escapes
+    # are not JavaScript obfuscation. Keep this stream rule for source code.
+    unless:
+      - type: text
+        substr: 'data:font/'
+      - id: metadata/file/format::sourcemap-context
+
+composite_rules:
+  - id: digit-heavy-charcode-eval-loader
+    desc: Digit-heavy JavaScript line reconstructs and evaluates code
+    crit: hostile
+    conf: 0.96
+    attack: T1027,T1059.007
+    all:
+      - id: js-single-line-over-50k
+      - id: js-digit-ratio-over-30pct
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+  - id: large-digit-heavy-obfuscator-bundle
+    desc: Large digit-heavy obfuscator.io bundle
+    crit: notable
+    conf: 0.94
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::any-name-mangling
+      - id: js-single-line-over-50k
+      - id: js-digit-ratio-over-30pct
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+
+  - id: js-obfuscated-lua-dispatch
+    desc: JavaScript-labeled source contains an obfuscated Lua dispatch payload
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140,T1059.007
+    all:
+      - id: js-single-line-over-50k
+      - id: js-octal-escape-stream
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-indexed-string-table-reassembly
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-environment-proxy-loader
+      - id: objectives/anti-static/obfuscation/code-metrics/runtime-indirection::computed-call-property-access-ast
+
+  - id: js-obfuscated-lua-environment-loader
+    desc: JavaScript-labeled source hides a Lua environment/proxy loader
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140,T1059.007
+    all:
+      - id: js-octal-escape-stream
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-environment-proxy-loader
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-indexed-string-table-reassembly
+      - id: objectives/anti-static/obfuscation/code-metrics/runtime-indirection::computed-call-property-access-ast
+
+  - id: js-obfuscated-lua-return-loader
+    desc: Obfuscated Lua loader disguised as JavaScript
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.004
+    all:
+      - id: lua-packed-return-function-loader
+      - id: js-octal-escape-stream
+      - id: objectives/anti-static/obfuscation/syntax::js-obfuscated-increment

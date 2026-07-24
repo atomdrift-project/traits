@@ -1,0 +1,82 @@
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1195.002
+traits:
+  - id: ctf-flag-open-path
+    desc: Opens /flag.txt challenge file
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)\b(os\.)?open\s*\([^)]{0,60}/flag\.txt'
+
+  - id: ctf-flag-read-method
+    desc: Calls a read method on /flag.txt
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)/flag\.txt[^\n]{0,80}\.read_(text|bytes|lines)\s*\('
+
+  - id: post-data-package-key
+    desc: HTTP POST data includes package
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: 'data\s*=\s*\{[^}]{0,80}["'']package["'']\s*:'
+composite_rules:
+  - id: ctf-flag-target
+    desc: Reads /flag.txt challenge file
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: ctf-flag-open-path
+      - id: ctf-flag-read-method
+    unless:
+      - id: well-known/tool/offensive/sqlmap::source-tree-member
+  - id: webhook-file-post
+    desc: Webhook file POST with package tag
+    crit: suspicious
+    conf: 0.94
+    near_lines: 25
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: objectives/exfiltration/oob/endpoint::webhook-site
+      - id: post-data-package-key
+    any:
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd
+      - id: ctf-flag-target
+  - id: setup-sensitive-file-exfil
+    desc: setup.py install hook exfiltrates file
+    crit: hostile
+    conf: 0.98
+    mbc: E1041
+    attack: T1020
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+      - id: metadata/build/package::setup-cmdclass-install
+      - id: metadata/build/package::setuptools-run-override
+      - id: micro-behaviors/fs/read/file::file-open-content
+      - id: micro-behaviors/fs/read/file::file-read-content
+      - id: webhook-file-post
+    any:
+      - id: ctf-flag-target
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd
+  - id: init-sensitive-file-exfil
+    desc: Import time file exfiltration
+    crit: hostile
+    conf: 0.97
+    mbc: E1041
+    attack: T1020
+    near_lines: 30
+    all:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: micro-behaviors/fs/read/file::file-open-content
+      - id: micro-behaviors/fs/read/file::file-read-content
+      - id: webhook-file-post
+    any:
+      - id: ctf-flag-target
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd
+      - id: micro-behaviors/data/control-flow/error-handling::silent-exception-pass

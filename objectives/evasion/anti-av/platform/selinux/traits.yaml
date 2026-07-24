@@ -1,0 +1,327 @@
+defaults:
+  attack: T1562.001
+  platforms:
+    - linux
+traits:
+  - id: setxattr-command
+    desc: Sets file xattr (SELinux relabel)
+    crit: suspicious
+    conf: 0.65
+    for:
+      - shell
+    if:
+      type: string_literal
+      word: setxattr
+  - id: kotlin-setenforce-zero
+    desc: Kotlin setenforce zero command
+    crit: suspicious
+    conf: 0.9
+    platforms: [android]
+    for: [kotlin]
+    if:
+      type: text
+      substr: "setenforce 0"
+  - id: load-policy-command
+    desc: Loads a custom SELinux policy
+    crit: suspicious
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: text
+      regex: '(?m)^[ \t]*((sudo[ \t]+)?load_policy)([ \t]|$)'
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: semodule-command
+    desc: Installs or removes SELinux policy modules
+    crit: suspicious
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: text
+      regex: '(?m)^\s*(sudo\s+)?semodule\s+-[irden]\b'
+    unless:
+      - id: well-known/app/wazuh/
+      # An RPM %post scriptlet running semodule installs the package's own
+      # SELinux policy module (legitimate packaging), not AV evasion.
+      - id: well-known/app/netatalk::netatalk-source-tree
+  - id: selinux-equals-zero
+    desc: selinux=0 boot param disables SELinux
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string_literal
+      substr: selinux=0
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
+  - id: enforcing-equals-zero
+    desc: enforcing=0 boot param, SELinux permissive
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string_literal
+      substr: enforcing=0
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
+  - id: selinux-disabled-config
+    desc: Disables SELinux in config file
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string_literal
+      substr: SELINUX=disabled
+    unless:
+      - id: well-known/app/dataease::installer-script-marker
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: metadata/package/files/included::install-uninstall-shell-basename
+  - id: selinux-permissive-config
+    desc: Sets SELinux permissive in config
+    crit: suspicious
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: string_literal
+      substr: SELINUX=permissive
+    unless:
+      - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
+      - id: well-known/app/dataease::installer-script-marker
+      - id: well-known/tool/sysadmin/k3s::k3s-vagrant-provisioner
+  - id: selinux-state-symbol
+    desc: selinux_state struct, runtime-patch target
+    crit: suspicious
+    conf: 0.75
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      exact: selinux_state
+  - id: enforcing-keyword
+    desc: enforcing keyword
+    crit: component
+    conf: 0.6
+    for:
+      - shell
+    if:
+      type: string_literal
+      word: enforcing
+  - id: fake-enforce-identifier
+    desc: fake_enforce spoofs SELinux enforcing
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: text
+      substr: fake_enforce
+  - id: sel-read-enforce-symbol
+    desc: sel_read_enforce kernel enforce reader
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      exact: sel_read_enforce
+  - id: sel-write-enforce-symbol
+    desc: Patches sel_write_enforce to disable SELinux
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      exact: sel_write_enforce
+  - id: policy-file-pattern-ext-a
+    desc: SELinux policy extension set A
+    crit: suspicious
+    conf: 0.65
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: policy\.(3[0-9]|pp|te)$
+  - id: policy-file-pattern-ext-b
+    desc: SELinux policy extension set B
+    crit: suspicious
+    conf: 0.65
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: policy\.(fc|if)$
+composite_rules:
+  - id: enforcement-commands
+    desc: SELinux enforcement commands
+    for: [scripts, binaries]
+    any:
+      - id: objectives/impact/degrade/mac::selinux-setenforce
+      - id: micro-behaviors/os/security/selinux::permissive-keyword
+    crit: baseline
+    unless:
+      - id: well-known/app/kilocode::kilo-code-native-runtime
+      - id: well-known/tool/reverse-engineering/frida/
+      - id: well-known/app/systemd::container-runtime-component-basename
+      - id: well-known/app/matomo/
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
+      - id: metadata/package/files/wheel-sdist::python-wheel-vendored-shlib-dir
+      - id: well-known/lib/selinux::official-libselinux
+  - id: policy-commands
+    desc: SELinux policy modification commands
+    for:
+      - shell
+    any:
+      - id: load-policy-command
+      - id: semodule-command
+    crit: suspicious
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: well-known/app/virtualbox::unattended-template
+      - id: well-known/app/postgresql::postgresql-source-tree
+      - id: well-known/app/wazuh/
+  - id: policy-file-pattern
+    desc: SELinux policy binary file
+    crit: notable
+    conf: 0.65
+    for: [scripts, binaries]
+    any:
+      - id: micro-behaviors/fs/path/config/system::selinux-policy-path
+      - id: policy-file-pattern-ext-a
+      - id: policy-file-pattern-ext-b
+    unless:
+      - id: well-known/tool/reverse-engineering/frida/
+      - id: metadata/package/testing/presence/harness::ruby-spec-file
+      - id: well-known/lib/specinfra/
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+  - id: kernel-parameters
+    desc: SELinux kernel boot parameters
+    for:
+      - shell
+    any:
+      - id: selinux-equals-zero
+      - id: enforcing-equals-zero
+      - id: selinux-disabled-config
+      - id: selinux-permissive-config
+    crit: suspicious
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
+      - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
+      - id: well-known/app/dataease::installer-script-marker
+      - id: well-known/tool/sysadmin/k3s::k3s-vagrant-provisioner
+  - id: sel-enforce-symbols
+    desc: SELinux enforcement symbols
+    for:
+      - c
+      - elf
+    all:
+      - id: sel-read-enforce-symbol
+      - id: sel-write-enforce-symbol
+    crit: suspicious
+  - id: xattr-manipulation
+    desc: SELinux extended attribute manipulation
+    crit: suspicious
+    conf: 0.75
+    for: [shell, elf, so]
+    unless:
+      - id: micro-behaviors/data/archive/create/tar::selinux-archive-header
+      - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+      - id: well-known/tool/reverse-engineering/frida/
+      - id: well-known/app/systemd::container-runtime-component-basename
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
+      - id: metadata/package/files/wheel-sdist::python-wheel-vendored-shlib-dir
+      - id: well-known/lib/selinux::official-libselinux
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+    all:
+      - id: micro-behaviors/fs/attributes/xattr::security-selinux-xattr
+    any:
+      - id: micro-behaviors/fs/attributes/xattr::setxattr-func
+      - id: setxattr-command
+  - id: policy-manipulation
+    desc: SELinux policy load or manipulation
+    crit: suspicious
+    conf: 0.8
+    for: [scripts, binaries]
+    any:
+      - id: policy-commands
+      - id: micro-behaviors/os/security/selinux::selinux-config-path
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library/family/
+        - id: metadata/package/testing/presence/platform_suites/
+        - id: metadata/build/autotools
+    unless:
+      - id: well-known/app/wazuh/
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+  - id: selinux-state-enforcing
+    desc: SELinux state with enforcing keyword
+    for:
+      - c
+      - elf
+    all:
+      - id: selinux-state-symbol
+      - id: enforcing-keyword
+    crit: suspicious
+  - id: fake-enforce-selinux
+    desc: Fake enforce with SELinux state
+    for:
+      - c
+      - elf
+    all:
+      - id: fake-enforce-identifier
+      - id: selinux-state-symbol
+    crit: suspicious
+  - id: runtime-patch
+    desc: Runtime kernel patch to disable SELinux
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+      - elf
+    any:
+      - id: selinux-state-enforcing
+      - id: sel-enforce-symbols
+      - id: fake-enforce-selinux
+  - id: bypass-comp
+    desc: SELinux enforcement-control indicators
+    crit: notable
+    conf: 0.95
+    for: [scripts, binaries]
+    needs: 2
+    any:
+      - id: xattr-manipulation
+      - id: enforcement-commands
+      - id: kernel-parameters
+      - id: runtime-patch
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+      - id: well-known/tool/reverse-engineering/frida/
+      - id: metadata/package/files/wheel-sdist::python-wheel-vendored-shlib-dir
+      - id: well-known/app/systemd::container-runtime-component-basename
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: well-known/tool/sysadmin/busybox::busybox-binary

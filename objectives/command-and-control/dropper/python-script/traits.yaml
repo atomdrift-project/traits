@@ -1,0 +1,125 @@
+defaults:
+  attack: T1105
+  mbc: B0024
+  platforms: [unix, windows]
+  for: [python]
+traits:
+  - id: localappdata-pip-dir
+    desc: LOCALAPPDATA pip directory
+    crit: notable
+    conf: 0.86
+    if:
+      type: text
+      regex: "LOCALAPPDATA[\\s\\S]{0,160}[\"']pip[\"']"
+  - id: home-dot-pip-dir
+    desc: Home .pip directory
+    crit: notable
+    conf: 0.78
+    if:
+      type: string_literal
+      exact: ".pip"
+  - id: localappdata-pip-exe-stage
+    desc: EXE staged in LOCALAPPDATA pip directory
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: "LOCALAPPDATA[\\s\\S]{0,160}[\\\"']pip[\\\"'][\\s\\S]{0,120}\\.exe"
+  - id: home-dot-pip-exe-stage
+    desc: EXE staged in home .pip directory
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: "[\\\"']\\.pip[\\\"'][\\s\\S]{0,120}\\.exe"
+  - id: python-github-zip-stage
+    desc: GitHub release ZIP staging
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: "releases/download/[\\s\\S]{0,120}\\.zip"
+composite_rules:
+  - id: pip-dir-exe-stage
+    desc: EXE staged in pip directory
+    crit: suspicious
+    conf: 0.92
+    any:
+      - id: localappdata-pip-exe-stage
+      - id: home-dot-pip-exe-stage
+  - id: python-github-zip-exe-detached-dropper
+    desc: Python GitHub ZIP EXE detached dropper
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/url/external/github::github-release-download
+      - id: python-github-zip-stage
+      - id: pip-dir-exe-stage
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+      - id: micro-behaviors/data/archive/extract/zip::python-zipfile-extractall
+      - id: micro-behaviors/process/create/subprocess::popen-content
+    any:
+      - id: micro-behaviors/process/create/subprocess::subprocess-detached-session
+      - id: micro-behaviors/process/create/flags::python-detached-hidden-hex
+  - id: python-inline-github-zip-dropper
+    desc: Inline Python GitHub ZIP dropper
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: python-github-zip-exe-detached-dropper
+      - id: micro-behaviors/process/create/subprocess::sys-executable-c-popen
+
+  # Embedded (offline) payload dropper: a large base64 blob in source is DECODED,
+  # WRITTEN to disk, and EXECUTED (os.system / subprocess). Unlike the remote
+  # droppers below there is no download — the payload ships inside the module and
+  # is unpacked at runtime (e.g. a "time" utility whose main.py is one huge base64
+  # ZIP written to a hidden dotfile, run via `os.system("python3 .OxN ...")`, then
+  # deleted). Uses text-reliable legs because a blob-dominated file defeats the
+  # bulk scanner's literal/symbol extraction. Embedding an executable payload as a
+  # base64 blob and running it has no benign use.
+  - id: python-embedded-b64-blob-write-exec-dropper
+    desc: Decodes an embedded base64 blob to disk and runs it
+    crit: hostile
+    conf: 0.96
+    # Keep the decode/write/execute legs in one compact code region. Large
+    # application modules commonly contain unrelated embedded UI resources,
+    # cache/config writes, and shell calls that must not be fused into a
+    # dropper finding.
+    scope: file
+    near_lines: 120
+    all:
+      - id: micro-behaviors/data/encode/base64::embedded-base64-blob
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+      - id: micro-behaviors/fs/file/write/direct::py-open-write-mode
+    any:
+      - id: micro-behaviors/process/create/system::python-os-system-text
+      - id: micro-behaviors/process/create/system::python-aliased-os-system
+      - id: micro-behaviors/process/create/system::python-os-system
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+
+  # Generalized remote-payload dropper: fetch a payload over HTTP, DECODE/
+  # deobfuscate it (base64, often with an XOR pass), and EXECUTE it — silently
+  # (CREATE_NO_WINDOW / stdio to DEVNULL). Unlike python-github-zip-exe-detached-
+  # dropper this is not tied to GitHub-releases URLs or a pip staging dir, so it
+  # catches raw-CDN / arbitrary-dir droppers (e.g. a python-slugify typosquat
+  # fetching a disguised .png, XOR+base64-decoding it to a zip under %APPDATA%,
+  # and running pythonw.exe hidden at import). Download + decode + execute in one
+  # file is already a dropper; the obfuscation/stealth `any:` confirms intent and
+  # keeps ordinary updaters (which do not deobfuscate + hide) out.
+  - id: python-remote-deobfuscated-payload-dropper
+    desc: Fetches, deobfuscates, and silently runs a remote payload
+    crit: hostile
+    conf: 0.97
+    # Keep the download, decode, and execution evidence in the same compact
+    # loader. A large server module may legitimately contain each operation in
+    # unrelated features (for example image decoding and a watchdog process).
+    scope: file
+    near_lines: 80
+    all:
+      - id: micro-behaviors/communications/http/request/client::request-python
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+    any:
+      - id: micro-behaviors/data/encode/xor::xor-bytes-genexpr-literal
+      - id: micro-behaviors/process/create/flags::python-create-no-window-hex
+      - id: micro-behaviors/process/create/subprocess::python-subprocess-devnull

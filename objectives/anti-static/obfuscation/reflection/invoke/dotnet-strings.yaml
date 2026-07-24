@@ -1,0 +1,144 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for:
+    - pe
+    - csharp
+traits:
+  - id: property-info-class
+    desc: PropertyInfo class reference
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      substr: System.Reflection.PropertyInfo
+  - id: type-info-class
+    desc: TypeInfo class reference
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      word: System.Reflection.TypeInfo
+composite_rules:
+  - id: property-info
+    desc: Reflection property access
+    crit: component
+    conf: 0.55
+    all:
+      - id: property-info-class
+      - id: micro-behaviors/process/interpreter/reflection/runtime::get-properties-token
+  - id: dotnet-resource-resolver-loader
+    desc: .NET resource resolver loader
+    crit: suspicious
+    conf: 0.92
+    attack: T1027.009
+    for:
+      - pe
+      - dll
+    platforms:
+      - windows
+    all:
+      - id: metadata/binary/framework::dotnet-metadata
+      - id: micro-behaviors/process/interpreter/reflection/resolve::resolver-api-cluster
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+    any:
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
+      - id: metadata/binary/layout::pe-embedded
+      - id: metadata/binary/layout::dotnet-low-entropy-text-carrier
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/package/versioning::pe-version-resource
+        - id: objectives/anti-static/obfuscation/obfuscator/managed/
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/binary/resource/
+  - id: dotnet-resource-delegate-injection-loader
+    desc: .NET resource delegate injection loader
+    crit: hostile
+    conf: 0.97
+    attack: T1027.009
+    mbc: B0009.014
+    for:
+      - pe
+      - dll
+    platforms:
+      - windows
+    all:
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-resource-resolver-loader
+      - id: micro-behaviors/process/interpreter/reflection/runtime::delegate-invocation-chain
+      - id: objectives/evasion/process/injection/toolkit::dotnet-split-winapi-injection-loader
+    any:
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
+      - id: micro-behaviors/communications/http/client/managed::dotnet-http-client-with-aes
+      - id: metadata/binary/symbols/imports::single-import-raw
+    needs: 2
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/binary/resource/
+  - id: type-info
+    desc: Runtime type inspection
+    # GetType/typeof are too common in benign .NET code to surface on their
+    # own; higher-order reflection loaders still reference this helper.
+    crit: component
+    conf: 0.7
+    needs: 2
+    any:
+      - id: micro-behaviors/process/interpreter/reflection/runtime::get-type-call
+      - id: micro-behaviors/process/interpreter/reflection/runtime::typeof-call
+      - id: type-info-class
+  # Activator + GetMethod co-occurrence is the Type.GetType(name).GetMethod(...)
+  # .Invoke(null, [type, args]) shape used to reach Activator.CreateInstance
+  # reflectively (so the literal "Activator.CreateInstance" never appears). A
+  # building block for the reflective-invoke-any aggregate; not surfaced alone.
+  - id: activator-getmethod-pair
+    desc: Activator instantiation with reflected method lookup
+    crit: component
+    conf: 0.75
+    all:
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: metadata/lang/compiler/managed::get-method-token
+  # The Activator.CreateInstance + GetMethod/GetMethods + GetManifestResourceStream
+  # shape is the simplest reflective-resource-loader form: instantiate a type
+  # decrypted from an embedded managed resource and resolve+invoke its method by
+  # name. Distinct from the resolver-token loaders above (ResolveMethod/
+  # ResolveType) and the Assembly.Load / MethodBase.Invoke chains — those tokens
+  # are absent in this Activator-based family. Notable on its own (plugin hosts
+  # and DI containers do this too); the crypter verdict comes from pairing it
+  # with a scrambled/fabricated identity.
+  - id: dotnet-activator-resource-invoker
+    desc: .NET reflective instantiation of embedded-resource type
+    crit: notable
+    conf: 0.8
+    attack: T1620
+    for:
+      - pe
+      - dll
+    platforms:
+      - windows
+    all:
+      - id: metadata/binary/framework::dotnet-metadata
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+    any:
+      - id: metadata/lang/compiler/managed::get-method-token
+      - id: micro-behaviors/process/interpreter/reflection/runtime::get-methods-token
+    unless:
+      - id: metadata/signed/platform::microsoft
+  - id: dotnet-scrambled-reflective-crypter
+    desc: .NET reflective resource loader with scrambled identity (crypter stub)
+    crit: hostile
+    conf: 0.95
+    attack: T1027.009
+    mbc: B0009.014
+    for:
+      - pe
+      - dll
+    platforms:
+      - windows
+    all:
+      - id: dotnet-activator-resource-invoker
+      - id: objectives/evasion/masquerade/identity/fabricated::garbled-versioninfo-identity
+    unless:
+      - id: metadata/signed/platform::microsoft-windows

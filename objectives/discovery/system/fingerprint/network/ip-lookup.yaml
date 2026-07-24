@@ -1,0 +1,145 @@
+defaults:
+  platforms: [windows, unix]
+  crit: notable
+  conf: 0.85
+  for: [python, javascript, powershell, pe, macho, ruby, package.json]
+traits:
+  - id: ident-me
+    desc: ident.me IP lookup
+    if:
+      type: text
+      substr: ident.me
+  - id: whatismyip-akamai
+    desc: whatismyip.akamai.com IP lookup
+    if:
+      type: text
+      substr: whatismyip.akamai.com
+  - id: curlmyip-org
+    desc: curlmyip.org IP lookup
+    if:
+      type: text
+      substr: curlmyip.org
+  - id: db-ip-com
+    desc: db-ip.com geolocation lookup
+    if:
+      type: text
+      substr: db-ip.com
+  - id: whatismyip-legacy-automation
+    desc: whatismyip.com automation IP lookup
+    if:
+      type: text
+      substr: whatismyip.com/automation/
+  - id: geoplugin-com
+    desc: geoplugin.com geolocation lookup
+    if:
+      type: text
+      substr: geoplugin.com
+  - id: iplogger-keyword
+    desc: iplogger service domain reference
+    # Covers scripting/binary surfaces; compiled source uses
+    # objectives/discovery/network/ip-tracker::iplogger instead (no ruby overlap).
+    for: [python, javascript, powershell, pe, macho, package.json]
+    if:
+      type: text
+      regex: \biplogger\.(org|com|net)\b
+    unless:
+      - id: metadata/package/quality/
+      - id: well-known/app/browser-extension::adblock-extension-bundle
+      - id: well-known/app/browser-extension::adblock-marker-easylist
+      - id: well-known/app/browser-extension::adblock-marker-ublock
+      - id: micro-behaviors/process/hook/webextension::dnr-block-request-rules
+      - id: metadata/file/format::adblock-filter-list
+  - id: iplogger-ru-host
+    desc: iplogger.ru tracking host reference
+    if:
+      type: text
+      regex: \biplogger\.ru\b
+    unless:
+      - id: metadata/package/quality/
+      - id: well-known/app/browser-extension::adblock-extension-bundle
+      - id: well-known/app/browser-extension::adblock-marker-easylist
+      - id: well-known/app/browser-extension::adblock-marker-ublock
+      - id: micro-behaviors/process/hook/webextension::dnr-block-request-rules
+      - id: metadata/file/format::adblock-filter-list
+  - id: iplogger-base64
+    desc: iplogger.org (base64 encoded)
+    if:
+      type: encoded
+      encoding: base64
+      substr: iplogger.org
+  - id: iplogger-xor
+    desc: iplogger.org (XOR encoded)
+    if:
+      type: encoded
+      encoding: xor
+      substr: iplogger.org
+composite_rules:
+  - id: ip-service-endpoint
+    desc: IP lookup service endpoint
+    crit: component
+    any:
+      - id: micro-behaviors/communications/http/ip-discovery/
+      - id: ident-me
+      - id: whatismyip-akamai
+      - id: whatismyip-legacy-automation
+      - id: micro-behaviors/communications/http/ip-discovery::ipify-api
+      - id: curlmyip-org
+  - id: geo-service-endpoint
+    desc: Geolocation service endpoint
+    crit: component
+    any:
+      - id: micro-behaviors/communications/http/ip-discovery::ipapi-co
+      - id: micro-behaviors/communications/http/ip-discovery::ipinfo-io
+      - id: objectives/discovery/host/geo::freegeoip-app
+      - id: db-ip-com
+      - id: geoplugin-com
+      - id: micro-behaviors/communications/http/ip-discovery::ip-api-com
+  - id: host-profile-signal
+    desc: Host profiling signal
+    crit: component
+    any:
+      # A lone profile fragment (for example the word `locale`) is not
+      # profiling. Require a complete, behavior-level profile detector so
+      # combining this with an IP/geo endpoint cannot promote ordinary UI or
+      # configuration code into reconnaissance.
+      - id: objectives/discovery/system/profile::host-process-software-locale-form
+      - id: objectives/discovery/system/profile::system-recon-exfiltration
+      - id: objectives/discovery/system/profile::python-device-host-profile-fields
+  - id: ip-lookup-service
+    desc: Public IP lookup used alongside host profiling
+    all:
+      - id: ip-service-endpoint
+      - id: host-profile-signal
+  - id: geo-lookup-service
+    desc: Public geolocation lookup used alongside host profiling
+    all:
+      - id: geo-service-endpoint
+      - id: host-profile-signal
+  - id: iplogger-encoded
+    desc: iplogger.org (encoded)
+    crit: notable
+    any:
+      - id: iplogger-base64
+      - id: iplogger-xor
+  - id: tracking-service-lookup
+    desc: IP lookup via tracking/logging service
+    crit: suspicious
+    unless:
+      # Security products and ad blockers catalog tracker domains in filter
+      # lists / ranking tables; that is destination blocking, not recon.
+      - id: well-known/app/browser-extension::adblock-extension-bundle
+      - id: well-known/app/browser-extension::adblock-marker-easylist
+      - id: well-known/app/browser-extension::adblock-marker-ublock
+      - id: micro-behaviors/process/hook/webextension::dnr-block-request-rules
+      - id: metadata/file/format::adblock-filter-list
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+      - id: iplogger-keyword
+      - id: iplogger-ru-host
+      - id: iplogger-encoded
+  - id: external-recon-service
+    desc: Contacts external service for IP/geo reconnaissance
+    any:
+      - id: ip-lookup-service
+      - id: geo-lookup-service
+      - id: tracking-service-lookup

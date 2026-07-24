@@ -1,0 +1,82 @@
+# Setup.py AST Pattern Detection
+# Uses AST patterns to detect malicious setup.py structures
+# ATT&CK: T1195.001 (Supply Chain)
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: "T1195.001"
+  for: [python]
+traits:
+  # === Custom Install Class Detection ===
+  - id: custom-install-inherit
+    desc: Custom install inherits install
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: "class.{0,50}\\(install\\):"
+  # === cmdclass with custom install ===
+  - id: ast-cmdclass-custom
+    desc: cmdclass custom install
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: "cmdclass.{0,50}install.{0,50}Custom"
+  # `pre_install` is only a context marker here; the composite below also
+  # requires the conventional setup.py package entrypoint.
+  - id: pre-install-method
+    desc: pre_install method name marker
+    crit: component
+    conf: 0.90
+    if:
+      type: symbol
+      kind: function
+      exact: pre_install
+composite_rules:
+  # === Pre-install function definition in setup.py ===
+  - id: ast-preinstall-call
+    desc: Setup.py defines pre-install hook
+    crit: suspicious
+    conf: 0.90
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+      - id: pre-install-method
+
+  # === Subprocess call in setup.py ===
+  - id: ast-subprocess-in-setup
+    desc: Setup.py invokes subprocess
+    # Optional dependency installers and setup wizards legitimately invoke
+    # subprocess.  Escalation remains in setup-py-backdoor, which also needs
+    # a custom install hook shape.
+    crit: notable
+    conf: 0.85
+    all:
+      - id: metadata/package/files/included::setup-py-basename
+    any:
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/process/create/subprocess::run-ast
+      - id: micro-behaviors/process/create/subprocess::call-ast
+    unless:
+      # Application CLI modules named setup.py are not packaging install hooks.
+      - id: metadata/package/files/included::nested-cli-setup-py
+      - id: well-known/app/ethan-agent::ethan-agent-package
+
+  # === Malicious Setup.py Detection ===
+  - id: malicious-setup-install
+    desc: Custom setup.py install hook
+    crit: notable
+    conf: 0.92
+    needs: 2
+    any:
+      - id: custom-install-inherit
+      - id: ast-cmdclass-custom
+      - id: ast-preinstall-call
+  - id: setup-py-backdoor
+    desc: Setup.py backdoor execution
+    crit: hostile
+    conf: 0.95
+    mbc: "E1059"
+    all:
+      - id: malicious-setup-install
+      - id: ast-subprocess-in-setup

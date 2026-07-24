@@ -1,0 +1,195 @@
+# macOS System Cache Path Masquerade
+# Detects dropping malicious files disguised as Apple system cache entries,
+# fake LaunchAgent/LaunchDaemon plists with com.apple.* names, and hidden
+# /private/tmp payloads using Apple-style naming conventions.
+# ATT&CK: T1036.005 (Masquerading: Match Legitimate Name or Location)
+defaults:
+  platforms:
+    - macos
+  for: [scripts, binaries]
+  attack: T1036.005
+  mbc: F0004
+traits:
+  - id: library-caches-com-apple
+    desc: Drops file in /Library/Caches as com.apple.*
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: /Library/Caches/com\.apple\.[a-z][a-z0-9.-]{2,40}
+    not:
+      - substr: /Library/Caches/com.apple.xbs
+      # Chromium/Electron sandbox profiles refer to user cache files using the
+      # system-looking spelling; that is a read policy, not a system drop.
+      - regex: 'user-homedir-path\s+["'']/Library/Caches/com\.apple\.'
+      - substr: /AppleInternal/Library/BuildRoots/
+      - substr: /Sources/xnu/
+      - regex: com\.apple\.(SoftwareUpdate|metadata|InstallAssistant|installer)
+      - regex: com\.apple\.(Safari|appstore|commerce|dt\.)
+    unless:
+      - id: well-known/lib/wine::wine-source-tree
+      - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+      - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
+      - id: metadata/signed/platform::apple
+      - type: text
+        substr: com.apple.smb.preferences
+      - id: metadata/binary/vendor/
+      - id: well-known/app/mastergo::mastergo-application-context
+      - id: well-known/lib/cydia-substrate/
+    downgrade:
+      any:
+        - type: basename
+          exact: postfixsetup
+  - id: user-library-caches-fake-apple
+    desc: Drops file in ~/Library/Caches as com.apple.*
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: ~/Library/Caches/com\.apple\.[a-z][a-z0-9.-]{2,40}
+    unless:
+      - id: metadata/file/profile/identity::generated-attack-map-context
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+      - id: well-known/tool/development/pymobiledevice3
+      - id: well-known/tool/development/pymobiledevice3
+      - type: text
+        substr: com.apple.smb.preferences
+  - id: launchagents-fake-apple
+    desc: Fake Apple name in LaunchAgents/Daemons path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: (LaunchAgents|LaunchDaemons)/com\.apple\.[a-z][a-z0-9.-]{2,40}\.plist
+    not:
+      - regex: com\.apple\.(SoftwareUpdate|metadata|InstallAssistant|installer)
+      - regex: com\.apple\.(Safari|appstore|commerce|dt\.)
+      - exact: LaunchDaemons/com.apple.postfixsetup.plist
+      - exact: LaunchDaemons/com.apple.smbd.plist
+      - substr: com.apple.smb.preferences
+    unless:
+      - id: metadata/file/profile/identity::generated-attack-map-context
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+  - id: app-support-hidden-apple
+    desc: Hidden Application Support Apple path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: /Application Support/\.com\.apple\.[a-z][a-z0-9.-]{2,40}
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+  - id: app-support-google-update
+    desc: GoogleUpdate in Application Support
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, binaries, plist]
+    if:
+      type: text
+      substr: /Application Support/Google/GoogleUpdate.app/
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+  - id: apple-helper-name
+    desc: Apple-style helper service name
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: '[^/]com\.apple\.[a-z0-9.-]{2,30}\.(helper|service|agent|daemon)\b'
+    not:
+      - regex: com\.apple\.private\.
+      - regex: com\.apple\.(kext|driver)\.
+      - regex: com\.apple\.(trustd|coresimulator)\.
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+      - id: well-known/tool/development/anthropic-claude-agent::claude-agent-sdk-js-marker
+      - id: objectives/supply-chain/trojanized/app/debug-probe/
+      - id: well-known/app/macos-benign::electron-framework
+      # Seatbelt profiles legitimately name Apple's preference services; these
+      # are IPC allowlists, not masquerading helper binaries.
+      - type: text
+        regex: 'global-name\s+"com\.apple\.cfprefsd\.(daemon|agent)"'
+  - id: private-tmp-hidden-apple
+    desc: Hidden /private/tmp path with Apple-style name
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: /private/tmp/\.[a-z][a-z0-9]{3,8}(\.scpt|\.plist|\.dylib|\.app)?
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+  - id: applescript-curl-chmod-zsh
+    desc: AppleScript curl download chmod zsh launch
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.002
+    if:
+      type: text
+      regex: do shell script.{0,200}curl.{0,200}chmod.{0,200}zsh
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+  - id: applescript-rm-self
+    desc: "AppleScript self-deletes via do shell rm"
+    crit: suspicious
+    conf: 0.88
+    attack: T1070.004
+    if:
+      type: text
+      regex: do shell script\s*"rm\s+-rf?
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/binary/vendor/
+composite_rules:
+  - id: fake-apple-cache-drop
+    desc: Fake Apple cache path file drop
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: library-caches-com-apple
+      - id: user-library-caches-fake-apple
+      - id: launchagents-fake-apple
+    unless:
+      - id: well-known/app/mastergo::mastergo-application-context
+  - id: macos-payload-staging
+    desc: Hidden tmp drop or fake Apple system path
+    crit: suspicious
+    conf: 0.88
+    any:
+      - id: library-caches-com-apple
+      - id: user-library-caches-fake-apple
+      - id: launchagents-fake-apple
+      - id: app-support-hidden-apple
+      - id: app-support-google-update
+      - id: private-tmp-hidden-apple
+  - id: fake-apple-appsupport-helper
+    desc: Fake Apple Application Support helper
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: app-support-hidden-apple
+      - id: apple-helper-name
+    unless:
+      - id: well-known/tool/development/pymobiledevice3
+  - id: applescript-library-cache-drop-chain
+    desc: AppleScript curl drop to fake Apple cache path
+    crit: hostile
+    conf: 0.97
+    attack: T1059.002
+    all:
+      - id: applescript-curl-chmod-zsh
+      - id: library-caches-com-apple
+  - id: applescript-drop-and-erase
+    desc: AppleScript payload drop then self-delete
+    crit: hostile
+    conf: 0.95
+    attack: T1070.004
+    all:
+      - id: applescript-curl-chmod-zsh
+      - id: applescript-rm-self

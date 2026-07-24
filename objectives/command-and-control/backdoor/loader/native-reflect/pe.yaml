@@ -1,0 +1,111 @@
+defaults:
+  platforms:
+    - windows
+  for:
+    - pe
+    - dll
+traits:
+  - id: custom-pe-loader
+    desc: Manual PE header verification and parsing
+    crit: suspicious
+    conf: 0.9
+    mbc: B0005
+    if:
+      type: hex
+      section: .text
+      pattern: 66 81 ?? 4d 5a 75 ?? ?? ?? ?? 3c ?? ?? ?? ?? ?? 50 45 00 00
+    unless:
+      - id: metadata/signed/developer::hulubulu-software
+      - id: metadata/lang/compiler/native::mingw-pseudo-reloc-runtime
+      # Benign compiled-runtime PE markers: a Python C-extension (PyInit_
+      # export) or a MinGW C-runtime stub is not a reflective loader.
+      - type: text
+        regex: 'PyInit_|Mingw-w64 runtime failure:'
+      - id: micro-behaviors/data/db/postgresql/
+      - id: well-known/app/sq::go-module-path
+      # The Rust object crate's PE/COFF parser (linked by std backtrace
+      # symbolization) emits this exact MZ/PE-signature header walk on the
+      # binary's own headers — not a payload it intends to map and run.
+      - id: metadata/lang/compiled::rust-backtrace-symbolizer
+      - id: well-known/lib/benign-runtime-bundles::ffprobe-binary
+      - id: well-known/lib/ffmpeg/
+  - id: x64-manual-pe-section-mapper
+    desc: x64 manual PE section mapper
+    crit: component
+    conf: 0.92
+    mbc: B0005
+    attack: T1620
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: "48 63 40 3C 48 8B 8C 24 C0 00 00 00 48 03 C8 48 8B C1 48 89 44 24 28 48 8B 44 24 28 0F B7 40 14"
+  - id: x64-manual-pe-section-copy-loop
+    desc: x64 manual PE section copy loop
+    crit: component
+    conf: 0.9
+    mbc: B0005
+    attack: T1620
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: "0F B7 40 06 39 44 24 24 7D 67 48 63 44 24 24 48 6B C0 28 48 8B 4C 24 38 8B 44 01 0C"
+composite_rules:
+  - id: x64-manual-pe-mapper
+    desc: x64 manual PE mapper
+    crit: suspicious
+    conf: 0.95
+    mbc: B0005
+    attack: T1620
+    all:
+      - id: x64-manual-pe-section-mapper
+      - id: x64-manual-pe-section-copy-loop
+  - id: loader-api-surface
+    desc: Native loader API surface pattern
+    crit: suspicious
+    conf: 0.86
+    mbc: B0005
+    attack: T1620
+    all:
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    any:
+      - id: micro-behaviors/os/module/load::get-module-filename-ansi
+      - id: micro-behaviors/fs/file/open::fopen
+      - id: micro-behaviors/fs/file/read::fread
+    needs: 2
+    unless:
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/binary/metrics/threshold::many-imports-100
+      - id: metadata/package/quality/
+      - id: micro-behaviors/data/db/postgresql/
+      - id: well-known/tool/reverse-engineering/oep-finder/
+      - id: well-known/tool/reverse-engineering/windows-debugger/
+      - id: well-known/tool/reverse-engineering/nanomite/
+  - id: native-loader-obfuscated
+    desc: Native reflective loader with packer profile
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: loader-api-surface
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::dominant-section
+  - id: resource-backed-native-loader
+    desc: Resource-backed native memory loader chain
+    crit: suspicious
+    conf: 0.92
+    mbc: B0005
+    attack: T1620
+    all:
+      - id: loader-api-surface
+      - id: micro-behaviors/data/embedded/payload/resource::pe-resource-load-lock-chain
+    any:
+      - id: objectives/anti-analysis/timing/evasion::timing-delta-check
+      - id: objectives/anti-analysis/environment-detect/runtime::environment-adaptive-behavior
+      - id: micro-behaviors/time/timing/delay::sleep-dup
+    downgrade:
+      any:
+        - id: metadata/package/versioning::pe-version-resource
+        - id: metadata/binary/vendor::is-microsoft-named

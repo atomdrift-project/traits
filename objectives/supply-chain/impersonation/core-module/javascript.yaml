@@ -1,0 +1,145 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  crit: suspicious
+  attack: T1195.002
+traits:
+- id: fs-write-sensitive-call-ssh
+  desc: File write targets SSH key
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    case_insensitive: true
+    regex: (writeFile|appendFile)Sync?\s*\([^;]{0,360}(id_rsa|id_ed25519|authorized_keys)
+- id: fs-write-sensitive-call-token
+  desc: File write targets credential
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    case_insensitive: true
+    regex: (write|append)FileSync?\([^,)]{0,140}\b(authToken|password|credentials)\b[^,)]{0,20},
+  not:
+    # Build scaffolds commonly create a placeholder Google OAuth file whose
+    # filename contains "credentials" but does not contain a secret.
+    - regex: '(?i)(google-api\.credentials\.json|yourappidhere|your project id here|your client secret here)'
+- id: fs-write-sensitive-call-dotfile
+  desc: File write targets credential dotfile
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    case_insensitive: true
+    regex: (writeFile|appendFile)Sync?\s*\([^;]{0,360}(\.npmrc|\.netrc|passwd)
+- id: fs-stream-sensitive-call
+  desc: Stream write targets credentials
+  crit: component
+  conf: 0.82
+  if:
+    type: text
+    case_insensitive: true
+    regex: createWriteStream\s*\([^;]{0,360}(id_rsa|credentials|password)
+- id: fs-append-hidden
+  desc: Appends to hidden file
+  crit: suspicious
+  conf: 0.75
+  if:
+    type: text
+    regex: fs\.(appendFile|writeFile)Sync?\s*\(\s*["\']/.{0,50}/\..{1,30}
+
+composite_rules:
+- id: input-capture-wrapper
+  desc: Node readline prompt input
+  crit: notable
+  conf: 0.94
+  all:
+  - id: micro-behaviors/ui/dialog/prompt::node-readline-question-call
+  unless:
+  - id: well-known/app/nitin-ai
+- id: obfuscated-node-crypto-loader
+  desc: Obfuscated Node crypto loader
+  crit: notable
+  conf: 0.88
+  all:
+  - id: micro-behaviors/crypto/library/provider::require-crypto
+  - id: micro-behaviors/crypto/library/provider::node-crypto-operation
+  any:
+  - id: objectives/anti-static/obfuscation/string/array::string-array-hex-index
+  - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
+  - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
+  downgrade:
+    any:
+    - id: metadata/package/testing/harness/runtime/
+  unless:
+  - id: micro-behaviors/communications/http/oauth/
+  - id: well-known/lib/node-edge/
+- id: dynamic-exec
+  desc: Dynamic code execution
+  crit: notable
+  conf: 0.8
+  any:
+  - id: objectives/execution/interpreter/eval/dynamic::eval-variable
+  - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
+- id: js-input-intercept-exfil
+  desc: Node readline input exfiltration
+  crit: hostile
+  conf: 0.95
+  attack: T1056
+  mbc: E1056
+  near_bytes: 4096
+  all:
+  - id: input-capture-wrapper
+  any:
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/post::axios-post-call
+  - id: micro-behaviors/communications/http/post::http-request-post
+  - id: fs-write-sensitive
+  - id: fs-append-hidden
+  unless:
+  - id: well-known/app/nitin-ai
+- id: crypto-intercept-exfil
+  desc: Crypto wrapper with exfiltration
+  crit: hostile
+  conf: 0.95
+  attack: T1056
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/crypto/library/wrapper::node-crypto-wrapper
+  any:
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/post::axios-post-call
+  - id: micro-behaviors/communications/http/post::http-request-post
+  - id: fs-write-sensitive
+  - id: fs-append-hidden
+  unless:
+  - id: metadata/library/structure::js-large-module-bundle
+  - id: metadata/package/testing/
+- id: js-credential-supply-chain
+  desc: JavaScript credential interception supply chain attack
+  crit: hostile
+  conf: 0.98
+  mbc: E1056
+  any:
+  - id: js-input-intercept-exfil
+  - id: crypto-intercept-exfil
+- id: fs-write-sensitive
+  desc: Writes to sensitive path
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: micro-behaviors/fs/write/file/direct::js-file-write
+  any:
+  - id: fs-write-sensitive-call-ssh
+  - id: fs-write-sensitive-call-token
+  - id: fs-write-sensitive-call-dotfile
+  - id: fs-stream-sensitive-call
+  not:
+  - substr: "process.env["
+  unless:
+  - id: metadata/build/scaffold::node-project-scaffolder-file-writer
+  - id: metadata/package/files/dependency::node-modules-path
+  - id: well-known/tool/development/yarn::yarn-cli-bundle-marker
+  - id: well-known/tool/development/aube::aube-package-test-fixture
+  - id: well-known/app/freddie::benign-archive-context
+  - id: well-known/app/neurolink::benign-archive-context

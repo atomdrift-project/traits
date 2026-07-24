@@ -1,0 +1,167 @@
+# Browser-extension runtime lifecycle / identity. These are irreducibly
+# extension-specific (no non-extension analog): the extension's own runtime
+# object, install/update events, self-resource URLs, and the WebExtension
+# `browser.*` namespace. Messaging (runtime.sendMessage/onMessage) is NOT here
+# — it is a generic IPC technique and lives in communications/ipc/message/.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  crit: notable
+  conf: 0.9
+traits:
+  - id: chrome-runtime-api
+    desc: Uses the Chrome runtime API
+    if:
+      type: text
+      regex: 'chrome\.runtime\.[A-Za-z_]'
+  - id: chrome-runtime-on-installed
+    desc: Handles browser extension install or update
+    crit: notable
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)runtime\.onInstalled\.addListener$'
+  - id: chrome-runtime-on-startup
+    desc: Registers a browser-startup listener
+    crit: notable
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)runtime\.onStartup\.addListener$'
+  - id: offscreen-document-creation
+    desc: Creates an extension offscreen document
+    crit: notable
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)offscreen\.createDocument$'
+  - id: runtime-set-uninstall-url
+    desc: Sets a browser extension uninstall URL
+    if:
+      type: symbol
+      kind: call
+      regex: '(chrome\.|browser\.)?runtime\.setUninstallURL$'
+  - id: browser-search-engines-get
+    desc: Reads browser search engines
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)(chrome\.|browser\.)?search\.get$'
+  - id: safari-extension-api-class
+    desc: Safari extension API class reference
+    platforms: [macos]
+    conf: 0.7
+    attack: T1176
+    if:
+      type: text
+      regex: 'Safari(App|Web)Extension|SFSafariExtension'
+  - id: chrome-runtime-get-url
+    desc: Chrome runtime resource URL
+    crit: baseline
+    if:
+      type: text
+      regex: '(chrome|browser)\.runtime\.getURL|runtime\.getURL\('
+  - id: chrome-runtime-id
+    desc: Chrome runtime extension ID read
+    crit: baseline
+    if:
+      type: text
+      regex: '(chrome|browser)\.runtime\.id\b'
+  - id: chrome-webnavigation-api
+    desc: References the WebExtension webNavigation API
+    if:
+      type: symbol
+      kind: member
+      regex: '^(chrome|browser)\.webNavigation(\.[A-Za-z_][A-Za-z0-9_]*|$)'
+  - id: chrome-webnavigation-before-navigate
+    desc: Observes navigation before it starts
+    if:
+      type: text
+      substr: chrome.webNavigation.onBeforeNavigate
+  - id: chrome-history-state-listener
+    desc: Registers a history-state navigation listener
+    conf: 0.94
+    if:
+      type: text
+      regex: '(chrome|browser)\.webNavigation\.onHistoryStateUpdated\.addListener\b'
+
+  - id: external-url-io-domain
+    desc: References an .io-domain HTTP(S) URL
+    crit: component
+    conf: 0.8
+    if:
+      type: string_literal
+      regex: https?://[a-zA-Z0-9][-a-zA-Z0-9]*\.io/
+
+  - id: chrome-namespace-extra
+    desc: Uses extended chrome.* namespace APIs
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: chrome\.(alarms|notifications)
+  - id: chrome-namespace-core
+    desc: Uses core Chrome extension APIs
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'chrome\.(runtime|tabs|storage|scripting)\b'
+  - id: chrome-namespace
+    desc: Uses the Chrome extension API namespace
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'chrome\.[A-Za-z_]\w*\b'
+  - id: chrome-search-query
+    desc: Chrome search API query
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\\.)(chrome\.search\.query|search\.query)$'
+  - id: browser-namespace-1
+    desc: Uses browser.* namespace core APIs
+    conf: 0.95
+    if:
+      type: string_literal
+      regex: browser\.(runtime|tabs|storage|webRequest)
+  - id: browser-namespace-2
+    desc: Uses browser.* namespace data APIs
+    conf: 0.95
+    if:
+      type: string_literal
+      regex: browser\.(cookies|history|bookmarks)
+composite_rules:
+  - id: uninstall-tracking
+    desc: Sets an external .io uninstall URL
+    crit: notable
+    conf: 0.9
+    all:
+      - id: runtime-set-uninstall-url
+      - id: external-url-io-domain
+
+  - id: browser-namespace
+    desc: Uses browser.* namespace (Firefox/WebExtension)
+    crit: notable
+    conf: 0.95
+    any:
+      - id: browser-namespace-1
+      - id: browser-namespace-2
+  - id: extension-install-uninstall-lifecycle-urls
+    desc: Configures install and uninstall lifecycle URLs
+    crit: notable
+    conf: 0.94
+    all:
+      - id: runtime-set-uninstall-url
+      - id: micro-behaviors/browser-extension/tabs::install-https-tab-open
+  # A lifecycle callback plus an uninstall landing URL and a network client
+  # describes extension telemetry/navigation behavior, not attacker intent.
+  - id: extension-lifecycle-network-request
+    desc: Extension lifecycle sends a network request
+    crit: notable
+    conf: 0.9
+    all:
+      - id: chrome-runtime-on-installed
+      - id: runtime-set-uninstall-url
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call

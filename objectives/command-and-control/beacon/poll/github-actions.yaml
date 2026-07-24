@@ -1,0 +1,107 @@
+# GitHub Actions C2 Implant Detection
+# Detects shell-based C2 backdoors in GitHub Actions composite actions
+# ATT&CK: T1059.004 (Unix Shell), T1071.001 (Web Protocols)
+defaults:
+  platforms: [unix]
+  for: [github-actions]
+  attack: "T1059.004"
+traits:
+  # === Structural markers (kv — match within YAML run: blocks) ===
+  - id: composite-action-type
+    desc: GitHub Actions composite action
+    crit: component
+    conf: 1.0
+    if:
+      type: value
+      path: "runs.using"
+      exact: "composite"
+  - id: run-block-eval-var
+    desc: eval of variable in run block
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: value
+      path: "runs.steps[*].run"
+      regex: 'eval\s+\\?"?\$\w+'
+  # === Content patterns (raw) ===
+  - id: eval-shell-var
+    desc: eval of shell variable
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '\beval\s+\\?"?\$[{(]?\w+'
+    unless:
+      - type: text
+        regex: '\beval\s+["'']?\$\(opam\s+env\)'
+  - id: c2-jitter-sleep
+    desc: Random sleep interval (C2 jitter)
+    crit: component
+    conf: 0.85
+    attack: T1071.001
+    if:
+      type: text
+      regex: 'sleep\s+\$\(\(RANDOM\s*%'
+  - id: sys-info-collect
+    desc: Hostname/user/OS collection
+    crit: suspicious
+    conf: 0.9
+    attack: T1082
+    if:
+      type: text
+      regex: 'hostname.{0,40}id\s+-un|id\s+-un.{0,40}uname|hostname.{0,80}uname'
+  - id: zlib-base64-c2-encode
+    desc: zlib+base64 pipeline for C2 output
+    crit: suspicious
+    conf: 0.9
+    attack: T1027
+    if:
+      type: text
+      regex: 'zlib\b.{0,80}base64\b.{0,80}(compress|encode)'
+  - id: c2-poll-endpoint
+    desc: Short-path HTTP C2 endpoint
+    crit: component
+    conf: 0.82
+    attack: T1071.001
+    if:
+      type: text
+      regex: 'https?://[^\s"]{4,80}/[a-z]{1,3}/[a-z]{1,3}\b'
+    unless:
+      - type: text
+        substr: git.kernel.org/pub/scm/
+      - type: text
+        regex: 'https?://([^\s"/]+\.)?intel\.com/content/'
+      - type: text
+        regex: 'https://[^/\s"]+\.codecov\.io/upload'
+      - type: text
+        regex: 'https://[^/\s"]+\.codeartifact\.[^/\s"]+/npm/npm/'
+      - type: text
+        regex: 'https://download\.pytorch\.org/whl/[A-Za-z0-9._-]+'
+composite_rules:
+  # C2 polling loop: curl fetch + eval + sleep jitter
+  - id: shell-c2-poll-exec
+    desc: Shell C2 poll-and-execute loop
+    crit: hostile
+    conf: 0.95
+    attack: T1071.001
+    all:
+      - id: eval-shell-var
+      - id: c2-jitter-sleep
+    any:
+      - id: micro-behaviors/communications/http/tls::curl-insecure
+      - id: run-block-eval-var
+      - id: c2-poll-endpoint
+  # Full GHA C2 implant
+  - id: gha-c2-implant
+    desc: GitHub Actions C2 implant
+    crit: hostile
+    conf: 0.97
+    attack: T1071.001
+    mbc: "B0001"
+    all:
+      - id: shell-c2-poll-exec
+    any:
+      - id: composite-action-type
+      - id: sys-info-collect
+      - id: zlib-base64-c2-encode
+      - id: micro-behaviors/communications/http/url/domain::nip-io-ip-hostname

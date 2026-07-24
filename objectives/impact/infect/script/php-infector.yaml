@@ -1,0 +1,183 @@
+defaults:
+  platforms: [windows, unix]
+  for: [php]
+traits:
+- id: php-extension-filter
+  desc: Filters files by .php extension (substr -3)
+  crit: suspicious
+  conf: 0.95
+  attack: T1083
+  if:
+    type: text
+    regex: substr\s*\(\s*\$?\w+\s*,\s*-\s*3\s*\)\s*==?\s*["']php["']
+
+- id: php-append-file-mode
+  desc: fopen() with a+ append mode
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: "fopen\\s*\\(.{0,80},\\s*[\"']a\\+[\"']\\)"
+    case_insensitive: true
+- id: php-overwrite-file-mode
+  desc: fopen() with w/x/c overwrite mode
+  crit: component
+  conf: 0.82
+  if:
+    type: text
+    regex: "fopen\\s*\\(.{0,40},\\s*['\"](w|x|c)\\+?['\"]"
+
+- id: reinfection-marker-check--rx-1
+  desc: strstr scans source for <?php or /*
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: "strstr\\s*\\(\\s*\\$\\w+\\s*,\\s*[\"'](<\\?php|/\\*)"
+
+  count_max: 1005394
+- id: reinfection-marker-check--rx-2
+  desc: strstr scans for @php_ or _infected
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: "strstr\\s*\\(\\s*\\$\\w+\\s*,\\s*[\"'](@php_|//\\s*\\w+_infected)"
+
+  count_max: 1005395
+- id: reinfection-marker-check--rx-3
+  desc: strstr scans for eval( or base64_decode
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: "strstr\\s*\\(\\s*\\$\\w+\\s*,\\s*[\"'](eval\\(|base64_decode)"
+
+  count_max: 1005396
+- id: payload-body-extraction
+  desc: substr extracts fixed-size payload from source
+  crit: component
+  conf: 0.85
+  attack: T1554
+  if:
+    type: text
+    regex: "substr\\s*\\(\\s*\\$\\w+\\s*,\\s*0\\s*,\\s*\\d{3,}"
+
+- id: php-tag-strip--rx-4
+  desc: 'substr followed by <?php'
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: "substr\\s*\\(\\s*\\$\\w+\\s*,\\s*5\\s*\\).{0,80}<\\?php"
+
+  count_max: 1005398
+- id: php-tag-strip--rx-5
+  desc: '<?php followed by substr'
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: "<\\?php.{0,80}substr\\s*\\(\\s*\\$\\w+\\s*,\\s*5\\s*\\)"
+
+  count_max: 1005399
+- id: php-temp-file-job-code-write
+  desc: Writes job code to temp file
+  crit: notable
+  conf: 0.99
+  if:
+    type: text
+    regex: 'file_put_contents\s*\(\s*\$temporaryFile\s*,\s*\$job->code\(\)'
+
+- id: php-temp-file-cleanup
+  desc: Cleans up temporary file
+  crit: notable
+  conf: 0.99
+  if:
+    type: text
+    regex: 'unlink\s*\(\s*\$temporaryFile\s*\)'
+
+composite_rules:
+- id: php-temp-file-write-cleanup
+  desc: Writes then cleans up temp file
+  crit: notable
+  conf: 0.99
+  all:
+  - id: micro-behaviors/fs/temp/directory::tempnam-call
+  - id: php-temp-file-job-code-write
+  - id: php-temp-file-cleanup
+
+- id: php-unlink-recreate-pattern
+  # Standalone delete-then-recreate hits many legitimate atomic-write and
+  # cache-rebuild patterns (manifest writers, stub generators). Treat as a
+  # component signal that contributes to infector composites but does not
+  # surface on its own.
+  desc: PHP unlink near file recreate
+  crit: notable
+  conf: 0.92
+  near_bytes: 500
+  unless:
+  - id: objectives/impact/infect/script/
+  - id: metadata/library/web-frameworks/
+  - id: metadata/library/web-frameworks/
+  - id: metadata/library/web-frameworks/
+  - id: metadata/package/testing/harness/unit/
+  all:
+  - id: micro-behaviors/fs/delete/file::php-unlink
+  any:
+  - id: php-overwrite-file-mode
+  - id: micro-behaviors/fs/write/file/direct::file-put-contents
+  - id: php-append-file-mode
+
+- id: php-prepender-virus
+  desc: PHP prepender virus infection chain
+  crit: hostile
+  conf: 0.95
+  attack: T1554
+  all:
+  - id: micro-behaviors/fs/read/self::fopen-self-file
+  - id: micro-behaviors/fs/directory/traverse::php-dir-traverse-fn
+  any:
+  - id: micro-behaviors/fs/delete/file::php-unlink
+  - id: php-append-file-mode
+  - id: php-overwrite-file-mode
+  unless:
+  - id: metadata/package/testing/harness/unit/
+  - id: metadata/library/web-frameworks/
+  - id: metadata/library/web-frameworks/
+  - id: metadata/library/web-frameworks/
+  # Packed PHP archive (phar): the file-infector chain is matching the phar
+  # stub's generic file ops, not a live in-place infector.
+  - id: metadata/file/magic/identity::php-archive
+  - id: well-known/lib/deb-package/
+  - id: metadata/library/runtime::upstream-php-source
+
+- id: php-file-infector-full
+  desc: PHP file infector with marker avoidance
+  crit: hostile
+  conf: 0.97
+  attack: T1554
+  all:
+  - id: micro-behaviors/fs/read/self::fopen-self-file
+  - id: micro-behaviors/fs/directory/traverse::php-dir-traverse-fn
+  - id: reinfection-marker-check
+  - id: micro-behaviors/fs/write/file/direct::fwrite
+  any:
+  - id: payload-body-extraction
+  - id: php-tag-strip
+- id: reinfection-marker-check
+  desc: Checks string content to avoid reinfection
+  crit: suspicious
+  conf: 0.9
+  attack: T1554
+  any:
+  - id: reinfection-marker-check--rx-1
+  - id: reinfection-marker-check--rx-2
+  - id: reinfection-marker-check--rx-3
+- id: php-tag-strip
+  desc: Strips PHP opening tag from victim content
+  crit: component
+  conf: 0.8
+  any:
+  - id: php-tag-strip--rx-4
+  - id: php-tag-strip--rx-5

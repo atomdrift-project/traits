@@ -1,0 +1,173 @@
+# Obfuscated Dynamic Execution Patterns (JavaScript)
+# Detects evasive eval usage
+# ATT&CK: T1027 + T1059.007
+defaults:
+  platforms: [windows, unix]
+  for: [javascript]
+traits:
+  # Indirect execution through this[eval|Function|constructor]. A generic
+  # computed dispatch such as this[type]() is ordinary library code and is
+  # intentionally excluded.
+  - id: js-indirect-eval-this
+    desc: Indirect eval through named object property
+    crit: notable
+    conf: 0.8
+    attack: "T1059.007"
+    if:
+      type: text
+      regex: 'this\[\s*(eval|Function|constructor)\s*\]\s*\('
+    unless:
+      - id: metadata/library/jquery/
+      - id: metadata/library/prototype/
+      # this[mangledName]() is ordinary computed method dispatch in minified
+      # bundles (e.g. transformers.js), not indirect eval. js-known-bundler-output
+      # subsumes webpack/esbuild/large-module/large-minified output.
+      - id: metadata/library/structure/
+  - id: js-indirect-eval-this-assign
+    desc: Indirect eval through variable alias
+    crit: notable
+    conf: 0.8
+    attack: "T1059.007"
+    if:
+      type: text
+      regex: '\b\w+\s*=\s*this\[\s*[''"]?(eval|Function|constructor)[''"]?\s*\]'
+      case_insensitive: true
+    unless:
+      - id: metadata/library/jquery/
+      - id: metadata/library/d3/
+      - id: metadata/library/prototype/
+      - id: metadata/library/generated::laya-engine-runtime-marker
+      - id: well-known/lib/marked/
+      - type: basename
+        regex: '(^jsbn(-combined|2)?\.js$|\.m?js\.map$)'
+      - type: basename
+        regex: (^|[\\/])(.+[\\/])?node_modules[\\/]ipv6[\\/]
+      - type: basename
+        regex: (^|[\\/])builtin-plugins[\\/]tabby-terminal[\\/]dist[\\/]
+      - type: basename
+        regex: ^(rimraf|run-(script-)?os|ipv6(grep)?)$
+  - id: js-assign-common-root-1
+    desc: Global object assignment (root/self/global)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '\b(root|global|that)\s*=\s*this($|[^.A-Za-z0-9_$])'
+    unless:
+      - id: metadata/file/metrics/
+      - id: metadata/library/structure/
+      - id: metadata/package/files/dependency::node-modules-path
+  - id: js-assign-common-root-2
+    desc: Global object alias assignment pattern
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '\b(me|window|globalThis)\s*=\s*this\b'
+    unless:
+      - id: well-known/app/google-web::official-google-web-asset
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+    downgrade:
+      any:
+        - type: metrics
+          field: text.whitespace_ratio
+          min: 0.20
+        - id: metadata/package/testing/harness/runtime/
+  # Indirect eval execution via global[var]. The bare `window[X](` form is
+  # generic action dispatch (e.g., `window[handler](payload)`); split into
+  # three narrower signals — direct eval/Function name lookup, obfuscator-
+  # style `_0x` lookup, and bracket-call with immediate string argument.
+  - id: js-indirect-eval-window-named
+    desc: window["eval"] / ["Function"] bracket lookup
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059.007"
+    if:
+      type: text
+      regex: '(window|self|global)\[["''](eval|Function)["'']\]\('
+    downgrade:
+      any:
+        - id: metadata/library/structure::js-large-module-bundle
+        - id: micro-behaviors/process/interpreter/vm/
+    unless:
+    - id: well-known/lib/wine::wine-source-tree
+    - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+    # Linter test corpora (biome noGlobalEval) ship window["eval"](...) fixtures
+    # under tests/specs and .snap snapshots — not real indirect-eval obfuscation.
+    - id: metadata/package/testing/presence/harness::test-directory-path
+    - id: metadata/package/testing/presence/fixture::snapshot-file
+  - id: js-indirect-eval-window-mangled
+    desc: window[_0x...] obfuscator bracket lookup
+    crit: suspicious
+    conf: 0.8
+    attack: "T1059.007"
+    if:
+      type: text
+      regex: '(window|self|global)\[_0x[a-fA-F0-9]+\]\('
+    downgrade:
+      any:
+        - id: metadata/library/structure::js-large-module-bundle
+        - id: micro-behaviors/process/interpreter/vm/
+  # Construction of "eval" string (e.g., 'e'+'val')
+  - id: js-eval-construction
+    desc: Constructed eval string
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '[''"]e[''"]\s*\+\s*[''"]val[''"]'
+  - id: js-ascii-char-map-prefix
+    desc: ASCII char map array prefix
+    crit: suspicious
+    conf: 0.96
+    size_max: 20000
+    if:
+      type: text
+      substr: "var EFUpp=['','','','','','','','','','','"
+  - id: js-parseint-tostring-remap
+    desc: parseInt toString radix remap
+    crit: suspicious
+    conf: 0.93
+    size_max: 20000
+    if:
+      type: text
+      regex: 'parseInt\(\w+,\w+\);\w+=\w+\.toString\(\w+\);'
+  - id: js-parsefloat-finite-guard
+    desc: parseFloat finite token guard
+    crit: component
+    conf: 0.93
+    size_max: 20000
+    if:
+      type: text
+      substr: return !isNaN(parseFloat(
+  - id: js-char-map-radix-lookup
+    desc: Char map radix lookup return
+    crit: suspicious
+    conf: 0.92
+    size_max: 20000
+    if:
+      type: text
+      substr: return EFUpp[jYAdx(
+composite_rules:
+  - id: js-assign-common-root
+    desc: Common global object assignment (root, self, global)
+    crit: notable
+    conf: 0.9
+    size_max: 50000
+    any:
+      - id: js-assign-common-root-1
+      - id: js-assign-common-root-2
+  - id: js-ascii-map-eval-reconstruction
+    desc: ASCII-map numeric decoder feeding eval
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: js-ascii-char-map-prefix
+      - id: js-parseint-tostring-remap
+      - id: js-parsefloat-finite-guard
+      - id: js-char-map-radix-lookup
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
+      - id: objectives/anti-static/obfuscation/string/conceal::js-junk-math-1

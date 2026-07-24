@@ -1,0 +1,210 @@
+defaults:
+  platforms:
+  - macos
+  for:
+  - macho
+  attack: T1547.015
+traits:
+- id: session-loginitems-key
+  desc: Legacy macOS Login Items session key usage
+  crit: suspicious
+  conf: 0.8
+  for: [scripts, binaries, macho]
+  if:
+    type: text
+    substr: kLSSharedFileListSessionLoginItems
+  unless:
+  - id: well-known/app/mos::mos-app-context
+  - id: well-known/app/lulu
+  - id: well-known/app/macos-benign/
+  - id: well-known/app/carbon-copy-cloner::official-carbon-copy-cloner-member
+  - id: well-known/app/ollama::ollama-macos-signed-app-context
+
+
+  # === Legacy LoginHook persistence ===
+- id: loginhook-key
+  desc: Legacy macOS LoginHook preference key
+  crit: suspicious
+  conf: 0.8
+  attack: T1037.002
+  for: [macho, c, shell, scripts, plist]
+  if:
+    type: text
+    word: LoginHook
+  unless:
+  - id: metadata/file/profile/identity::generated-attack-map-context
+- id: loginwindow-domain--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  for: [macho, c, shell, scripts, plist]
+  if:
+    type: text
+    regex: /Library/Preferences/com\.apple\.loginwindow(\.plist)?
+  count_max: 1024134
+- id: loginwindow-domain--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  for: [macho, c, shell, scripts, plist]
+  if:
+    type: text
+    regex: ~/Library/Preferences/com\.apple\.loginwindow(\.plist)?
+  count_max: 1024135
+- id: defaults-write-loginhook--rx-4
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  for: [shell, scripts, c, macho]
+  if:
+    type: text
+    substr: Library/Preferences/com.apple.loginwindow
+  count_max: 1024136
+- id: defaults-write-loginhook--rx-5
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  for: [shell, scripts, c, macho]
+  if:
+    type: text
+    substr: LoginHook
+  count_max: 1024137
+- id: defaults-write-loginhook--rx-6
+  desc: defaults write command
+  crit: component
+  conf: 0.9
+  for: [shell, scripts, c, macho]
+  if:
+    type: text
+    regex: '\bdefaults\s+write\b'
+  count_max: 1024138
+- id: defaults-write-loginhook--rx-7
+  desc: loginwindow plist path
+  crit: component
+  conf: 0.9
+  for: [shell, scripts, c, macho]
+  if:
+    type: text
+    regex: 'com\.apple\.loginwindow(\.plist)?'
+  count_max: 1024139
+- id: tal-relaunch-key
+  desc: 'TALAppsToRelaunchAtLogin plist key'
+  crit: suspicious
+  conf: 0.9
+  for: [macho, c, plist, shell, scripts]
+  if:
+    type: text
+    substr: TALAppsToRelaunchAtLogin
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+  unless:
+    - id: well-known/app/carbon-copy-cloner::official-carbon-copy-cloner-member
+- id: loginwindow-byhost-path
+  desc: com.apple.loginwindow ByHost plist path
+  crit: suspicious
+  conf: 0.8
+  for: [macho, c, shell, scripts]
+  if:
+    type: text
+    regex: com\.apple\.loginwindow\.[A-F0-9-]{36}\.plist
+- id: loginwindow-byhost-dir
+  desc: com.apple.loginwindow ByHost preference path
+  crit: suspicious
+  conf: 0.7
+  for: [macho, c, shell, scripts]
+  if:
+    type: text
+    regex: 'Library/Preferences/ByHost[/\\]com\.apple\.loginwindow([._/\\]|$)'
+  unless:
+  - id: metadata/file/profile/identity::generated-attack-map-context
+  - id: well-known/app/macos-benign/
+  - id: well-known/app/homebrew::source-tree
+  - id: well-known/app/homebrew::source-tree-macos
+  - id: well-known/app/comfy-desktop::comfy-reset-mac-path
+- id: cfprefsd-flush
+  desc: killall cfprefsd (flush preferences cache)
+  crit: suspicious
+  conf: 0.85
+  attack: T1647
+  for: [macho, c, shell, scripts]
+  if:
+    type: text
+    regex: killall\s+cfprefsd
+  downgrade:
+    any:
+    - id: metadata/signed/anchor-apple
+- id: tal-background-state
+  desc: BackgroundState key in TAL entry
+  crit: component
+  conf: 0.7
+  for: [macho, c, plist]
+  if:
+    type: text
+    substr: BackgroundState
+
+composite_rules:
+- id: loginhook-persistence
+  desc: Legacy macOS LoginHook persistence
+  crit: suspicious
+  conf: 0.92
+  attack: T1037.002
+  for: [macho, c, shell, scripts, plist]
+  all:
+  - id: loginhook-key
+  any:
+  - id: loginwindow-domain
+  - id: defaults-write-loginhook
+  unless:
+  - id: metadata/file/profile/identity::generated-attack-map-context
+- id: tal-persistence
+  desc: TAL loginwindow restore-state persistence
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: tal-relaunch-key
+  any:
+  - id: loginwindow-byhost-path
+  - id: loginwindow-byhost-dir
+  - id: cfprefsd-flush
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: tal-installer-binary
+  desc: Binary that installs TAL persistence (C/Mach-O installer)
+  crit: suspicious
+  conf: 0.92
+  for: [macho, c]
+  all:
+  - id: tal-relaunch-key
+  - id: cfprefsd-flush
+  any:
+  - id: loginwindow-byhost-dir
+  - id: micro-behaviors/os/sysinfo/machine-id::macos-ioreg-platform-uuid-command
+  - id: tal-background-state
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: loginwindow-domain
+  desc: com.apple.loginwindow preferences target
+  crit: suspicious
+  conf: 0.8
+  attack: T1037.002
+  for: [macho, c, shell, scripts, plist]
+  any:
+  - id: objectives/persistence/login/items::defaults-write-loginhook--rx-7
+  - id: loginwindow-domain--rx-2
+  - id: loginwindow-domain--rx-3
+- id: defaults-write-loginhook
+  desc: defaults write loginwindow LoginHook command
+  crit: suspicious
+  conf: 0.9
+  attack: T1037.002
+  for: [shell, scripts, c, macho]
+  any:
+  - id: defaults-write-loginhook--rx-4
+  - id: defaults-write-loginhook--rx-5
+  - id: defaults-write-loginhook--rx-6
+  - id: defaults-write-loginhook--rx-7
+  unless:
+  - id: metadata/file/profile/identity::generated-attack-map-context

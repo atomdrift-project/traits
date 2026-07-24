@@ -1,0 +1,706 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+  - python
+  - javascript
+  - php
+  - html
+  attack: T1005
+  mbc: B0030
+traits:
+- id: luhn-algorithm
+  desc: Luhn algorithm implementation
+  crit: notable
+  conf: 0.85
+  if:
+    type: text
+    word: luhn
+    case_insensitive: false
+  unless:
+  - id: metadata/file/catalog/identity/
+  - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: objectives/credential-access/financial/credit-card/
+- id: mod10-check
+  desc: Modulo 10 check (Luhn)
+  crit: component
+  conf: 0.7
+  if:
+    type: text
+    regex: (?i)\bmod[_\-\s]?10\b
+- id: checksum-digit
+  desc: Checksum digit validation
+  crit: baseline
+  conf: 0.6
+  if:
+    type: text
+    regex: (?i)check.?sum.?digit
+- id: mastercard-brand
+  desc: Mastercard brand reference
+  crit: component
+  conf: 0.4
+  if:
+    type: text
+    word: mastercard
+- id: cc-regex-16digit
+  desc: 16-digit card number regex
+  crit: notable
+  conf: 0.85
+  if:
+    type: text
+    substr: '[0-9]{16}'
+  unless:
+  - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
+  downgrade:
+    any:
+    - id: metadata/library/structure::js-large-module-bundle
+    - id: metadata/package/testing/presence/scripted::faker-word
+- id: visa-bin
+  desc: Visa BIN range (starts with 4)
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: '(?i)startsWith\s*\(\s*["'']4["'']'
+  unless:
+    # `startsWith("4")` is pervasive in minified bundles (version checks, char
+    # codes); a recognized JS bundle is not a card-BIN check.
+    - id: metadata/library/structure/
+    - type: text
+      substr: profiler-kv-row
+    # HTTP 4xx status checks (e.g. httpStatusCode.startsWith("4")) are not BINs.
+    - type: text
+      regex: '(?i)(statusCode|httpStatus)\w*\.startsWith\s*\(\s*["'']4["'']'
+- id: visa-bin--card-payment-marker
+  desc: Card-number or PAN marker near Visa prefix
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    # Require card-number/PAN identity — bare "card"/"payment" match UI Card
+    # components and generic checkout copy.
+    regex: '(?i)(cardNumber|card_number|credit_?card|\bpan\b)'
+- id: mastercard-bin--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    substr: credit
+    case_insensitive: true
+  count_max: 1014410
+- id: mastercard-bin--rx-2
+  desc: Mastercard brand near card-number context
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: '(?i)\bmastercard.{0,64}(cardNumber|card_number|credit.?card|pan|bin)'
+  count_max: 1014411
+- id: mastercard-bin--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: startsWith.{0,20}"(5[1-5]|2[2-7])
+    case_insensitive: true
+  count_max: 1014412
+- id: mastercard-bin--rx-5
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: (?i)(card.{0,40}type|type.{0,40}card)
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+  count_max: 1014414
+- id: cvv-field
+  desc: CVV/CVC field reference
+  crit: component
+  conf: 0.7
+  if:
+    type: text
+    regex: (?i)\b(cvv|cvc|cv2)\b
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+  - id: metadata/package/quality/
+  - id: metadata/package/testing/
+  - type: text
+    substr: ").registerCommand("
+  - type: metrics
+    field: text.non_ascii_ratio
+    min: 0.8
+- id: expiry-field
+  desc: Card expiry field reference
+  crit: component
+  conf: 0.6
+  if:
+    type: text
+    regex: (?i)\b(exp_month|exp_year|exp_date)\b
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+- id: expiry-field-ru
+  desc: Card expiry field reference (Russian)
+  crit: component
+  conf: 0.6
+  if:
+    type: text
+    regex: "Срок\\s+действия"
+- id: expiry-field-short
+  desc: Short card expiry field reference
+  crit: component
+  conf: 0.6
+  if:
+    type: text
+    regex: (?i)\b(card_exp|mm/yy)\b
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+- id: card-number-field
+  desc: Credit card number field reference
+  crit: component
+  conf: 0.5
+  if:
+    type: text
+    regex: (?i)\b(card.?number|cc.?num)\b
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+  - id: metadata/file/catalog/identity/
+  - id: metadata/package/quality/
+- id: card-filter-name-regex
+  desc: Card-field exclusion regex
+  crit: baseline
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    substr: "card|cc|cvv|cvc|expir"
+- id: card-filter-autocomplete-regex
+  desc: Card autocomplete exclusion regex
+  crit: baseline
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    substr: "cc-|card-number|cvv|cvc|expiry|exp-date"
+- id: card-filter-return-true
+  desc: True-return marker for card filter
+  crit: component
+  conf: 0.3
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: '(?is)\b(card|cc|cvv|cvc)\b[^\n]{0,120}return\s+true'
+- id: card-number-field-ru
+  desc: Credit card number field reference (Russian)
+  crit: component
+  conf: 0.5
+  if:
+    type: text
+    regex: "Номер\\s+карты"
+- id: credit-card-form-capture--rx-7
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(cvv|cvc)\b.{0,500}(\bfetch\s*\(|\bXMLHttpRequest\b)
+  count_max: 1014422
+- id: credit-card-form-capture--rx-8
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card.?number|cc.?num)\b.{0,500}(\bfetch\s*\(|\bXMLHttpRequest\b)
+  count_max: 1014423
+- id: credit-card-form-capture--rx-9
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card_exp|mm/yy)\b.{0,500}(\bfetch\s*\(|\bXMLHttpRequest\b)
+  count_max: 1014424
+- id: credit-card-form-capture--rx-10
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(expiry|expiration)\b.{0,500}(\bfetch\s*\(|\bXMLHttpRequest\b)
+  count_max: 1014425
+- id: credit-card-form-capture--rx-11
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(cvv|cvc)\b.{0,500}(\bFormData\b|method\s*[:=]\s*['"]?POST)
+  count_max: 1014426
+- id: credit-card-form-capture--rx-12
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card.?number|cc.?num)\b.{0,500}(\bFormData\b|method\s*[:=]\s*['"]?POST)
+  count_max: 1014427
+- id: credit-card-form-capture--rx-13
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card_exp|mm/yy)\b.{0,500}(\bFormData\b|method\s*[:=]\s*['"]?POST)
+  count_max: 1014428
+- id: credit-card-form-capture--rx-14
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(expiry|expiration)\b.{0,500}(\bFormData\b|method\s*[:=]\s*['"]?POST)
+  count_max: 1014429
+- id: credit-card-form-capture--rx-15
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(cvv|cvc)\b.{0,500}(<form[^>]{0,300}\baction\s*=|\$_POST\b)
+  count_max: 1014430
+- id: credit-card-form-capture--rx-16
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card.?number|cc.?num)\b.{0,500}(<form[^>]{0,300}\baction\s*=|\$_POST\b)
+  count_max: 1014431
+- id: credit-card-form-capture--rx-17
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card_exp|mm/yy)\b.{0,500}(<form[^>]{0,300}\baction\s*=|\$_POST\b)
+  count_max: 1014432
+- id: credit-card-form-capture--rx-18
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(expiry|expiration)\b.{0,500}(<form[^>]{0,300}\baction\s*=|\$_POST\b)
+  count_max: 1014433
+- id: credit-card-form-capture--rx-19
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(cvv|cvc)\b.{0,500}(php://input|axios\.post)
+  count_max: 1014434
+- id: credit-card-form-capture--rx-20
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card.?number|cc.?num)\b.{0,500}(php://input|axios\.post)
+  count_max: 1014435
+- id: credit-card-form-capture--rx-21
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card_exp|mm/yy)\b.{0,500}(php://input|axios\.post)
+  count_max: 1014436
+- id: credit-card-form-capture--rx-22
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(expiry|expiration)\b.{0,500}(php://input|axios\.post)
+  count_max: 1014437
+- id: credit-card-form-capture--rx-23
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(cvv|cvc)\b.{0,500}(http\.post|\.post\()
+  count_max: 1014438
+- id: credit-card-form-capture--rx-24
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card.?number|cc.?num)\b.{0,500}(http\.post|\.post\()
+  count_max: 1014439
+- id: credit-card-form-capture--rx-25
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(card_exp|mm/yy)\b.{0,500}(http\.post|\.post\()
+  count_max: 1014440
+- id: credit-card-form-capture--rx-26
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?is)\b(expiry|expiration)\b.{0,500}(http\.post|\.post\()
+  count_max: 1014441
+- id: credit-card-form-capture--rx-27
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bfetch\s*\(|\bXMLHttpRequest\b).{0,500}\b(cvv|cvc)\b
+  count_max: 1014442
+- id: credit-card-form-capture--rx-28
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bfetch\s*\(|\bXMLHttpRequest\b).{0,500}\b(card.?number|cc.?num)\b
+  count_max: 1014443
+- id: credit-card-form-capture--rx-29
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bfetch\s*\(|\bXMLHttpRequest\b).{0,500}\b(card_exp|mm/yy)\b
+  count_max: 1014444
+- id: credit-card-form-capture--rx-30
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bfetch\s*\(|\bXMLHttpRequest\b).{0,500}\b(expiry|expiration)\b
+  count_max: 1014445
+- id: credit-card-form-capture--rx-31
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bFormData\b|method\s*[:=]\s*['"]?POST).{0,500}\b(cvv|cvc)\b
+  count_max: 1014446
+- id: credit-card-form-capture--rx-32
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bFormData\b|method\s*[:=]\s*['"]?POST).{0,500}\b(card.?number|cc.?num)\b
+  count_max: 1014447
+- id: credit-card-form-capture--rx-33
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bFormData\b|method\s*[:=]\s*['"]?POST).{0,500}\b(card_exp|mm/yy)\b
+  count_max: 1014448
+- id: credit-card-form-capture--rx-34
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (\bFormData\b|method\s*[:=]\s*['"]?POST).{0,500}\b(expiry|expiration)\b
+  count_max: 1014449
+- id: credit-card-form-capture--rx-35
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (<form[^>]{0,300}\baction\s*=|\$_POST\b).{0,500}\b(cvv|cvc)\b
+  count_max: 1014450
+- id: credit-card-form-capture--rx-36
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (<form[^>]{0,300}\baction\s*=|\$_POST\b).{0,500}\b(card.?number|cc.?num)\b
+  count_max: 1014451
+- id: credit-card-form-capture--rx-37
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (<form[^>]{0,300}\baction\s*=|\$_POST\b).{0,500}\b(card_exp|mm/yy)\b
+  count_max: 1014452
+- id: credit-card-form-capture--rx-38
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (<form[^>]{0,300}\baction\s*=|\$_POST\b).{0,500}\b(expiry|expiration)\b
+  count_max: 1014453
+- id: credit-card-form-capture--rx-39
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (php://input|axios\.post).{0,500}\b(cvv|cvc)\b
+  count_max: 1014454
+- id: credit-card-form-capture--rx-40
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (php://input|axios\.post).{0,500}\b(card.?number|cc.?num)\b
+  count_max: 1014455
+- id: credit-card-form-capture--rx-41
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (php://input|axios\.post).{0,500}\b(card_exp|mm/yy)\b
+  count_max: 1014456
+- id: credit-card-form-capture--rx-42
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (php://input|axios\.post).{0,500}\b(expiry|expiration)\b
+  count_max: 1014457
+- id: credit-card-form-capture--rx-43
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (http\.post|\.post\().{0,500}\b(cvv|cvc)\b
+  count_max: 1014458
+- id: credit-card-form-capture--rx-44
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (http\.post|\.post\().{0,500}\b(card.?number|cc.?num)\b
+  count_max: 1014459
+- id: credit-card-form-capture--rx-45
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (http\.post|\.post\().{0,500}\b(card_exp|mm/yy)\b
+  count_max: 1014460
+- id: credit-card-form-capture--rx-46
+  desc: Regex component marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (http\.post|\.post\().{0,500}\b(expiry|expiration)\b
+  count_max: 1014461
+- id: autofill-db
+  desc: Chromium autofill table query
+  crit: suspicious
+  conf: 0.85
+  for: [python, pyc, javascript, typescript]
+  if:
+    type: literal
+    kind: string
+    regex: '(?is)\b(from|join)\s+autofill(_profiles?)?\b'
+  unless:
+    - id: well-known/app/aleapp::aleapp-source-tree
+    - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+- id: storybook-story-file
+  desc: Storybook story file
+  crit: baseline
+  conf: 0.9
+  if:
+    type: path
+    basename: true
+    regex: '(?i)\.stories\.[jt]sx?$'
+- id: fake-stripe-checkout-demo
+  desc: Fake Stripe Checkout demo text
+  crit: baseline
+  conf: 0.9
+  if:
+    type: text
+    substr: "Fake Stripe Checkout"
+composite_rules:
+- id: visa-bin-card-payment-check
+  desc: Visa prefix with card marker
+  crit: suspicious
+  conf: 0.7
+  all:
+  - id: visa-bin
+  - id: visa-bin--card-payment-marker
+  near_lines: 100
+- id: mastercard-billing-marker
+  desc: Mastercard detection in billing marker
+  crit: component
+  conf: 0.82
+  any:
+  - id: mastercard-bin--rx-1
+  - id: mastercard-bin--rx-2
+  - id: mastercard-bin--rx-5
+- id: mastercard-bin-prefix-check
+  desc: Mastercard BIN startsWith range check
+  crit: component
+  conf: 0.8
+  all:
+  - id: metadata/lang/scripted::startswith-method
+  - id: mastercard-bin--rx-3
+  near_bytes: 128
+- id: mod10-regex-combo
+  desc: Mod10 check with card regex
+  all:
+  - id: mod10-check
+  - id: cc-regex-16digit
+- id: card-validation
+  desc: Credit card validation logic
+  crit: notable
+  conf: 0.9
+  any:
+  - id: luhn-algorithm
+  - id: mod10-regex-combo
+- id: credit-card-stealer
+  desc: Credit card data stealer
+  crit: hostile
+  conf: 0.95
+  all:
+  # Card-brand routing and a CVC/CVV label are normal payment-form logic.
+  # Require a card-field capture path plus an outbound request before calling
+  # the behavior theft.
+  - id: credit-card-form-capture
+  - id: micro-behaviors/communications/http/request/client::js-fetch-call
+  unless:
+  - id: metadata/package/testing/presence/scripted::faker-word
+  - id: well-known/app/amplify-backend/
+- id: credit-card-form-fields
+  desc: Credit card form fields collection
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: cvv-field
+  - id: credit-card-form-capture
+  any:
+  - id: expiry-field
+  - id: expiry-field-ru
+  - id: expiry-field-short
+  - id: card-number-field
+  - id: card-number-field-ru
+  - id: luhn-algorithm
+  - id: mastercard-brand
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+  downgrade:
+    any:
+    - id: metadata/package/testing/presence/scripted::faker-word
+- id: credit-card-form-fields-carveouts
+  desc: Recognized credit-card form-field markers
+  crit: component
+  conf: 0.9
+  any:
+  - id: metadata/lang/source::generated-do-not-edit-text
+  - id: metadata/package/quality/false-positives::n8n-stripe-card-token-description
+  - id: metadata/package/quality/profile::has-tests
+  - id: metadata/package/testing/harness/runtime::is-test
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: metadata/package/testing/presence/harness::test-directory
+  - id: metadata/lang/scripted::dts-declaration-file
+  - id: storybook-story-file
+  - id: fake-stripe-checkout-demo
+- id: credit-card-field-exclusion-filter
+  desc: Payment-field exclusion filter
+  crit: baseline
+  conf: 0.92
+  near_bytes: 800
+  all:
+  - id: card-filter-return-true
+  any:
+  - id: card-filter-name-regex
+  - id: card-filter-autocomplete-regex
+- id: mastercard-bin
+  desc: Mastercard BIN range (51-55, 2221-2720)
+  crit: suspicious
+  conf: 0.75
+  all:
+  # The "BIN range" identity requires an actual prefix check (startsWith 51-55 /
+  # 2221-2720). A bare brand reference ("mastercard" / "master card") is not a BIN
+  # check — it matches Font Awesome card-icon classes (fa-cc-mastercard) and other
+  # benign brand mentions, so it must not satisfy this composite on its own.
+  - id: mastercard-billing-marker
+  - id: mastercard-bin-prefix-check
+  near_bytes: 512
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+  - id: metadata/library/semantic-ui/
+  - id: metadata/library/runtime::fontawesome-free-header
+  - id: well-known/lib/freemius
+  - id: metadata/library/runtime::bootstrap-iconpicker-iconset
+- id: credit-card-form-capture
+  desc: Credit card form capture path
+  crit: component
+  conf: 0.8
+  unless:
+  - id: objectives/credential-access/financial/credit-card/
+  any:
+  - id: credit-card-form-capture--rx-7
+  - id: credit-card-form-capture--rx-8
+  - id: credit-card-form-capture--rx-9
+  - id: credit-card-form-capture--rx-10
+  - id: credit-card-form-capture--rx-11
+  - id: credit-card-form-capture--rx-12
+  - id: credit-card-form-capture--rx-13
+  - id: credit-card-form-capture--rx-14
+  - id: credit-card-form-capture--rx-15
+  - id: credit-card-form-capture--rx-16
+  - id: credit-card-form-capture--rx-17
+  - id: credit-card-form-capture--rx-18
+  - id: credit-card-form-capture--rx-19
+  - id: credit-card-form-capture--rx-20
+  - id: credit-card-form-capture--rx-21
+  - id: credit-card-form-capture--rx-22
+  - id: credit-card-form-capture--rx-23
+  - id: credit-card-form-capture--rx-24
+  - id: credit-card-form-capture--rx-25
+  - id: credit-card-form-capture--rx-26
+  - id: credit-card-form-capture--rx-27
+  - id: credit-card-form-capture--rx-28
+  - id: credit-card-form-capture--rx-29
+  - id: credit-card-form-capture--rx-30
+  - id: credit-card-form-capture--rx-31
+  - id: credit-card-form-capture--rx-32
+  - id: credit-card-form-capture--rx-33
+  - id: credit-card-form-capture--rx-34
+  - id: credit-card-form-capture--rx-35
+  - id: credit-card-form-capture--rx-36
+  - id: credit-card-form-capture--rx-37
+  - id: credit-card-form-capture--rx-38
+  - id: credit-card-form-capture--rx-39
+  - id: credit-card-form-capture--rx-40
+  - id: credit-card-form-capture--rx-41
+  - id: credit-card-form-capture--rx-42
+  - id: credit-card-form-capture--rx-43
+  - id: credit-card-form-capture--rx-44
+  - id: credit-card-form-capture--rx-45
+  - id: credit-card-form-capture--rx-46

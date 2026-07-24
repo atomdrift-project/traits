@@ -1,0 +1,73 @@
+# Encrypted overlay dropper detection for Windows PE binaries.
+# Detects the classic stealer-loader profile: a small host PE with minimal
+# imports (often KERNEL32-only) carrying a large high-entropy encrypted
+# overlay, plus the in-memory unpack primitives (VirtualProtect + CreateThread).
+# ATT&CK: T1027 (Obfuscated Files or Information), T1620 (Reflective Code Loading)
+# MBC: B0032 (Anti-Static Analysis), B0023 (Dynamic Loading)
+defaults:
+  platforms: [windows]
+  for: [pe]
+  attack: T1027
+  mbc: B0032
+
+composite_rules:
+  # A self-reading overlay whose VirtualAlloc/VirtualProtect API names are
+  # themselves XOR-decoded is an in-memory loader, not merely an installer
+  # carrying compressed resources.  Requiring both decoded memory APIs and
+  # executable allocation keeps this intent rule away from ordinary SFX files.
+- id: xor-obfuscated-overlay-memory-loader
+  desc: XOR-obfuscated PE overlay decoded into executable memory
+  crit: hostile
+  conf: 0.98
+  attack: T1027.002,T1620
+  mbc: B0032,B0023
+  all:
+  - id: objectives/anti-static/obfuscation/payload/self-read::pe-overlay-self-extractor
+  - id: objectives/anti-static/obfuscation/decoders::xor-decoded-virtual-alloc-api
+  - id: objectives/anti-static/obfuscation/decoders::xor-decoded-virtual-protect-api
+  - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
+
+  # Classic stealer-loader: single-DLL IAT + API hashing + encrypted overlay
+  # + in-memory unpack primitives. Very few benign binaries match this profile.
+- id: kernel32-only-encrypted-overlay-dropper
+  desc: KERNEL32-only loader with encrypted overlay payload
+  crit: hostile
+  conf: 0.95
+  size_min: 1048576
+  all:
+  - id: metadata/binary/symbols/imports::pe-single-import-dll
+  - id: objectives/anti-static/obfuscation/imports::pe-api-hashing-indicator-single
+  - id: micro-behaviors/mem/protect/modify::virtual-protect
+  - id: micro-behaviors/process/thread/create::create-thread
+  - id: metadata/signed/trust-level::unsigned
+  any:
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::binary-encrypted-overlay
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay
+  unless:
+  - id: metadata/binary/framework/
+  - id: metadata/binary/framework::electron-desktop-runtime
+  - id: metadata/binary/installer/family/
+  - id: metadata/signed/platform/
+
+  # Broader encrypted overlay dropper: minimal imports + encrypted overlay
+  # + VirtualProtect + CreateThread. Covers cases where imports are slightly
+  # more than KERNEL32-only but still minimal.
+- id: minimal-import-encrypted-overlay-dropper
+  desc: Minimal-import loader with encrypted overlay payload
+  crit: hostile
+  conf: 0.92
+  size_min: 1048576
+  all:
+  - id: micro-behaviors/mem/protect/modify::virtual-protect
+  - id: micro-behaviors/process/thread/create::create-thread
+  - id: metadata/signed/trust-level::unsigned
+  any:
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::binary-encrypted-overlay
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay
+  unless:
+  - id: metadata/binary/metrics/structural::many-imports
+  - id: metadata/binary/metrics/threshold::many-imports-25
+  - id: metadata/binary/framework/
+  - id: metadata/binary/framework::electron-desktop-runtime
+  - id: metadata/binary/installer/family/
+  - id: metadata/signed/platform/

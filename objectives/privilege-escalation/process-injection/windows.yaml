@@ -1,0 +1,153 @@
+defaults:
+  mbc: E1055
+  attack: T1055
+  platforms:
+    - windows
+  for:
+    - pe
+    - dll
+    - rust
+traits:
+  - id: lsass-target
+    desc: lsass.exe target reference
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      regex: (?i)lsass\.exe
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - type: metrics
+          field: imports.count
+          min: 100
+  - id: csrss-target
+    desc: csrss.exe target reference
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      regex: (?i)csrss\.exe
+    unless:
+      - type: text
+        substr: DXGPROCESS for CSRSS.exe
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+  - id: services-target
+    desc: services.exe target reference
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      regex: (?i)services\.exe
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+composite_rules:
+  - id: winlogon-target
+    desc: winlogon.exe target reference
+    crit: component
+    conf: 0.75
+    any:
+      - id: objectives/evasion/masquerade/process/name::winlogon-name
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+  - id: privileged-target
+    desc: References a privileged system process
+    crit: component
+    conf: 0.8
+    any:
+      - id: objectives/evasion/process/injection/hollowing::svchost-target
+      - id: winlogon-target
+      - id: csrss-target
+      - id: services-target
+  - id: inject-privileged-process
+    desc: Process injection targeting privileged process
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: privileged-target
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+    any:
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
+    unless:
+      - id: well-known/app/drivers/
+      - id: well-known/tool/reverse-engineering/scyllahide/
+  - id: hollow-privileged-process
+    desc: Process hollowing of privileged process
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: privileged-target
+      - id: objectives/evasion/process/injection/hollowing::hollowing-primitives
+  - id: debug-privilege-injection
+    desc: Debug privilege with process injection
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+    any:
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+      - id: objectives/evasion/process/injection/toolkit::poolparty-toolkit
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/os/syscall/raw::nt-write-ssn
+    needs: 2
+    unless:
+      - id: well-known/lib/electron::nodejs-webstorage-marker
+      - id: well-known/lib/ffmpeg/
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/sysadmin/jvm::jdk-attach-library
+      - id: metadata/build/openra::openra-system-library-helper
+      - id: metadata/binary/symbols/plugin/
+      - id: well-known/tool/reverse-engineering/
+      - id: well-known/app/installer::openra-installer
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+
+  - id: debug-privilege-remote-injector
+    desc: SeDebugPrivilege enabled for remote process write
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+    any:
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/os/syscall/raw::nt-write-ssn
+      - id: objectives/evasion/process/injection/toolkit::poolparty-toolkit
+    needs: 2
+    unless:
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+      - id: well-known/tool/reverse-engineering/
+      - id: metadata/binary/symbols/plugin/
+
+  - id: unsigned-template-debug-privilege-loader
+    desc: Unsigned template PE enables debug privilege for thread hijacking
+    crit: hostile
+    conf: 0.98
+    attack: T1134.001,T1055.003
+    for: [pe, dll]
+    all:
+      - id: metadata/build/manifest::pe-manifest-myapplication-template
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+      - id: micro-behaviors/process/create/spawn::open-process
+      - id: micro-behaviors/process/enumerate/psapi::enum-processes
+      - id: micro-behaviors/process/inject/runtime/call::get-thread-context-dup
+      - id: micro-behaviors/process/inject/runtime/call::set-thread-context-dup
+      - id: micro-behaviors/process/info/thread::resume-thread-dup
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/reverse-engineering/
+      # NativeAOT statically links the .NET runtime, whose startup/import
+      # surface includes these process and privilege APIs without performing
+      # thread hijacking. Preserve this chain for ordinary unsigned PEs.
+      - id: metadata/lang/compiler/aot

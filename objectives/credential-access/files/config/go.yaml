@@ -1,0 +1,110 @@
+# Go programs reading multiple sensitive credential files.
+# When a single Go program assembles paths under the user's home directory
+# and reads .npmrc / .netrc / .ssh keys / cloud creds, it is harvesting
+# developer credentials regardless of how the path strings are obfuscated.
+defaults:
+  platforms: [unix, windows]
+  for: [go]
+  attack: T1552.001
+  mbc: B0029
+traits:
+- id: home-dir-read--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    regex: 'os\.ReadFile\([^)]{0,80}HomeDir'
+  count_max: 1009220
+- id: home-dir-read--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    regex: 'filepath\.Join\([^)]{0,40}HomeDir[^)]{0,80}\)\s*\)'
+  count_max: 1009221
+- id: home-dir-read--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    regex: 'usr\.HomeDir[^)]{0,80}os\.ReadFile'
+  count_max: 1009222
+- id: home-dir-readfile-helper
+  desc: ReadFile call against a home-directory path
+  crit: component
+  conf: 0.85
+  count_min: 2
+  if:
+    type: text
+    regex: '\b\w*[Rr]ead[Ff]ile\s*\([^)]{0,200}(HomeDir|UserHomeDir|os\.Getenv\(\s*["`]HOME["`])'
+- id: npmrc-fragment
+  desc: .npmrc filename fragment
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: npmrc
+- id: netrc-fragment
+  desc: .netrc filename fragment
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: netrc
+  unless:
+  - type: text
+    substr: "UsageLine:"  # Go toolchain help documentation
+- id: kube-fragment
+  desc: kube config fragment
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: kube
+  unless:
+  # Kubernetes source code is full of "kube" references that have
+  # nothing to do with reading ~/.kube/config credential files.
+  - type: text
+    regex: 'k8s\.io/|kubernetes/|k8s\.io/client-go|"k8s\.'
+  - id: metadata/package/testing/
+composite_rules:
+- id: go-multi-credential-file-harvest
+  desc: Go program harvests multiple developer credential files
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: home-dir-readfile-helper
+  any:
+  - id: micro-behaviors/fs/path/sensitive/credentials
+  - id: npmrc-fragment
+  - id: netrc-fragment
+  - id: kube-fragment
+  needs: 2
+- id: go-homedir-credential-reader
+  desc: Go reads credential files joined to user HomeDir
+  crit: suspicious
+  conf: 0.92
+  # Reading a file under $HOME is what every CLI does (config, themes, cache).
+  # The suspicious signal is reading a CREDENTIAL store there, so require an
+  # actual credential target — not just a path that happens to contain the
+  # substring "HomeDir" (e.g. a var named `themeHomeDirPath`).
+  all:
+  - id: home-dir-read
+  - id: micro-behaviors/fs/file/read::os-readfile
+  any:
+  - id: micro-behaviors/fs/path/sensitive/credentials
+  - id: npmrc-fragment
+  - id: netrc-fragment
+  - id: objectives/credential-access/ssh/key::private-key-material
+  needs: 1
+- id: home-dir-read
+  desc: Reads file under user home directory
+  crit: component
+  conf: 0.85
+  any:
+  - id: home-dir-read--rx-1
+  - id: home-dir-read--rx-2
+  - id: home-dir-read--rx-3

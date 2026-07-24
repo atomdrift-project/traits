@@ -1,0 +1,233 @@
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  attack: "T1059.006"
+
+traits:
+- id: echo-cat-parameter-fstring
+  desc: Echo or cat parameter f-string
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'f["''](echo|cat) \{(command|filename)\}'
+
+- id: shell-interpreter-parameter-fstring
+  desc: Shell interpreter parameter f-string
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'f["''](sh|bash) \{(command|filename)\}'
+
+- id: echo-command-param-fstring
+  desc: Echo command from parameter
+  crit: component
+  conf: 0.94
+  mbc: "E1059"
+  if:
+    type: text
+    regex: 'full_command\s*=\s*f["'']echo \{command\}["'']'
+
+- id: cat-filename-param-fstring
+  desc: Cat command from filename
+  crit: component
+  conf: 0.94
+  mbc: "E1059"
+  if:
+    type: text
+    regex: 'cmd\s*=\s*f["'']cat \{filename\}["'']'
+
+- id: command-injection-comments
+  desc: Command injection vulnerability comments
+  crit: component
+  conf: 0.75
+  count_min: 2
+  if:
+    type: text
+    substr: command injection
+    case_insensitive: true
+
+- id: bash-network-command-call-argument
+  desc: Call argument contains bash network command
+  crit: component
+  conf: 0.9
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '(?is)\bbash\b.{0,40}-c\b.{0,120}\b(curl|wget|nc)\b'
+
+- id: bash-destructive-command-call-argument
+  desc: Call argument contains destructive bash command
+  crit: component
+  conf: 0.9
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '(?is)\bbash\b.{0,40}-c\b.{0,120}\b(chmod|eval|rm\s+-rf)\b'
+
+- id: bash-python-command-call-argument
+  desc: Call argument contains nested Python command
+  crit: component
+  conf: 0.9
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '(?is)\bbash\b.{0,40}-c\b.{0,120}\bpython[23]?\s+-c\b'
+
+- id: python-nslookup-payload
+  desc: Python embeds dynamic nslookup target
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: text
+    # A fixed diagnostic target (for example, host.docker.internal) is a
+    # normal connectivity check.  This rule is for command-shaped DNS
+    # payloads whose lookup target is assembled from data or shell syntax.
+    regex: '(?i)\bnslookup\s+([\$<{]|\{\s*[A-Za-z_]\w*\s*\}|[A-Za-z_]\w*\s*\+)'
+  unless:
+  - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+
+- id: python-dev-tcp-payload
+  desc: Python embeds dev-tcp endpoint
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: text
+    regex: '/dev/tcp/([A-Za-z0-9._-]+)/[0-9]{1,5}\b'
+  unless:
+  - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+  - id: metadata/package/testing/
+  - id: metadata/package/quality/false-positives::agent-utilities-library-context
+  - id: well-known/tool/offensive/decepticon::package-tree-member
+
+- id: shell-action-command-parameter
+  desc: Shell handler reads command parameter
+  crit: component
+  conf: 0.93
+  if:
+    type: text
+    regex: 'params\.get\(\s*["'']command["'']'
+
+composite_rules:
+- id: python-bash-network-payload
+  desc: Python executes bash network command
+  # A fixed curl/wget installer is a clear execution capability, but it is
+  # common in legitimate tool bootstrappers. Intent-specific suspicion comes
+  # from dynamic/untrusted command input or a higher-level exploit composite.
+  crit: notable
+  conf: 0.96
+  all:
+  - id: bash-network-command-call-argument
+  any:
+  - id: micro-behaviors/process/create/subprocess::run-ast
+  - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: micro-behaviors/process/create/subprocess::call-ast
+  - id: micro-behaviors/process/create/system::python-os-system
+  near_lines: 3
+  unless:
+  - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+  - id: well-known/app/ethan-agent::ethan-agent-server-module-context
+
+- id: python-bash-destructive-payload
+  desc: Python executes destructive bash command
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: bash-destructive-command-call-argument
+  any:
+  - id: micro-behaviors/process/create/subprocess::run-ast
+  - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: micro-behaviors/process/create/subprocess::call-ast
+  - id: micro-behaviors/process/create/system::python-os-system
+  near_lines: 3
+  unless:
+  - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+  - id: well-known/app/ethan-agent::ethan-agent-server-module-context
+
+- id: python-bash-python-payload
+  desc: Python executes nested Python via bash
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: bash-python-command-call-argument
+  any:
+  - id: micro-behaviors/process/create/subprocess::run-ast
+  - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: micro-behaviors/process/create/subprocess::call-ast
+  - id: micro-behaviors/process/create/system::python-os-system
+  near_lines: 3
+  unless:
+  - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+  - id: well-known/app/ethan-agent::ethan-agent-server-module-context
+
+- id: python-bash-command-payload
+  desc: Python executes a bash command payload
+  crit: notable
+  conf: 0.98
+  any:
+  - id: python-bash-network-payload
+  - id: python-bash-destructive-payload
+  - id: python-bash-python-payload
+- id: python-shell-command-injection
+  desc: Python passes an unguarded command to a shell
+  crit: suspicious
+  conf: 0.92
+  all:
+  - id: shell-action-command-parameter
+  - id: micro-behaviors/process/create/subprocess::variable-command-shell-true
+  unless:
+  - id: metadata/package/testing/
+  - id: micro-behaviors/process/create/shell/guard::python-whitelist-blocklist-shell-guard
+  near_lines: 80
+
+- id: python-web-request-shell-execution
+  desc: Web endpoint executes request command via shell
+  crit: hostile
+  conf: 0.99
+  attack: "T1059.006,T1190"
+  mbc: "B0024"
+  all:
+  - id: micro-behaviors/communications/http/server/request::http-post-endpoint
+  - id: micro-behaviors/process/create/subprocess::shell-true-call
+  any:
+  - id: micro-behaviors/communications/http/server/request::extract-from-request-form
+  - id: micro-behaviors/communications/http/server/request::extract-from-request-json
+  - id: micro-behaviors/communications/http/server/request::extract-from-request-data
+  near_lines: 35
+
+- id: python-skill-command-injection-tool
+  desc: Python skill command injection tool
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: fstring-shell-command-param
+  - id: echo-command-param-fstring
+  - id: cat-filename-param-fstring
+  - id: objectives/execution/interpreter/eval/dynamic::exec-open-read
+  - id: command-injection-comments
+  any:
+  - id: micro-behaviors/process/create/subprocess::shell-true
+  - id: micro-behaviors/process/create/subprocess::run-content
+  - id: micro-behaviors/process/create/system::python-os-system
+  unless:
+  - id: metadata/package/testing/
+- id: fstring-shell-command-param
+  desc: Parameter interpolated into shell command
+  crit: component
+  conf: 0.9
+  mbc: "E1059"
+  any:
+  - id: echo-cat-parameter-fstring
+  - id: shell-interpreter-parameter-fstring
+
+- id: python-shell-command-payload
+  desc: Python carries shell command payload
+  crit: notable
+  conf: 0.98
+  any:
+  - id: python-bash-command-payload
+  - id: python-nslookup-payload
+  - id: python-dev-tcp-payload
+  unless:
+  - id: well-known/tool/detection/llm-scanner::llm-scanner-context

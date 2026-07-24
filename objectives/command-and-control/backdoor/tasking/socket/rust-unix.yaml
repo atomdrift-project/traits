@@ -1,0 +1,135 @@
+defaults:
+  platforms: [unix, appliance]
+  for: [rust, elf]
+  attack: T1059
+  mbc: B0030
+
+traits:
+  - id: rust-binary-beacon-magic
+    desc: Rust binary beacon magic
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      substr: HEARTBEAT_MAGIC
+
+  - id: rust-framed-rx-fx-protocol
+    desc: Rust framed RX FX protocol
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      regex: 'b''R''[\s\S]{0,120}b''X''[\s\S]{0,220}b''F'''
+
+  - id: rust-rx-fx-header-bytes
+    desc: Rust RX FX header bytes
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: 'b''R''[\s\S]{0,120}b''X'''
+
+  - id: rust-fx-header-bytes
+    desc: Rust FX header bytes
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      substr: "b'F'"
+
+  - id: rust-exfil-command-token
+    desc: Rust EXFIL command token
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      substr: "EXFIL:"
+
+  # Spawning `sh -c` is a generic process-execution capability — notable, not
+  # suspicious alone. The socket-tasking intent is the composite (beacon magic
+  # + RX/FX framing + exfil/shell-exec together).
+  - id: rust-symbol-send-beacon
+    desc: Rust native send_beacon symbol
+    crit: component
+    conf: 0.88
+    for: [elf]
+    if:
+      type: symbol
+      regex: '(^|::)send_beacon(\.|::|$)'
+
+  - id: rust-symbol-execute-command
+    desc: Rust native execute_command symbol
+    crit: component
+    conf: 0.88
+    for: [elf]
+    if:
+      type: symbol
+      regex: '(^|::)execute_command(\.|::|$)'
+
+  - id: rust-symbol-exfiltrate-file
+    desc: Rust native exfiltrate_file symbol
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: symbol
+      regex: '(^|::)exfiltrate_file(\.|::|$)'
+
+  - id: rust-symbol-install-persistence
+    desc: Rust native install_persistence symbol
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: symbol
+      regex: '(^|::)install_persistence(\.|::|$)'
+
+  - id: rust-symbol-gather-system-info
+    desc: Rust native gather_system_info symbol
+    crit: component
+    conf: 0.88
+    for: [elf]
+    if:
+      type: symbol
+      regex: '(^|::)gather_system_info(\.|::|$)'
+
+composite_rules:
+  - id: rust-native-tasking-symbol-cluster
+    desc: Rust native tasking symbol cluster
+    crit: hostile
+    conf: 0.96
+    for: [elf]
+    all:
+      - id: rust-symbol-send-beacon
+      - id: rust-symbol-execute-command
+    any:
+      - id: rust-symbol-exfiltrate-file
+      - id: rust-symbol-install-persistence
+      - id: rust-symbol-gather-system-info
+    needs: 2
+
+  - id: rust-framed-socket-tasking
+    desc: Rust framed socket tasking
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: rust-binary-beacon-magic
+      - id: rust-rx-fx-header-bytes
+      - id: rust-fx-header-bytes
+    any:
+      - id: rust-exfil-command-token
+      - id: micro-behaviors/process/create/shell/runner::rust-shell-command-exec
+      - id: micro-behaviors/communications/socket/connect::tcpstream-connect-timeout
+
+  - id: rust-unix-socket-eval-command-channel
+    desc: Rust Unix socket eval channel
+    crit: hostile
+    conf: 0.99
+    mbc: B0022
+    all:
+      - id: micro-behaviors/communications/ipc/unix-socket::unix-listener-bind
+      - id: micro-behaviors/communications/ipc/unix-socket::unix-listener-accept
+      - id: micro-behaviors/communications/ipc/unix-socket::unix-stream-read
+      - id: objectives/execution/interpreter/eval/dynamic::rust-evaluator-reentry
+    unless:
+      - id: well-known/app/yom::yom-core-hook-context

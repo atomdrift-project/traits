@@ -1,0 +1,222 @@
+defaults:
+  # Batch droppers often embed the AES stage as a PowerShell here-string /
+  # labeled region; keep these atoms on both so invoice/Rechnung-style
+  # multi-stage bats are not invisible to encrypted-stage composites.
+  for: [powershell, batch]
+  platforms: [windows]
+  attack: T1027
+  mbc: C0025
+traits:
+- id: aes-create
+  desc: .NET AES object creation
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    substr: '[System.Security.Cryptography.Aes]::Create'
+- id: rijndael-managed-create
+  desc: RijndaelManaged decryptor object
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: text
+    substr: System.Security.Cryptography.RijndaelManaged
+- id: create-decryptor
+  desc: AES decryptor creation
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    substr: CreateDecryptor
+- id: multiple-base64-literals
+  desc: Multiple embedded base64 literals
+  crit: component
+  conf: 0.86
+  count_min: 3
+  if:
+    type: string_literal
+    regex: '^[A-Za-z0-9+/]{20,}={0,2}$'
+- id: crypto-stream-read
+  desc: CryptoStream read mode
+  crit: suspicious
+  conf: 0.86
+  if:
+    type: text
+    substr: CryptoStreamMode]::Read
+- id: decrypt-aes-function
+  desc: Decrypt-AES helper function
+  crit: suspicious
+  conf: 0.86
+  if:
+    type: text
+    regex: '(?i)function\s+Decrypt-AES\b'
+- id: decrypt-aes-chunk-accumulator
+  desc: Repeated AES chunk accumulation
+  crit: suspicious
+  conf: 0.94
+  count_min: 8
+  if:
+    type: text
+    substr: Decrypt-AES
+- id: empty-string-join
+  desc: Joins strings with empty delimiter
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '\[string\]::Join\(\s*''''\s*,\s*\$[A-Za-z_][A-Za-z0-9_]*\s*\)'
+- id: iex-finalscript
+  desc: "Invoke-Expression on reconstructed final"
+  crit: suspicious
+  conf: 0.93
+  if:
+    type: text
+    # Match reconstructed stage vars ($finalScript, $payload, …). Do not match
+    # bare $cmd — that is ordinary automation Invoke-Expression.
+    regex: 'Invoke-Expression\s+\$(final\w*|payload\w*|decrypted\w*)'
+- id: encoded-powershell-bxor
+  desc: Encoded PowerShell XOR operation
+  crit: suspicious
+  conf: 0.9
+  for: [powershell, vbs, html, batch, lnk]
+  if:
+    type: encoded
+    encoding: base64
+    substr: '-bxor'
+- id: encoded-powershell-modulo-rotation
+  desc: Encoded PowerShell modulo rotation update
+  crit: suspicious
+  conf: 0.86
+  for: [powershell, vbs, html, batch, lnk]
+  if:
+    type: encoded
+    encoding: base64
+    regex: '(?i)rotation\w*.{0,80}%\s*\d+'
+composite_rules:
+- id: decrypted-string-join
+  desc: Joins chunks after PowerShell decryption
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: empty-string-join
+  any:
+  - id: decrypt-aes-function
+  - id: crypto-stream-read
+  - id: create-decryptor
+  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  near_bytes: 1000
+- id: ps-aes-iex-stage-loader
+  desc: PowerShell AES-decrypts an embedded stage and evaluates it
+  crit: hostile
+  conf: 0.99
+  attack: T1027,T1059.001
+  mbc: C0025,E1059
+  all:
+  - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-aes-csp
+  - id: micro-behaviors/crypto/symmetric/aes/script::powershell-crypto-stream-write
+  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  any:
+  - id: micro-behaviors/process/interpreter/eval::powershell-iex-call
+  - id: micro-behaviors/process/interpreter/eval::embedded-powershell-iex
+- id: ps-base32-aes-embedded-stage
+  desc: Base32 and AES embedded PowerShell stage
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: micro-behaviors/data/decode/base32::ps-custom-base32-decoder
+  - id: aes-create
+  - id: create-decryptor
+  any:
+  - id: metadata/binary/metrics/encoded::large-embedded-b64-blob
+  - id: multiple-base64-literals
+- id: ps-aes-inline-payload
+  desc: AES-decrypts embedded payload
+  crit: suspicious
+  conf: 0.94
+  all:
+  - id: create-decryptor
+  any:
+  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  - id: multiple-base64-literals
+  - id: aes-create
+  - id: rijndael-managed-create
+  - id: micro-behaviors/crypto/symmetric/aes/script::powershell-crypto-stream-write
+  - id: crypto-stream-read
+  - id: micro-behaviors/fs/write/file/direct::write-all-text
+  needs: 2
+- id: ps-aes-chunked-stage-loader
+  desc: AES-decrypts many embedded chunks and evals the joined script
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: ps-aes-inline-payload
+  - id: decrypt-aes-function
+  - id: decrypt-aes-chunk-accumulator
+  - id: decrypted-string-join
+  - id: iex-finalscript
+- id: ps-document-masquerade-stage-loader
+  desc: Document-masqueraded encrypted PowerShell stage loader
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: ps-aes-chunked-stage-loader
+  - id: objectives/evasion/masquerade/file/double-ext::pdf-double-extension-ps1
+- id: ps-encoded-xor-eval-stage-loader
+  desc: Encoded PowerShell XOR-decodes and evaluates a stage
+  crit: hostile
+  conf: 0.97
+  for: [powershell, vbs, html, batch, lnk]
+  all:
+  - id: micro-behaviors/data/decode/base64::encoded-dotnet-frombase64string-text
+  - id: encoded-powershell-bxor
+  - id: encoded-powershell-modulo-rotation
+  any:
+  - id: objectives/execution/interpreter/eval/invoke::encoded-iex
+  - id: objectives/execution/interpreter/eval/invoke::encoded-scriptblock-create
+
+- id: ps-custom-base32-stage-loader
+  desc: Custom base32 PowerShell stage loader
+  crit: hostile
+  conf: 0.99
+  all:
+    - id: micro-behaviors/data/decode/base32::ps-custom-base32-decoder
+    - id: micro-behaviors/process/interpreter/eval::powershell-iex-call
+    - id: metadata/file/metrics::powershell-long-line
+    - id: micro-behaviors/data/decode/base32::ps-custom-base32-carrier
+- id: ps-base64-rc4-gzip-stage-loader
+  desc: PowerShell Base64 RC4 gzip stage loader
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  - id: micro-behaviors/crypto/symmetric/xor/rotational::rotation-counter-update
+  - id: micro-behaviors/data/compress/library::gzip-decompress-to-text
+  - id: objectives/execution/interpreter/eval/invoke::call-operator-get-command-scriptblock
+
+- id: ps-task-argument-keyed-scriptblock-stager
+  desc: Base64/XOR scheduled-task-keyed ScriptBlock stager
+  crit: hostile
+  conf: 0.99
+  attack: T1027,T1059.001,T1053.005
+  mbc: B0032,E1059,F0012
+  all:
+  - id: micro-behaviors/os/autorun/scheduled::powershell-scheduled-task-arguments
+  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  - id: micro-behaviors/crypto/symmetric/xor/loop::repeating-key-indexed-bxor-loader
+  - id: micro-behaviors/process/interpreter/eval::powershell-scriptblock-constructor
+
+# BAT→PS stagers that AES-CBC decrypt a hex blob, WriteAllBytes a temp
+# payload, and start it Hidden. Catches MulDrop / invoice-lure families that
+# keep the decryptor in an embedded PowerShell region of a .bat.
+- id: batch-aes-hex-decrypt-dropper
+  desc: Batch AES-decrypts hex blob and drops it
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1059.001,T1059.003
+  mbc: C0025,B0030
+  for: [batch]
+  all:
+  - id: aes-create
+  - id: create-decryptor
+  - id: micro-behaviors/fs/write/file/direct::write-all-bytes
+  - id: micro-behaviors/process/create/hidden::windowstyle-hidden

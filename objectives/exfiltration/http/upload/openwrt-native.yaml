@@ -1,0 +1,139 @@
+defaults:
+  platforms: [openwrt]
+  for: [c, cpp, objc, rust, elf]
+  attack: T1041
+  mbc: E1567
+traits:
+  - id: openwrt-release-recon-path
+    desc: OpenWrt release or banner file collection
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '/etc/(openwrt_release|banner)'
+  - id: openwrt-uci-recon-command
+    desc: OpenWrt UCI network discovery command
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '\buci show (network|wireless|dhcp)\b'
+  - id: native-http-message-api-path
+    desc: Native HTTP message API path
+    crit: notable
+    conf: 0.86
+    if:
+      type: text
+      regex: '/api/v[0-9]+/messages\b'
+  - id: native-elf-account-file-path
+    desc: Native ELF account exfil marker
+    crit: notable
+    conf: 0.86
+    for: [elf]
+    if:
+      type: text
+      regex: '\[(passwd|shadow)\]'
+  - id: native-http-content-length
+    desc: Native HTTP Content-Length header
+    crit: component
+    conf: 0.82
+    if:
+      type: text
+      substr: "Content-Length:"
+composite_rules:
+  - id: openwrt-native-host-profile-http-exfil
+    desc: OpenWrt native host profile exfiltration over HTTP
+    crit: hostile
+    conf: 0.96
+    scope: outer
+    all:
+      - id: openwrt-release-recon-path
+      - id: micro-behaviors/fs/proc/profile::host-profile-path-set
+      - id: micro-behaviors/communications/http/endpoints::ingest-api-path
+    any:
+      - id: micro-behaviors/communications/http/post::native-post-request-line
+      - id: micro-behaviors/communications/http/get::get
+      - id: native-http-content-length
+      - id: micro-behaviors/communications/socket/connect::connect-symbol
+    needs: 2
+  - id: openwrt-uci-host-profile-http-exfil
+    desc: OpenWrt UCI host profile exfiltration over HTTP
+    crit: hostile
+    conf: 0.95
+    scope: outer
+    all:
+      - id: openwrt-uci-recon-command
+      - id: micro-behaviors/communications/http/endpoints::ingest-api-path
+    any:
+      - id: micro-behaviors/communications/http/post::native-post-request-line
+      - id: micro-behaviors/communications/http/get::get
+      - id: native-http-content-length
+      - id: micro-behaviors/communications/socket/connect::connect-symbol
+    needs: 2
+  - id: openwrt-native-account-config-http-exfil
+    desc: OpenWrt account config exfiltration over HTTP
+    crit: hostile
+    conf: 0.96
+    scope: outer
+    all:
+      - id: openwrt-sensitive-config-path
+      - id: micro-behaviors/communications/http/endpoints::native-http-collect-path
+      - id: micro-behaviors/communications/http/post::native-post-request-line
+    any:
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd
+      - id: native-elf-account-file-path
+      - id: micro-behaviors/fs/path/sensitive/credentials::ssh-private-key
+      - id: micro-behaviors/fs/path/sensitive/credentials::ssh-authorized-keys
+      - id: micro-behaviors/fs/path/sensitive/credentials::hidden-temp-secret-path
+      - id: openwrt-sensitive-config-path
+      - id: native-http-content-length
+    needs: 3
+  - id: openwrt-native-message-api-http-exfil
+    desc: OpenWrt message API HTTP exfil
+    crit: hostile
+    conf: 0.96
+    scope: outer
+    all:
+      - id: native-http-message-api-path
+      - id: objectives/credential-access/theft/file::openwrt-native-credential-config-harvest
+    any:
+      - id: micro-behaviors/communications/http/download/curl::curl-easy-perform
+      - id: micro-behaviors/communications/http/download/curl::curl-easy-setopt
+      - id: micro-behaviors/communications/http/download/curl::curl-slist-append
+    needs: 2
+  - id: openwrt-rust-system-http-exfil
+    desc: OpenWrt Rust system HTTP exfil
+    crit: hostile
+    conf: 0.96
+    scope: outer
+    all:
+      - id: micro-behaviors/communications/http/endpoints::native-http-collect-path
+      - id: objectives/discovery/host/fingerprint::openwrt-rust-host-inventory
+      - id: micro-behaviors/communications/http/lib/crate::ureq-crate
+    any:
+      - id: micro-behaviors/fs/file/write/direct::rust-write-all
+      - id: micro-behaviors/communications/socket/connect::tcpstream-connect-timeout
+      - id: micro-behaviors/communications/http/post::native-post-request-line
+    needs: 1
+  - id: openwrt-native-account-email-http-exfil
+    desc: OpenWrt account email HTTP exfiltration
+    crit: hostile
+    conf: 0.97
+    scope: outer
+    all:
+      - id: micro-behaviors/communications/http/post::native-post-request-line
+      - id: native-http-content-length
+      - id: micro-behaviors/data/format/string::native-email-record-label
+      - id: micro-behaviors/data/format/string::native-account-record-label
+    any:
+      - id: micro-behaviors/communications/socket/connect::connect-symbol
+      - id: micro-behaviors/communications/socket/send::send-symbol
+      - id: micro-behaviors/communications/ip/resolve::resolve-getaddrinfo
+  - id: openwrt-sensitive-config-path
+    desc: OpenWrt sensitive config path
+    crit: notable
+    conf: 0.88
+    any:
+      - id: micro-behaviors/fs/path/config/system::openwrt-network-config-path
+      - id: micro-behaviors/fs/path/config/system::openwrt-service-config-path
+      - id: micro-behaviors/fs/path/config/system::openwrt-system-config-path

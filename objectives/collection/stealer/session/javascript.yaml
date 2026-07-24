@@ -1,0 +1,141 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript]
+  attack: T1539
+  crit: suspicious
+
+traits:
+- id: private-key-endpoint
+  desc: Private key retrieval endpoint
+  crit: suspicious
+  conf: 0.97
+  if:
+    type: literal
+    regex: '\b(Visitor|User|Admin)/GetPrivateKey\b'
+
+- id: jwt-payload-decode
+  desc: JWT payload segment extraction
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: '\b(jwt|token)\w*\.split\(\s*["'']\.\s*["'']\s*\)\s*\[1\]'
+
+- id: decodeuricomponent-atob-chain
+  desc: decodeURIComponent on atob output
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: '\bdecodeURIComponent\s*\([^)]{0,40}atob\s*\(|\batob.{0,40}decodeURIComponent'
+  not:
+  - substr: base64
+  - substr: token.split
+  unless:
+  - type: basename
+    exact: open-jssdk.es.js
+  - type: text
+    substr: ASSET_PRESETS
+
+- id: authenticated-blob-download
+  desc: Authenticated blob download workflow
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: text
+    regex: '(Authorization|Bearer).{0,40}responseType:\s*["'']blob["'']'
+
+composite_rules:
+- id: browser-jwt-session-persistence
+  desc: Broad-host extension reuses JWT from browser storage
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: micro-behaviors/data/db/web-storage::jwt-key-read
+  - id: micro-behaviors/communications/http/request/client::bearer-header-from-storage
+  - id: metadata/permission/host::broad-host-access
+
+- id: browser-jwt-token-introspection
+  desc: Browser JWT token introspection
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: browser-jwt-session-persistence
+  - id: jwt-payload-decode
+  any:
+  - id: decodeuricomponent-atob-chain
+  - id: micro-behaviors/communications/http/url/path::session-refresh-endpoint
+  unless:
+  - id: micro-behaviors/communications/http/oauth/
+
+- id: browser-private-key-harvest
+  desc: Browser private key harvesting flow
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: private-key-endpoint
+  - id: browser-jwt-session-persistence
+  any:
+  - id: micro-behaviors/communications/http/url/path::public-key-retrieval-endpoint
+  - id: browser-jwt-token-introspection
+
+- id: token-and-key-session-harvest
+  desc: Token refresh with key retrieval
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: private-key-endpoint
+  - id: micro-behaviors/communications/http/url/path::session-refresh-endpoint
+  - id: micro-behaviors/communications/http/request/client::bearer-header-from-storage
+  any:
+  - id: micro-behaviors/data/db/web-storage::jwt-key-write
+  - id: jwt-payload-decode
+
+- id: browser-bearer-session-replay
+  desc: Browser bearer session replay
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: micro-behaviors/communications/http/request/client::bearer-header-from-storage
+  - id: browser-jwt-session-persistence
+  - id: micro-behaviors/data/db/web-storage::jwt-key-read
+
+- id: browser-session-refresh-replay
+  desc: Browser session refresh replay
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: micro-behaviors/communications/http/request/client::bearer-header-from-storage
+  - id: micro-behaviors/communications/http/url/path::session-refresh-endpoint
+  - id: micro-behaviors/data/db/web-storage::jwt-key-read
+  any:
+  - id: browser-jwt-token-introspection
+  - id: micro-behaviors/data/db/web-storage::jwt-key-write
+
+- id: browser-authenticated-file-replay
+  desc: Browser authenticated file replay
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: micro-behaviors/communications/http/request/client::bearer-header-from-storage
+  - id: micro-behaviors/data/db/web-storage::jwt-key-read
+  - id: authenticated-blob-download
+  any:
+  - id: micro-behaviors/communications/http/download/handler::browser-forced-download
+  - id: browser-jwt-session-persistence
+
+# REMOVED: `browser-cookie-derived-auth-replay` (hostile).
+#
+# Its only distinguishing leg was the vendor-specific `node-kimi-auth-cookie-sql`
+# composite (since deleted), paired with "sends a Bearer header". Stripped of
+# the hardcoded vendor strings the rule reduces to "reads a cookie from the
+# browser store and then authenticates with it" — which is precisely what a
+# legitimate CLI that reuses your existing browser login does, and there are
+# many of those. Replaying a cookie to the very service that issued it is using
+# that service, not stealing from it.
+#
+# Real session theft is separated by breadth and destination: dumping the
+# cookies table rather than selecting one first-party name, and shipping the
+# result to a host unrelated to the cookie's owner. Those are carried by the
+# broader stealer composites in this directory, which require a harvest source
+# plus an exfiltration sink.

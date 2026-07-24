@@ -1,0 +1,179 @@
+defaults:
+  platforms: [windows, linux, macos]
+  mbc: C0026
+  attack: T1090.003
+traits:
+  - id: bine-import
+    desc: cretz/bine Tor library import
+    crit: notable
+    conf: 0.95
+    for:
+      - go
+    if:
+      type: symbol
+      kind: import
+      regex: github\.com/cretz/bine
+  - id: bine-string
+    desc: cretz/bine Tor library in binary
+    crit: notable
+    conf: 0.9
+    for: [go, go.mod, elf, macho, pe]
+    if:
+      type: text
+      regex: github\.com/cretz/bine
+  - id: tor-dialer
+    desc: Tor Dialer creation
+    crit: notable
+    conf: 0.9
+    for:
+      - go
+    if:
+      type: symbol
+      kind: call
+      regex: tor\.(Dialer|NewDialer)
+    unless:
+      - id: well-known/app/olares::cli-source-tree
+  - id: tor-start
+    desc: Tor process start
+    crit: notable
+    conf: 0.9
+    for:
+      - go
+    if:
+      type: symbol
+      kind: call
+      exact: tor.Start
+  - id: listen-hidden-service
+    desc: Tor hidden service listener
+    crit: suspicious
+    conf: 0.95
+    for:
+      - go
+    if:
+      type: string_literal
+      word: HiddenServicePort
+  - id: onion-key
+    desc: Tor onion service key handling
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, binaries]
+    if:
+      type: text
+      exact: hs_private
+    unless:
+      - id: metadata/package/files/system-package::java-runtime-native-library
+      - id: well-known/lib/jvm/
+      - id: well-known/tool/development/bazel-diff::bazel-diff-bzlmod-test-fixture
+      # HotSpot uses hs_private for its DTrace provider and embeds that name
+      # in libjvm; neither is Tor key handling.
+      - type: path
+        regex: '(?i)([\\/]src[\\/]hotspot[\\/]|[\\/]lib[\\/]server[\\/]libjvm\\.(so|dylib)$)'
+  - id: go-libtor
+    desc: go-libtor embedded Tor
+    crit: suspicious
+    conf: 0.95
+    for: [scripts, binaries]
+    if:
+      type: text
+      substr: go-libtor
+    unless:
+      - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+  - id: ntor-handshake-suite
+    desc: Tor NTOR handshake suite
+    crit: suspicious
+    conf: 0.94
+    for: [pe]
+    platforms: [windows]
+    if:
+      type: text
+      exact: ntor-curve25519-sha256-1
+  - id: tor-cell-runtime
+    desc: Tor cell transport runtime
+    crit: suspicious
+    conf: 0.92
+    for: [pe]
+    platforms: [windows]
+    if:
+      type: text
+      regex: tor_socket::(send_cell|recv_cell)\(
+  - id: tor-ntor-circuit
+    desc: Tor NTOR circuit operations
+    crit: suspicious
+    conf: 0.92
+    for: [pe]
+    platforms: [windows]
+    if:
+      type: text
+      regex: circuit::(create|extend)_ntor\(
+  - id: consensus-directory-path
+    desc: Tor consensus directory path
+    crit: notable
+    conf: 0.9
+    for: [pe]
+    platforms: [windows]
+    if:
+      type: text
+      exact: /tor/status-vote/current/consensus
+composite_rules:
+  - id: tor-library
+    desc: Tor library usage
+    crit: notable
+    conf: 0.9
+    any:
+      - id: bine-import
+      - id: bine-string
+      - id: go-libtor
+    unless:
+      - id: well-known/app/sing-box::source-tree
+  - id: tor-operations
+    desc: Tor network operations
+    crit: notable
+    conf: 0.85
+    any:
+      - id: tor-dialer
+      - id: tor-start
+  - id: hidden-service-setup
+    desc: Hidden service configuration
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: listen-hidden-service
+      - id: onion-key
+  - id: tor-client
+    desc: Tor client connectivity
+    crit: notable
+    conf: 0.9
+    all:
+      - id: tor-library
+      - id: tor-operations
+    unless:
+      - id: well-known/app/sing-box::source-tree
+  - id: tor-hidden-service
+    desc: Tor hidden service setup
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: tor-library
+      - id: hidden-service-setup
+  - id: tor-hidden-service-runtime
+    desc: Tor hidden service client runtime
+    crit: suspicious
+    conf: 0.95
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: ntor-handshake-suite
+    any:
+      - id: tor-cell-runtime
+      - id: tor-ntor-circuit
+      - id: consensus-directory-path
+
+  - id: tor-wallet-bot-binary
+    desc: Bot-style binary combines Tor C2 and wallet targeting
+    crit: hostile
+    conf: 0.99
+    for: [elf]
+    all:
+      - id: objectives/command-and-control/channel/tor/hidden-service::embedded-onion-endpoint
+      - id: micro-behaviors/os/sysinfo/platform/string::arch-suffix-bot
+      - id: objectives/impact/crypto-manipulation/keystore::native-bitcoin-wallet-paths

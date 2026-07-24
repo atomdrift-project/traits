@@ -1,0 +1,188 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - python
+    - pyc
+traits:
+  - id: pyc-huge-string-constant
+    desc: Python bytecode huge string constant
+    crit: component
+    conf: 0.9
+    if:
+      type: metrics
+      field: binary.max_string_length
+      min: 1048576
+  - id: pyc-few-sentence-strings
+    desc: Python bytecode few sentence strings
+    crit: component
+    conf: 0.75
+    if:
+      type: metrics
+      field: binary.sentence_string_ratio
+      max: 0.05
+  - id: pyc-extreme-line-length
+    desc: Python bytecode extreme line length
+    crit: component
+    conf: 0.8
+    if:
+      type: metrics
+      field: text.max_line_length
+      min: 1048576
+  - id: exec-word
+    desc: exec keyword
+    crit: component
+    for: [pyc]
+    if:
+      id: micro-behaviors/process/interpreter/python::exec-builtin
+  - id: eval-word
+    desc: eval keyword
+    crit: component
+    for: [pyc]
+    if:
+      type: string_literal
+      word: eval
+  - id: import-dunder
+    desc: __import__ function
+    crit: component
+    if:
+      type: string_literal
+      substr: __import__
+  - id: unhexlify-word
+    desc: unhexlify function
+    crit: component
+    if:
+      type: string_literal
+      substr: unhexlify
+  - id: open-file-ref
+    desc: open(__file__ call
+    crit: component
+    if:
+      type: text
+      substr: open(__file__
+  - id: open-file-sp-ref
+    desc: open( __file__ call (with space)
+    crit: component
+    if:
+      type: text
+      substr: open( __file__
+  - id: open-abspath-ref
+    desc: open(os.path.abspath(__file__) call
+    crit: component
+    if:
+      type: text
+      substr: open(os.path.abspath(__file__)
+  - id: compile-word
+    desc: compile keyword
+    crit: component
+    if:
+      type: string_literal
+      word: compile
+  - id: marshal-word
+    desc: marshal module
+    crit: component
+    if:
+      type: string_literal
+      word: marshal
+  - id: setuptools-word
+    desc: setuptools package
+    crit: component
+    if:
+      type: string_literal
+      substr: setuptools
+  - id: pyobfuscate-pyc-marker
+    desc: PyObfuscate payload with embedded 'pyc' string
+    crit: component
+    if:
+      type: text
+      regex: "'pyc'\\s*:\\s*\"\"\""
+composite_rules:
+  - id: pyobfuscate-pyc-payload
+    desc: PyObfuscate payload with embedded 'pyc' string
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: pyobfuscate-pyc-marker
+      - id: objectives/anti-static/obfuscation/obfuscator/signature::pyobfuscate-signature
+
+  - id: bytecode-disguised-as-source
+    desc: Python bytecode disguised as source
+    crit: suspicious
+    conf: 0.97
+    mbc: B0032
+    attack: T1036.008
+    all:
+      - id: metadata/file/extension/identity::python-source-extension
+      - id: metadata/file/magic/identity::pyc-magic
+  - id: bytecode-large-embedded-payload
+    desc: Python bytecode with embedded payload
+    crit: suspicious
+    conf: 0.93
+    mbc: B0032
+    attack: T1027
+    all:
+      - id: metadata/file/magic/identity::pyc-magic
+      - id: pyc-huge-string-constant
+      - id: pyc-few-sentence-strings
+    any:
+      - id: pyc-extreme-line-length
+      - id: objectives/anti-static/obfuscation/encoding/custom::slash-delimited-utf8-hex
+  - id: bytecode-exec-eval-import
+    desc: Bytecode with exec eval and __import__
+    crit: suspicious
+    conf: 0.85
+    mbc: E1059
+    attack: T1059
+    all:
+      - id: exec-word
+      - id: eval-word
+      - id: import-dunder
+      - id: unhexlify-word
+  - id: opens-self-file
+    desc: Opens own file reference
+    crit: component
+    any:
+      - id: open-file-ref
+      - id: open-file-sp-ref
+      - id: open-abspath-ref
+  - id: exec-functions
+    desc: Code execution functions
+    crit: component
+    any:
+      - id: exec-word
+      - id: eval-word
+      - id: compile-word
+  - id: decode-functions
+    desc: Decoding/deserialization functions
+    crit: component
+    any:
+      - id: marshal-word
+      - id: micro-behaviors/data/compress/library::zlib-signature
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: unhexlify-word
+      - id: import-dunder
+  - id: bytecode-self-reader
+    desc: Bytecode reads own file for payload
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027
+    all:
+      - id: micro-behaviors/dylib/load/runtime::python-file-dunder
+      - id: opens-self-file
+      - id: exec-functions
+      - id: decode-functions
+    unless:
+      - id: setuptools-word
+  - id: bytecode-payload-execution
+    desc: Compiled bytecode payload execution pipeline
+    crit: hostile
+    conf: 0.95
+    mbc: B0032
+    attack: T1027
+    all:
+      - id: bytecode-exec-eval-import
+      - id: bytecode-self-reader
+    any:
+      - id: unhexlify-word
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
+      - id: objectives/anti-static/obfuscation/obfuscator/signature::known-obfuscator-detected

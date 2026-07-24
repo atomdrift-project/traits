@@ -1,0 +1,110 @@
+# Timing and Delay Tactics Detection
+# Detects sleep/delay functions used for evasion or rate limiting
+# ATT&CK: T1497.003 (Virtualization/Sandbox Evasion: Time Based Evasion)
+defaults:
+  platforms: [unix, windows, macos]
+  attack: "T1497.003"
+  mbc: "B0003.005"
+  crit: notable
+traits:
+# sleep/usleep/nanosleep: use micro-behaviors/time/query::sleep-func etc. (canonical)
+# clock_gettime/gettimeofday: use micro-behaviors/time/query/legacy (canonical)
+composite_rules:
+  # Timing measurement
+  # NOTE: clock_gettime and gettimeofday are extremely common in legitimate software
+  # including graphics/video libraries (frame timing), database systems (query timing),
+  # profilers, async I/O libraries (event scheduling), and any application that
+  # measures performance.
+  - id: timing-measurement
+    desc: Execution time measurement APIs
+    crit: notable
+    conf: 0.4
+    any:
+      - id: micro-behaviors/time/query::clock_gettime
+      - id: micro-behaviors/time/query::gettimeofday
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+  # Delay with network = evasion or C2 beaconing
+  # NOTE: nanosleep + socket is extremely common in any network program.
+  # This pattern alone is NOT suspicious - nearly all network tools use this.
+  # Per the note above, sleep+socket alone is NOT suspicious — pacman, cargo, fio,
+  # clamonacc and nearly every network tool sleep and talk to sockets. Criticality
+  # now matches that documented reality (was incorrectly `suspicious`).
+  - id: delay-with-network
+    desc: Network communication with delay APIs
+    crit: notable
+    conf: 0.5
+    all:
+      - id: micro-behaviors/time/query::sleep
+    any:
+      - id: micro-behaviors/communications/socket/create::client-comp
+      - id: micro-behaviors/communications/socket/create::client-macos
+      - id: micro-behaviors/communications/http/download/curl::libcurl-http
+    unless:
+      # Go programs use usleep/sleep for scheduler yielding and network polling,
+      # and socket is universal. This pattern has no evasion signal in Go binaries.
+      - id: metadata/lang/compiler/systems::go-version-string
+      - id: metadata/lang/compiled/
+      - id: micro-behaviors/communications/http/server/listener::libmicrohttpd-start-daemon
+      - id: micro-behaviors/communications/http/server/listener::libmicrohttpd-start-daemon
+      - id: micro-behaviors/os/event/library/tokio::tokio-crate-path
+      - id: metadata/binary/linking/runtime::dotnet-host-runtime
+      - id: metadata/signed/platform::apple
+      - id: metadata/file/string/identity::system-shell-basename
+  - id: nt-delay-with-debug-check
+    desc: Native delay with anti-debug check
+    crit: suspicious
+    conf: 0.9
+    for: [pe, dll]
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/time/timing/delay::nt-delay-execution
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
+      - id: micro-behaviors/os/api-resolution/hash-based::peb-fs-access
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+      - id: well-known/tool/sysadmin/systeminformer
+  # Timing measurement + delay = sandbox evasion
+  # NOTE: clock_gettime + nanosleep is extremely common in legitimate software.
+  # This pattern alone is NOT suspicious - nearly all async I/O uses this.
+  # Only suspicious when combined with actual anti-analysis indicators.
+  - id: timing-evasion
+    desc: Timing measurement with delay APIs
+    crit: notable
+    conf: 0.5
+    all:
+      - id: timing-measurement
+      - id: micro-behaviors/time/query::sleep
+    unless:
+      - id: objectives/anti-analysis/timing/evasion/
+      - id: well-known/tool/development/profiler
+      - id: well-known/app/drivers/
+
+  - id: opaque-writable-pe-delayed-termination
+    desc: Opaque writable PE delays then terminates
+    crit: hostile
+    conf: 0.97
+    attack: T1027.002,T1497.003
+    mbc: B0032
+    for: [pe, dll]
+    platforms: [windows]
+    size_min: 32768
+    all:
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: metadata/binary/metrics/threshold::high-overall-entropy-binary
+      - id: metadata/binary/section/metrics::writable-text-section
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
+      - id: metadata/binary/symbols/imports::pe-imports-max-six
+      - id: micro-behaviors/time/timing/delay::sleep-dup
+      - id: micro-behaviors/process/terminate/kill::exit-process
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/framework/
+      - id: metadata/binary/installer/family/
+      - id: well-known/app/protected-benign-pe/

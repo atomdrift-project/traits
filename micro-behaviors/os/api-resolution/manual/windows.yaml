@@ -1,0 +1,227 @@
+defaults:
+  for:
+    - c
+    - cpp
+    - pe
+    - dll
+  platforms:
+    - windows
+  attack: T1027.007
+traits:
+  - id: export-table-label
+    desc: ExportTable parser label
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      word: ExportTable
+  - id: nt-current-teb
+    desc: Access current TEB directly
+    crit: notable
+    conf: 0.88
+    if:
+      type: symbol
+      kind: call
+      exact: NtCurrentTeb
+  - id: x64-peb-access-immediate
+    desc: Access PEB via GS register immediate
+    crit: notable
+    conf: 0.9
+    for: [pe, dll]
+    if:
+      type: hex
+      section: text
+      pattern: "41 B? 60 00 00 00 65 4? 8B ??"
+  - id: peb-ldr-data
+    desc: Access PEB loader data
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: \bP+EB_LDR_DATA\b|\bPEB_LDR_DATA\b
+  - id: module-list-walk
+    desc: Walk PEB module list
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: \bIn(Memory|Load|Initialization)OrderModuleList\b
+    unless:
+      - id: well-known/tool/sysadmin/sandboxie/
+  - id: export-directory
+    desc: Parse PE export directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      word: IMAGE_EXPORT_DIRECTORY
+  - id: export-name-ordinals
+    desc: Parse export name ordinals
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      word: AddressOfNameOrdinals
+  - id: export-name-table
+    desc: Parse export name table
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      word: AddressOfNames
+  - id: export-function-table
+    desc: Parse export function table
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      word: AddressOfFunctions
+  - id: kernel32-resolver
+    desc: Kernel32 DLL resolution string
+    crit: component
+    conf: 0.9
+    for:
+      - pe
+      - dll
+    if:
+      type: text
+      substr: kernel32.dll
+    unless:
+      - id: metadata/binary/framework/
+      - id: metadata/binary/framework::dotnet-metadata
+  - id: shadow-ntdll-indicator
+    desc: Shadow ntdll technique indicator
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: "(shadow|clean).ntdll"
+
+  - id: shadow-ntdll-redirection
+    desc: Redirecting APIs to shadow ntdll
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      substr: "Redirecting Nt* pointers to clean copy"
+
+  - id: knowndlls-ntdll
+    desc: KnownDlls ntdll reference
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: "\\KnownDlls\\ntdll.dll"
+
+  # Deferred resolution: API name strings staged in .rdata for later GetProcAddress.
+  # These are NOT in the static IAT — the binary resolves them at runtime.
+  - id: gettemppath2w-staged
+    desc: "GetTempPath2W name staged runtime resolution"
+    crit: component
+    conf: 0.9
+    for:
+      - pe
+    if:
+      type: text
+      exact: GetTempPath2W
+      section: .rdata
+    unless:
+      - id: micro-behaviors/fs/temp/directory::get-temp-path-dup
+
+  - id: gettempfilename-staged
+    desc: "GetTempFileName name staged runtime resolution"
+    crit: component
+    conf: 0.9
+    for:
+      - pe
+    if:
+      type: text
+      regex: ^GetTempFileName[AW]?$
+      section: .rdata
+
+  - id: x64-pe-export-directory-walk
+    desc: x64 manual PE export-table walk
+    crit: suspicious
+    conf: 0.97
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .mrdata
+      pattern: 41 8B 46 3C 4C 01 F0 8B 80 88 00 00 00 4C 01 F0 49 89 C0 41 8B 48 20 4C 01 F1 49 89 C9 41 8B 48 24 4C 01 F1 49 89 CA 41 8B 48 1C 4C 01 F1 49 89 CB
+  - id: x64-pe-export-directory-walk-inline
+    desc: x64 inline PE export-directory walk
+    crit: notable
+    conf: 0.96
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: 48 63 ?? 3C 8B ?? ?? 88 [0-24] 44 8B ?? ?? 18 [0-24] 44 8B ?? ?? 20 [0-24] 44 8B ?? ?? 24 [0-24] 44 8B ?? ?? 1C
+  - id: x64-peb-loader-list-walk-inline
+    desc: x64 inline PEB module-list walk
+    crit: notable
+    conf: 0.98
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: 65 48 8B 04 25 60 00 00 00 48 8B 40 18 48 8B 40 30 48 8B 00 48 8B 00 48 8B 40 10
+  - id: x64-peb-loader-list-walk-shellcode
+    desc: x64 shellcode PEB module-list walk
+    crit: notable
+    conf: 0.98
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      # Compact position-independent shellcode form of the PEB list walk.
+      pattern: 65 48 8B 52 60 48 8B 52 18 48 8B 52 20 48 8B 72 50
+  - id: x64-pe-export-directory-walk-inline-rex
+    desc: x64 inline PE export walk with REX
+    crit: notable
+    conf: 0.98
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: 48 63 ?? 3C 44 8B ?? ?? 88 [0-24] 45 8B ?? ?? 20 45 8B ?? ?? 1C 4C 03 ?? 41 8B ?? ?? 24
+
+composite_rules:
+  - id: peb-module-walk
+    desc: Resolve modules from PEB
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: nt-current-teb
+      - id: peb-ldr-data
+      - id: module-list-walk
+    unless:
+      - id: well-known/lib/wine::wine-source-tree
+  - id: manual-export-resolution
+    desc: Manually resolve PE exports
+    crit: notable
+    conf: 0.92
+    needs: 3
+    any:
+      - id: export-directory
+      - id: export-name-ordinals
+      - id: export-name-table
+      - id: export-function-table
+    unless:
+      - id: metadata/file/extension/identity::dotnet-native-image
+      - id: metadata/library/memory-module::memory-module-source
+      - id: well-known/tool/sysadmin/sandboxie/
+      - id: metadata/lang/compiler/managed::delphi
+  - id: staged-temp-api-resolution
+    desc: Multiple temp APIs staged for deferred resolution
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: gettemppath2w-staged
+      - id: gettempfilename-staged

@@ -1,0 +1,146 @@
+defaults:
+  platforms: [windows]
+  for: ["*"]
+
+traits:
+- id: hta-environment-item-write
+  desc: Writes a WSH environment item
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?i)\.Item\s*\(\s*["''][A-Za-z_][A-Za-z0-9_]{2,32}["'']\s*\)\s*='
+
+- id: hta-webclient-download-call
+  desc: Calls WebClient DownloadData
+  crit: notable
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?i)\.\s*DownloadData\s*\('
+
+- id: hta-dotnet-frombase64string
+  desc: Decodes Base64 data with .NET
+  crit: notable
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?i)\[Convert\]::FromBase64String\s*\('
+
+- id: hta-appdomain-currentdomain-token
+  desc: Builds a .NET AppDomain reference
+  crit: notable
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?i)\[AppDomain\]::\s*\(\s*["'']Cu["'']\s*\+\s*["'']rrentDomain["'']\s*\)'
+
+- id: hta-appdomain-load-method
+  desc: Resolves the .NET assembly Load method
+  crit: notable
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?i)GetMethod\s*\(\s*["'']Lo["'']\s*\+\s*["'']ad["'']'
+
+- id: hta-appdomain-invoke
+  desc: Invokes reflected .NET AppDomain method
+  crit: notable
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?is)(AppDomain|GetMethod).{0,200}\.Invoke\s*\('
+
+- id: hta-wmi-hidden-process-stage
+  desc: HTA creates a hidden WMI process
+  crit: notable
+  conf: 0.97
+  attack: T1047,T1564.003
+  mbc: E1043
+  if:
+    type: text
+    regex: '(?is)SpawnInstance_\s*\(\s*\)[\s\S]{0,700}ShowWindow\s*=\s*0[\s\S]{0,700}\.Create\s*\('
+
+- id: hta-user-environment-stage
+  desc: HTA assigns a WSH user environment item
+  crit: suspicious
+  conf: 0.97
+  if:
+    type: text
+    regex: '(?i)Environment\s*\(\s*["'']User["'']\s*\)'
+
+- id: hta-powershell-iex-environment-stage
+  desc: HTA evaluates a PowerShell environment variable
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: text
+    regex: '(?is)powershell(\.exe)?[^\r\n]{0,240}Invoke-Expression\s+\$env:[A-Za-z_][A-Za-z0-9_]*'
+
+composite_rules:
+  - id: hta-environment-item-assignment
+    desc: HTA WSH environment item assignment
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: metadata/file/format::hta-application-element
+    any:
+      - id: hta-environment-item-write
+      - id: micro-behaviors/os/env/access::wsh-environment-item-assignment
+      - id: micro-behaviors/os/env/access::wsh-environment-assignment-call
+
+  - id: hta-wscript-user-environment-stage
+    desc: HTA stages a WSH environment command
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: hta-user-environment-stage
+      - id: hta-environment-item-assignment
+
+  - id: hta-appdomain-reflected-load
+    desc: HTA reflectively loads a .NET assembly
+    crit: suspicious
+    conf: 0.98
+    attack: T1620,T1140
+    near_bytes: 4096
+    all:
+      - id: metadata/file/format::hta-application-element
+      - id: hta-appdomain-currentdomain-token
+      - id: hta-appdomain-load-method
+      - id: hta-appdomain-invoke
+
+  - id: hta-hidden-wmi-powershell-loader
+    desc: Hidden HTA stages and launches PowerShell through WMI
+    crit: hostile
+    conf: 0.99
+    attack: T1047,T1059.001,T1564.003
+    all:
+      - id: hta-wmi-hidden-process-stage
+      - id: hta-wscript-user-environment-stage
+      - id: hta-powershell-iex-environment-stage
+
+  - id: hta-remote-reflective-memory-loader
+    desc: HTA downloads bytes and reflectively loads a .NET assembly in memory
+    crit: hostile
+    conf: 0.99
+    attack: T1047,T1059.001,T1105,T1140,T1620,T1564.003
+    all:
+      - id: hta-wscript-user-environment-stage
+      - id: hta-powershell-iex-environment-stage
+      - id: micro-behaviors/communications/http/client/webclient::net-webclient-object
+      - id: hta-webclient-download-call
+      - id: hta-dotnet-frombase64string
+      - id: hta-appdomain-reflected-load
+
+  - id: obfuscated-wsh-file-write-and-execute
+    desc: Obfuscated WSH writes and executes a payload
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1105
+    for: [javascript, html, vbs]
+    all:
+      - id: micro-behaviors/process/create/shell/wsh::shellexecute-method-call
+      - id: micro-behaviors/os/com/object::filesystemobject-progid
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish

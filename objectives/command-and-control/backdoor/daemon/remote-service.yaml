@@ -1,0 +1,75 @@
+# Remote Shell Backdoor Installation
+# Detects telnet and SSH services exposed for persistent remote shell access.
+# ATT&CK: T1021.004 (Remote Services: SSH)
+# MBC: E1037 (Communication)
+defaults:
+  attack: T1021.004
+  platforms: [unix, android, ios]
+  for: [elf, shell]
+composite_rules:
+  - id: telnet-service
+    desc: "Telnet service for remote access"
+    crit: notable
+    conf: 0.8
+    all:
+      - id: micro-behaviors/communications/socket/telnet::telnet
+    any:
+      - id: micro-behaviors/communications/socket/listen::listen-sym
+      - id: micro-behaviors/communications/socket/listen::accept-sym
+      - id: micro-behaviors/communications/socket/listen::accept64-sym
+      - id: micro-behaviors/os/service/daemon::telnetd
+    unless:
+      - id: micro-behaviors/communications/http/download/curl::curl-easy-init
+      - id: metadata/file/string/process-name::telnet-client-name
+    downgrade:
+      any:
+        - id: metadata/binary/metrics/size::massive-executable
+
+  - id: telnetd-daemon
+    desc: "Telnet daemon for remote access"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/service/daemon::telnetd
+    any:
+      - id: micro-behaviors/communications/socket/listen::listen-sym
+      - id: micro-behaviors/communications/socket/listen::accept-sym
+      - id: micro-behaviors/communications/socket/listen::accept64-sym
+    unless:
+      - id: metadata/file/string/process-name::telnetd-name
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+
+  - id: ssh-configured-backdoor
+    desc: SSH service with suspicious access configuration
+    crit: suspicious
+    conf: 0.9
+    mbc: "E1037"
+    all:
+      - id: micro-behaviors/os/service/remote::ssh-service-setup
+      - id: objectives/lateral-movement/ssh/backdoor-deploy::ssh-config-modification
+
+    unless:
+      - id: well-known/app/nvidia-nvcf::multi-node-sample-container
+      - id: metadata/library/runtime::legitimate-kubernetes-incluster-client-marker
+      - id: metadata/package/testing/presence/harness::shell-example-directory
+
+  - id: remote-shell-backdoor
+    desc: "Remote shell backdoor"
+    crit: suspicious
+    conf: 0.9
+    mbc: "E1037"
+    unless:
+      - id: well-known/app/openssh/
+    any:
+      - id: telnetd-daemon
+      - id: ssh-configured-backdoor
+  - id: iot-telnet-service-backdoor
+    desc: IoT telnet service backdoor
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: telnetd-daemon
+      - id: micro-behaviors/fs/path/binary::bin-busybox-path
+      - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
+    unless:
+      - id: metadata/file/string/process-name::telnetd-name

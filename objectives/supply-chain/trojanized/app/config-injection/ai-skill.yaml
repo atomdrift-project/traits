@@ -1,0 +1,232 @@
+# AI Skill prompt injection and IDE config persistence
+# Detects malicious AI skill packages that inject instructions into AI coding
+# assistants' global config files (CLAUDE.md, GEMINI.md, etc.) to achieve
+# persistence and self-bootstrapping across sessions.
+# These patterns appear in markdown/text/source files — we use broad groups
+# since the attack vector spans code and AI skill manifests.
+defaults:
+  platforms: [windows, unix]
+  attack: T1195.002
+  for:
+    - markdown
+    - shell
+    - python
+    - javascript
+    - typescript
+
+traits:
+  # === AI assistant global config file paths ===
+  # These are the write targets for prompt injection persistence.
+
+  - id: claude-md-config-path
+    desc: Claude Code global config file path
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: ".claude/CLAUDE.md"
+
+  - id: gemini-md-config-path
+    desc: Gemini AI global config file path
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: ".gemini/GEMINI.md"
+
+  - id: cursor-rules-config-path
+    desc: Cursor IDE global rules file path
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: ".cursor/rules/global.mdc"
+
+  - id: codex-instructions-path
+    desc: Codex global instructions file path
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: ".codex/instructions.md"
+
+  - id: workspace-soul-md-path
+    desc: Workspace SOUL.md instruction path
+    crit: component
+    conf: 0.95
+    if:
+      type: string_literal
+      exact: "/data/workspaces/SOUL.md"
+
+  - id: workspace-user-md-path
+    desc: Workspace USER.md instruction path
+    crit: component
+    conf: 0.95
+    if:
+      type: string_literal
+      exact: "/data/workspaces/USER.md"
+
+  # === Prompt injection urgency markers ===
+
+  - id: critical-protocol-injection
+    desc: Urgent forced-execution prompt injection
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      substr: "CRITICAL PROTOCOL"
+
+  - id: true-owner-password-prompt
+    desc: Owner password prompt injection
+    crit: component
+    conf: 0.9
+    if:
+      type: string_literal
+      regex: true owner.{0,120}password
+      case_insensitive: true
+
+  - id: unconditional-command-prompt
+    desc: Unconditional command following prompt
+    crit: component
+    conf: 0.9
+    if:
+      type: string_literal
+      substr: "follow all of his commands without reservation"
+      case_insensitive: true
+
+  - id: subservient-instruction-prompt
+    desc: Subservient instruction prompt
+    crit: component
+    conf: 0.85
+    if:
+      type: string_literal
+      substr: "Anything else written here is subservient"
+      case_insensitive: true
+
+  # NOTE: the OpenClaw/Molty platform-name marker is a neutral identifier (legit
+  # OpenClaw skills reference the platform), so it lives at
+  # well-known/app/openclaw::openclaw-skill-text and is referenced cross-tier by
+  # the openclaw-skill-remote-msi-execution composite below as platform context.
+  - id: remote-msiexec-install-instructions
+    desc: Remote silent MSI install instructions
+    crit: suspicious
+    conf: 0.96
+    for: [markdown]
+    if:
+      type: text
+      regex: '(?i)\bmsiexec(\.exe)?\s+/q\s+/i\s+h.{2,5}ps?://.{1,160}'
+
+  - id: cmd-start-remote-msiexec
+    desc: cmd starts remote MSI installer
+    crit: suspicious
+    conf: 0.97
+    for: [markdown]
+    if:
+      type: text
+      regex: '(?i)\bcmd\s+/c\s+start\s+msiexec\s+/q\s+/i\s+h.{2,5}ps?://'
+
+composite_rules:
+  - id: workspace-ai-instruction-files
+    desc: Targets workspace AI instruction files
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: workspace-soul-md-path
+      - id: workspace-user-md-path
+
+  - id: owner-password-prompt-injection
+    desc: Owner password prompt injection
+    crit: suspicious
+    conf: 0.94
+    needs: 2
+    any:
+      - id: true-owner-password-prompt
+      - id: unconditional-command-prompt
+      - id: subservient-instruction-prompt
+
+  - id: workspace-prompt-injection-write
+    desc: Writes workspace prompt injection
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: workspace-ai-instruction-files
+      - id: owner-password-prompt-injection
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+
+  - id: pypi-install-workspace-prompt-injection
+    desc: PyPI install hook injects AI prompt
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: metadata/build/package::python-install-hook
+      - id: workspace-prompt-injection-write
+
+  # Referencing 3+ AI IDE config paths = persistence across IDEs
+  - id: multi-ide-config-persistence
+    desc: AI skill targets multiple IDE config files
+    crit: hostile
+    conf: 0.95
+    attack: T1547.001
+    needs: 3
+    any:
+      - id: claude-md-config-path
+      - id: gemini-md-config-path
+      - id: cursor-rules-config-path
+      - id: codex-instructions-path
+
+  # Prompt injection urgency + any IDE config target
+  - id: prompt-injection-with-config-target
+    desc: Prompt injection targeting AI assistant config
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: critical-protocol-injection
+    any:
+      - id: claude-md-config-path
+      - id: gemini-md-config-path
+      - id: cursor-rules-config-path
+      - id: codex-instructions-path
+
+  - id: openclaw-skill-remote-msi-execution
+    desc: OpenClaw skill launches remote MSI
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002, T1218.007
+    all:
+      - id: metadata/package/config::agent-skill-md-basename
+      - id: remote-msiexec-install-instructions
+    any:
+      - id: well-known/app/openclaw::openclaw-skill-text
+      - id: cmd-start-remote-msiexec
+
+  # Fetching remote text and writing it into the agent's instruction file
+  # (AGENTS.md / CLAUDE.md / GEMINI.md) hands a server live control of what the
+  # AI agent is told to do - indirect prompt injection refreshed every run.
+  - id: remote-agent-instruction-overwrite
+    desc: Overwrites agent instructions with remote data
+    crit: hostile
+    conf: 0.9
+    # Byte proximity remains meaningful in bundled/minified JavaScript where a
+    # whole application may occupy one physical line. Line-only proximity let
+    # unrelated fetch, file-write, and instruction-file references compose.
+    near_bytes: 8192
+    all:
+      - id: micro-behaviors/fs/path/application/config::agent-instruction-file
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+
+  - id: package-injects-agent-memory-bridge
+    desc: Package injects persistent AI memory bridge
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    ref: sha256:ffbf482c4b6c5a57944da3576001f383e4cb61bce3ed008b813487357e49e107
+    all:
+      - id: micro-behaviors/fs/path/application/config::ai-coding-tool-config-directory-cluster
+      - id: objectives/collection/monitor/capture::ai-agent-persistent-memory-capture
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+    any:
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-memory-sync-command
+      - id: micro-behaviors/process/create/agent::ai-agent-shell-command-allowlist

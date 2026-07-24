@@ -1,0 +1,84 @@
+# Obfuscated Shellcode Injection — PE binaries with shellcode injection
+# capabilities combined with string obfuscation, indicating an implant
+# rather than a legitimate utility.
+# ATT&CK: T1055 (Process Injection) + T1027 (Obfuscated Files or Information)
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: "T1055"
+  mbc: "B0033"
+
+traits:
+  - id: signalapp-sqlcipher-path
+    desc: Signal SQLCipher addon path
+    crit: notable
+    conf: 0.98
+    if:
+      type: path
+      regex: '@signalapp([\\/]|\\+)sqlcipher'
+
+composite_rules:
+  # Shellcode injection + string obfuscation = hostile implant profile.
+  # Legitimate compression/utility libraries do not combine W^X injection
+  # with stack-string obfuscation.
+  - id: obfuscated-shellcode-injection
+    desc: Shellcode injection with string obfuscation
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: objectives/evasion/process/injection/shellcode::w-xor-x-injection-x64
+      - id: objectives/anti-static/obfuscation/string/anomaly::many-stack-strings
+    any:
+      - id: micro-behaviors/crypto/symmetric/xor/loop::native-byte-xor-loop
+      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+      - id: micro-behaviors/process/thread/create::create-thread
+    unless:
+      - id: metadata/signed/
+      - id: metadata/binary/framework/
+      - id: well-known/lib/electron/
+      - id: well-known/lib/videolan/
+      - id: well-known/app/mcu-ai-debug/
+      - id: metadata/binary/metrics/structural::rust-native-export-library
+
+  # Shellcode injection in a Node-API native addon (supply-chain context).
+  # A compression utility should not need W^X memory transitions.
+  - id: node-addon-shellcode-injection
+    desc: Node-API addon with shellcode injection capability
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/binary/framework::node-api-addon-export
+      - id: objectives/evasion/process/injection/shellcode::w-xor-x-injection-x64
+      - id: micro-behaviors/mem/alloc/executable::virtualalloc-rwx-commit-x64
+    any:
+      - id: objectives/anti-static/obfuscation/string/anomaly::many-stack-strings
+      - id: micro-behaviors/crypto/symmetric/xor/loop::native-byte-xor-loop
+      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+    unless:
+      - id: well-known/app/anthropic-claude-code::native-cli-member
+      - id: well-known/app/anthropic-claude-code::native-audio-member
+      - id: metadata/signed/platform/
+      - id: well-known/lib/electron/
+      - id: well-known/lib/skia/
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: signalapp-sqlcipher-path
+    downgrade:
+      all:
+        - id: metadata/signed/developer::johannes-schindelin
+
+  - id: opaque-payload-thread-injector
+    desc: PE opaque payload with thread-context injection
+    crit: hostile
+    conf: 0.98
+    arch: [x86-64]
+    size_max: 5242880
+    all:
+      - id: objectives/anti-static/obfuscation/payload/section::large-high-entropy-gfx-section
+      - id: micro-behaviors/os/api-resolution/hash-based::multiplicative-hash-loop
+      - id: micro-behaviors/process/inject/runtime/call::get-thread-context-dup
+      - id: micro-behaviors/process/inject/runtime/call::set-thread-context-dup
+      - id: micro-behaviors/process/info/thread::resume-thread-dup
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    unless:
+      - id: metadata/binary/framework/
+      - id: metadata/signed/platform/

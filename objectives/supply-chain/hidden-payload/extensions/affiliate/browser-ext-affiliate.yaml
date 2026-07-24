@@ -1,0 +1,143 @@
+# Affiliate Link Hijacking Patterns
+# Detection of affiliate ID injection and link manipulation
+defaults:
+  platforms: [unix, windows]
+  for: [javascript]
+traits:
+  # === Affiliate Link Hijacking Patterns ===
+  - id: url-params-mutator
+    desc: URL params mutation call
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: "params\\.(set|append)\\("
+  - id: affiliate-param-name
+    desc: Affiliate parameter name
+    crit: component
+    conf: 0.85
+    # Affiliate-specific param prefixes only. Bare "tag"/"ref" are ubiquitous
+    # generic field names (matched a Cypress reporter's `'tag', names` call).
+    if:
+      type: text
+      regex: "['\"](utm_|affiliate|aff[_-]).{0,40}['\"]"
+      case_insensitive: true
+  - id: affiliate-tag-constant
+    desc: Affiliate tag variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: "[A-Z_]*(AFFILIATE|REFERRAL)[A-Z_]*TAG"
+  - id: tag-param-literal
+    desc: tag parameter string marker
+    # Component: a bare "tag": / "tag"= literal is ubiquitous (config objects,
+    # git ref parsing like `"tag"===o`, HTML tag handling). Affiliate-injection
+    # meaning comes from the composites below that pair it with amazon/affiliate
+    # URL context, so it is a fragment, not a standalone signal.
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: "['\"]tag['\"]\\s*[:=,)]"
+  - id: queryselector-link-targeting
+    desc: Link element selection
+    crit: component
+    conf: 0.8
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: objectives/anti-static/obfuscation/code-metrics/structure/
+    if:
+      type: text
+      regex: "querySelectorAll\\([^)]{0,120}a\\[href"
+composite_rules:
+  # Archive-level form of the DNR affiliate-fraud behavior.  Keep this in the
+  # extension supply-chain objective so it is visible even when rules.json is
+  # the only file carrying the parsed redirect rule.
+  - id: extension-dnr-affiliate-fraud
+    desc: Extension DNR affiliate fraud
+    crit: hostile
+    conf: 0.97
+    attack: T1565.001
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: metadata/permission/network::dnr-commercial-affiliate-redirect
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: metadata/permission/network::permission-declarative-net-request
+
+  # === Affiliate Link Hijacking Detection ===
+
+  # URL parameter modification capability
+  - id: url-params-set
+    desc: Affiliate URL params modification
+    crit: notable
+    conf: 0.88
+    near_bytes: 120
+    all:
+      - id: url-params-mutator
+      - id: affiliate-param-name
+  # Amazon affiliate link targeting
+  - id: amazon-link-targeting
+    desc: Amazon link targeting
+    crit: notable
+    conf: 0.85
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/http/services/ecommerce::amazon-product-url-pattern
+      - id: micro-behaviors/communications/http/services/ecommerce::amazon-hostname-field-reference
+      - id: queryselector-link-targeting
+  # Generic affiliate link hijacking pattern (cross-platform)
+  - id: affiliate-link-hijack
+    desc: Affiliate link hijacking
+    crit: suspicious
+    conf: 0.9
+    attack: "T1565.001"
+    all:
+      - id: url-params-set
+      - id: micro-behaviors/ui/window/manage/dom::browser-link-href-assignment
+    any:
+      - id: affiliate-tag-constant
+      - id: tag-param-literal
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+  # Amazon affiliate hijacking (specific)
+  - id: ext-amazon-affiliate-hijack
+    desc: Amazon affiliate hijacking
+    crit: hostile
+    conf: 0.95
+    attack: "T1565.001"
+    all:
+      - id: amazon-link-targeting
+      - id: url-params-set
+      - id: micro-behaviors/ui/window/manage/dom::browser-link-href-assignment
+  # Persistent affiliate hijack via MutationObserver (hostile - complexity 4+)
+  - id: persistent-affiliate-hijack
+    desc: Persistent affiliate hijacking
+    crit: hostile
+    conf: 0.95
+    attack: "T1565.001"
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-mutation-observer
+      - id: micro-behaviors/ui/window/manage/dom::browser-link-href-assignment
+      - id: url-params-set
+    any:
+      - id: amazon-link-targeting
+      - id: affiliate-tag-constant
+    unless:
+      - id: well-known/app/browser-extension::honey-popover-wallet-bundle
+      - id: well-known/app/avast::avast-antitrack-extension
+  # Chrome extension affiliate fraud
+  - id: extension-affiliate-fraud
+    desc: Extension affiliate fraud
+    crit: hostile
+    conf: 0.95
+    attack: "T1565.001"
+    all:
+      - id: metadata/permission/runtime::is-extension
+      - id: micro-behaviors/ui/window/manage/dom::browser-mutation-observer
+      - id: micro-behaviors/ui/window/manage/dom::browser-link-href-assignment
+      - id: url-params-set
+    unless:
+      - id: well-known/app/browser-extension::honey-popover-wallet-bundle
+      - id: well-known/app/avast::avast-antitrack-extension

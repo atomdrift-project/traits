@@ -1,0 +1,157 @@
+# Deprecated Package Impersonation Detection
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# Detects packages that impersonate deprecated stdlib packages
+# Attackers target deprecated paths because:
+# 1. Users searching for old imports find malicious packages
+# 2. Automated tools may still reference old paths
+# 3. Less scrutiny on "deprecated" code
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: "T1195.002"
+traits:
+  # ============================================================
+  # GO: Deprecated package impersonation
+  # ============================================================
+
+  # --- crypto/ssh/terminal (deprecated -> golang.org/x/term) ---
+  - id: go-pkg-terminal-deprecated
+    desc: Package named terminal (deprecated path)
+    crit: notable
+    conf: 0.7
+    for: [go]
+    unless:
+      - type: path
+        regex: '(^|[\\/])(pkg|internal|cmd|cli|testdata)[\\/]terminal[\\/]'
+      - type: path
+        regex: '(^|/)golang\.org/x/crypto@[^/]+/ssh/terminal/'
+      - type: path
+        regex: '(^|[\\/])vendor[\\/]golang\.org[\\/]x[\\/]crypto[\\/]ssh[\\/]terminal[\\/]'
+    if:
+      type: text
+      regex: '^package terminal\s*$'
+  # --- ioutil (deprecated -> io and os) ---
+  - id: go-pkg-ioutil-deprecated
+    desc: Package named ioutil (deprecated)
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: text
+      regex: '^package ioutil\s*$'
+  - id: go-imports-io-os
+    desc: Imports io or os packages
+    crit: component
+    conf: 0.4
+    for: [go]
+    if:
+      type: text
+      regex: 'import\s*\(.{0,100}"(io|os)"'
+  # --- syscall (deprecated -> golang.org/x/sys) ---
+  - id: go-pkg-syscall-wrapper
+    desc: Package wrapping syscall
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: text
+      regex: '^package syscall\s*$'
+  # --- imp (deprecated -> importlib) ---
+  - id: py-mod-imp-deprecated
+    # ============================================================
+    # PYTHON: Deprecated module impersonation
+    # ============================================================
+
+    desc: Module named imp (deprecated)
+    crit: notable
+    conf: 0.7
+    for: [python]
+    if:
+      type: path
+      regex: '(^|[\\/])imp(\.py|[\\/]__init__\.py)$'
+  # py-importlib-import removed: importing importlib is the neutral
+  # metadata/import/python::importlib (an `import importlib` statement is not
+  # impersonation); the deprecated-imp-wrapper composite references that instead.
+  - id: py-imp-stdlib-deprecation-warning
+    desc: Contains stdlib imp deprecation warning
+    crit: notable
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      substr: the imp module is deprecated in favour of importlib
+  # --- optparse (deprecated -> argparse) ---
+  - id: py-mod-optparse-wrapper
+    desc: Module wrapping optparse
+    crit: component
+    conf: 0.65
+    for: [python]
+    size_max: 3000
+    if:
+      type: text
+      regex: "from optparse import|import optparse"
+    unless:
+      - type: basename
+        regex: (^|[\\/])optparse\.py$
+  # --- request (deprecated -> got, axios, node-fetch) ---
+  - id: js-pkg-request-wrapper
+    # ============================================================
+    # JAVASCRIPT/NODE: Deprecated package patterns
+    # ============================================================
+
+    desc: Package wrapping deprecated request
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: text
+      exact: "require('request-promise')"
+composite_rules:
+  - id: py-mod-optparse-wrapper-small
+    desc: Small module wrapping optparse
+    crit: notable
+    conf: 0.7
+    for: [python]
+    unless:
+      - id: objectives/execution/interpreter/eval/invoke::python-optparse-basename
+    all:
+      - id: py-mod-optparse-wrapper
+      - id: metadata/file/metrics::python-under-120-lines
+  # === Go Terminal Wrapper ===
+  - id: go-terminal-wrapper-deprecated
+    desc: Go terminal package wrapping x/term
+    crit: notable
+    conf: 0.9
+    all:
+      - id: go-pkg-terminal-deprecated
+      - id: micro-behaviors/ui/terminal::go-x-term-import
+  # === Go ioutil Wrapper ===
+  - id: go-ioutil-wrapper-deprecated
+    desc: Go ioutil package wrapping io/os
+    crit: notable
+    conf: 0.85
+    all:
+      - id: go-pkg-ioutil-deprecated
+      - id: go-imports-io-os
+  # === Python imp Wrapper ===
+  - id: python-imp-wrapper-deprecated
+    desc: Python imp module wrapping importlib
+    crit: suspicious
+    conf: 0.85
+    unless:
+      - id: py-imp-stdlib-deprecation-warning
+    all:
+      - id: py-mod-imp-deprecated
+      - id: metadata/import/python::importlib
+      - id: metadata/file/metrics::python-under-120-lines
+  # === Deprecated Package Attack ===
+  - id: deprecated-package-attack
+    desc: Deprecated package impersonation attack
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: go-terminal-wrapper-deprecated
+      - id: go-ioutil-wrapper-deprecated
+      - id: python-imp-wrapper-deprecated
+    all:
+      - id: objectives/supply-chain/impersonation/shadow::function-shadow-attack

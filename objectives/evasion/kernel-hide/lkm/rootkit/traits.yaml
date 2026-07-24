@@ -1,0 +1,360 @@
+# Linux Kernel Rootkit - General Composite Detection Rules
+# Complex patterns combining rootkit indicators across categories
+# ATT&CK: T1014 (Rootkit)
+defaults:
+  platforms: [linux]
+traits:
+  - id: hidden-pids-module-obj
+    desc: Build includes hidden PID module
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/hidden_pids.o
+  - id: hide-module-obj
+    desc: Build includes hide module object
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/hide_module.o
+  - id: clear-taint-dmesg-module-obj
+    desc: Build includes taint log filter
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/clear_taint_dmesg.o
+  - id: hiding-tcp-module-obj
+    desc: Build includes TCP hiding module
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/hiding_tcp.o
+  - id: hiding-directory-module-obj
+    desc: Build includes directory hiding module
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/hiding_directory.o
+  - id: hiding-stat-module-obj
+    desc: Build includes stat hiding module
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/hiding_stat.o
+  - id: hiding-readlink-module-obj
+    desc: Build includes readlink hiding module
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/hiding_readlink.o
+  - id: ftrace-helper-module-obj
+    desc: Build includes ftrace hook helper
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: ftrace/ftrace_helper.o
+composite_rules:
+  # memfd_create composite
+  - id: memfd-create-comp
+    desc: memfd_create kernel-loader component
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    any:
+      - id: objectives/evasion/fileless/memory::memfd-create
+      - id: objectives/evasion/kernel-hide/lkm/internals::sys-memfd-create-ref
+        # finit_module composite
+  - id: finit-module
+    desc: finit_module kernel-loader component
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/internals::finit-module-call
+      - id: objectives/evasion/kernel-hide/lkm/internals::sys-finit-module-ref
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::pihole-ftl-binary
+        # Fileless LKM loading (migrated from YARA)
+  - id: fileless-lkm-loading
+    desc: memfd_create plus finit_module
+    crit: suspicious
+    conf: 1.0
+    attack: "T1620"
+    for: [elf, c]
+    all:
+      - id: memfd-create-comp
+      - id: finit-module
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::pihole-ftl-binary
+        # Page protection flag composite
+  - id: page-protection-flag
+    desc: Memory page protection flags
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/internals::page-rw-flag
+      - id: objectives/evasion/kernel-hide/lkm/internals::page-nx-flag
+        # PTE manipulation (migrated from YARA)
+  - id: pte-manipulation
+    desc: Direct PTE manipulation to bypass
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/evasion/kernel-hide/lkm/internals::lookup-address-call
+      - id: page-protection-flag
+        # elf64-headers composite moved to
+        # micro-behaviors/data/format/executable/header (parsing capability);
+        # elf-patching references it cross-tier.
+        # ELF patching (migrated from YARA)
+  - id: elf-patching
+    desc: ELF binary structural patching (Infection)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1542.001"
+    for: [c]
+    all:
+      - id: micro-behaviors/data/format/executable/header::elf64-headers
+    any:
+      - id: micro-behaviors/data/format/executable/header::elf-entry-field
+      - id: objectives/evasion/kernel-hide/lkm/internals::patch-string-ref
+        # Advanced LKM Rootkit Flow
+  - id: advanced-lkm-rootkit
+    desc: "Advanced LKM rootkit detected"
+    crit: suspicious
+    conf: 0.95
+    # ============================================================
+    # ROOTKIT HEADER DETECTION (string-based composites)
+    # ============================================================
+  - id: kprobes-kallsyms
+    # Kernel hooking infrastructure (kprobes for symbol resolution)
+
+    desc: Kprobes with kallsyms (kernel 5.7+ symbol bypass)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/evasion/kernel-hide/lkm/headers::kprobes-include-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::kallsyms-lookup-name-str
+    downgrade:
+      any:
+        - id: objectives/evasion/kernel-hide/lkm/headers::kernel-fault-inject-header
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
+  - id: syscall-table-indicator
+    desc: Syscall table hook indicator
+    crit: component
+    conf: 0.9
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/headers::syscall-table-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::nr-getdents-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::kernel-syscalls-header
+  - id: dirent-hook-indicator
+    desc: Dirent hook indicator
+    crit: component
+    conf: 0.9
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/headers::dirent-include-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::linux-dirent-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::kernel-dirent-header
+  - id: syscall-hook-setup
+    desc: Syscall hooking setup (table+dirent)
+    crit: suspicious
+    conf: 0.7
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: syscall-table-indicator
+      - id: dirent-hook-indicator
+        # CR0 manipulation (memory write protection bypass)
+  - id: cr0-bypass
+    desc: CR0 write protection bypass
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/headers::cr0-variable-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::force-order-str
+    downgrade:
+      any:
+        - id: micro-behaviors/os/kernel/module::linux-module-header-include
+          # Rootkit header pattern (kernel module with hooking)
+  - id: rootkit-header
+    desc: Rootkit header file pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: micro-behaviors/os/kernel/module::linux-module-header-include
+    needs: 2
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/headers::kprobes-include-str
+      - id: objectives/evasion/kernel-hide/lkm/headers::kernel-kallsyms-header
+      - id: objectives/evasion/kernel-hide/lkm/headers::kernel-ftrace-header
+        # Full rootkit header detection
+  - id: lkm-rootkit-header
+    desc: LKM rootkit header detected
+    crit: hostile
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/evasion/kernel-hide/lkm/headers::linkage-include-str
+      - id: kprobes-kallsyms
+    any:
+      - id: syscall-hook-setup
+      - id: cr0-bypass
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+        # Solaris DDI/DKI kernel rootkit (SInAR pattern)
+  - id: solaris-ddi-headers
+    desc: Solaris DDI/DKI kernel headers
+    crit: notable
+    conf: 0.6
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::solaris-ddi-header
+      - id: objectives/evasion/kernel-hide/lkm/solaris::solaris-ddi-raw
+      - id: objectives/evasion/kernel-hide/lkm/solaris::solaris-sunddi-header
+  - id: solaris-kernel-patch
+    desc: Solaris direct kernel text patching
+    crit: suspicious
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::hot-patch-sym
+      - id: objectives/evasion/kernel-hide/lkm/solaris::hot-patch-sym
+  - id: solaris-privilege-escalation
+    desc: Solaris kernel credential elevation
+    crit: suspicious
+    conf: 0.99
+    attack: "T1068"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::crdup-sym
+      - id: objectives/evasion/kernel-hide/lkm/solaris::kcred-crdup-raw
+  - id: solaris-symbolic-rootkit-support
+    desc: Solaris rootkit symbol support
+    crit: component
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::kobj-getsymvalue-call
+      - id: objectives/evasion/kernel-hide/lkm/solaris::kobj-sync-call
+      - id: objectives/evasion/kernel-hide/lkm/solaris::rootkit-com-ref
+  - id: solaris-state-hiding-support
+    desc: Solaris state hiding support
+    crit: component
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::mod-state-zeroing
+      - id: objectives/evasion/kernel-hide/lkm/solaris::pid-prinactive-hiding
+  - id: solaris-dtrace-disable-indicator
+    desc: Solaris DTrace disable indicator
+    crit: component
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::dtrace-disable-sym
+      - id: objectives/evasion/kernel-hide/lkm/solaris::dtrace-disable-sym
+  - id: solaris-dtrace-enable-indicator
+    desc: Solaris DTrace enable indicator
+    crit: notable
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/solaris::dtrace-enable-sym
+      - id: objectives/evasion/kernel-hide/lkm/solaris::dtrace-enable-sym
+  - id: solaris-dtrace-bypass
+    desc: Solaris DTrace interrupt disabling (anti-analysis)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: solaris-dtrace-disable-indicator
+    any:
+      - id: solaris-kernel-patch
+      - id: solaris-privilege-escalation
+      - id: solaris-symbolic-rootkit-support
+      - id: solaris-state-hiding-support
+  - id: solaris-kernel-rootkit
+    desc: Solaris kernel rootkit (DDI-based)
+    crit: hostile
+    conf: 0.99
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: solaris-ddi-headers
+    any:
+      - id: solaris-kernel-patch
+      - id: solaris-privilege-escalation
+      - id: solaris-dtrace-bypass
+      - id: objectives/evasion/kernel-hide/lkm/solaris::mod-state-zeroing
+      - id: objectives/evasion/kernel-hide/lkm/solaris::pid-prinactive-hiding
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+        # Linux Kernel LKM Rootkit (General)
+  - id: lkm-rootkit-behavior
+    desc: Linux LKM rootkit (hooking + hiding)
+    crit: hostile
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/evasion/kernel-hide/hook::syscall-table-write
+    any:
+      - id: objectives/evasion/kernel-hide/micro/module::list-del-this-module
+      - id: objectives/evasion/kernel-hide/micro/module::task-flags-10000000
+      - id: objectives/evasion/kernel-hide/hook::kill-hook-sig-switch
+      - id: objectives/privilege-escalation/exploit/kernel::commit-creds-prepare-creds
+      - id: objectives/evasion/kernel-hide/module::cr0-manipulation
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+  - id: lkm-stealth-module-build
+    desc: LKM stealth rootkit build graph
+    crit: hostile
+    conf: 0.98
+    attack: "T1014"
+    all:
+      - id: micro-behaviors/os/kernel/module::linux-kbuild-module-build
+      - id: ftrace-helper-module-obj
+    needs: 4
+    any:
+      - id: hidden-pids-module-obj
+      - id: hide-module-obj
+      - id: clear-taint-dmesg-module-obj
+      - id: hiding-tcp-module-obj
+      - id: hiding-directory-module-obj
+      - id: hiding-stat-module-obj
+      - id: hiding-readlink-module-obj
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context

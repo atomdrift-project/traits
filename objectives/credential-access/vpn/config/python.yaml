@@ -1,0 +1,84 @@
+defaults:
+  platforms: [unix]
+  for: [python]
+  attack: T1552.001
+  mbc: E1552
+
+traits:
+- id: tailscale-state-path
+  desc: Tailscale state database path
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: string_literal
+    regex: 'tailscale.*/tailscaled\.state'
+- id: tailscale-debug-prefs-cli
+  desc: Tailscale debug prefs command
+  crit: component
+  conf: 0.86
+  if:
+    type: string_literal
+    exact: tailscale
+# Generic "debug"/"prefs" subcommand tokens live in the neutral
+# micro-behaviors/process/argument/subcommand tier (referenced below) — a bare
+# "debug" literal must not register as a credential-access finding on its own.
+- id: wireguard-config-dir
+  desc: WireGuard config directory path
+  crit: notable
+  conf: 0.9
+  if:
+    type: string_literal
+    substr: /etc/wireguard
+  unless:
+  - type: path
+    regex: '(^|[\\/])(tests?|fixtures?|mocks?)([\\/]|$)'
+  - type: path
+    regex: '(^|[\\/])test[_-].*\.py$'
+- id: wireguard-showconf-cli
+  desc: WireGuard showconf command
+  crit: component
+  conf: 0.86
+  if:
+    # Migrated from a tree-sitter query to a lenient `type: text`
+    # match (no per-member cursor walk). Approximates the query's
+    # structural intent via its distinctive token(s).
+    type: text
+    regex: '[''\"]showconf[''\"]'
+- id: wireguard-showconf-literal
+  desc: WireGuard showconf subcommand literal
+  crit: component
+  conf: 0.86
+  if:
+    type: string_literal
+    exact: showconf
+
+composite_rules:
+- id: tailscale-debug-prefs-command
+  desc: Tailscale debug prefs command
+  crit: notable
+  conf: 0.9
+  all:
+  - id: tailscale-debug-prefs-cli
+  - id: micro-behaviors/process/argument/subcommand::cli-verb-debug
+  - id: micro-behaviors/process/argument/subcommand::cli-verb-prefs
+  near_lines: 8
+- id: wireguard-showconf-command
+  desc: WireGuard showconf command
+  crit: suspicious
+  conf: 0.92
+  all:
+  - id: wireguard-showconf-cli
+  - id: wireguard-showconf-literal
+  near_lines: 6
+- id: python-vpn-secret-material-harvest
+  desc: Python harvests VPN state and tunnel configuration
+  crit: hostile
+  conf: 0.97
+  needs: 2
+  any:
+  - id: tailscale-state-path
+  - id: tailscale-debug-prefs-command
+  - id: wireguard-config-dir
+  - id: wireguard-showconf-command
+  all:
+  - id: micro-behaviors/process/create/subprocess::run-content

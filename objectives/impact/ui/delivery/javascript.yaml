@@ -1,0 +1,264 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - javascript
+    - typescript
+    - html
+    - package.json
+    - chrome-manifest
+traits:
+  - id: ui-delivery-class
+    desc: JavaScript referring to .ui-delivery CSS class
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      substr: .ui-delivery
+  - id: e-commerce-promoted-listing
+    desc: E-commerce promoted-listing copy
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      regex: (?i)promoted\s+listing
+  - id: localized-promotion-copy
+    desc: Localized promotion text copy
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: disclaimerPromotionTitle
+  - id: go-authors-rights-reserved
+    desc: Go authors copyright header
+    crit: baseline
+    conf: 0.95
+    if:
+      type: text
+      substr: 'The Go Authors. All rights reserved.'
+  - id: sponsored-copy-keyword
+    desc: Repeated standalone sponsored label
+    crit: component
+    conf: 0.7
+    count_min: 2
+    if:
+      type: string_literal
+      # URL paths such as `/ads/` identify a destination, not ad copy. Use
+      # visible sponsored copy as the discriminating marker.
+      exact: sponsored
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/library/structure::js-hashed-asset-bundle
+      - id: metadata/library/structure::js-webpack-bundle
+  - id: promotion-token-reference
+    desc: References a promoted-content identifier
+    crit: component
+    conf: 0.7
+    count_min: 2
+    if:
+      # "promotion"/"promoted" are advertising terms; bare "promo" is coupon /
+      # e-commerce vocabulary ("Promo Code", findPromoElements) that legitimate
+      # coupon/deal extensions and checkout pages use constantly, so it does not
+      # indicate advertisement injection on its own. Require a code-like
+      # hyphenated, underscored, or camel-case identifier so prose such as
+      # "promoted to production" cannot satisfy the ad-injection composite.
+      type: text
+      regex: '\bpromoted([-_][A-Za-z0-9_-]+|[A-Z][A-Za-z0-9_]*)\b'
+    not:
+      # A `promoted-…-renderer` token is a DOM ad-element SELECTOR that cosmetic
+      # ad blockers HIDE (e.g. ytd-promoted-video-renderer,
+      # ytd-promoted-sparkles-web-renderer), not ad-injection copy — the
+      # extension is removing promoted content, the opposite of injecting it.
+      - regex: (?i)promoted[\w-]*renderer
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/library/structure::js-hashed-asset-bundle
+      - id: metadata/library/structure::js-webpack-bundle
+  - id: news-delivery-pattern
+    desc: 'news or content delivery pattern'
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: (?i)\.(news|tips|rm|adb)\.js
+  - id: body-all-selector
+    desc: Selects all body children
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      substr: body > *
+    unless:
+      - id: metadata/library/structure/
+      - id: well-known/app/browser-extension::adblock-filter-resource
+  - id: display-none-important
+    desc: Forces display none important
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: ;display:none !important;
+  - id: observe-document-body
+    desc: Observes document body mutations
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: observer\(document\.body
+  - id: style-class-filter
+    desc: Filters style and class mutations
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: 'attributeFilter: [''style'', ''class'']'
+  - id: remove-target-call
+    desc: Removes mutated target element
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      # Anchor on identifier `m` — a bare substr false-positives on
+      # `item.target.remove()` and similar DOM cleanup in extensions.
+      regex: '\bm\.target\.remove\s*\('
+composite_rules:
+  - id: extension-remote-html-page-replacement
+    desc: Extension writes fetched HTML into the page
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::document-root-html-replacement
+      - id: micro-behaviors/communications/http/client/response-body::fetch-html-innerhtml
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-namespace
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/package/testing/
+  - id: dynamic-ad-injection-a
+    desc: Dynamic ad injection innerHTML with keyword
+    crit: suspicious
+    conf: 0.7
+    all:
+      - id: sponsored-copy-keyword
+      - id: micro-behaviors/ui/window/manage/dom::browser-innerhtml-assignment
+    # The keyword must be close to the actual innerHTML write; a file-wide
+    # match pairs unrelated sponsored labels with benign fallback markup.
+    near_bytes: 256
+    unless:
+    - id: metadata/library/runtime::acquire-vscode-api
+    - id: micro-behaviors/process/interpreter/vm/
+    - id: metadata/package/testing/
+    - id: metadata/library/structure::js-dist-asset-bundle
+    - id: metadata/library/structure::js-hashed-asset-bundle
+    - id: micro-behaviors/data/manipulation/
+    - id: sponsored-content-filter-extension
+  - id: dynamic-ad-injection-b
+    desc: Dynamic ad injection innerHTML with promo
+    crit: suspicious
+    conf: 0.7
+    all:
+      - id: promotion-token-reference
+    any:
+      - id: micro-behaviors/ui/window/manage/dom::browser-innerhtml-assignment
+      - id: micro-behaviors/ui/window/manage/dom::browser-append-child
+    near_bytes: 2048
+    unless:
+    - id: metadata/library/runtime::acquire-vscode-api
+    - id: micro-behaviors/process/interpreter/vm/
+    - id: metadata/library/structure/
+    - id: e-commerce-promoted-listing
+    - id: localized-promotion-copy
+    - id: sponsored-content-filter-extension
+    - id: companion-extension-promotion-context
+  - id: dynamic-ad-injection-c
+    desc: Dynamic ad injection insertBefore with keyword
+    crit: suspicious
+    conf: 0.7
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-insert-before
+      - id: sponsored-copy-keyword
+    near_bytes: 2048
+    unless:
+    - id: metadata/library/runtime::acquire-vscode-api
+    - id: micro-behaviors/process/interpreter/vm/
+    - id: metadata/library/structure::js-large-module-bundle
+    - id: metadata/library/structure::js-large-minified-bundle
+    - id: metadata/library/structure::js-dist-asset-bundle
+    - id: metadata/library/structure::js-hashed-asset-bundle
+    # Static documentation pages may legitimately insert a sponsored/widget
+    # node; the fetched WordPress documentation asset is this exact shape.
+    - id: metadata/file/profile/identity::static-html-shell
+    - id: well-known/app/google-web::google-ads-bgc-bootstrapper
+    - id: sponsored-content-filter-extension
+  - id: dynamic-ad-injection-d
+    desc: Dynamic ad injection insertBefore with promo
+    crit: suspicious
+    conf: 0.7
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-insert-before
+      - id: promotion-token-reference
+    near_bytes: 2048
+    unless:
+    - id: metadata/library/structure::js-large-module-bundle
+    - id: metadata/library/structure::js-large-minified-bundle
+    - id: metadata/library/structure::js-dist-asset-bundle
+    - id: metadata/library/structure::js-hashed-asset-bundle
+    - id: sponsored-content-filter-extension
+    - id: well-known/lib/posthog/
+  - id: dynamic-ad-injection
+    desc: Potential dynamic ad or content injection pattern
+    crit: suspicious
+    conf: 0.7
+    any:
+      - id: dynamic-ad-injection-a
+      - id: dynamic-ad-injection-b
+      - id: dynamic-ad-injection-c
+      - id: dynamic-ad-injection-d
+  - id: remote-iframe-overlay
+    desc: Full-screen remote iframe delivery
+    crit: hostile
+    conf: 0.99
+    attack: T1189,T1491.002
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-create-iframe-element
+      - id: micro-behaviors/ui/window/manage/dom::browser-iframe-src-variable
+      - id: micro-behaviors/ui/window/manage/dom::browser-append-child
+      - id: micro-behaviors/ui/window/manage/dom::fixed-viewport-overlay-style
+      - id: micro-behaviors/ui/window/manage/dom::high-layer-overlay-style
+      - id: micro-behaviors/ui/window/manage/style::browser-body-overflow-hidden
+      - id: micro-behaviors/data/source/syntax/array::remote-url-array-literal
+    near_bytes: 2400
+  - id: body-children-hide
+    desc: Hides existing body elements
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: body-all-selector
+      - id: display-none-important
+  - id: body-style-guard
+    desc: Guards hidden body element state
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: observe-document-body
+      - id: style-class-filter
+      - id: body-children-hide
+      - id: remove-target-call
+  - id: sponsored-content-filter-extension
+    desc: Site-scoped sponsored-content filtering extension context
+    crit: exception
+    conf: 0.96
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::browser-query-sponsored-marker
+      - id: micro-behaviors/ui/window/manage/dom::browser-hide-sponsored-element
+      - id: micro-behaviors/ui/window/manage/dom::browser-innerhtml-assignment
+      - id: micro-behaviors/data/db/web-storage::chrome-storage-api
+  - id: companion-extension-promotion-context
+    desc: Popup promotes a companion extension
+    crit: exception
+    conf: 0.95
+    all:
+      - id: micro-behaviors/browser-extension/action::companion-extension-promotion-link
+      - id: micro-behaviors/ui/window/manage/dom::browser-innerhtml-assignment
+      - id: micro-behaviors/data/db/web-storage::chrome-storage-api
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create

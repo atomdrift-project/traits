@@ -1,0 +1,616 @@
+defaults:
+  platforms: [windows, unix]
+  # JS obfuscator patterns can appear in files that shebang-juked file-type
+  # detection (e.g. attackers prepending `#!/bin/bash` to a .js) so we accept
+  # both shell and javascript here. The patterns are JS-grammar-specific —
+  # `var _0xabcd =`, `while(!![])` — so legitimate shell scripts don't FP.
+  for:
+    - javascript
+    - shell
+traits:
+  - id: while-not-zero
+    desc: while(0x0) infinite loop pattern
+    crit: notable
+    conf: 0.85
+    attack: T1027
+    if:
+      type: text
+      regex: while\(0x0\)
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: while-not-space-zero
+    desc: while(!![]) with space infinite loop
+    crit: notable
+    conf: 0.85
+    attack: T1027
+    if:
+      type: text
+      regex: while\(\s*!!\s*\[\]\s*\)
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  # Obfuscator string-table rotation: `_0xabcd.push(_0xabcd.shift())` —
+  # always uses `_0x`-mangled identifiers in real JS-obfuscator output.
+  # The bare `X.push(X.shift())` form matched too many legitimate queue
+  # rotations to keep as an objective.
+  - id: push-shift-pattern
+    desc: _0x push/shift self-rotation pattern
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    if:
+      type: text
+      regex: '_0x[a-fA-F0-9]{3,}\.push\(\s*_0x[a-fA-F0-9]{3,}\.shift\(\)\s*\)'
+  # Bracket/quote notation variant: `y['push'](y['shift']())` with a plain
+  # identifier (not _0x-mangled). Same self-rotating string-array decoder, used
+  # by obfuscators that don't hex-rename the array var (e.g. the ndsw webinject).
+  - id: push-shift-bracket-pattern
+    desc: "Bracket-notation push/shift self-rotation"
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    if:
+      type: text
+      regex: "\\w+\\[['\"]push['\"]\\]\\(\\s*\\w+\\[['\"]shift['\"]\\]\\(\\)\\s*\\)"
+    unless:
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+  - id: a0-string-decoder-entrypoint
+    desc: a0_0x JavaScript string decoder entrypoint
+    crit: notable
+    conf: 0.92
+    attack: T1027.002
+    mbc: B0032
+    if:
+      type: text
+      regex: "function a0_0x[0-9a-f]{4}\\("
+    unless:
+      - id: metadata/library/structure::vscode-extension-generated-asset
+  - id: shift-push-pattern
+    desc: _0x unshift/pop self-rotation pattern
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    if:
+      type: text
+      regex: '_0x[a-fA-F0-9]{3,}\.unshift\(\s*_0x[a-fA-F0-9]{3,}\.pop\(\)\s*\)'
+  - id: array-shuffle-algorithm
+    desc: Array shuffle algorithm in infinite loop
+    crit: notable
+    conf: 0.88
+    attack: T1027
+    if:
+      type: text
+      regex: while\(!!\[\]\).*?try.*?parseInt.*?\.push.*?\.shift
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: parseint-decoder-loop
+    desc: while(!![]) try/parseInt decoder loop
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    mbc: B0032
+    if:
+      type: text
+      regex: while\(\s*!!\s*\[\]\s*\)\s*\{\s*try\s*\{\s*(var|let|const)\s+\w+\s*=\s*-?\s*parseInt\(
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+  # Obfuscator.io control-flow-flattening signature: pipe-separated digit
+  # permutations like '5|1|4|3|0|2' or '4|3|0|2|1'. These appear as AST string
+  # literals: the state ordering for the while/switch dispatcher.
+  - id: cfg-flatten-state-list
+    desc: "Obfuscator.io CFF state list"
+    # Control-flow flattening is a real anti-static transformation, but
+    # javascript-obfuscator is also used deliberately by published software.
+    # Keep this observable as notable; hostile composites must add a payload
+    # or boundary-crossing behavior.
+    crit: notable
+    conf: 0.95
+    count_min: 2
+    attack: T1027.002
+    mbc: B0032
+    if:
+      type: string_literal
+      regex: '^\d(\|\d){4,}$'
+  - id: push-keyword
+    desc: push keyword in string-table decoder context
+    crit: component
+    conf: 0.6
+    attack: T1027
+    mbc: B0032
+    if:
+      type: string_literal
+      exact: push
+  - id: shift-keyword
+    desc: shift keyword in string-table decoder context
+    crit: component
+    conf: 0.6
+    attack: T1027
+    mbc: B0032
+    if:
+      type: string_literal
+      exact: shift
+  - id: array-swap-elements
+    desc: Array element assignment swap step
+    crit: component
+    conf: 0.75
+    attack: T1027
+    count_min: 3
+    if:
+      type: text
+      regex: \w+\[\w+\]\s*=\s*\w+\[\w+\]
+  - id: for-boolean-coercion
+    desc: For loop with boolean coercion (+!!false)
+    crit: suspicious
+    conf: 0.88
+    attack: T1027
+    mbc: B0032
+    if:
+      type: text
+      regex: for\s*\(\s*(var|let|const)\s+\w+\s*=\s*\+\s*!!\s*false
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+  - id: global-buffer-access
+    desc: Dynamic global property access via Buffer
+    crit: suspicious
+    conf: 0.92
+    attack: T1027.002
+    mbc: B0032
+    if:
+      type: text
+      regex: global\s*\[\s*Buffer\.from\s*\(
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+  - id: hex-function-names
+    desc: Hex-prefixed function names (_0x pattern)
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    mbc: B0032
+    if:
+      type: text
+      regex: function\s+_0x[a-fA-F0-9]{4,}\s*\(
+    unless:
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+  - id: hex-variable-names
+    desc: Hex-prefixed variable names (_0x pattern)
+    crit: notable
+    conf: 0.85
+    attack: T1027
+    mbc: B0032
+    if:
+      type: text
+      regex: (var|let|const)\s+_0x[a-fA-F0-9]{4,}\s*=
+    unless:
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+  - id: jsfuck-pattern
+    desc: JSFuck obfuscation ([]()!+ only)
+    crit: suspicious
+    conf: 0.95
+    attack: T1027.002
+    mbc: B0032
+    count_min: 2
+    if:
+      type: text
+      regex: '[\[\]\(\)!]{10,}[\+][\[\]\(\)!]{10,}'
+  - id: whitespace-hiding
+    desc: Long inline whitespace hides code
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    mbc: B0032
+    size_max: 131072
+    if:
+      type: metrics
+      field: text.max_inline_whitespace_run
+      min: 100
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/testing/scripted/
+      - id: metadata/package/testing/harness/runtime/
+      - type: basename
+        regex: \.wasm$
+      - type: basename
+        regex: \.(md|mdx)$
+      # TypeScript compiler test baseline files (.types, .js, .symbols)
+      # use long-run whitespace for type-annotation column alignment.
+      - type: basename
+        regex: '\.(types|symbols)$'
+  # Global property with punctuation name (global['!'] = ...)
+  - id: global-punctuation-property
+    desc: Global property with non-alphanumeric name
+    crit: suspicious
+    conf: 0.92
+    attack: T1027.002
+    mbc: B0032
+    if:
+      type: text
+      regex: "global\\s*\\[\\s*['\"][^a-zA-Z0-9_]['\"]\\s*\\]\\s*="
+  # _$_ prefix naming convention used by some obfuscators
+  - id: dollar-underscore-function-names
+    desc: 'Generated dollar-underscore function names'
+    crit: notable
+    conf: 0.85
+    attack: T1027
+    mbc: B0032
+    count_min: 2
+    if:
+      type: text
+      regex: "function\\s+_\\$[_a-zA-Z0-9]{2,}\\s*\\("
+    unless:
+      - id: well-known/lib/sentry-js::sentry-raven-legacy-bundle
+      - id: metadata/lang/source::generated-do-not-edit-text
+  - id: dollar-underscore-variable-names
+    desc: 'Generated dollar-underscore variable names'
+    crit: notable
+    conf: 0.85
+    attack: T1027
+    mbc: B0032
+    count_min: 2
+    if:
+      type: text
+      regex: "(var|let|const)\\s+_\\$[_a-zA-Z0-9]{2,}\\s*="
+    unless:
+      - id: well-known/lib/sentry-js::sentry-raven-legacy-bundle
+      - id: metadata/lang/source::generated-do-not-edit-text
+  # Character permutation deobfuscation (string shuffle/swap loops)
+  - id: char-permutation-deobfuscator
+    desc: Character permutation deobfuscation function
+    crit: component
+    conf: 0.9
+    attack: T1027.002
+    mbc: B0032
+    size_max: 262144
+    if:
+      type: text
+      regex: "charAt.{0,120}\\[[^\\]]{1,40}\\]\\s*=.{0,120}charCodeAt"
+    not:
+      - substr: charAt(y):d<128?c[c.length]=a[d]
+      - substr: y<128?f[f.length]=s[y]
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: well-known/tool/development/aube::aube-package-test-fixture
+      - id: metadata/library/automation::testing-library-imports
+  - id: global-bracket-require-alias
+    desc: Obfuscated quoted global require alias
+    crit: suspicious
+    conf: 0.94
+    attack: T1027.002
+    mbc: B0032
+    for: [javascript]
+    if:
+      type: text
+      regex: 'global\s*\[\s*["''][A-Za-z_$][A-Za-z0-9_$]{0,20}["'']\s*\]\s*=\s*require\b'
+    unless:
+      - id: well-known/lib/text-encoding::encoding-indexes-loader
+      - id: well-known/lib/text-encoding::package-name
+  - id: global-bracket-module-alias
+    desc: Module aliased to global via bracket notation
+    crit: suspicious
+    conf: 0.88
+    attack: T1027.002
+    mbc: B0032
+    if:
+      type: text
+      regex: "global\\s*\\[.{1,80}\\]\\s*=\\s*module\\b"
+    unless:
+      - id: metadata/library/structure::js-browserify-dependency-map
+      - id: metadata/library/structure::js-browserify-module-wrapper
+      - id: metadata/file/format::sourcemap-inline-base64
+      - id: metadata/file/format::sourcemap-sources-content
+  - id: packer-eval-pattern
+    desc: Packer obfuscation (eval with replace)
+    crit: suspicious
+    conf: 0.95
+    attack: T1027.002
+    mbc: B0032
+    if:
+      type: text
+      regex: eval\s*\(\s*function\s*\(.{0,80}\)\s*\{.{0,220}\.replace\s*\(\s*new\s+RegExp
+    unless:
+      - id: well-known/lib/js-beautify::package-context
+composite_rules:
+  - id: full-obfuscator-io-toolkit
+    desc: JavaScript uses multiple obfuscator.io techniques
+    crit: notable
+    conf: 0.96
+    mbc: B0032
+    attack: T1027.002
+    all:
+      - id: any-name-mangling
+    any:
+      - id: objectives/anti-static/obfuscation/syntax::js-while-switch-state-machine
+      - id: objectives/anti-static/obfuscation/string/array::string-array-hex-index
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::single-long-line-outlier
+    needs: 2
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+      - id: metadata/library/generated::box-extract-progress-context
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+
+  # A custom Base64 alphabet is a clear encoding capability, but it is not
+  # evidence of a hidden payload: obfuscator.io's own decoder uses one.
+  - id: obfuscated-base64-codec
+    desc: Obfuscated JavaScript embeds a Base64 alphabet
+    crit: notable
+    conf: 0.9
+    attack: T1027.002
+    mbc: B0032
+    all:
+      - id: any-name-mangling
+      - id: micro-behaviors/data/decode/base64::base64-alphabet
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+
+  - id: infinite-loop
+    desc: Obfuscated infinite loop (while(!![]) pattern)
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    any:
+      - id: metadata/lang/javascript-features::js-obfuscator-while-loop
+      - id: while-not-zero
+      - id: while-not-space-zero
+      - id: for-boolean-coercion
+    unless:
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/file/format::sourcemap-context
+      - id: metadata/library/structure/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: string-array-rotation
+    desc: String array with rotation decoder
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    any:
+      - id: push-shift-pattern
+      - id: push-shift-bracket-pattern
+      - id: shift-push-pattern
+      - id: array-shuffle-algorithm
+    unless:
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/file/format::sourcemap-context
+      - id: metadata/library/structure/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: decoder-loop-keyword-triad
+    desc: Infinite loop decoder with parseInt + push/shift keywords
+    crit: notable
+    conf: 0.92
+    attack: T1027.002
+    mbc: B0032
+    all:
+      - id: infinite-loop
+      - id: parseint-decoder-loop
+      - id: push-keyword
+      - id: shift-keyword
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  # The string-array rotation decoder is the structural signature of
+  # javascript-obfuscator output. It is anti-analysis (T1027) but NOT proof of
+  # malicious intent on its own — commercial software obfuscates its own source
+  # with the identical tool. Obfuscation structure alone is `notable`;
+  # suspicious or hostile is reserved for obfuscation paired with a stronger
+  # boundary-crossing or malicious-payload leg
+  # (eval of decoded bytes, global require-alias trojan, etc. — see
+  # whitespace-hidden-eval / global-alias-obfuscation below).
+  - id: advanced-array-shuffling
+    desc: Advanced array shuffling algorithm
+    crit: notable
+    conf: 0.95
+    attack: T1027.002
+    all:
+      - id: infinite-loop
+      - id: string-array-rotation
+    any:
+      - id: array-swap-elements
+      - id: string-array-rotation
+      - id: decoder-loop-keyword-triad
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/build/bundler/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: hex-name-mangling
+    desc: Hex-prefixed identifier names (obfuscation)
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    mbc: B0032
+    any:
+      - id: hex-function-names
+      - id: hex-variable-names
+    unless:
+      - id: well-known/app/lux/
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/file/format::sourcemap-context
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+      - id: metadata/package/files/ecosystem::openclaw-benign-skill-member
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+  - id: commercial-obfuscation
+    desc: Commercial obfuscator patterns
+    crit: suspicious
+    conf: 0.92
+    attack: T1027.002
+    mbc: B0032
+    any:
+      - id: packer-eval-pattern
+      - id: jsfuck-pattern
+      - id: global-buffer-access
+  # Dollar-underscore obfuscator naming
+  - id: dollar-underscore-name-mangling
+    desc: Dollar-underscore prefixed generated identifiers
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    mbc: B0032
+    any:
+      - id: dollar-underscore-function-names
+      - id: dollar-underscore-variable-names
+    unless:
+      - id: metadata/lang/source::generated-do-not-edit-text
+  # Any style of obfuscator name mangling
+  - id: any-name-mangling
+    desc: Obfuscator-style name mangling
+    # This is a broad umbrella over the more specific naming traits.  The
+    # naming mechanic is notable on its own; intent-sensitive suspicion comes
+    # from the string-table/control-flow composites below.
+    crit: notable
+    conf: 0.9
+    attack: T1027
+    mbc: B0032
+    any:
+      - id: hex-name-mangling
+      - id: dollar-underscore-name-mangling
+    downgrade:
+      any:
+        - id: metadata/package/files/ecosystem::openclaw-evolver-archive-container
+    unless:
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+  - id: hex-name-mangling-with-string-table-rotation
+    desc: Hex-named string-table decoder
+    crit: notable
+    conf: 0.94
+    attack: T1027.002
+    mbc: B0032
+    all:
+      - id: hex-name-mangling
+      - id: push-shift-bracket-pattern
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+  # Permutation-based obfuscation (charAt/charCodeAt + split/join + global aliasing)
+  - id: permutation-obfuscation
+    desc: Permutation-based string obfuscation
+    crit: suspicious
+    conf: 0.92
+    attack: T1027.002
+    mbc: B0032
+    all:
+      - id: char-permutation-deobfuscator
+    any:
+      - id: objectives/anti-static/obfuscation/string/encoding::js-split-join-cleanup
+      - id: objectives/anti-static/obfuscation/string/encoding::js-string-split
+    unless:
+      - id: well-known/app/browser-extension-known/
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/automation::testing-library-imports
+      - id: well-known/lib/sheetjs-xlsx::bundled-source-context
+      - id: well-known/lib/sheetjs-xlsx::package-context
+      - id: well-known/lib/sheetjs-xlsx::vendor-bundle-context
+  # Stacked obfuscation indicators (name-mangling + array-shuffle + commercial
+  # patterns). Strong anti-analysis signal, but obfuscation density alone does
+  # not establish malicious intent — kept `notable`. Suspicious or hostile escalation
+  # happens via the payload-bearing composites below (require/eval legs).
+  - id: strong-js-obfuscation
+    desc: Strong JavaScript obfuscation indicators
+    crit: notable
+    conf: 0.95
+    attack: T1027.002
+    mbc: B0032
+    needs: 2
+    any:
+      - id: hex-name-mangling
+      - id: dollar-underscore-name-mangling
+      - id: commercial-obfuscation
+      - id: advanced-array-shuffling
+      - id: whitespace-hiding
+      - id: permutation-obfuscation
+      - id: global-bracket-require-alias
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/files/ecosystem::openclaw-evolver-package-member
+      - id: metadata/package/files/ecosystem::openclaw-benign-skill-member
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+  - id: obfuscated-eval-npm-trojan
+    desc: Obfuscated eval in JS bundle
+    crit: hostile
+    conf: 0.95
+    attack: T1195.002
+    mbc: B0024
+    all:
+      - id: any-name-mangling
+    any:
+      - id: objectives/anti-static/obfuscation/encoding/content::encoded-eval
+      - id: objectives/execution/interpreter/eval/dynamic::eval-variable
+      - id: objectives/anti-static/obfuscation/string/array::string-array-hex-index
+      - id: objectives/anti-static/obfuscation/string/encoding::js-b64-encoded-require
+    unless:
+      - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/file/format::sourcemap-context
+  # Whitespace-hidden obfuscated eval
+  - id: whitespace-hidden-eval
+    desc: Obfuscated code hidden behind whitespace padding
+    crit: hostile
+    conf: 0.95
+    attack: T1027.002
+    mbc: B0032
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-libcxx-header
+    all:
+      - id: whitespace-hiding
+    any:
+      - id: char-permutation-deobfuscator
+      - id: objectives/execution/interpreter/eval/dynamic/
+      - id: objectives/anti-static/obfuscation/string/encoding::dense-fromcharcode
+  # Global aliasing with obfuscation = supply-chain trojan
+  - id: global-alias-obfuscation
+    desc: Global require/module aliasing with obfuscation
+    crit: hostile
+    conf: 0.95
+    attack: T1027.002
+    mbc: B0024
+    all:
+      - id: global-bracket-require-alias
+    any:
+      - id: char-permutation-deobfuscator
+      - id: whitespace-hiding
+      - id: objectives/anti-static/obfuscation/string/encoding::js-string-deobfuscation
+      - id: any-name-mangling
+  - id: global-require-module-aliasing
+    desc: Global require and module aliasing
+    crit: hostile
+    conf: 0.98
+    attack: T1027.002
+    mbc: B0024
+    all:
+      - id: micro-behaviors/data/source/property/computed::js-global-require-alias
+      - id: global-bracket-module-alias

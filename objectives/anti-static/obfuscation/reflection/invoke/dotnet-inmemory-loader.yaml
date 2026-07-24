@@ -1,0 +1,121 @@
+---
+# .NET reflective in-memory assembly loader — the runtime stage of a managed
+# crypter. The stub decodes an embedded payload to a byte[], calls
+# Assembly.Load(byte[]) (no file touches disk), enumerates the loaded
+# assembly's exported types, and instantiates the entry class via
+# Activator.CreateInstance. This is the SnakeKeyLogger / generic MSIL-crypter
+# delivery shape: the real stealer never appears on disk in cleartext.
+defaults:
+  platforms: [windows, unix]
+  for: [pe, csharp]
+traits:
+  - id: dotnet-appdomain-currentdomain-load
+    desc: 'dotnet appdomain currentdomain load'
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: AppDomain.CurrentDomain.Load
+  - id: dotnet-runlib-invoke-inj
+    desc: RunLib injection invoke hook
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      substr: 'InvokeMember("Inj"'
+  - id: dotnet-runlib-invoke-bind-download
+    desc: RunLib bind/download invoke hook
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'InvokeMember\("(Bind|d)"'
+  - id: dotnet-runlib-invoke-message-disable
+    desc: RunLib message/disable invoke hook
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'InvokeMember\("(mb|dbl|sup)"'
+  - id: dotnet-resource-placeholder-getobject
+    desc: 'dotnet resource placeholder getobject'
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      substr: 'ResourceManager("[RESOURCEFILE]"'
+composite_rules:
+  - id: dotnet-runlib-invoke-member
+    desc: RunLib InvokeMember execution hooks
+    crit: component
+    conf: 0.94
+    needs: 2
+    any:
+      - id: dotnet-runlib-invoke-inj
+      - id: dotnet-runlib-invoke-bind-download
+      - id: dotnet-runlib-invoke-message-disable
+  - id: dotnet-crypter-template-reflective-runlib-loader
+    desc: .NET crypter template reflectively loads and invokes a RunLib payload
+    crit: hostile
+    conf: 0.96
+    attack: T1620
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: dotnet-appdomain-currentdomain-load
+      - id: dotnet-runlib-invoke-member
+      - id: dotnet-resource-placeholder-getobject
+    any:
+      - id: objectives/command-and-control/dropper/builder::dotnet-crypter-stub-placeholders
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-resourcemanager
+  # Suspicious on its own (plugin hosts do this too) — becomes hostile only
+  # when combined with a packed/encrypted body or packer-stub shape below.
+  # dotnet-explicit-load-api (dotnet-chain.yaml) anchors this to actual assembly
+  # loading; GetExportedTypes + Activator.CreateInstance alone is normal plugin
+  # and handler discovery in benign .NET frameworks.
+  - id: dotnet-reflective-loader-chain
+    desc: .NET reflective load-and-instantiate chain
+    crit: suspicious
+    conf: 0.8
+    attack: T1620
+    all:
+      - id: metadata/lang/compiler/managed::reflection-namespace
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/process/interpreter/reflection/runtime::create-instance-token
+      - id: dotnet-explicit-load-api
+      - id: get-exported-types-token
+    unless:
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/lang/compiler/aot::system-private-corelib
+      - id: metadata/lang/compiler/aot::kiota-wasm-corelib-dll-path
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-apicurio-registry-ui-package
+      - id: metadata/package/quality/recognized-contexts::dotnet-reference-pack-context
+  # HOSTILE (T1620 Reflective Code Loading): the reflective load+instantiate
+  # chain inside a packed/encrypted .NET assembly. A legitimate plugin host is
+  # not packed to >7.4 code entropy, so the encrypted body is the discriminator.
+  - id: dotnet-reflective-payload-execution
+    desc: Packed .NET reflectively loads and executes an in-memory payload
+    crit: hostile
+    conf: 0.9
+    attack: T1620
+    for: [pe]
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: dotnet-reflective-loader-chain
+      - id: metadata/binary/metrics/structural::high-code-entropy
+    unless:
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/lang/compiler/aot::system-private-corelib
+      - id: metadata/lang/compiler/aot::kiota-wasm-corelib-dll-path
+  - id: dotnet-reflective-network-stage
+    desc: .NET reflective stage combines encoded data with proxied network communication
+    crit: hostile
+    conf: 0.97
+    attack: "T1027,T1090.001"
+    for: [pe]
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+      - id: micro-behaviors/communications/http/client/managed::httpclient
+      - id: micro-behaviors/communications/proxy/socks::socks5-version-greeting-bytes
+      - id: micro-behaviors/data/archive/extract/zip::dotnet-zip-entry-extract

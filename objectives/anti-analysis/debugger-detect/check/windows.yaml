@@ -1,0 +1,226 @@
+defaults:
+  attack: T1622
+  mbc: B0001
+  platforms:
+    - windows
+  for:
+    - pe
+    - dll
+  crit: notable
+  conf: 0.95
+traits:
+  - id: dynamic-debugger-api-pair
+    desc: Paired debugger-check API strings
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: raw
+      regex: 'IsDebuggerPresent.{0,64}CheckRemoteDebuggerPresent'
+    unless:
+      - id: well-known/tool/reverse-engineering/
+      - id: metadata/signed/platform/
+  - id: output-debug-string
+    desc: OutputDebugString API reference
+    crit: component
+    conf: 0.82
+    if:
+      type: text
+      regex: (^|_)OutputDebugString[AW](@\d+)?$
+    unless:
+      - id: well-known/app/drivers::ngx-dll-basename
+  - id: bad-read-ptr
+    desc: IsBadReadPtr anti-debug style probe
+    crit: component
+    conf: 0.82
+    if:
+      type: symbol
+      exact: IsBadReadPtr
+  - id: bad-write-ptr
+    desc: IsBadWritePtr anti-debug style probe
+    crit: component
+    conf: 0.82
+    if:
+      type: symbol
+      exact: IsBadWritePtr
+  - id: reversed-isdebuggerpresent
+    desc: Reversed IsDebuggerPresent API string
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      exact: tneserPreggubeDsi
+  - id: reversed-checkremotedebuggerpresent
+    desc: Reversed CheckRemoteDebuggerPresent string
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      exact: tneserPreggubeDetomeRkcehC
+  - id: reversed-sleepex
+    desc: Reversed SleepEx API string
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      exact: xEpeelS
+composite_rules:
+  - id: is-debugger-present
+    desc: Paired local and remote debugger queries
+    crit: notable
+    conf: 0.88
+    all:
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/process/debug/detect::check-remote-debugger
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/lib/advanced-inf::advanced-inf-setup-context
+      - id: well-known/lib/ssh2::ssh2-pageant-helper-context
+      - id: well-known/app/telegram::telegram-desktop-signed-client-context
+
+  - id: is-debugger-present-symbol
+    desc: IsDebuggerPresent API is concealed with its reversed spelling
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: reversed-isdebuggerpresent
+
+  - id: debugger-gated-masqueraded-watchdog
+    desc: Debugger-gated masqueraded watchdog launcher
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: objectives/anti-analysis/environment-detect/check::anti-analysis-core
+      - id: objectives/evasion/masquerade/path::microsoft-windows-programdata-executable
+      - id: micro-behaviors/process/create/spawn::create-process-w
+  - id: unsigned-future-rwx-anti-debug-loader
+    desc: Unsigned future-dated RWX PE with anti-debugging imports
+    crit: hostile
+    conf: 0.99
+    attack: T1622,T1027.009,T1036.005
+    for: [pe]
+    all:
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: metadata/hardening/memory::wx-section
+      - id: metadata/signed/trust-level::unsigned
+      - id: metadata/binary/anomaly/provenance::pe-far-future-timestamp
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: win-debug-symbol-compatibility-marker
+    desc: Windows debugger/RE-tool presence marker
+    crit: notable
+    conf: 0.9
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::win-debugger-recognized-marker
+      - id: well-known/tool/reverse-engineering/ida-pin-tracer::ida-pin-tracer-plugin
+      - id: metadata/binary/vendor::bitdefender-product-marker
+      - id: metadata/signed/platform::shenzhen-goodix-technology-co.
+      - id: well-known/app/drivers::ngx-dll-basename
+  - id: dotnet-reversed-debugger-checks
+    desc: .NET reversed debugger detection APIs
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: reversed-isdebuggerpresent
+    any:
+      - id: reversed-checkremotedebuggerpresent
+      - id: reversed-sleepex
+  - id: anti-debug-api-pair
+    desc: Anti-debug API pair present
+    crit: suspicious
+    conf: 0.88
+    all:
+      - id: is-debugger-present
+      - id: output-debug-string
+    downgrade:
+      any:
+        - id: metadata/package/versioning::pe-version-resource
+        - id: metadata/lang/compiler/native::msvcrt
+        - id: metadata/binary/metrics/structural::many-imports
+        - id: metadata/binary/vendor::is-microsoft-named
+        - id: metadata/signed/platform/
+        - id: metadata/build/manifest::pe-has-manifest
+    unless:
+      - id: objectives/anti-analysis/debugger-detect/check/
+  - id: anti-debugged-embedded-network-loader
+    desc: Anti-debugged embedded network loader
+    crit: hostile
+    conf: 0.98
+    attack: T1105,T1129,T1562.001
+    size_max: 1048576
+    all:
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: metadata/binary/layout::pe-embedded
+      - id: micro-behaviors/communications/http/get::url-download-to-file-str
+      - id: micro-behaviors/dylib/load/runtime::load-library-ex-a
+      - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
+      - id: micro-behaviors/process/enumerate/snapshot::dynamic-toolhelp-enumerator
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/script/
+
+  - id: debugger-gated-elevated-logon-persistence
+    desc: Unsigned PE combines anti-debugging with elevated logon persistence
+    crit: hostile
+    conf: 0.98
+    attack: T1622,T1053.005,T1036.005
+    mbc: B0001,F0012
+    for: [pe]
+    all:
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: objectives/persistence/login/scheduled-task/cli::windows-schtasks-onlogon-highest
+      - id: metadata/binary/anomaly/provenance::pe-basename-differs-from-original-filename
+    unless:
+      - id: metadata/signed/platform/
+  - id: msi-embedded-anti-analysis-loader
+    desc: MSI embeds native payloads with anti-analysis and privileged inspection APIs
+    crit: hostile
+    conf: 0.99
+    attack: T1622,T1055,T1548.002
+    # MSI containers are surfaced as Unknown in the composite context; the
+    # outer scope is therefore the required container gate here.
+    for: [all]
+    scope: outer
+    all:
+      - id: metadata/package/files/msi::ole2-installer-kind
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/os/syscall/raw::nt-query-info-ssn
+      - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+  - id: msi-anti-analysis-service-loader
+    desc: MSI anti-analysis loader controls services
+    crit: hostile
+    conf: 0.99
+    attack: T1057,T1543.003,T1622,T1055
+    for: [all]
+    scope: outer
+    all:
+      - id: metadata/package/files/msi::ole2-installer-kind
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/os/syscall/raw::nt-query-info-ssn
+      - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+      - id: micro-behaviors/os/service/control::start-service
+  - id: seh-pointer-probe-anti-debug
+    desc: SEH with bad pointer debug probes
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/exception/error-handling::set-unhandled-exception-filter-import
+      - id: output-debug-string
+    any:
+      - id: bad-read-ptr
+      - id: bad-write-ptr
+    downgrade:
+      any:
+        - id: metadata/package/versioning::pe-version-resource
+        - id: metadata/lang/compiler/native::vcruntime
+        - id: metadata/lang/compiler/native::msvcrt
+        - id: metadata/signed/platform/
+        - id: metadata/binary/metrics/structural::many-imports
+    unless:
+      - id: metadata/package/quality/

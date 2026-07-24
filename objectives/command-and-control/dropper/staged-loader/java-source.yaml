@@ -1,0 +1,110 @@
+defaults:
+  platforms: [windows, unix]
+  for: [java]
+  attack: T1105
+  mbc: B0042
+
+traits:
+  - id: java-base64-decode-source
+    desc: Java Base64 decoder source
+    crit: component
+    conf: 0.84
+    if:
+      type: symbol
+      kind: call
+      exact: getDecoder
+  - id: java-embedded-zip-base64-source
+    desc: Java embedded zip payload Base64 source
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: UEsDB
+  - id: java-jar-processbuilder-source
+    desc: Java ProcessBuilder jar execution source
+    crit: notable
+    conf: 0.9
+    if:
+      type: literal
+      exact: -jar
+  - id: java-jar-command-string-source
+    desc: Java command string includes JAR execution
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '\b(command|cmd)\s*=.{0,120}"\s-jar\s"'
+  - id: java-pid-output-parser-source
+    desc: Java spawned process PID output parser source
+    crit: component
+    conf: 0.84
+    if:
+      type: symbol
+      kind: identifier
+      exact: pidPattern
+  - id: java-runtime-jar-exec-source
+    desc: Java Runtime jar execution source
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'Runtime\.getRuntime\(\)\.exec[\s\S]{0,120}-jar'
+composite_rules:
+  - id: java-embedded-jar-drop-exec
+    desc: Java embedded JAR drop and execute
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: java-embedded-zip-base64-source
+      - id: java-base64-decode-source
+      - id: java-jar-processbuilder-source
+      - id: micro-behaviors/fs/write/file/direct::java-fileoutputstream-source
+    any:
+      - id: micro-behaviors/data/string/mutate::java-append-calls
+      - id: java-pid-output-parser-source
+    needs: 1
+  - id: java-embedded-jar-runtime-drop-exec
+    desc: Java embedded JAR runtime drop exec
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: java-embedded-zip-base64-source
+      - id: micro-behaviors/data/string/mutate::java-append-calls
+      - id: micro-behaviors/fs/write/file/direct::java-fileoutputstream-source
+      - id: java-jar-command-string-source
+      - id: micro-behaviors/process/create/spawn::java-runtime-exec-source
+    any:
+      - id: micro-behaviors/process/io/stream::java-input-stream-access
+      - id: java-pid-output-parser-source
+    needs: 1
+  - id: java-encrypted-file-dropper
+    desc: Java decrypts staged file payload
+    crit: hostile
+    conf: 0.98
+    for: [class, java_class]
+    all:
+      - id: micro-behaviors/crypto/library/provider::java-payload-decryption
+      - id: micro-behaviors/data/decode/base64::java-base64-decoding-bytecode
+      - id: micro-behaviors/fs/write/file/direct::jvm-files-write-bytecode
+      - id: micro-behaviors/fs/file/delete::java-delete-on-exit
+  - id: java-encrypted-stage-drop-exec
+    desc: Java decrypts and executes staged file
+    crit: hostile
+    conf: 0.99
+    for: [class, java_class]
+    all:
+      - id: java-encrypted-file-dropper
+      - id: micro-behaviors/process/create/spawn::java-processbuilder-start-bytecode
+      - id: micro-behaviors/process/control/wait::java-process-waitfor-bytecode
+
+  - id: java-encrypted-zip-stage-drop-exec
+    desc: Java decrypts ZIP entries and launches a staged process
+    crit: hostile
+    conf: 0.99
+    for: [class, java_class]
+    all:
+      - id: micro-behaviors/crypto/library/provider::java-payload-decryption
+      - id: micro-behaviors/data/decode/base64::java-base64-decoding-bytecode
+      - id: micro-behaviors/data/archive/extract/zip::jvm-zip-entry-extraction-to-file
+      - id: micro-behaviors/process/create/spawn::java-processbuilder-start-bytecode
+      - id: micro-behaviors/process/io/stream::java-processbuilder-redirected-stdio

@@ -1,0 +1,209 @@
+# Python Supply Chain Attack Detection - Package Impersonation
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# Detects Python packages that masquerade as legitimate stdlib packages
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  crit: suspicious
+  attack: "T1195.002"
+traits:
+- id: top-level-code-stdlib-name
+  desc: Top-level module named code
+  crit: component
+  conf: 0.9
+  for: [data]
+  if:
+    type: text
+    regex: '^code\s*$'
+  # === getpass Interception ===
+- id: getpass-func-def
+  desc: getpass function definition
+  crit: notable
+  conf: 0.6
+  if:
+    type: text
+    regex: 'def getpass\s*\('
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+- id: imports-real-getpass
+  desc: Imports real getpass module
+  crit: component
+  conf: 0.5
+  if:
+    type: text
+    regex: 'from getpass import|import getpass\b'
+- id: getpass-module-call
+  desc: Calls getpass.getpass
+  crit: component
+  conf: 0.5
+  # Requires attribute-access against the real module; bare `getpass`
+  # symbols also match locally-defined methods like `def getpass(self):`.
+  if:
+    type: text
+    regex: 'getpass\.getpass\s*\('
+- id: builtin-input-call
+  desc: Calls __builtins__.input or builtins.input
+  crit: notable
+  conf: 0.6
+  if:
+    type: text
+    regex: '(__builtins__|builtins)\.input\('
+  # === File Exfiltration ===
+- id: write-password-file--rx-5
+  desc: Python open write to credential path
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?i)open\s*\(\s*["''][^"'']{0,80}(pass|cred)[^"'']{0,80}["'']\s*,\s*["''][abwx]'
+  not:
+  - substr: "open('/etc/passwd').read()"
+  unless:
+  - id: well-known/tool/detection/ai-guardrail/
+  - type: text
+    substr: "auth_hash_password"
+  count_max: 1022260
+- id: hidden-file-open-call
+  desc: Calls open() with a hidden-file path literal
+  crit: component
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: open
+    arg:
+      kind: string
+      substr: '/.'
+  # === HTTP Exfiltration ===
+  # NOTE: HTTP client usage is a neutral capability owned by canonical homes —
+  # requests.post by micro-behaviors/communications/http/lib/requests::requests-post,
+  # urllib.request.urlopen by .../http/lib/urllib::urllib-urlopen, and
+  # urllib.request.Request by ::urllib-request-symbol. The py-http-exfil composite
+  # below references those cross-tier and adds the impersonation/exfil intent.
+- id: write-password-file-cond-0--inline-22265
+  desc: Regex component marker
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '\.write\(.{0,80}(password-db|password-stores)\s*='
+    case_insensitive: true
+  count_max: 1022266
+- id: write-password-file-cond-1--inline-22266
+  desc: Regex component marker
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '\.write\(.{0,80}(store-passwords|store-plaintext-passwords)\s*='
+    case_insensitive: true
+  count_max: 1022267
+- id: write-password-file-cond-2--inline-22267
+  desc: Regex component marker
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '\.write\(.{0,80}http-proxy-password\s*='
+    case_insensitive: true
+      # Telnet/serial device auth writes password bytes to connection object
+  count_max: 1022268
+- id: write-password-file-cond-3--inline-22268
+  desc: Regex component marker
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    substr: 'bytes(password, "ascii")'
+  count_max: 1022269
+- id: write-password-file-cond-4--inline-22269
+  desc: Regex component marker
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    substr: "import telnetlib"
+  count_max: 1022270
+composite_rules:
+  - id: stdlib-code-top-level
+    desc: Package exposes stdlib code module
+    crit: suspicious
+    conf: 0.9
+    for: [data]
+    all:
+      - id: metadata/file/extension/identity::python-wheel-top-level-txt
+      - id: top-level-code-stdlib-name
+  # === getpass Wrapper Detection ===
+  - id: getpass-wrapper
+    desc: Wrapper around real getpass module
+    crit: notable
+    conf: 0.85
+    all:
+    - id: getpass-func-def
+    any:
+    - id: imports-real-getpass
+    - id: getpass-module-call
+  - id: append-hidden-file
+    desc: Opens a hidden path for writing
+    crit: suspicious
+    conf: 0.85
+    near_bytes: 512
+    all:
+    - id: hidden-file-open-call
+    - id: micro-behaviors/fs/file/write/direct::py-open-write-mode
+    unless:
+    - id: well-known/app/pulumi::pulumi-source-tree
+    - id: metadata/package/testing/
+    - id: metadata/package/testing/presence/harness/
+  # === Credential Interception with Exfil ===
+  - id: getpass-intercept-exfil
+    desc: getpass interception with exfiltration
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    mbc: "E1056"
+    all:
+    - id: getpass-wrapper
+    any:
+    - id: micro-behaviors/communications/http/request/client::request-python
+    - id: write-password-file
+    unless:
+    - id: metadata/package/testing/
+    - id: metadata/package/testing/presence/harness/
+    - id: metadata/package/testing/presence/harness::python-test-file
+  # === Input Interception with Exfil ===
+  - id: py-input-intercept-exfil
+    desc: input interception with exfiltration
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    all:
+    - id: objectives/supply-chain/impersonation/shadow::py-func-input-shadow
+    any:
+    - id: micro-behaviors/communications/http/request/client::request-python
+    - id: write-password-file
+  # === Full Supply Chain Pattern ===
+  - id: python-credential-supply-chain
+    desc: Python credential interception supply chain attack
+    crit: notable
+    conf: 0.98
+    mbc: "E1056"
+    any:
+    - id: getpass-intercept-exfil
+    - id: py-input-intercept-exfil
+  - id: write-password-file
+    desc: Writes to file with password in path
+    crit: suspicious
+    conf: 0.8
+    any:
+    - id: write-password-file--rx-5
+    unless:
+      # Benign config-template writes (password keys in INI/config content)
+    - id: write-password-file-cond-0--inline-22265
+    - id: write-password-file-cond-1--inline-22266
+    - id: write-password-file-cond-2--inline-22267
+    - id: write-password-file-cond-3--inline-22268
+    - id: write-password-file-cond-4--inline-22269
+    - id: micro-behaviors/crypto/library/blockchain/
+    - id: metadata/package/testing/presence/harness/

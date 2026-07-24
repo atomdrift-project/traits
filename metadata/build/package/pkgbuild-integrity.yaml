@@ -1,0 +1,136 @@
+# Neutral PKGBUILD source-integrity facts. These are structural observations
+# about how an Arch/AUR PKGBUILD fetches and verifies its sources; the
+# supply-chain *intent* (an unverified, swappable remote source) is inferred by
+# the composite in metadata/package/quality/.
+defaults:
+  platforms: [linux]
+  for: [shell]
+
+traits:
+  - id: pkgbuild-checksum-skip
+    # `*sums=(... SKIP ...)` disables integrity verification for a source.
+    # Legitimate for VCS sources and PGP-verified ones (see the benign-context
+    # atoms below); on a fixed downloadable archive it means the maintainer can
+    # swap the fetched bytes after review (content-swap / moving-target). The
+    # regex is anchored on the `*sums=(` assignment, so the bare word SKIP
+    # elsewhere in the recipe cannot trip it; a commented placeholder is
+    # suppressed by the explicit context trait below.
+    desc: PKGBUILD skips source checksum verification
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: '(sha\d+|md5|b2|ck)sums=\([^)]{0,400}\bSKIP\b'
+    unless:
+      - id: metadata/build/package::pkgbuild-commented-checksum-placeholder
+
+  - id: pkgbuild-shell-variable-pkgbase
+    # `pkgbase=linux-$_pkgsuffix` / `${_major}`: makepkg expands these when it
+    # generates .SRCINFO, but a PKGBUILD parser keeps the literal token. The two
+    # files then disagree for a purely mechanical reason, so identity-comparison
+    # rules must exclude this shape rather than read it as a renamed package.
+    desc: PKGBUILD pkgbase is an unexpanded shell variable
+    crit: baseline
+    conf: 0.97
+    if:
+      type: value
+      path: pkg.pkgbase
+      substr: '$'
+
+  - id: pkgbuild-commented-checksum-placeholder
+    desc: PKGBUILD comments out checksum placeholder
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: '(sha\d+|md5|b2|ck)sums=\([^)]{0,400}#[ \t]*["'']?SKIP\b'
+
+  - id: pkgbuild-remote-archive-source
+    # Field-scoped to the parsed source[] array, so a URL mentioned in a comment
+    # or pkgdesc cannot trip it.
+    desc: PKGBUILD fetches a remote source archive
+    crit: baseline
+    conf: 0.6
+    if:
+      type: value
+      path: pkg.source[*]
+      regex: 'https?://[^\s]{0,200}\.(tar|zip|tgz)'
+
+  - id: pkgbuild-validpgpkeys
+    # Declaring validpgpkeys means the source is verified by detached PGP
+    # signature, so SKIP checksums are expected and benign.
+    desc: PKGBUILD declares validpgpkeys for PGP verify
+    crit: baseline
+    conf: 0.6
+    if:
+      type: value
+      path: pkg.validpgpkeys
+      exists: true
+
+  - id: pkgbuild-vcs-source
+    # git+/svn+/hg+/bzr+ sources are version-controlled; SKIP checksums are the
+    # norm because the integrity comes from the pinned revision, not a digest.
+    # Scoped to the parsed source[] array (vs a file-wide `git+` match).
+    desc: PKGBUILD uses a VCS (git/svn/hg) source
+    crit: baseline
+    conf: 0.6
+    if:
+      type: value
+      path: pkg.source[*]
+      regex: '(git|svn|hg|bzr)\+'
+
+  - id: pkgbuild-multiple-checksum-assignments
+    desc: PKGBUILD contains multiple checksum assignments
+    crit: notable
+    conf: 0.9
+    count_min: 2
+    if:
+      type: text
+      regex: '(?m)^\s*(sha256|sha512|md5|b2)sums\s*=\s*\('
+
+  - id: pkgbuild-architecture-checksum-arrays
+    desc: PKGBUILD defines architecture checksum arrays
+    crit: notable
+    conf: 0.95
+    count_min: 2
+    if:
+      type: text
+      regex: '(?mi)^\s*(sha256|sha512|md5|b2)sums_[A-Za-z0-9_]+\s*=\s*\('
+
+  - id: pkgbuild-carch-case
+    desc: PKGBUILD branches on CARCH
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?m)^\s*case\s+["'']?\$\{CARCH\}["'']?\s+in'
+
+  - id: pkgbuild-carch-if
+    desc: PKGBUILD conditionally selects on CARCH
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?mi)^\s*if\s+\[\s*["'']?\$CARCH["'']?\s*=\s*["''](.{1,30})["'']'
+
+  - id: multiple-pkgbuild-recipes
+    desc: Multiple PKGBUILD recipe variants
+    crit: notable
+    conf: 0.99
+    for: [zip, tar]
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: '(^|[/\\])PKGBUILD(-[^/\\]+)?$'
+    count_min: 2
+
+composite_rules:
+  - id: pkgbuild-architecture-conditional-checksums
+    desc: PKGBUILD selects checksums by architecture
+    crit: exception
+    conf: 0.95
+    scope: outer
+    near_lines: 40
+    all:
+      - id: pkgbuild-architecture-checksum-arrays
+      - id: pkgbuild-carch-if

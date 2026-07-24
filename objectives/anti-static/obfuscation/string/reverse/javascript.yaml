@@ -1,0 +1,62 @@
+# JavaScript reverse-string obfuscation.
+# Reversal alone is a neutral string operation. These objective rules require
+# the reversed material to participate in dynamic code execution, which keeps
+# ordinary token protocols and CAPTCHA challenge handling out of the finding.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1027
+  mbc: B0032
+
+traits:
+  - id: js-decoded-dynamic-sink
+    desc: Dynamic execution directly wraps decoder
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: tree-sitter
+      kind: call
+      regex: '(eval|new Function)\s*\(\s*(atob|Buffer\.from)\s*\('
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: well-known/tool/detection/hol-guard/
+
+  - id: js-reverse-assignment-tail
+    desc: Variable assigned reverse call result
+    crit: component
+    conf: 0.97
+    if:
+      type: text
+      regex: '\w+\s*=\s*\w+\.reverse\(\)'
+    not:
+      - substr: "Lodash <https://lodash.com/>"
+    unless:
+      - type: basename
+        regex: '(^|!!).{0,200}lodash\.min\.js$'
+
+composite_rules:
+  - id: js-reverse-split-then-decode
+    desc: Executes reversed decoded JavaScript
+    crit: suspicious
+    conf: 0.96
+    near_bytes: 256
+    all:
+      - id: micro-behaviors/data/string/reverse::split-reverse-join-string
+      - id: objectives/anti-static/obfuscation/string/reverse::js-decoded-dynamic-sink
+
+  - id: js-reverse-decode-aggregator
+    desc: Reverse-obfuscated JavaScript execution pattern
+    crit: suspicious
+    conf: 0.96
+    any:
+      - id: objectives/anti-static/obfuscation/string/reverse::js-reverse-split-then-decode
+      - id: objectives/anti-static/obfuscation/string/reverse::js-reverse-then-eval
+
+  - id: js-reverse-then-eval
+    desc: Dynamically executes reversed JavaScript string
+    crit: suspicious
+    conf: 0.95
+    near_bytes: 256
+    all:
+      - id: micro-behaviors/data/string/reverse::split-reverse-join-string
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw

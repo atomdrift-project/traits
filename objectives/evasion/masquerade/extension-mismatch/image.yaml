@@ -1,0 +1,88 @@
+defaults:
+  platforms: [windows, linux, macos]
+  crit: suspicious
+  conf: 0.9
+  attack: T1036.008
+# Executable content wearing a benign *document/image/text* extension
+# (PE-named-.png, ELF-named-.pdf, shell-named-.jpg, …) is the masquerade
+# (T1036.008). filefacts reports the content→extension group transition via
+# `consistency.extension_content_mismatch.<content>_as_<ext>`. We gate on the
+# specific dangerous transitions only — image / document / text — and NOT on the
+# benign-but-mismatched cases (a Mach-O named `ls.macOS` is `binary_as_unknown`;
+# a versioned `.so.1.2` is `binary_as_data`; a `.zip`/`.json` container is
+# `binary_as_archive`/`binary_as_config`). A real executable named as an *image*
+# is the most egregious transition (hostile composite); document/text disguises
+# are suspicious.
+traits:
+  - id: binary-content-as-image-extension
+    desc: Binary content under image extension
+    crit: notable
+    conf: 0.97
+    for: [elf, macho, pe]
+    if:
+      type: metrics
+      field: consistency.extension_content_mismatch.binary_as_image
+      min: 1
+  - id: binary-content-as-document-extension
+    desc: Binary content under document extension
+    crit: component
+    conf: 0.95
+    for: [elf, macho, pe]
+    if:
+      type: metrics
+      field: consistency.extension_content_mismatch.binary_as_document
+      min: 1
+  - id: binary-content-as-text-extension
+    desc: Binary content under text extension
+    crit: component
+    conf: 0.9
+    for: [elf, macho, pe]
+    if:
+      type: metrics
+      field: consistency.extension_content_mismatch.binary_as_text
+      min: 1
+  - id: script-content-as-image-extension
+    desc: Script content under image extension
+    crit: component
+    conf: 0.9
+    for: [scripts]
+    if:
+      type: metrics
+      field: consistency.extension_content_mismatch.script_as_image
+      min: 1
+  - id: script-content-as-document-extension
+    desc: Script content under document extension
+    crit: component
+    conf: 0.9
+    for: [scripts]
+    if:
+      type: metrics
+      field: consistency.extension_content_mismatch.script_as_document
+      min: 1
+composite_rules:
+  - id: binary-disguised-as-image-extension
+    desc: Executable disguised as an image file
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: binary-content-as-image-extension
+    any:
+      - id: metadata/file/magic/identity::elf-header
+      - id: metadata/file/magic/identity::macho-32
+      - id: metadata/file/magic/identity::macho-64
+      - id: metadata/file/magic/identity::cafebabe-magic
+      - id: metadata/file/magic/identity::pe-dos-stub
+  - id: binary-masquerades-as-document-extension
+    desc: Executable disguised as document or text
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: binary-content-as-document-extension
+      - id: binary-content-as-text-extension
+  - id: script-masquerades-as-document-extension
+    desc: Script disguised as image or document
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: script-content-as-image-extension
+      - id: script-content-as-document-extension

@@ -1,0 +1,264 @@
+defaults:
+  platforms: [windows]
+  for: [pe]
+  crit: notable
+  conf: 0.9
+
+traits:
+- id: nvidia-driver-loader-banner
+  desc: Driver-themed loader banner
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: (?i)Nvidia driver loader,\s+version
+composite_rules:
+- id: inno-dbk-wrapper-export-pair
+  desc: Inno dbk wrapper export pair
+  crit: component
+  conf: 0.97
+  all:
+  - id: metadata/binary/symbols/exports::dbk-fcall-wrapper-export
+  - id: metadata/binary/symbols/exports::dbk-fcall-wrapper-addr-export
+- id: inno-delphi-overlay-loader
+  desc: Delphi/Inno installer with dominant staged overlay
+  crit: component
+  conf: 0.96
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: metadata/binary/layout::overlay-over-90pct
+  - id: metadata/binary/layout::large-overlay-1mb
+  unless:
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/leaf::johannes-schindelin
+
+# NOTE: The `inno-dbk-wrapper-stage-loader` / `inno-dbk-privileged-process-loader`
+# composites were removed here. They keyed "hostile" on `inno-dbk-wrapper-export-pair`
+# (the `__dbk_fcall_wrapper` / `dbkFCallWrapperAddr` exports) plus generic installer
+# behaviour (large overlay, winhttp-in-system32 manifest, CreateProcessW, reboot
+# privilege). Those exports are a STANDARD Inno Setup / Delphi `SetupLdr` artifact —
+# present in ordinary signed installers (Telegram Desktop, Git for Windows) and every
+# other Inno 6.x build, not the Cheat Engine "DBK" kernel driver — so the pair carries
+# no malware signal, and every unsigned app installer (e.g. JustQuery Setup, Inno
+# 6.7.0) tripped it. The genuine DriverPack-Solution family that motivated the DBK
+# export match is still caught by well-known/malware/trojan/driverpack-solution::
+# maombi-driverpack-bundle-installer, which anchors on the malicious Maombi signer and
+# the DriverPack product name and merely uses inno-dbk-wrapper-export-pair as one
+# supporting leg. Genuinely malicious Inno loaders remain covered by the encryption /
+# COM-staging / thread-injection / token-manipulation / masquerade composites below.
+- id: inno-opaque-overlay-loader
+  desc: Inno/Delphi installer with opaque staged overlay
+  crit: suspicious
+  conf: 0.97
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: metadata/binary/layout::overlay-dominates-third
+  - id: metadata/binary/layout::large-overlay-1mb
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay-raw
+  any:
+  - id: objectives/evasion/indicator-removal/timestamps::inno-55-pre2000-timestamp
+  - id: metadata/binary/installer/script::inno-password-canary
+  - id: metadata/binary/installer/script::inno-bcrypt-random
+  - id: metadata/binary/layout::pe-checksum-zeroed
+  unless:
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/leaf::johannes-schindelin
+  - id: metadata/signed/platform/
+  - id: metadata/signed/certificate/identity::pe-signature-verified-kv
+
+- id: inno-privileged-opaque-dropper
+  desc: Privilege-aware Inno opaque overlay dropper
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: inno-opaque-overlay-loader
+  - id: metadata/signed/trust-level::unsigned
+  - id: objectives/anti-static/obfuscation/payload/self-read::self-read-file-chain
+  - id: objectives/privilege-escalation/token-manipulation::dynamic-token-privilege-chain
+  - id: objectives/impact/system/shutdown::shutdown-privilege-reboot-api
+  any:
+  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: micro-behaviors/fs/file/write/direct::write-file
+  - id: micro-behaviors/fs/file/delete::deletefile-a
+  - id: micro-behaviors/fs/directory/mkdir::create-directory-a
+  needs: 2
+  unless:
+  - id: metadata/binary/installer/family/
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/platform/
+
+- id: inno-crypto-com-loader
+  desc: Inno/Delphi loader with COM array staging and PBKDF2
+  crit: suspicious
+  conf: 0.97
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: micro-behaviors/os/com/array::safearray-put-element
+  - id: micro-behaviors/crypto/kdf/algorithm::pbkdf2
+  any:
+  - id: metadata/binary/installer/script::inno-password-canary
+  - id: metadata/binary/installer/script::inno-bcrypt-random
+
+- id: malformed-inno-com-staged-dropper
+  desc: Malformed Inno COM-staged process dropper
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: metadata/binary/layout::pe-no-signature-record
+  - id: micro-behaviors/os/com/array::safearray-data-manipulation-cluster
+  - id: micro-behaviors/process/create/spawn::create-process-w
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+- id: inno-privilege-aware-loader
+  desc: Inno/Delphi loader with dynamic privilege control
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: micro-behaviors/os/sysinfo/platform/locale::get-system-default-ui-language
+  - id: objectives/privilege-escalation/token-manipulation::token-manipulation-cluster
+  - id: objectives/privilege-escalation/token-manipulation::dynamic-token-privilege-chain
+  any:
+  - id: micro-behaviors/fs/enumerate/volume::get-volume-info
+  - id: micro-behaviors/fs/enumerate/volume::get-disk-free-space
+  - id: micro-behaviors/os/com/array::safearray-put-element
+  unless:
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/leaf::johannes-schindelin
+  - id: metadata/signed/platform/
+
+- id: inno-driver-themed-loader
+  desc: Driver-themed Inno/Delphi loader profile
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: nvidia-driver-loader-banner
+  any:
+  - id: metadata/binary/installer/runtime::winhttp-system32-manifest
+  - id: metadata/lang/compiler/managed::embarcadero-delphi-compiler-banner
+- id: inno-staged-rat-loader
+  desc: Overlay-heavy Inno/Delphi staged loader with COM and crypto
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: inno-delphi-overlay-loader
+  - id: micro-behaviors/os/com/array::safearray-put-element
+  - id: micro-behaviors/crypto/kdf/algorithm::pbkdf2
+  any:
+  - id: metadata/binary/installer/script::inno-password-canary
+  - id: metadata/binary/installer/script::inno-bcrypt-random
+  - id: metadata/binary/layout::pe-checksum-zeroed
+  - id: metadata/signed/trust-level::unsigned-pe-executable
+  needs: 2
+
+- id: inno-encrypted-overlay-thread-loader
+  desc: Encrypted Inno overlay controls thread
+  crit: hostile
+  conf: 0.97
+  attack: T1027.002
+  mbc: B0032
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: objectives/anti-static/obfuscation/payload/encrypted::encrypted-inno-overlay-payload
+  any:
+  - id: micro-behaviors/process/info/thread::resume-thread-dup
+  - id: micro-behaviors/process/inject/runtime/call::suspend-thread
+  - id: micro-behaviors/dylib/load/runtime::load-library-a-string-no-import
+  - id: micro-behaviors/os/privilege/token::shutdown-privilege-name
+  - id: objectives/privilege-escalation/token-manipulation::token-manipulation-cluster
+  needs: 2
+  downgrade:
+    any:
+    - id: metadata/signed/platform/
+
+- id: tampered-encrypted-inno-overlay-loader
+  desc: Self-issued encrypted Inno overlay loader
+  crit: hostile
+  conf: 0.98
+  attack: T1027.002
+  mbc: B0032
+  all:
+  - id: metadata/binary/installer/family::inno-delphi-installer-foundation
+  - id: objectives/anti-static/obfuscation/payload/encrypted::inno-pbkdf2-chacha-crypto-markers
+  - id: metadata/binary/layout::overlay-dominates-third
+  - id: metadata/binary/layout::large-overlay-1mb
+  - id: micro-behaviors/os/com/array::safearray-data-manipulation-cluster
+  - id: micro-behaviors/process/create/spawn::create-process-w
+  - id: metadata/signed/certificate/identity::pe-cert-leaf-self-issued-kv
+  any:
+  - id: metadata/binary/installer/script::inno-setup-installer-data
+  - id: metadata/binary/installer/runtime::winhttp-system32-manifest
+  - id: micro-behaviors/fs/file/delete::deletefile-w
+  - id: micro-behaviors/fs/enumerate/volume::get-disk-free-space
+  needs: 2
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/leaf::johannes-schindelin
+
+- id: inno-privileged-overlay-stage-loader
+  desc: Overlay-heavy Inno/Delphi loader with privilege and geofence logic
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: inno-delphi-overlay-loader
+  - id: micro-behaviors/os/sysinfo/platform/locale::get-system-default-ui-language
+  - id: micro-behaviors/process/inject/runtime/call::suspend-thread
+  any:
+  - id: objectives/privilege-escalation/token-manipulation::dynamic-token-privilege-chain
+  - id: micro-behaviors/os/com/array::safearray-put-element
+  - id: metadata/binary/installer/script::inno-password-canary
+  - id: metadata/binary/layout::pe-checksum-zeroed
+  needs: 2
+  unless:
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/leaf::johannes-schindelin
+  - id: metadata/signed/platform/
+
+- id: inno-privileged-opaque-stage-loader
+  desc: Opaque Inno/Delphi loader with privilege control
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: inno-opaque-overlay-loader
+  - id: metadata/signed/trust-level::unsigned
+  - id: micro-behaviors/process/create/spawn::create-process-w
+  - id: micro-behaviors/process/inject/runtime/call::suspend-thread
+  - id: micro-behaviors/os/privilege/token::shutdown-privilege-name
+  - id: objectives/privilege-escalation/token-manipulation::token-manipulation-cluster
+  any:
+  - id: objectives/privilege-escalation/token-manipulation::dynamic-token-privilege-chain
+  - id: micro-behaviors/os/sysinfo/platform/locale::get-system-default-ui-language
+  - id: micro-behaviors/os/com/array::safearray-put-element
+  - id: metadata/binary/installer/runtime::winhttp-system32-manifest
+  needs: 2
+  unless:
+  - id: metadata/signed/developer::open-source-developer
+  - id: metadata/signed/leaf::johannes-schindelin
+  - id: metadata/signed/platform/
+
+- id: fake-driver-inno-stage-loader
+  desc: Driver-masquerading Inno/Delphi staged loader
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: inno-delphi-overlay-loader
+  - id: inno-driver-themed-loader
+  any:
+  - id: metadata/binary/installer/script::inno-password-canary
+  - id: metadata/binary/installer/script::inno-bcrypt-random
+  - id: metadata/signed/trust-level::unsigned-pe-executable
+- id: nvidia-masquerade-encrypted-inno-dropper
+  desc: NVIDIA-masquerading encrypted Inno dropper
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: objectives/anti-static/obfuscation/payload/encrypted::encrypted-inno-overlay-payload
+  - id: objectives/evasion/masquerade/version-resource/claim::nvidia-labs-driver-version-masquerade
+  - id: metadata/signed/trust-level::unsigned
+  - id: micro-behaviors/process/create/spawn::create-process-w
+  any:
+  - id: micro-behaviors/fs/file/write/direct::write-file
+  - id: micro-behaviors/fs/file/open::file-create-win
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges

@@ -1,0 +1,229 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+  attack: T1105
+  mbc: B0030
+
+traits:
+  - id: set-system-time-api
+    desc: Set system time API
+    crit: notable
+    conf: 0.86
+    if:
+      type: symbol
+      regex: '^SetSystemTime(Adjustment)?$'
+
+  - id: set-computer-name-api
+    desc: Set computer name API
+    crit: notable
+    conf: 0.86
+    if:
+      type: symbol
+      regex: '^SetComputerName[AW]?$'
+
+composite_rules:
+  - id: native-websocket-registry-tasking-agent
+    desc: Unsigned WebSocket agent with registry mutation and child-process tasking
+    crit: hostile
+    conf: 0.98
+    attack: T1071.001,T1059.003,T1112
+    all:
+      - id: micro-behaviors/communications/http/websocket::websocket-http-upgrade-headers
+      - id: micro-behaviors/communications/socket/init::socket-api-ordinal
+      - id: micro-behaviors/communications/socket/init::connect-api-ordinal
+      - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
+      - id: micro-behaviors/process/create/spawn::create-process-a
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/app/
+      - id: well-known/tool/
+
+  - id: native-pipe-tasking-destructive-backdoor
+    desc: Native named-pipe tasking with destructive file control
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-api-usage
+      - id: micro-behaviors/fs/file/delete::deletefile-w
+      - id: micro-behaviors/process/terminate/kill::terminate-process
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
+    any:
+      - id: micro-behaviors/fs/file/copy::copyfile-w
+      - id: micro-behaviors/fs/volume/admin::set-volume-label-w
+      - id: micro-behaviors/time/schedule/waitable::set-waitable-timer
+      - id: objectives/discovery/system/locale::windows-locale-fingerprint
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+      - id: well-known/app/handbrake::handbrake-windows-binary
+
+  - id: native-ipc-control-surface
+    desc: Native IPC control surface
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-api-usage
+      - id: micro-behaviors/communications/ipc/pipe::peek-named-pipe
+      - id: micro-behaviors/communications/ipc/mailslot::create-mailslot
+
+  - id: native-system-tamper-api-cluster
+    desc: Native system tamper API cluster
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: set-system-time-api
+      - id: set-computer-name-api
+      - id: micro-behaviors/process/resources/limits::terminate-job-object
+      - id: micro-behaviors/fs/link/hardlink::create-hardlink-api
+      - id: micro-behaviors/data/embedded/payload/resource::end-update-resource-w
+    needs: 2
+    unless:
+      # pywin32 binding modules re-export the whole Win32 API surface, so they
+      # reference these calls as bindings without invoking them.
+      - id: metadata/library/pywin32::pywin32-binding-module
+      # GHC's Windows runtime links a broad Win32 compatibility surface; an
+      # import-table cluster does not show that the Haskell application calls it.
+      - id: metadata/lang/compiler/systems::haskell-binary
+      - id: well-known/lib/wine/
+      - id: well-known/lib/electron::electron-chromium-runtime-strong
+      - id: well-known/lib/electron::electron-windows-runtime-pdb
+
+  - id: native-debug-or-timer-marker
+    desc: Debugger API or waitable timer marker
+    crit: component
+    conf: 0.9
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
+      - id: objectives/anti-analysis/debugger-detect/check::output-debug-string
+      - id: micro-behaviors/time/schedule/waitable::set-waitable-timer
+
+  - id: native-ipc-system-tamper-backdoor
+    desc: Native IPC backdoor with system tamper APIs
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: native-ipc-control-surface
+      - id: native-system-tamper-api-cluster
+      - id: native-debug-or-timer-marker
+      - id: objectives/discovery/system/locale::windows-locale-fingerprint
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+      - id: well-known/app/handbrake::handbrake-windows-binary
+
+  - id: native-ipc-tamper-control-backdoor
+    desc: Native IPC tamper backdoor with local control surface
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: native-ipc-control-surface
+      - id: native-system-tamper-api-cluster
+      - id: native-debug-or-timer-marker
+    any:
+      - id: micro-behaviors/os/clipboard/access::is-clipboard-format-available
+      - id: micro-behaviors/hardware/display/screen::get-desktop-window
+      - id: micro-behaviors/fs/file/write/direct::lwrite
+      - id: micro-behaviors/communications/ip/literal::encoded-external-ipv4-binary
+      - id: micro-behaviors/data/embedded/payload/resource::end-update-resource-w
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+
+  - id: profiled-pipe-backdoor-with-obfuscated-strings
+    desc: Profiled named-pipe backdoor with obfuscated string surface
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-api-usage
+      - id: micro-behaviors/os/sysinfo/hostname::get-computer-name
+      - id: objectives/discovery/system/locale::windows-locale-fingerprint
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
+      - id: metadata/binary/anomaly/signing::small-high-entropy-data-section
+      - id: micro-behaviors/time/schedule/waitable::set-waitable-timer
+      - id: micro-behaviors/process/terminate/kill::terminate-process
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+
+  - id: profiled-version-ip-evasive-loader
+    desc: Profiled native loader with external-IP version marker
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: metadata/package/versioning::version-resource-external-ip-only
+      - id: objectives/discovery/system/locale::locale-and-environment-profiling
+      - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+    any:
+      - id: micro-behaviors/hardware/input/virtual::virtual-input-driver-token
+      - id: micro-behaviors/ui/window/probe::ansi-gui-probe
+      - id: micro-behaviors/process/terminate/kill::terminate-process
+      - id: set-computer-name-api
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+
+  - id: profiled-dotted-version-evasive-loader
+    desc: Profiled native loader with fabricated dotted versions
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: objectives/evasion/masquerade/identity/fabricated::dotted-quad-version-pair
+      - id: objectives/discovery/system/locale::locale-and-environment-profiling
+      - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+    any:
+      - id: micro-behaviors/hardware/input/virtual::virtual-input-driver-token
+      - id: micro-behaviors/ui/window/probe::ansi-gui-probe
+      - id: micro-behaviors/process/terminate/kill::terminate-process
+      - id: set-computer-name-api
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+
+  - id: native-ipc-rwx-obfuscated-loader
+    desc: Native IPC RWX loader with obfuscated strings
+    crit: hostile
+    conf: 0.94
+    attack: T1055
+    mbc: E1055
+    all:
+      - id: native-ipc-control-surface
+      - id: objectives/evasion/process/injection/memory::rwx-allocation
+      - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+    any:
+      - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-api-usage
+      - id: micro-behaviors/communications/ipc/mailslot::create-mailslot
+    needs: 1
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+
+  - id: native-rwx-remote-thread-obfuscated-loader
+    desc: Native RWX remote-thread loader with obfuscated strings
+    crit: hostile
+    conf: 0.95
+    attack: T1055
+    mbc: E1055
+    all:
+      - id: objectives/evasion/process/injection/memory::rwx-allocation
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+      - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+    any:
+      - id: micro-behaviors/ui/window/probe::ansi-gui-probe
+      - id: objectives/discovery/system/locale::windows-locale-fingerprint
+      - id: micro-behaviors/os/env/access::environment-block-enumeration
+    needs: 1
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/

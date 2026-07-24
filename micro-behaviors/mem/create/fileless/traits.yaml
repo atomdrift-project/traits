@@ -1,0 +1,135 @@
+traits:
+  - id: syscall-memfd-create
+    desc: Calls memfd_create syscall
+    crit: suspicious
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["memfd_create"]
+  - id: nscreate-objectfile-memory
+    desc: In-memory dylib load (fileless exec)
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: text
+      substr: "NSCreateObjectFileImageFromMemory"
+  - id: nslink-module-api
+    desc: Links Mach-O module from memory
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: text
+      substr: "NSLinkModule"
+    unless:
+      - id: well-known/app/macos-benign/
+  - id: nslookup-symbol-module-api
+    desc: Resolves symbol in memory module
+    crit: notable
+    conf: 0.88
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: text
+      substr: "NSLookupSymbolInModule"
+  - id: nsaddress-symbol-api
+    desc: Resolves Mach-O symbol address
+    crit: notable
+    conf: 0.86
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: text
+      substr: "NSAddressOfSymbol"
+  - id: nsdestroy-objectfile-api
+    desc: Destroys in-memory object image
+    crit: notable
+    conf: 0.84
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: text
+      substr: "NSDestroyObjectFileImage"
+  - id: nt-create-section-api-string
+    desc: Allocates shared memory section
+    crit: component
+    conf: 0.9
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: NtCreateSection
+  - id: nt-map-view-section-api-string
+    desc: Maps memory section for code exec
+    crit: component
+    conf: 0.9
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: NtMapViewOfSection
+  - id: custom-memory-loader-module
+    desc: Custom memory loader marker
+    crit: notable
+    conf: 0.94
+    platforms: [windows, unix]
+    for: [pe, dll, javascript, typescript]
+    if:
+      type: text
+      substr: memload
+composite_rules:
+  - id: fileless
+    desc: Fileless execution - memfd_create + execve
+    conf: 0.95
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    all:
+      - id: syscall-memfd-create
+      - id: micro-behaviors/process/create/shell/fd::syscall-execve-linux
+  - id: fileless-macos-hostile
+    desc: Fileless execution with hidden tmp file on macOS
+    conf: 0.95
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: nscreate-objectfile-memory
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+  - id: mach-o-memory-module-loader
+    desc: Mach-O in-memory module loader
+    conf: 0.96
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: nscreate-objectfile-memory
+      - id: nslink-module-api
+    any:
+      - id: nslookup-symbol-module-api
+      - id: nsaddress-symbol-api
+      - id: nsdestroy-objectfile-api
+  - id: nt-section-map-exec-primitives
+    desc: Native section mapping execution primitives
+    conf: 0.94
+    crit: suspicious
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: nt-create-section-api-string
+      - id: nt-map-view-section-api-string
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/os/module/load::get-module-handle-ansi
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/metrics/structural::many-exports
+      - id: well-known/tool/sysadmin/virtualization/
+      - id: well-known/tool/development/jetbrains::jetbrains-company-string
+      - id: well-known/lib/protection/vmware-thinapp/

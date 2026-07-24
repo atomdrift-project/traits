@@ -1,0 +1,86 @@
+# Ruby File Infector Detection
+# Detects self-replicating malware that spreads by injecting into other files
+# ATT&KT: T1029 (Scheduled Transfer), T1491.001 (Data Encrypted for Impact)
+defaults:
+  for: [ruby]
+  platforms: [unix, windows]
+traits:
+  # === Extension Manipulation ===
+  - id: file-extension-rename
+    desc: File extension renaming
+    crit: suspicious
+    conf: 0.85
+    unless:
+      - type: text
+        regex: '_bak\.rb'
+    attack: "T1027"
+    if:
+      type: text
+      regex: 'File\.rename.{0,50}\.rb|\.rb.{0,50}File\.rename'
+  # === Self-Replication ===
+  - id: read-self-content
+    desc: Reading own file content
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059"
+    if:
+      type: text
+      regex: 'File\.open.{0,50}malware|File\.read.{0,50}malware|file_malware\.read'
+  - id: write-to-other-files
+    desc: Writing content to other files
+    crit: component
+    conf: 0.90
+    attack: "T1059"
+    unless:
+      - id: well-known/lib/jruby::package-path
+      - id: well-known/lib/jruby::module-marker
+      - id: well-known/lib/jruby::jruby-home-path
+    if:
+      type: text
+      regex: 'file_target\.write|\.write\s*\(\s*content'
+  # === Self-Preservation ===
+  - id: skip-self-check
+    desc: Skip self to avoid infection
+    crit: suspicious
+    conf: 0.80
+    attack: "T1070"
+    if:
+      type: text
+      regex: 'next\s+if\s+file\s*==\s*__FILE__|!=.{0,30}malware\.rb|!=.{0,30}main\.rb'
+composite_rules:
+  # === Extension Spoofer ===
+  - id: extension-spoofer
+    desc: File extension manipulation
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    needs: 2
+    any:
+      - id: file-extension-rename
+      - id: metadata/file/string/charset::split-string
+  # === Self-Replicator ===
+  - id: self-replicator
+    desc: Self-replicating malware behavior
+    crit: suspicious
+    conf: 0.92
+    attack: "T1059"
+    needs: 3
+    any:
+      - id: micro-behaviors/fs/read/self::self-file-reference
+      - id: read-self-content
+      - id: write-to-other-files
+      - id: skip-self-check
+  # === File Infector Virus ===
+  # HOSTILE: Active file infection that modifies/overwrites other files
+  # Complexity: all(3) + any(1) = 4+ (meets hostile threshold)
+  - id: file-infector-virus
+    desc: File infector virus spreads by injecting code into other files
+    crit: hostile
+    conf: 0.95
+    attack: "T1491.001"
+    all:
+      - id: micro-behaviors/fs/enumerate/directory::ruby-recursive-glob
+      - id: self-replicator # Must have self-replication behavior
+      - id: write-to-other-files # Must write to other files
+    any:
+      - id: file-extension-rename

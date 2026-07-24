@@ -1,0 +1,131 @@
+# Linux Kernel Rootkit Detection - Syscall Hooking Infrastructure
+# MBC: Defense Evasion, Privilege Escalation  
+# ATT&CK: T1014 (Rootkit), T1068 (Exploitation for Privilege Escalation)
+defaults:
+  # Linux kernel-module syscall hooking — linux-only by definition.
+  platforms: [linux]
+  for: [c]
+traits:
+  # SYSCALL HOOKING INFRASTRUCTURE
+  # ============================================================
+  - id: asmlinkage-decl
+    desc: Assembly linkage declaration (syscall calling
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "asmlinkage"
+    unless:
+      - id: well-known/app/xilinx-onload::onload-kernel-source-context
+      - id: metadata/lang/source::linux-kernel-arch-source-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: metadata/lang/source::linux-kernel-source-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context
+  - id: t-syscall-typedef
+    desc: Syscall function pointer typedef
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '\b(t_syscall|sys_?call_(ptr|hook|orig))\b'
+  - id: orig-syscall-pattern
+    desc: Original syscall pointer assignment
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    # Require a C assignment statement, rather than an identifier anywhere in
+    # text. Tests frequently use names such as `orig_kill` inside fixture data
+    # and assertions, which is not syscall-hook implementation evidence.
+    if:
+      type: text
+      regex: '\b(orig_(getdents|kill|tcp4|packet))\s*=\s*[^;\r\n]{0,80};'
+    unless:
+      - id: well-known/app/samba::samba-source-tree
+  - id: pt-regs-register-access
+    desc: Direct register access via pt_regs
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: symbol
+      kind: member
+      exact: "pt_regs->"
+  - id: pt-regs-di-access
+    desc: RDI register access (first syscall
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      kind: member
+      exact: "->di"
+  - id: pt-regs-si-access
+    desc: RSI register access (second syscall
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      kind: member
+      exact: "->si"
+  # ============================================================
+  # GETDENTS HOOKING SPECIFIC
+  # ============================================================
+  - id: getdents-hook-function
+    desc: getdents hook function (directory listing
+    crit: suspicious
+    conf: 0.99
+    attack: "T1014"
+    if:
+      type: symbol
+      kind: function
+      exact: "getdents"
+  # nr-getdents-ref deleted: duplicate of
+  # micro-behaviors/os/syscall/invoke::nr-getdents (same `__NR_getdents`
+  # IOC, different match kind).
+  # nr-kill-ref deleted: bare `__NR_kill` is ubiquitous libc/strace text;
+  # the kill-hook signal is orig-syscall-pattern (orig_kill).
+  # user-annotation deleted: `__user` is a kernel-source structural marker
+  # present in all kernel-adjacent C, not hooking evidence.
+  # ============================================================
+  # USER/KERNEL BOUNDARY
+  # ============================================================
+  - id: gfp-kernel-alloc
+    desc: GFP_KERNEL allocation flag
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: symbol
+      kind: call
+      exact: "GFP_KERNEL"
+  # ============================================================
+  # KERNEL FUNCTION CALLS
+  # ============================================================
+  # kallsyms_lookup_name is a neutral kernel symbol resolver used by kgdb,
+  # kprobes and livepatch as well as by rootkits, and it was already covered
+  # twice in micro-behaviors/os/kernel/routines (kallsyms-lookup-symbol and
+  # kallsyms-lookup-name-reference, both notable). This third copy sat at
+  # suspicious in an objectives directory with no composite referencing it, so
+  # it convicted in-tree kernel code on its own. Composites needing the signal
+  # reference the micro-behaviour instead.
+  - id: prepare-credential-access-call
+    desc: "Prepare kernel credentials"
+    crit: suspicious
+    conf: 0.98
+    attack: "T1068"
+    if:
+      type: symbol
+      kind: call
+      exact: "prepare_credential-access"
+  - id: commit-credential-access-call
+    desc: "Commit kernel credentials"
+    crit: suspicious
+    conf: 0.98
+    attack: "T1068"
+    if:
+      type: symbol
+      kind: call
+      exact: "commit_credential-access"
+  # A bare read_cr0() call is a neutral privileged-register read, not a rootkit
+  # indicator: in-tree drivers read CR0 for cache and suspend/resume handling.
+  # It lives in micro-behaviors/os/kernel/register::cr0-read-call; the
+  # write-protect-clearing intent is asserted by
+  # objectives/evasion/kernel-hide/module::cr0-manipulation.
+# ============================================================

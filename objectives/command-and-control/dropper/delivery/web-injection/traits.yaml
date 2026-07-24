@@ -1,0 +1,106 @@
+defaults:
+  platforms: [windows, unix]
+  attack: T1105
+
+traits:
+  - id: ndsw-guard-block
+    desc: NDSW injected JavaScript guard block
+    crit: suspicious
+    conf: 0.96
+    for: [source, html, text]
+    if:
+      type: text
+      substr: if(ndsw===undefined)
+
+  - id: ndsw-xhr-client
+    desc: NDSW JavaScript XMLHttpRequest client
+    crit: suspicious
+    conf: 0.96
+    for: [source, html, text]
+    if:
+      type: text
+      regex: 'HttpClient=function[\s\S]{0,260}new XMLHttpRequest\('
+
+  - id: ndsw-eval-response-callback
+    desc: NDSW JavaScript response eval callback
+    crit: suspicious
+    conf: 0.96
+    for: [source, html, text]
+    if:
+      type: text
+      regex: 'function\(E\)[\s\S]{0,80}\beval\b'
+
+  - id: ndsw-tokenized-eval-string
+    desc: NDSW tokenized eval string
+    crit: suspicious
+    conf: 0.94
+    for: [source, html, text]
+    if:
+      type: text
+      substr: ",'eval',"
+
+  - id: stat-js-clock-include
+    desc: Injected stat.js clock loader
+    crit: suspicious
+    conf: 0.94
+    for: [source, html, text]
+    if:
+      type: text
+      regex: '<script[^>]{0,120}src=[''"]https?://.{1,160}/stat\.js\?v=clock[''"]'
+
+  - id: travelfornamewalking-loader
+    desc: Travelfornamewalking injected loader domain
+    crit: suspicious
+    conf: 0.98
+    for: [source, html, text]
+    if:
+      type: text
+      substr: travelfornamewalking.ga/stat.js?v=clock
+
+composite_rules:
+  - id: ndsw-web-injected-loader
+    desc: NDSW injected web loader
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: ndsw-guard-block
+      - id: ndsw-xhr-client
+    any:
+      - id: ndsw-eval-response-callback
+      - id: ndsw-tokenized-eval-string
+
+  - id: stat-js-clock-web-injected-loader
+    desc: Stat.js clock web injected loader
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: stat-js-clock-include
+      - id: travelfornamewalking-loader
+
+  # Obfuscated browser injectors hide createElement/src/appendChild behind
+  # computed properties. The atoms stay neutral; these composites require
+  # the complete remote-script delivery behavior before inferring hostility.
+  - id: obfuscated-remote-script-loader
+    desc: Obfuscated remote script injection
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/process/create/load/remote-code::js-createelement-name-fragment
+      - id: micro-behaviors/data/source/property/computed::js-computed-member-variable-assignment
+      - id: micro-behaviors/process/create/load/remote-code::js-computed-document-member-call
+    any:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::cfg-flatten-state-list
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
+    needs: 1
+    near_bytes: 1800
+
+  - id: host-targeted-obfuscated-script-loader
+    desc: Host-targeted obfuscated script injection
+    crit: hostile
+    conf: 0.97
+    for: [javascript, typescript]
+    all:
+      - id: obfuscated-remote-script-loader
+      - id: micro-behaviors/communications/http/url/path::browser-location-bracket-member-read

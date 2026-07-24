@@ -1,0 +1,194 @@
+defaults:
+  platforms: [unix, windows]
+  crit: suspicious
+  attack: T1195.002
+traits:
+  - id: go-func-readpassword-shadow
+    desc: "ReadPassword func calling term.ReadPassword"
+    crit: component
+    conf: 0.95
+    for: [go]
+    if:
+      type: text
+      regex: func ReadPassword\s*\(.{0,50}\)[^{]{0,100}\{[\s\S]{0,800}term\.ReadPassword
+  # Encrypt/Decrypt are ordinary names in any crypto library; defining one that
+  # calls real crypto is NOT function shadowing (Go has no builtin Encrypt/Decrypt
+  # to shadow). These are building blocks — only meaningful combined with I/O exfil
+  # (mirror of the JS js-crypto-shadow = def AND http-exfil gate). Component so they
+  # don't surface standalone as supply-chain/impersonation findings.
+  - id: go-func-encrypt-shadow
+    desc: Encrypt function calling real crypto
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: text
+      regex: func Encrypt\s*\(.{0,50}\).{0,50}\{[\s\S]{0,500}(cipher\.|aes\.|crypto/)
+  - id: go-func-decrypt-shadow
+    desc: Decrypt function calling real crypto
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: text
+      regex: func Decrypt\s*\(.{0,50}\)[^{]{0,50}\{[\s\S]{0,500}(cipher\.|aes\.|crypto/)
+  - id: py-func-getpass-shadow
+    desc: getpass function calling real getpass
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: def getpass\s*\(.{0,30}\):[\s\S]{0,300}getpass\.getpass\s*\(
+  - id: py-func-input-shadow
+    desc: input function calling builtin input
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: def input\s*\(.{0,30}\):[\s\S]{0,300}(__builtins__|builtins)\.input\s*\(
+  - id: py-func-print-shadow
+    desc: print function with network call
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: def print\s*\(.{0,30}\):[\s\S]{0,300}(requests\.|urllib|socket)
+  - id: js-console-log-shadow
+    desc: console.log redefined with network call
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: console\.log\s*=\s*[^;]{0,200}(fetch|axios|http\.request)
+  - id: ruby-gets-shadow
+    desc: gets method redefined with I/O
+    crit: suspicious
+    conf: 0.8
+    for: [ruby]
+    if:
+      type: text
+      regex: def gets[\s\S]{0,300}(Net::HTTP|open\s*\(|File\.write)
+composite_rules:
+  - id: go-readpassword-with-io
+    desc: Go ReadPassword wrapper with nearby I/O
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    near_bytes: 1200
+    all:
+      - id: go-func-readpassword-shadow
+    any:
+      - id: objectives/credential-access/capture/input::file-write-operation
+      - id: objectives/credential-access/capture/input::http-exfil-operation
+
+  - id: go-credential-shadow
+    desc: Go credential function shadowing
+    crit: hostile
+    conf: 0.95
+    attack: T1056
+    mbc: E1056
+    all:
+      - id: go-func-readpassword-shadow
+      - id: go-readpassword-with-io
+  # Not wired into function-shadow-attack and has no exfil requirement, so as a
+  # standalone composite it just re-surfaces the benign Encrypt/Decrypt definition.
+  # Keep as a component building block until a Go http-exfil gate exists.
+  - id: go-crypto-shadow
+    desc: Go crypto function shadowing
+    crit: notable
+    conf: 0.85
+    any:
+      - id: go-func-encrypt-shadow
+      - id: go-func-decrypt-shadow
+  - id: py-io-operation
+    desc: Python I/O operation
+    crit: component
+    conf: 0.6
+    any:
+      - id: micro-behaviors/communications/http/lib/requests
+      - id: micro-behaviors/fs/file/open::text-write-append-mode
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
+  - id: py-getpass-with-io
+    desc: getpass with file/network I/O
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: py-func-getpass-shadow
+      - id: py-io-operation
+  - id: python-credential-shadow
+    desc: Python credential function shadowing
+    crit: hostile
+    conf: 0.95
+    attack: T1056
+    mbc: E1056
+    any:
+      - id: py-func-getpass-shadow
+      - id: py-getpass-with-io
+      - id: py-func-input-shadow
+  - id: js-crypto-func-def
+    desc: JavaScript crypto-named function definition
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: micro-behaviors/crypto/library/keyword::js-encrypt-func-def
+      - id: micro-behaviors/crypto/library/keyword::js-decrypt-func-def
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: well-known/app/wordpress-plugins::wordpress-plugin-path-downloads
+      - id: well-known/app/browser-extension-translator::translator-member-path
+      - id: well-known/app/browser-extension-translator::tencent-translation-api-auth
+  - id: js-crypto-shadow
+    desc: Crypto-named function with nearby HTTP POST
+    crit: suspicious
+    conf: 0.8
+    scope: leaf
+    near_bytes: 4096
+    all:
+      - id: js-crypto-func-def
+    any:
+      - id: micro-behaviors/communications/http/post::fetch-post-call
+      - id: micro-behaviors/communications/http/post::axios-post-call
+      - id: micro-behaviors/communications/http/post::http-request-post
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: well-known/app/tencent-codebuddy::codebuddy-marker
+      - id: well-known/app/browser-extension-translator::translator-member-path
+      - id: well-known/app/browser-extension-translator::tencent-translation-api-auth
+  - id: javascript-function-shadow
+    desc: JavaScript function shadowing
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: js-console-log-shadow
+      - id: js-crypto-shadow
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/package/files/dependency::node-modules-path
+      - id: metadata/package/quality/false-positives::projen-package-context
+      - id: well-known/lib/system::system-browser-loader-bundle
+      - id: well-known/lib/requirejs::requirejs-browser-xhr-loader
+      - id: well-known/lib/requirejs::requirejs-library-context
+      - id: well-known/lib/capacitor::capacitor-cordova-runtime-context
+      - id: well-known/lib/import-in-the-middle::import-in-the-middle-library-context
+      - id: metadata/package/quality/false-positives::napi-rs-require-reassignment-context
+  - id: function-shadow-attack
+    desc: Function shadowing supply chain attack
+    crit: hostile
+    conf: 0.95
+    mbc: E1056
+    any:
+      - id: go-credential-shadow
+      - id: python-credential-shadow
+      - id: javascript-function-shadow
+      - id: ruby-gets-shadow
+    unless:
+      - id: metadata/package/quality/false-positives::projen-package-context
+      - id: well-known/lib/import-in-the-middle::import-in-the-middle-library-context
+      - id: well-known/lib/import-in-the-middle::import-in-the-middle-loader-source
+      - id: metadata/package/quality/false-positives::napi-rs-require-reassignment-context

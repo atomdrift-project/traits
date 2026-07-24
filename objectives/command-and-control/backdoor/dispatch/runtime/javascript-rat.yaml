@@ -1,0 +1,122 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - javascript
+traits:
+  - id: npm-install-runtime-exec
+    desc: Runtime npm install via exec
+    crit: suspicious
+    conf: 0.85
+    attack: T1027.009
+    if:
+      # Migrated from a tree-sitter query to a `kind: call` match on
+      # the pre-extracted call fact (no per-member cursor walk).
+      type: symbol
+      kind: call
+      regex: '\.(^(exec|execSync)$)$'
+  - id: npm-prefix-install
+    desc: Runtime exec call with npm prefix
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\\.)exec$'
+      arg:
+        kind: string
+        substr: --prefix
+  - id: windows-hide-option
+    desc: windowsHide option for stealth
+    crit: notable
+    conf: 0.8
+    attack: T1564.003
+    if:
+      type: string_literal
+      regex: windowsHide:\s*true
+  - id: module-paths-push
+    desc: module.paths.push manipulation
+    crit: suspicious
+    conf: 0.85
+    attack: T1574.007
+    if:
+      type: symbol
+      regex: module\\.paths\\.push
+  - id: hidden-node-modules
+    desc: Hidden .node_modules directory in home
+    crit: notable
+    conf: 0.75
+    if:
+      type: string_literal
+      substr: .node_modules
+    unless:
+      - id: metadata/library/structure::vscode-material-icon-map-bundle
+      - type: path
+        regex: '(^|[\\/])opencode([\\/]|$)'
+  - id: socket-command-handler
+    desc: Socket command event handler
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.007
+    if:
+      # Migrated from a tree-sitter query to a `kind: call` match on
+      # the pre-extracted call fact (no per-member cursor walk).
+      type: symbol
+      kind: call
+      regex: '(^|\.)\^\(socket\|sock\|client\|conn\|connection\|ws\)\$\.on$'
+  - id: process-id-collection
+    desc: Process ID collection
+    crit: suspicious
+    conf: 0.6
+    if:
+      type: symbol
+      regex: process\\.pid
+composite_rules:
+  - id: runtime-npm-install
+    desc: Runtime npm package installation (dependency evasion)
+    crit: hostile
+    conf: 0.95
+    attack: T1027.009
+    mbc: E1027
+    all:
+      - id: npm-install-runtime-exec
+      - id: objectives/execution/interpreter/eval/invoke::shell-eval
+      - id: npm-prefix-install
+  - id: module-path-tampering
+    desc: Node.js module path tampering for persistence
+    crit: suspicious
+    conf: 0.85
+    attack: T1574.007
+    all:
+      - id: module-paths-push
+      - id: hidden-node-modules
+  - id: rat-command-execution
+    desc: Remote Access Trojan with command execution
+    crit: hostile
+    conf: 0.95
+    attack: T1219
+    mbc: B0022
+    all:
+      - id: socket-command-handler
+      - id: objectives/command-and-control/channel/http/listener::socket-io
+      - id: micro-behaviors/process/create/exec::js-child-process
+  - id: advanced-rat-evasion
+    desc: Advanced RAT with runtime dependency evasion
+    crit: hostile
+    conf: 0.95
+    attack: T1219
+    all:
+      - id: runtime-npm-install
+      - id: module-path-tampering
+    any:
+      - id: socket-command-handler
+      - id: objectives/command-and-control/channel/http/listener::socket-io
+  - id: rat-client-fingerprinting
+    desc: RAT client fingerprinting and tracking
+    crit: suspicious
+    conf: 0.85
+    attack: T1082
+    all:
+      - id: micro-behaviors/data/source/property/identity::client-uuid-object-field
+    any:
+      - id: process-id-collection
+      - id: micro-behaviors/process/user/query::os-homedir-call

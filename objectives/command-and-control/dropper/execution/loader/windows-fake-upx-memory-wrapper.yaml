@@ -1,0 +1,281 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+traits:
+  - id: giant-rwx-upx1
+    desc: Giant RWX UPX1 payload section
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: section
+      exact: UPX1
+      length_min: 524288
+      entropy_min: 7.7
+      writable: true
+      executable: true
+    unless:
+      - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/certificate/identity::pe-signature-verified
+      - id: objectives/anti-static/pack/detect::obsidium-software-marker
+      - id: well-known/tool/development/cygwin::cygwin-setup-signature
+  - id: compact-rwx-upx1
+    desc: Compact RWX UPX1 payload section
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: section
+      exact: UPX1
+      length_min: 32768
+      length_max: 262144
+      entropy_min: 7.7
+      writable: true
+      executable: true
+    unless:
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/developer/
+      - id: well-known/app/peazip::peazip-freearc-sfx-helper
+      - id: metadata/binary/installer/sfx::freearc-sfx
+      - id: well-known/tool/development/cygwin::cygwin-setup-signature
+      - id: metadata/package/testing/presence/harness::binary-test-directory
+      - id: well-known/tool/sysadmin/wimlib::bfi-helper
+  - id: empty-rwx-upx0
+    desc: Empty RWX UPX0 decoy section
+    crit: notable
+    conf: 0.96
+    if:
+      type: section
+      exact: UPX0
+      length_max: 1
+      writable: true
+      executable: true
+    unless:
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/developer/
+composite_rules:
+  - id: fake-upx-memory-wrapper
+    desc: Fake UPX wrapper with in-memory payload layout
+    crit: suspicious
+    conf: 0.97
+    attack: T1027
+    mbc: B0032
+    all:
+      - id: giant-rwx-upx1
+      - id: empty-rwx-upx0
+      - id: metadata/binary/section/names::upx-section
+      - id: metadata/binary/resource::minimal-resources
+      - id: metadata/binary/metrics/anomaly::low-function-count-marker
+      - id: objectives/anti-static/obfuscation/binary-metrics/imports::import-count-under-40
+    unless:
+      - id: objectives/command-and-control/dropper/execution/windows-loader/
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+  - id: fake-upx-threaded-memory-loader
+    desc: Fake UPX threaded in-memory loader
+    crit: hostile
+    conf: 0.98
+    attack: T1620
+    mbc: B0030
+    all:
+      - id: giant-rwx-upx1
+      - id: empty-rwx-upx0
+      - id: metadata/binary/section/names::upx-section
+      - id: metadata/binary/resource::minimal-resources
+      - id: metadata/binary/metrics/anomaly::low-function-count-marker
+      - id: objectives/anti-static/obfuscation/binary-metrics/imports::import-count-under-40
+      - id: micro-behaviors/process/thread/create::create-thread
+    any:
+      - id: micro-behaviors/time/timing/delay::sleep-dup
+      - id: micro-behaviors/dylib/load/runtime::load-library-ex-a
+      - id: micro-behaviors/dylib/load/runtime::load-library-ex-w
+      - id: micro-behaviors/mem/protect/modify::virtual-free
+    needs: 3
+    unless:
+      - id: objectives/command-and-control/dropper/execution/windows-loader/
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+  # Magic-stripped UPX bookend used as an in-memory loader: giant RWX UPX1,
+  # empty UPX0 decoy, and a VirtualProtect resolution stub — orthogonal to
+  # pure pack/upx composites so both surfaces fire for triage.
+  - id: scrambled-upx-giant-memory-loader
+    desc: Magic-stripped UPX giant RWX in-memory loader
+    crit: hostile
+    conf: 0.97
+    attack: T1620
+    mbc: B0030
+    all:
+      - id: giant-rwx-upx1
+      - id: empty-rwx-upx0
+      - id: objectives/anti-static/pack/upx::scrambled-upx-header
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: objectives/anti-static/pack/runtime::pe-import-count-under-10
+    unless:
+      - id: objectives/anti-static/pack/upx::upx-magic-bytes
+      - id: metadata/signed/platform/
+      - id: metadata/signed/developer/
+      - id: metadata/package/versioning::pe-version-resource
+
+  - id: scrambled-upx-overlay-api-loader
+    desc: Magic-stripped UPX loader with encrypted overlay and API resolution
+    crit: hostile
+    conf: 0.98
+    attack: T1027.002,T1620
+    mbc: B0030
+    all:
+      - id: objectives/anti-static/pack/upx::scrambled-upx-header
+      - id: metadata/binary/layout::high-entropy-overlay
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: objectives/anti-static/pack/runtime::pe-import-count-under-10
+    unless:
+      - id: objectives/anti-static/pack/upx::upx-magic-bytes
+      - id: metadata/signed/platform/
+      - id: metadata/signed/developer/
+      - id: metadata/package/versioning::pe-version-resource
+
+  - id: compact-fake-upx-memory-wrapper
+    desc: Compact fake UPX wrapper with memory-loader layout
+    crit: suspicious
+    conf: 0.96
+    attack: T1027
+    mbc: B0032
+    all:
+      - id: compact-rwx-upx1
+      - id: empty-rwx-upx0
+      - id: metadata/binary/section/names::upx-section
+      - id: objectives/anti-static/pack/polymorphic::unusual-entry-point-section
+      - id: metadata/binary/metrics/structural::single-complex-function
+      - id: objectives/anti-static/obfuscation/binary-metrics/imports::import-count-under-40
+    any:
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+    needs: 2
+    unless:
+      - id: objectives/command-and-control/dropper/execution/windows-loader/
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+  - id: compact-fake-upx-memory-loader
+    desc: Compact fake UPX in-memory loader
+    crit: hostile
+    conf: 0.97
+    attack: T1620
+    mbc: B0030
+    all:
+      - id: compact-rwx-upx1
+      - id: empty-rwx-upx0
+      - id: metadata/binary/section/names::upx-section
+      - id: objectives/anti-static/pack/polymorphic::unusual-entry-point-section
+      - id: metadata/binary/metrics/structural::single-complex-function
+      - id: objectives/anti-static/obfuscation/binary-metrics/imports::import-count-under-40
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    any:
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: metadata/binary/layout::has-overlay
+    needs: 2
+    unless:
+      - id: objectives/command-and-control/dropper/execution/windows-loader/
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+  - id: upx-windowsupdate-masquerade-loader
+    desc: UPX masquerade loader stages WindowsUpdate path
+    crit: hostile
+    conf: 0.97
+    attack: T1027
+    mbc: B0030
+    all:
+      - id: compact-rwx-upx1
+      - id: objectives/anti-static/obfuscation/payload/import::minimal-pe-dynamic-load
+      - id: objectives/evasion/masquerade/identity/mimicry::non-microsoft-windowsupdate-path
+    any:
+      - id: objectives/anti-static/obfuscation/encoding/content::encoded-mozilla-ua
+      - id: micro-behaviors/dylib/load/runtime::load-library-a-string-no-import
+      - id: metadata/binary/metrics/structural::dominant-section
+    needs: 2
+    unless:
+      - id: metadata/package/versioning::pe-version-resource
+      - id: metadata/signed/platform/
+  - id: upx-encrypted-overlay-module-loader
+    desc: UPX encrypted overlay resolves modules
+    crit: hostile
+    conf: 0.97
+    attack: T1027.002
+    mbc: B0032
+    all:
+      - id: compact-rwx-upx1
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::binary-encrypted-overlay
+      - id: objectives/anti-static/obfuscation/payload/import::minimal-pe-dynamic-load
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a-string-no-import
+      - id: micro-behaviors/process/enumerate/snapshot::dynamic-toolhelp-enumerator
+      - id: xor-base64-encoded-payload
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+  - id: upx-dominant-overlay-apihash-loader
+    desc: UPX dominant overlay hashes APIs
+    crit: hostile
+    conf: 0.98
+    attack: T1027.002
+    mbc: B0032
+    all:
+      - id: compact-rwx-upx1
+      - id: objectives/anti-static/obfuscation/imports::pe-api-hashing-indicator-single
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::binary-encrypted-overlay
+      - id: objectives/anti-static/obfuscation/payload/import::minimal-pe-dynamic-load
+      - id: micro-behaviors/process/enumerate/snapshot::dynamic-toolhelp-enumerator
+      - id: micro-behaviors/dylib/load/runtime::load-library-a-string-no-import
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - id: metadata/package/versioning::pe-version-resource
+        - id: well-known/lib/spidermonkey/
+  - id: xor-base64-encoded-payload
+    desc: XOR and base64 encoded payload content
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: metadata/lang/encoded/xor/
+      - id: metadata/lang/encoded/base64/
+
+  - id: fake-upx-pyinstaller-temp-loader
+    desc: Fake UPX PyInstaller temp loader
+    crit: hostile
+    conf: 0.98
+    attack: T1027.001
+    mbc: B0032
+    all:
+      - id: objectives/anti-static/pack/upx::fake-upx-invalid-import-wrapper
+      - id: micro-behaviors/fs/temp/pyinstaller::onefile-temp-bootstrap
+    any:
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/dylib/load/runtime::load-library-ex-w
+      - id: micro-behaviors/mem/protect/modify::virtual-protect-text-pe
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/package/versioning::pe-version-resource
+
+  - id: fake-upx-pyinstaller-memory-loader
+    desc: Fake UPX PyInstaller memory loader
+    crit: hostile
+    conf: 0.99
+    attack: T1620
+    mbc: B0030
+    all:
+      - id: objectives/anti-static/pack/upx::fake-upx-invalid-import-wrapper
+      - id: micro-behaviors/fs/temp/pyinstaller::onefile-temp-bootstrap
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/mem/protect/modify::virtual-protect-text-pe
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-ex-w
+      - id: micro-behaviors/dylib/load/runtime::load-library-a-string-no-import
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/package/versioning::pe-version-resource

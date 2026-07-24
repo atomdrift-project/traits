@@ -1,0 +1,308 @@
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms:
+    - windows
+  for:
+    - javascript
+    - vbs
+    - html
+  attack: T1059.005
+  mbc: E1243
+traits:
+  - id: activex-wmi
+    desc: WbemScripting.SWbemLocator
+    if:
+      type: string_literal
+      substr: WbemScripting.SWbemLocator
+    attack: T1047
+    mbc: E1043
+  - id: activex-object-global-lookup-unicode
+    desc: this lookup for ActiveXObject
+    crit: notable
+    if:
+      type: encoded
+      encoding: unicode-escape
+      regex: (?i)\bthis\s*\[\s*['"]ActiveXObject['"]\s*\]
+    attack: T1202
+  - id: activex-object-computed-progid
+    desc: ActiveXObject built with computed ProgID
+    crit: notable
+    conf: 0.9
+    # `new ActiveXObject((function(){...String.fromCharCode...})())` — the COM
+    # ProgID is built at runtime by an inline function instead of being a string
+    # literal ("WScript.Shell", "Scripting.FileSystemObject", ...). Legitimate
+    # WSH code always passes a literal ProgID; reconstructing it solely hides the
+    # class from static AV/string scanners. Hallmark of obfuscated JScript droppers.
+    if:
+      type: text
+      regex: 'new\s+ActiveXObject\s*\(\s*\(\s*function'
+    attack: T1027
+  - id: activex-object-variable-progid
+    desc: ActiveXObject built from variable ProgID
+    crit: notable
+    conf: 0.88
+    # The COM ProgID is supplied by an identifier instead of a literal string.
+    # In obfuscated JScript droppers this is commonly the final value produced
+    # by a decoder or delimiter cleanup step.
+    if:
+      type: text
+      regex: '\bnew\s+ActiveXObject\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]{1,80}\s*\)'
+    attack: T1027
+  - id: activex-object-aliased-constructor
+    desc: ActiveXObject via local alias
+    crit: suspicious
+    conf: 0.95
+    # JScript can hide the COM constructor itself by assigning ActiveXObject
+    # to a generated local name before invoking that name with a decoded ProgID.
+    if:
+      type: text
+      regex: '\b\w+\s*=\s*ActiveXObject\s*;'
+    attack: T1027
+    unless:
+    - id: well-known/lib/svg-pan-zoom::package-path
+    - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: activex-object-question-delimited-progid
+    desc: 'activex object question delimited progid'
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '\([''"]\?\?[''"]\)\s*\[.{1,80}\]\([''"][''"]\)[\s\S]{0,260}\bnew\s+ActiveXObject\s*\('
+    attack: T1027
+  - id: activex-indirect-hidden-run
+    desc: ActiveX indirect hidden process launch
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      # WSH commonly stores the Boolean show-window flag in a variable and
+      # calls the aliased COM object's Run method later. Keep the assignment
+      # and invocation in one bounded match.
+      regex: '(?is)\b\w+\s*\.\s*Run\s*\([^)]{1,100},\s*\(1\+-1\),\s*\w+\s*\)'
+    attack: T1059.007
+  - id: activex-indirect-environment-staging
+    desc: Obfuscated COM default staging
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      # JScript COM default-property syntax permits assignments such as
+      # `env("randomName") = encodedChunk`; the quoted random key is the
+      # important shape, not a sample-specific variable name.
+      regex: '\b[A-Za-z_$]\w*\s*\(\s*["''][A-Za-z0-9_$]{8,40}["'']\s*\)\s*=\s*[A-Za-z_$]\w*\b'
+    attack: T1027,T1059.007
+composite_rules:
+  - id: obfuscated-activex-file-stager
+    desc: Obfuscated COM script writes decoded payload
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1105
+    mbc: B0023,B0032
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/decode/custom::js-alphabet-coded-decoder-source
+      - id: micro-behaviors/process/interpreter/eval::js-eval-alias-assignment
+      - id: micro-behaviors/process/interpreter/jscript::activex-object
+      - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
+    near_bytes: 16384
+
+  - id: activex-file-network
+    desc: File + network operations
+    crit: suspicious
+    conf: 0.85
+    attack: T1071
+    all:
+      - id: micro-behaviors/os/com/object::filesystemobject-progid
+      - id: micro-behaviors/os/com/object::activex-network-access
+  - id: activex-shell-execution
+    desc: Shell command execution via COM
+    crit: notable
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+    any:
+      - id: micro-behaviors/process/create/shell/wsh::wsh-process-launch-method
+  - id: activex-shell-app-execute
+    desc: Shell.Application ShellExecute invocation
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.007
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: metadata/package/testing/presence/harness::tests-path-filename
+    all:
+      - id: micro-behaviors/os/com/object::shell-application-progid
+      - id: micro-behaviors/process/create/shell/wsh::shellexecute-method-call
+  - id: obfuscated-hidden-activex-command-loader
+    desc: Obfuscated ActiveX script launches hidden command
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1564.003
+    for: [javascript, html]
+    all:
+      - id: activex-shell-app-execute
+      - id: micro-behaviors/process/create/shell/wsh::shell-application-shellexecute-hidden
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+  - id: obfuscated-vbs-shellexecute-loader
+    desc: Obfuscated VBScript launches a command through Shell.Application
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.005,T1059.007
+    for: [vbs]
+    all:
+      - id: activex-shell-app-execute
+      - id: objectives/anti-static/obfuscation/wsh::vbs-execute-concat-code
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-runner-call
+  - id: wsh-obfuscated-activex-hidden-dropper
+    desc: WSH script builds an obfuscated ActiveX object and runs a hidden process
+    crit: hostile
+    conf: 0.95
+    attack: T1059.007
+    # A runtime-obscured COM constructor (computed ProgID, variable ProgID, or
+    # a local alias) AND a window-hidden Run() of a command. Obscuring the COM
+    # class and then launching an invisible process is the JScript dropper
+    # signature; the constructor alternatives cover equivalent alias shapes.
+    all:
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run-hidden-window
+    any:
+      - id: activex-object-computed-progid
+      - id: activex-object-variable-progid
+      - id: activex-object-aliased-constructor
+  - id: wsh-aliased-activex-hidden-environment-stager
+    desc: Obfuscated ActiveX script stages an environment payload and launches it hidden
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.001,T1059.007
+    all:
+      - id: activex-object-aliased-constructor
+      - id: activex-indirect-environment-staging
+      - id: micro-behaviors/data/decode/xor::charcode-modulo-key-index
+      - id: objectives/execution/interpreter/script/wsh::wscript-scriptfullname
+  - id: wsh-aliased-activex-hidden-runner
+    desc: Obfuscated ActiveX object launches a hidden child process
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007
+    all:
+      - id: activex-object-aliased-constructor
+      - id: activex-indirect-hidden-run
+      - id: micro-behaviors/data/decode/xor::charcode-modulo-key-index
+  - id: wsh-obfuscated-environment-powershell-loader
+    desc: Obfuscated WSH environment-staged hidden loader
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1564.003
+    all:
+      - id: micro-behaviors/process/interpreter/jscript::createobject-call
+      - id: micro-behaviors/os/env/access::wsh-environment-indexed-staging
+      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: micro-behaviors/data/decode/custom::js-charcode-mask-unescape-decoder
+      - id: objectives/execution/interpreter/script/wsh::wscript-scriptfullname
+  - id: obfuscated-wsh-powershell-file-dropper
+    desc: Obfuscated WSH PowerShell file dropper
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.001,T1059.007
+    all:
+      - id: micro-behaviors/process/create/shell/wsh::shellexecute-method-call
+      - id: micro-behaviors/fs/write/content::create-text-file-method-name
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: micro-behaviors/os/registry/access::powershell-app-paths-registry-read
+  - id: vbs-fso-powershell-irm-shellexecute
+    desc: FSO write of PowerShell IRM cradle launched via ShellExecute
+    crit: hostile
+    conf: 0.98
+    mbc: "B0023"
+    attack: "T1059.005,T1059.001,T1105"
+    for: [vbs]
+    all:
+      - id: micro-behaviors/fs/write/content::create-text-file-method-name
+      - id: objectives/command-and-control/dropper/execution/fileless::ps-irm-pipeline-eval
+      - id: micro-behaviors/process/create/shell/wsh::shellexecute-method-call
+      - id: micro-behaviors/process/create/shell/lang::powershell-keyword
+  - id: vbs-obfuscated-com-hidden-powershell
+    desc: VBScript hides a split PowerShell command behind a concatenated COM object
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.001,T1059.005,T1564.003
+    for: [vbs]
+    all:
+      - id: objectives/anti-static/obfuscation/string/concat::vbs-createobject-concat
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-run-hidden-zero
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-split-powershell-path
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+  - id: js-obfuscated-activex-payload-writer
+    desc: Obfuscated JScript uses a variable ActiveX object to write a payload
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.007,T1105
+    for: [javascript]
+    all:
+      - id: activex-object-variable-progid
+      - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
+      - id: objectives/anti-static/obfuscation/syntax::js-wscript-dynamic-property-ast
+      - id: objectives/anti-static/obfuscation/string/conceal::js-interspersed-question-marks
+  - id: obfuscated-wsh-payload-write-and-run
+    desc: Obfuscated WSH script writes and runs a payload
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.007,T1105
+    for: [javascript]
+    all:
+      - id: activex-object-variable-progid
+      - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
+      - id: objectives/anti-static/obfuscation/syntax::js-wscript-dynamic-property-ast
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run-bracket
+  - id: obfuscated-activex-network-payload-stager
+    desc: Obfuscated ActiveX download stager
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1105
+    mbc: B0023
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/decode/custom::js-indexof-charat-lookup
+      - id: micro-behaviors/process/interpreter/jscript::activex-object-decoder-progid
+      - id: micro-behaviors/data/source/property/computed::js-decoded-false-flag-call
+      - id: micro-behaviors/fs/write/file/stream::js-adodb-stream-savetofile-dynamic-path
+      - id: micro-behaviors/data/source/property/computed::js-computed-hidden-flag-call
+  - id: obfuscated-activex-file-drop-and-run
+    desc: Obfuscated ActiveX script writes and launches a payload
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1105
+    mbc: B0023
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/decode/custom::js-indexof-charat-lookup
+      - id: micro-behaviors/process/interpreter/jscript::activex-object-decoder-progid
+      - id: micro-behaviors/fs/write/file/stream::js-adodb-stream-savetofile-dynamic-path
+      - id: micro-behaviors/process/create/flags::computed-call-zero-final-argument
+  - id: wsh-powershell-base64-stager
+    desc: WSH writes a Base64-decoded batch payload and runs PowerShell
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.001,T1059.007,T1105
+    for: [javascript]
+    all:
+      - id: micro-behaviors/process/interpreter/jscript::activex-object
+      - id: micro-behaviors/fs/write/file/stream::adodb-stream
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run
+      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+  - id: wsh-base64-adodb-hidden-dropper
+    desc: WSH decodes Base64, writes an executable, and runs it hidden
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1140,T1564.003
+    mbc: B0023,B0032
+    for: [javascript, vbs]
+    all:
+      - id: micro-behaviors/data/decode/base64::msxml-node-typed-value
+      - id: micro-behaviors/fs/write/stream::adodb-save-to-file
+      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: micro-behaviors/process/interpreter/jscript::activex-object

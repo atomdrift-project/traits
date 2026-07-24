@@ -1,0 +1,93 @@
+# Junk Code and Disassembler Frustration
+# Detects instructions designed to crash or confuse disassemblers/analyzers
+# ATT&CK: T1027 (Obfuscated Files or Information)
+defaults:
+  platforms: [linux, macos, windows]
+traits:
+- id: ud2-junk-code
+  desc: Dense undefined instructions (UD2)
+  crit: suspicious   # Downgraded from suspicious - can be compiler padding/alignment
+  conf: 0.75
+  for: [pe, elf, macho, -go, -rust]
+  count_min: 20
+  size_max: 10485760
+  if:
+    type: hex
+    section: text
+    pattern: "0F 0B"
+      # per_kb_min removed - count_min is sufficient for detecting deliberate junk
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: indirect-call-compare-branches
+  desc: Indirect call followed by a compare branch
+  crit: component
+  conf: 0.85
+  for: [pe]
+  count_min: 4
+  size_max: 1048576
+  if:
+    type: hex
+    section: ".text"
+      # call [rip+disp32] (IAT); cmp eax, imm8
+    pattern: "FF 15 ?? ?? ?? ?? 83 F8"
+  unless:
+  - id: well-known/app/graphics/
+
+- id: indirect-call-compare-branches-dense
+  desc: Dense indirect-call compare branches
+  crit: notable
+  conf: 0.9
+  for: [pe]
+  count_min: 100
+  per_kb_min: 3.0
+  if:
+    type: hex
+    section: ".text"
+    pattern: "FF 15 ?? ?? ?? ?? 83 F8"
+composite_rules:
+- id: timing-junk-code-stub
+  desc: "Timing API junk branches in minimal stub"
+  crit: suspicious
+  conf: 0.88
+  attack: T1027
+  for: [pe, archives]
+  size_max: 524288
+  scope: archive
+  all:
+  - id: indirect-call-compare-branches
+  - id: micro-behaviors/time/query::get-tick-count
+  unless:
+  - id: objectives/anti-static/obfuscation/instruction/junk/
+- id: timing-junk-code-recognized-marker
+  desc: Recognized marker for timing junk branch patterns
+  crit: component
+  conf: 0.9
+  any:
+  - id: metadata/signed/trust-level::signed
+  - id: metadata/file/string/identity::tool-identity-7zip
+  - id: metadata/file/string/identity::official-7zip-component
+  - id: metadata/signed/leaf::microsoft-corporation
+  - id: metadata/binary/vendor::microsoft-corp-versioninfo
+  - id: well-known/lib/openssl::openssl-cryptogams
+  - id: metadata/binary/installer/family::known-benign-installer
+  - id: well-known/lib/mozilla-nspr::nspr-library
+  - id: metadata/binary/symbols/plugin::x64dbg-plugin-export
+  - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+  - id: micro-behaviors/process/inject/runtime/clr::corexitprocess-string
+  - id: well-known/lib/microsoft-imagehlp::microsoft-imagehlp-dll
+  - id: well-known/tool/sysadmin/cdrtools::cdrtools-component
+
+- id: dense-timing-junk-code
+  desc: "High density of timing API junk branches"
+  crit: hostile
+  conf: 0.95
+  attack: T1027
+  for: [pe]
+  all:
+  - id: indirect-call-compare-branches-dense
+  - id: micro-behaviors/time/query::get-tick-count
+  unless:
+  - id: metadata/signed/trust-level::signed
+  - id: well-known/game/steam::steam-api-exports
+  - id: well-known/game/steam/

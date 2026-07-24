@@ -1,0 +1,123 @@
+defaults:
+  platforms: [windows]
+  for: [powershell, scripts, binaries]
+  attack: T1204.002
+traits:
+  - id: recursive-lure-zip-search
+    desc: Recursive lure archive search
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: (?is)where(\.exe)?\s+/r\s+\$env:USERPROFILE.{0,160}\.zip
+  - id: recycle-bin-zip-stage
+    desc: Recycle Bin ZIP staging
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: (?is)\$RECYCLE\.BIN.{0,160}Rename-Item.{0,160}\.zip
+  - id: powershell-expand-archive-programdata
+    desc: PowerShell expands archive into ProgramData
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: (?is)Expand-Archive.{0,260}(C:\\ProgramData|%ProgramData%|\$env:ProgramData)
+  - id: powershell-download-archive-tool
+    desc: PowerShell archive download command reference
+    crit: component
+    conf: 0.9
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\b(DownloadFile|Invoke-WebRequest|iwr|curl)\b'
+  - id: powershell-archive-extension
+    desc: PowerShell archive filename extension reference
+    crit: component
+    conf: 0.85
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\.(zip|7z|rar)\b'
+  - id: powershell-expand-archive-command
+    desc: PowerShell Expand-Archive command reference
+    crit: component
+    conf: 0.9
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\bExpand-Archive\b'
+  - id: powershell-tar-extract-command
+    desc: PowerShell tar extraction command reference
+    crit: component
+    conf: 0.9
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\btar\s+-[A-Za-z]*x\b'
+  - id: powershell-7zip-extract-command
+    desc: PowerShell 7-Zip extraction command reference
+    crit: component
+    conf: 0.9
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\b7z(\.exe)?\s+[xet]\b'
+composite_rules:
+  - id: powershell-archive-extract
+    desc: PowerShell archive extraction command reference
+    crit: component
+    conf: 0.9
+    for: [powershell, batch]
+    any:
+      - id: powershell-expand-archive-command
+      - id: powershell-tar-extract-command
+      - id: powershell-7zip-extract-command
+
+  - id: powershell-download-archive-execute
+    desc: PowerShell downloads archive then executes
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: powershell-download-archive-tool
+      - id: powershell-archive-extension
+      - id: powershell-archive-extract
+    # Keep generic invocation mechanics in the capability tier. The archive
+    # objective comes from combining one of these with download + archive +
+    # extraction evidence, not from the invocation primitive by itself.
+    any:
+      - id: micro-behaviors/process/create/start-process::start-process-call
+      - id: micro-behaviors/process/create/exec::powershell-invoke-item
+      - id: micro-behaviors/process/create/exec::powershell-call-exe
+    near_lines: 40
+    unless:
+      - id: well-known/app/calvyn-code
+      - id: well-known/app/aui-agent-builder/
+      - id: well-known/app/azure-dev-cli/
+      - id: metadata/package/quality/false-positives::intune-remediation-script
+      - id: metadata/package/testing/scripted::endtoend-smoke-download-recipe
+      - id: metadata/package/quality/false-positives::cargo-binstall-release-installer-context
+      - id: metadata/package/quality/false-positives-powershell::powershell-release-installer
+      - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-bootstrap-context
+      - id: well-known/lib/adios2::adios2-windows-ci-setup-context
+
+  - id: archive-lnk-hidden-powershell-stage
+    desc: Archive LNK hidden PowerShell stage
+    crit: hostile
+    conf: 0.97
+    needs: 2
+    any:
+      - id: recursive-lure-zip-search
+      - id: recycle-bin-zip-stage
+      - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
+  - id: powershell-cloud-archive-programdata-exec
+    desc: PowerShell cloud archive ProgramData execution
+    crit: hostile
+    conf: 0.96
+    attack: T1105
+    all:
+      - id: powershell-expand-archive-programdata
+      - id: powershell-download-archive-execute
+    any:
+      - id: objectives/command-and-control/infrastructure/cloud

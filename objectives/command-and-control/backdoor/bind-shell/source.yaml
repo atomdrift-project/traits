@@ -1,0 +1,93 @@
+# Bind shell: socket bind() + listen() + interactive shell exec.
+# Listener-side counterpart to reverse-shell.
+defaults:
+  for: [scripts, binaries, c, cpp]
+  platforms: [unix, windows]
+  attack: T1059
+  mbc: B0030.003
+
+traits:
+  - id: source-winexec-client-command
+    desc: WinExec on parsed client command
+    crit: suspicious
+    conf: 0.94
+    for: [c, cpp]
+    platforms: [windows]
+    if:
+      type: text
+      substr: "WinExec(cutstr(cmd)+"
+composite_rules:
+  - id: bind-shell
+    desc: Bind shell pattern with socket listener and shell launch
+    crit: suspicious
+    conf: 0.95
+    size_max: 500000
+    scope: leaf
+    near_lines: 80
+    all:
+      - id: micro-behaviors/communications/socket/listen::accepting-server-api-surface
+    any:
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+      - id: micro-behaviors/process/create/shell/spawn::bin-shell
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+    unless:
+      - id: micro-behaviors/process/fork/clone::daemon-dup
+      - id: well-known/tool/sysadmin/network::socat-utility
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+        - id: objectives/persistence/system/daemon/init/
+        - id: micro-behaviors/ui/help/
+  - id: listener-command-exec-source
+    desc: Native listener executes client commands
+    crit: hostile
+    conf: 0.97
+    size_max: 500000
+    near_lines: 140
+    all:
+      - id: micro-behaviors/communications/socket/bind/function::bind
+      - id: micro-behaviors/communications/socket/listen::server-socket-source
+      - id: micro-behaviors/communications/socket/listen::accept-call-source
+    any:
+      - id: source-winexec-client-command
+      - id: micro-behaviors/process/create/shell/spawn::c-popen-call
+  - id: go-bind-shell-pty-source
+    desc: Go TCP listener relays an interactive PTY shell
+    crit: hostile
+    conf: 0.99
+    for: [go]
+    mbc: B0022
+    size_max: 500000
+    scope: leaf
+    near_lines: 160
+    all:
+      - id: micro-behaviors/communications/socket/listen::listen-go
+      - id: micro-behaviors/communications/socket/listen::accept-go
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: micro-behaviors/process/tty/pty::go-pty-start
+      - id: micro-behaviors/fs/file/copy::io-copy
+    unless:
+      # Published offensive-security frameworks ship bind-shell payload
+      # templates as part of their documented toolkit. The behavior is real, so
+      # the matcher stays as-is; only the tool's own attributable source tree
+      # is excepted.
+      - id: well-known/tool/offensive/xodbox::xodbox-framework-context
+  - id: go-bind-shell-stdio-source
+    desc: Go TCP listener attaches a shell to the socket
+    crit: hostile
+    conf: 0.99
+    for: [go]
+    mbc: B0022
+    size_max: 500000
+    scope: leaf
+    near_lines: 160
+    all:
+      - id: micro-behaviors/communications/socket/listen::listen-go
+      - id: micro-behaviors/communications/socket/listen::accept-go
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: micro-behaviors/process/io/stream::go-network-stdio-redirect
+    unless:
+      - id: well-known/tool/offensive/xodbox::xodbox-framework-context

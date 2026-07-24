@@ -1,0 +1,80 @@
+# Embedded script loaders carried by native Windows binaries.
+# These rules describe the loader shape rather than an IOC: a native PE that
+# stores a PowerShell stage as many base64 fragments and reconstructs it through
+# a helper-call loop is materially different from an ordinary Go runtime.
+defaults:
+  platforms: [windows]
+  for: [pe]
+  attack: T1027
+  mbc: B0032
+
+traits:
+  - id: pe-script-base64-fragment-calls
+    desc: Base64 fragment helper calls
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\bCall\s+[A-Za-z][A-Za-z0-9_]{7,}\s*\(\s*["''][A-Za-z0-9+/]{24,}={0,2}["'']'
+    count_min: 8
+
+  - id: pe-script-vbscript-helper-definition
+    desc: Long-name VBScript helper definition
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      # Keep the VBScript keyword case-insensitive, but require the separate
+      # End Function/End Sub marker below so JavaScript `function` definitions
+      # in embedded runtimes do not qualify as VBScript.
+      regex: '(?im)^[ \t]*(Function|Sub)\s+[A-Za-z][A-Za-z0-9_]{7,}\s*\([^)]{0,80}\)[ \t]*$'
+    count_min: 2
+
+  - id: pe-script-vbscript-end-marker
+    desc: VBScript function termination marker
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\bEnd\s+(Function|Sub)\b'
+    count_min: 2
+
+  - id: pe-script-encoded-dotnet-network-stage
+    desc: Encoded .NET network stage
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: encoded
+      encoding: base64
+      regex: '(?i)(WebRequest|GetResponseStream|MemoryStream)'
+
+  - id: pe-script-encoded-reflective-stage
+    desc: Encoded reflective .NET stage
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: encoded
+      encoding: base64
+      regex: '(?i)(Reflection\\.Assembly|Assembly::Load|AppDomain|scriptblock)'
+
+composite_rules:
+  - id: pe-script-obfuscated-helper-functions
+    desc: Long-name VBScript helper definitions
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: pe-script-vbscript-helper-definition
+      - id: pe-script-vbscript-end-marker
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/development/inno-setup::inno-setup-compiler
+      - id: metadata/binary/framework::dotnet-assembly
+
+  - id: pe-obfuscated-script-stage
+    desc: Native PE reconstructs an obfuscated embedded script stage
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.001
+    all:
+      - id: pe-script-base64-fragment-calls
+      - id: pe-script-obfuscated-helper-functions

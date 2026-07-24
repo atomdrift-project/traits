@@ -1,0 +1,171 @@
+defaults:
+  platforms:
+    - unix
+    - android
+    - ios
+  attack: T1562
+traits:
+  - id: watchdog-bot-target
+    desc: Shell kill command targeting a watchdog process
+    crit: notable
+    conf: 0.85
+    for: [elf, shell, binaries]
+    if:
+      type: text
+      regex: '(?im)^\s*(kill|pkill)\s+[^\n]{0,60}\bwatchdog\b'
+  - id: mirai-token
+    desc: Mirai malware family name
+    crit: component
+    conf: 0.85
+    for: [elf, shell, scripts, binaries]
+    if:
+      type: text
+      word: mirai
+  - id: mirai-botnet-marker
+    desc: Botnet marker near Mirai family name
+    crit: component
+    conf: 0.85
+    for: [elf, shell, scripts, binaries]
+    if:
+      type: text
+      word: botnet
+  - id: update-agent-target
+    desc: Update agent software targeting
+    crit: notable
+    conf: 0.8
+    for: [elf, shell, scripts, binaries]
+    if:
+      type: text
+      substr: sysupdate
+    unless:
+      - id: well-known/app/systemd::container-runtime-component-basename
+      - id: metadata/file/profile/identity::static-html-shell
+  - id: botkill
+    desc: Bot killer function
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - macho
+    if:
+      type: text
+      substr: botkill
+    unless:
+      - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+  - id: killed-process-log
+    desc: Process-kill telemetry string
+    crit: component
+    conf: 0.82
+    for: [elf, macho, shell, c, cpp]
+    if:
+      type: text
+      substr: "Killed process:"
+  - id: rival-port-24936
+    desc: Rival bot port marker
+    crit: component
+    conf: 0.72
+    for: [elf, macho, shell, c, cpp]
+    if:
+      type: text
+      substr: "24936"
+  - id: proc-exe-fragment-cluster
+    desc: Procfs executable path fragments
+    crit: component
+    conf: 0.78
+    for: [elf]
+    size_max: 262144
+    if:
+      type: text
+      regex: '/proc/.{0,200}/exe|/exe.{0,200}/proc/'
+  - id: process-killer-label
+    desc: Native process-killer status labels
+    crit: component
+    conf: 0.92
+    for: [elf]
+    if:
+      type: text
+      regex: '(?i)\[[^\]]{0,32}killer[^\]]{0,32}\]\s+killed\s+process\s*:'
+    count_min: 2
+  - id: proc-maps-kill-loop
+    desc: Procfs map filter then forced kill
+    crit: notable
+    conf: 0.94
+    for: [elf]
+    if:
+      type: raw
+      regex: '(?s)/proc/(%[sd]|[0-9]{1,10})/maps.{0,512}\bkill\s+-9\b'
+  - id: proc-deleted-maps-kill-loop
+    desc: Procfs deleted-image scan then forced kill
+    crit: notable
+    conf: 0.96
+    for: [elf]
+    if:
+      type: raw
+      regex: '(?s)/proc/(%[sd]|[0-9]{1,10})/maps.{0,512}\(deleted\).{0,256}\bkill\s+-9\b'
+  - id: proc-glob-maps-kill-loop
+    desc: Procfs numeric-glob map scan then forced kill
+    crit: notable
+    conf: 0.96
+    for: [elf]
+    if:
+      type: text
+      regex: '(?s)/proc/\[0-9\]\*.{0,700}maps.{0,300}\bkill\s+-9\b'
+composite_rules:
+  - id: mirai-bot-target
+    desc: Mirai botnet targeting marker
+    crit: notable
+    conf: 0.85
+    for: [elf, shell, scripts, binaries]
+    all:
+      - id: mirai-token
+      - id: mirai-botnet-marker
+    near_bytes: 256
+  - id: deleted-process-kill-methods
+    desc: Deleted process kill methods
+    crit: suspicious
+    conf: 0.88
+    any:
+      - id: objectives/evasion/self-delete/process::pkill-deleted-pattern
+      - id: objectives/evasion/self-delete/process::proc-exe-deleted-search
+  - id: proc-net-rival-process-kill
+    desc: Kills network-active rival processes
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
+      - id: killed-process-log
+    any:
+      - id: micro-behaviors/fs/proc/info/exe::process-pid-exe
+      - id: proc-exe-fragment-cluster
+  - id: hardcoded-rival-port-eviction
+    desc: Evicts rival bot by hardcoded port
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
+      - id: rival-port-24936
+  - id: proc-enumeration-process-killer
+    desc: Procfs process enumeration with native killer telemetry
+    crit: hostile
+    conf: 0.97
+    attack: T1562.001
+    mbc: B0025
+    for: [elf]
+    all:
+      - id: micro-behaviors/fs/proc/info/path::process-inspection-path-cluster
+      - id: killed-process-log
+      - id: process-killer-label
+  - id: proc-map-filter-rival-killer
+    desc: Procfs network/process inspection with hidden-image process killing
+    crit: hostile
+    conf: 0.98
+    attack: T1562.001,T1046
+    mbc: B0025
+    for: [elf]
+    all:
+      - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
+      - id: micro-behaviors/fs/proc/info/path::process-pid-exe-template
+    any:
+      - id: proc-maps-kill-loop
+      - id: proc-deleted-maps-kill-loop
+      - id: proc-glob-maps-kill-loop

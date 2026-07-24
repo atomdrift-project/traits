@@ -1,0 +1,121 @@
+# Unix LOLBins (Living-off-the-Land Binaries)
+# MBC: C0049 (Execution - LoLBins)
+# ATT&CK: T1218 (System Binary Proxy Execution)
+defaults:
+  platforms: [unix]
+  conf: 0.9
+traits:
+- id: python-shell-exec-system
+  desc: python -c exec/system/popen
+  crit: component
+  for: [shell]
+  if:
+    type: text
+    regex: '\bpython[23]?\s+-c\s+[''"].{0,200}\b(exec|system|popen)\b'
+- id: python-shell-spawn-subprocess
+  desc: python -c spawn/subprocess
+  crit: component
+  for: [shell]
+  if:
+    type: text
+    regex: '\bpython[23]?\s+-c\s+[''"].{0,200}\b(spawn|subprocess)\b'
+- id: perl-shell-execution
+  desc: Shell execution via perl -e
+  crit: notable
+  for: [shell]
+  if:
+    type: text
+    regex: 'perl\s+-e\s+[''"].{0,200}(exec\(|system\()'
+
+- id: ruby-shell-execution
+  desc: Shell execution via ruby -e
+  crit: notable
+  for: [shell]
+  if:
+    type: text
+    regex: 'ruby\s+-e\s+[''"].{0,200}(exec\(|system\()'
+
+- id: suspicious-bash-c-redirection
+  desc: Bash -c command with output redirection
+  crit: suspicious
+  conf: 0.85
+  for: [shell, scripts]
+  if:
+    type: text
+    regex: '/bin/bash\s+-c\s+[''"].{0,200}>/dev/null\s+2>&1'
+  unless:
+  - id: well-known/app/dokku::dokku-source-tree
+  - id: well-known/app/community-scripts-proxmoxve::ddns-updater-installer-context
+
+- id: python-c-constructed-arg
+  desc: python -c builds command non-literally
+  crit: component
+  for: [shell]
+  if:
+    type: text
+    regex: '\bpython[23]?\s+-c\s+[''"].{0,200}(\.format\(|f[''"]\{|\[[''"]\w{1,12}[''"]\])'
+- id: python-c-subprocess-shell-arg
+  desc: python -c subprocess shell=True arg
+  crit: component
+  for: [shell]
+  if:
+    type: text
+    regex: '\bpython[23]?\s+-c\s+[''"].{0,200}subprocess\.\w{1,6}\([^)]{0,80}shell\s*=\s*True'
+
+composite_rules:
+- id: python-shell-execution
+  desc: Shell execution via python -c
+  crit: notable
+  conf: 1.0
+  for: [shell]
+  any:
+  - id: python-shell-exec-system
+  - id: python-shell-spawn-subprocess
+- id: unix-lolbin
+  desc: Any Unix LOLbin execution
+  crit: notable
+  any:
+  - id: python-shell-execution
+  - id: perl-shell-execution
+  - id: ruby-shell-execution
+  - id: micro-behaviors/process/create/shell/spawn::sh-c-exec
+
+# --- python -c inline dropper with a constructed (non-literal) command ------
+# Suspicious tier: cleartext command built via format/fstring/dict/var inside a
+# `python -c` one-liner. Gated on the shell-level python -c invocation so real
+# .py files using os.system(f"...") are NOT matched (those are for:[python]).
+- id: python-c-constructed-dropper
+  desc: python -c constructed shell-exec command
+  crit: suspicious
+  conf: 0.85
+  for: [shell]
+  attack: T1059.006
+  all:
+  - id: python-shell-execution
+  - id: python-c-constructed-arg
+- id: python-c-subprocess-shell-true
+  desc: python -c subprocess shell=True dropper
+  crit: suspicious
+  conf: 0.85
+  for: [shell]
+  attack: T1059.006
+  all:
+  - id: python-shell-execution
+  - id: python-c-subprocess-shell-arg
+
+- id: stealth-lolbin-execution
+  desc: Stealthy LOLbin execution with redirection
+  crit: suspicious
+  conf: 0.9
+  scope: leaf
+  near_lines: 10
+  unless:
+  - id: metadata/package/testing/presence/platform_suites/
+  - id: metadata/package/testing/presence/harness/
+  - id: metadata/build/autotools::autoconf-generated-script
+  - id: metadata/package/quality/false-positives::benign-build-tooling-context
+  - id: well-known/app/adguardhome::release-path
+  - id: metadata/package/quality/false-positives::benign-build-tooling-context
+  - id: micro-behaviors/os/service/legitimate::installer-script
+  any:
+  - id: suspicious-bash-c-redirection

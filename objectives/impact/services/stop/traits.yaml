@@ -1,0 +1,516 @@
+defaults:
+  platforms:
+    - linux
+    - macos
+    - windows
+  attack: T1489
+  for: [shell, python, javascript, powershell, pe]
+traits:
+  - id: systemctl-stop
+    desc: Systemd service stop
+    crit: suspicious
+    conf: 0.8
+    platforms: [unix]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      regex: (?m)(^|[;&|])\s*(sudo\s+)?systemctl\s+stop\s+\S+
+    not:
+      - substr: systemctl stop "$container_runtime_name"
+      - regex: systemctl\s+stop\s+docker(\.socket)?\b
+      - regex: systemctl\s+stop\s+containerd\.service\b
+      - regex: systemctl\s+stop\s+['"]?policy-routes@\*\.service['"]?
+      - regex: systemctl\s+stop\s+systemd-networkd\b
+      - substr: systemctl stop "${agent_name}.service"
+      - substr: systemctl stop devmon@devmon
+      - substr: "systemctl stop raised:"
+      - substr: machine.communicate
+    unless:
+      - id: metadata/file/extension/identity::markdown-file-basename
+      - id: metadata/build/package/
+      - id: well-known/app/walinuxagent::source-tree
+      - id: well-known/app/olares::cli-source-tree
+      - type: text
+        substr: VagrantPlugins
+      - id: metadata/file/string/artifact::vagrant-machine-communicate-marker
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: well-known/tool/sysadmin/kubernetes
+  - id: systemctl-templated-service-target
+    desc: systemctl templated service target
+    crit: notable
+    conf: 0.8
+    platforms: [unix]
+    # `systemctl disable {app_name}` / `${SERVICE}` / `%s` -- the target is a
+    # format placeholder or variable emitted by a program's own (un)install
+    # routine, not a hardcoded victim service. Covers scripts AND the source
+    # languages that emit such commands as string literals (RustDesk builds the
+    # command in Rust), so it resolves at the same file scope the stop+disable
+    # composite is hosted on and can downgrade it.
+    for: [shell, python, javascript, source]
+    if:
+      type: text
+      regex: 'systemctl\s+(disable|stop)\s+["'']?[{$%]'
+  - id: systemctl-disable
+    desc: Systemd service disable
+    crit: suspicious
+    conf: 0.8
+    platforms: [unix]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      regex: (?im)(^|[;&|])\s*(sudo\s+)?systemctl\s+disable\s+(--now\s+)?\S+
+    not:
+      - substr: systemctl disable devmon@devmon
+      - substr: 'systemctl disable "${SERVICE}"'
+      - substr: systemctl disable "${agent_name}.service"
+      - regex: systemctl\s+disable\s+['"]?policy-routes@\*\.service['"]?
+      - regex: (?i)machinectl|systemd-nspawn@XXX|wrapper around `systemctl disable
+      - substr: "systemctl disable raised:"
+    unless:
+      - id: metadata/file/extension/identity::markdown-file-basename
+      - id: metadata/build/package/
+      - id: well-known/app/walinuxagent::source-tree
+      - id: well-known/app/olares::cli-source-tree
+    downgrade:
+      any:
+        - id: micro-behaviors/os/service/legitimate::installer-script
+        - id: well-known/tool/sysadmin/kubernetes
+  - id: service-stop-dup
+    desc: SysV service stop
+    crit: suspicious
+    conf: 0.8
+    platforms: [unix]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      regex: (?i)(^|[;&])\s*(/usr/sbin/)?service\s+[A-Za-z0-9_.@-]+\s+stop\b
+    unless:
+      - id: metadata/build/package/
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: metadata/build/package/
+  - id: sc-stop
+    desc: Windows service control stop
+    crit: notable
+    conf: 0.8
+    platforms: [windows]
+    for: [powershell, pe, python, javascript]
+    if:
+      type: text
+      regex: (?i)\bsc(\.exe)?\s+stop\s+[A-Za-z0-9_.-]{2,}
+    not:
+      - regex: '%[A-Za-z]'
+      - substr: sc stop cloudflared
+      - substr: sc stop igfxCUIService
+      - substr: sc.exe stop LCD_Service
+      - substr: sc stop sppsvc
+    downgrade:
+      any:
+        - id: metadata/binary/installer/family/
+    unless:
+      - id: metadata/binary/installer/family/
+  - id: net-stop
+    desc: Windows net stop command
+    crit: notable
+    conf: 0.8
+    platforms: [windows]
+    for: [powershell, pe, python, javascript]
+    if:
+      type: text
+      regex: net\s+stop
+  - id: sharedaccess-service-name
+    desc: References SharedAccess firewall service
+    crit: component
+    conf: 0.94
+    platforms: [windows]
+    for: [powershell, pe, python, javascript]
+    if:
+      type: text
+      word: SharedAccess
+  - id: sc-config-start-disabled
+    desc: Disables Windows service via sc config
+    crit: notable
+    conf: 0.92
+    platforms: [windows]
+    for: [powershell, pe, python, javascript, batch]
+    if:
+      type: text
+      regex: '(?i)sc\s+config\s+\S+\s+start=\s*disabled'
+    downgrade:
+      any:
+        - id: metadata/binary/installer/family/
+  - id: kill-mysql-kill
+    desc: MySQL process kill command
+    crit: suspicious
+    conf: 0.82
+    if:
+      type: text
+      regex: (?i)\b(killall|pkill|taskkill)\b[^\r\n]{0,80}\b(mysql|mysqld)\b
+    unless:
+      - id: well-known/lib/ace-editor
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness::python-test-file-content
+      - id: sysv-service-lifecycle
+  - id: kill-mysql-stop
+    desc: MySQL service stop command
+    crit: suspicious
+    conf: 0.82
+    if:
+      type: text
+      regex: (?i)\b(systemctl stop|service mysql stop)\b.{0,40}\b(mysql|mysqld)\b
+    unless:
+      - id: metadata/lang/source/
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness::python-test-file-content
+      - id: well-known/lib/ace-editor
+      - id: sysv-service-lifecycle
+    not:
+      - regex: '(?i)stop:\s+mysql'
+  - id: kill-postgres-kill
+    desc: PostgreSQL kill command
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\bkill\b.{0,30}postgres
+  - id: kill-postgres-stop
+    desc: PostgreSQL stop command
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\bstop\b.{0,30}postgres
+    unless:
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-ansible-core-package
+    not:
+      - regex: '(?i)stop:\s+.*postgres'
+  - id: kill-oracle-kill
+    desc: Oracle process termination command
+    crit: suspicious
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\b(killall|pkill|taskkill)\b[^\r\n]{0,80}\boracle\b
+  - id: kill-oracle-stop
+    desc: Oracle service stop command
+    crit: suspicious
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\b(systemctl\s+stop\s+oracle[\w.-]*|service\s+oracle\s+stop|net\s+stop\s+oracle)\b
+    not:
+      - regex: '(?i)stop:\s+oracle'
+  - id: kill-oracle-stop-windows
+    desc: Windows Oracle service stop command
+    crit: suspicious
+    conf: 0.5
+    platforms: [windows]
+    for: [powershell, python, javascript, batch, pe]
+    if:
+      type: text
+      regex: (?i)\bsc\s+(stop|delete)\s+oracle\b
+  - id: kill-mssql-kill
+    desc: MSSQL kill command
+    crit: suspicious
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\bkill\b[^\n]{0,30}\bmssql\b
+  - id: kill-mssql-stop
+    desc: MSSQL stop command
+    crit: suspicious
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\bstop\b[^\n]{0,30}\bmssql\b
+    not:
+      - regex: '(?i)stop:\s+mssql'
+  - id: kill-mongodb-kill
+    desc: MongoDB kill command
+    crit: suspicious
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\bkill(all)?\b[\s"'`=-]{0,8}[^\n]{0,22}\b(mongod|mongodb)\b
+  - id: kill-mongodb-stop
+    desc: MongoDB stop command
+    crit: component
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)\bstop\b[\s"'`=-]{0,8}[^\n]{0,22}\b(mongod|mongodb)\b
+    not:
+      - regex: '(?i)stop:\s+mongodb'
+  - id: mongodb-service-name
+    desc: MongoDB service name
+    crit: component
+    conf: 0.65
+    if:
+      type: text
+      regex: (?i)\bmongod(b)?\b
+  - id: tor-service-stop-systemctl
+    desc: Tor service stop systemctl command
+    crit: suspicious
+    conf: 0.7
+    platforms: [unix]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      # Word-bounded so e.g. `systemctl stop nut-driver-enumerator` does not match the "tor" in "enumerator".
+      regex: systemctl.{0,30}(stop|disable).{0,30}\btor(\b|@|\.service)
+  - id: tor-service-stop-service
+    desc: Tor service stop service command
+    crit: suspicious
+    conf: 0.7
+    platforms: [unix]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      regex: (?i)\bservice (tor stop|stop tor)\b
+    unless:
+      - id: metadata/binary/resource/
+  - id: tor-service-stop-launchctl
+    desc: Tor service stop launchctl command
+    crit: suspicious
+    conf: 0.7
+    platforms: [macos]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      regex: launchctl.{0,30}(stop|disable).{0,30}\btor\b
+  - id: tor-service-stop-sc
+    desc: Tor service stop sc command
+    crit: suspicious
+    conf: 0.7
+    platforms: [windows]
+    for: [powershell, pe, python, javascript]
+    if:
+      type: text
+      regex: \bsc (stop|config).{0,20}\btor\b
+  - id: tor-service-stop-suffix
+    desc: Tor service stop suffix
+    crit: suspicious
+    conf: 0.7
+    platforms: [unix]
+    for: [shell, python, javascript]
+    if:
+      type: text
+      regex: "\btor@?\\.service\b.{0,30}(stop|disable)"
+  - id: tor-process-kill
+    desc: Tor process termination
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: (?i)\b(killall|pkill|taskkill)\b.{0,50}\btor\b
+  - id: tor-browser-kill
+    desc: Tor Browser termination
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      regex: tor[- ]?browser.{0,50}kill|kill.{0,50}tor[- ]?browser
+  - id: pm2-kill-all
+    desc: PM2 process manager termination
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, shell]
+    if:
+      type: text
+      regex: '\b(npx\s+)?pm2\s+(kill|delete\s+all)\b'
+  - id: node-cwd-pkill
+    desc: pkill targets current Node project
+    crit: suspicious
+    conf: 0.95
+    platforms: [unix]
+    for: [javascript, shell]
+    if:
+      type: text
+      regex: 'pkill\s+-f\s+["''`]node\.\*\$\{?process\.cwd\(\)\}?'
+  - id: force-kill-node-exe
+    desc: Force kills node.exe process
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [javascript, batch, powershell]
+    if:
+      type: text
+      regex: '\btaskkill\b[^\r\n]{0,80}/IM\s+node\.exe\b[^\r\n]{0,80}/F\b'
+  - id: batch-deletes-programfiles-exe
+    desc: Batch deletes Program Files EXE
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [batch]
+    if:
+      type: text
+      regex: '(?i)\bdel\b.{0,80}\\Program Files\\.{0,80}\.exe'
+  - id: batch-runs-silent-uninstaller
+    desc: Batch runs silent uninstaller
+    crit: notable
+    conf: 0.86
+    platforms: [windows]
+    for: [batch]
+    if:
+      type: text
+      regex: '(?i)\\Uninstall\.exe"\s+/silent\b'
+composite_rules:
+  - id: sysv-service-lifecycle
+    desc: SysV service lifecycle context
+    crit: exception
+    conf: 0.99
+    for: [shell]
+    all:
+      - id: metadata/build/package::init-script-source-filename
+      - id: micro-behaviors/os/service/config::sysv-init-script-header
+      - id: micro-behaviors/os/service/config::init-script-path
+      - id: micro-behaviors/process/terminate/command::killall
+  - id: batch-kill-delete-silent-uninstall
+    desc: Batch kill-delete silent uninstall
+    crit: suspicious
+    conf: 0.95
+    for: [batch]
+    all:
+      - id: micro-behaviors/process/terminate/command::batch-taskkill-image-name
+      - id: batch-deletes-programfiles-exe
+      - id: batch-runs-silent-uninstaller
+
+  - id: systemd-service-stop-disable
+    desc: Systemd service stop and disable
+    crit: suspicious
+    conf: 0.9
+    platforms: [unix]
+    for: [shell, python, javascript]
+    all:
+      - id: systemctl-stop
+      - id: systemctl-disable
+    unless:
+      - id: well-known/app/olares
+      - id: well-known/app/skypilot::skypilot-source-file
+      - id: well-known/tool/dual-use/shadowsocks-libev::shadowsocks-libev-source
+    # An app (un)installing its OWN service emits the target as a templating
+    # placeholder/variable rather than a hardcoded victim service name. That is
+    # lifecycle management, not impact -> drop suspicious to notable. Referenced
+    # by name so it resolves at the leaf file (survives archive roll-up).
+    downgrade:
+      any:
+        - id: systemctl-templated-service-target
+  - id: kill-mysql
+    desc: MySQL service termination
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: kill-mysql-kill
+      - id: kill-mysql-stop
+    unless:
+      - id: metadata/lang/source/
+      - id: sysv-service-lifecycle
+  - id: kill-postgres
+    desc: PostgreSQL service termination
+    crit: notable
+    conf: 0.6
+    any:
+      - id: kill-postgres-kill
+      - id: kill-postgres-stop
+    unless:
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-ansible-core-package
+  - id: kill-oracle
+    desc: Oracle service termination
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: kill-oracle-kill
+      - id: kill-oracle-stop
+      - id: kill-oracle-stop-windows
+    unless:
+      - id: well-known/lib/sqlalchemy::source-tree
+  - id: kill-mssql
+    desc: MSSQL service termination
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: kill-mssql-kill
+      - id: kill-mssql-stop
+  - id: sharedaccess-firewall-service-stop
+    desc: Stop or tamper firewall service
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: sharedaccess-service-name
+      - id: micro-behaviors/os/service/control::service-stop-control
+    any:
+      - id: micro-behaviors/os/service/control::service-control-dispatch
+      - id: micro-behaviors/os/service/control::create-service
+      - id: micro-behaviors/os/service/control::query-service-status
+    needs: 3
+  - id: kill-mongodb
+    desc: MongoDB service termination
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: kill-mongodb-kill
+      - id: mongodb-service-stop
+  - id: node-project-self-destruct-stop
+    desc: Self-destruct stops Node project processes
+    crit: hostile
+    conf: 0.99
+    for: [javascript]
+    all:
+      - id: objectives/impact/wipe/disk/mass-delete::js-self-destruct-marker
+    any:
+      - id: pm2-kill-all
+      - id: node-cwd-pkill
+      - id: force-kill-node-exe
+  - id: mongodb-service-stop
+    desc: MongoDB service stop command
+    crit: suspicious
+    conf: 0.5
+    near_bytes: 80
+    all:
+      - id: mongodb-service-name
+      - id: kill-mongodb-stop
+    any:
+      - id: systemctl-stop
+      - id: service-stop-dup
+      - id: sc-stop
+      - id: net-stop
+      - id: micro-behaviors/os/service/control::launchctl-stop-command
+  - id: kill-database
+    desc: Database service termination
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: kill-mysql
+      - id: kill-postgres
+      - id: kill-oracle
+      - id: kill-mssql
+      - id: kill-mongodb
+  - id: security-service-disable
+    desc: Disables Windows security services
+    crit: hostile
+    conf: 0.97
+    platforms: [windows]
+    for: [powershell, pe, python, javascript]
+    all:
+      - id: sc-config-start-disabled
+      - id: sharedaccess-service-name
+    any:
+      - id: net-stop
+      - id: sc-stop
+    downgrade:
+      any:
+        - id: metadata/binary/installer/family/
+        - id: metadata/signed/platform/
+  - id: esxi-ransomware-comp
+    desc: VMware ESXi ransomware
+    crit: suspicious
+    conf: 0.99
+    attack: T1486
+    mbc: B0040
+    all:
+      - id: micro-behaviors/os/sysinfo/vmware::esxcli-tool
+      - id: micro-behaviors/communications/proxy/tor::onion-domain-reference
+      - id: objectives/impact/ransom/encrypt/threat-text::ransom-word

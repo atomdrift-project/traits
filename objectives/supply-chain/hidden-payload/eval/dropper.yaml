@@ -1,0 +1,297 @@
+# File-Read-Eval Dropper Detection
+# Detects the pattern of reading a file, transforming its content, and eval'ing the result
+# This is a common supply-chain attack technique where encrypted/encoded payloads are
+# stored in innocuous-looking files (LICENSE, README, data files) and decrypted at runtime
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+# MBC: B0024 (Execution Guardrails)
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1195.002
+traits:
+- id: emscripten-run-script-bridge
+  desc: Emscripten run_script bridge
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: _emscripten_run_script
+  # Detects eval() called with a function call as its argument: eval(someFunc(data))
+  # More suspicious than eval(variable) because it implies data transformation before execution
+- id: eval-of-transform
+  desc: "eval() with transform func call"
+  crit: notable
+  if:
+    type: text
+    regex: 'eval\([a-zA-Z_$][a-zA-Z0-9_$]{0,30}\('
+  not:
+  - substr: eval(function
+  - substr: eval(contentsOf(
+  - substr: makeSource
+  - substr: eval(Symbol(
+  - substr: _emscripten_run_script
+  - substr: eval(UTF8ToString(
+  - regex: ^\s*//
+  # fs-readfile-raw: use micro-behaviors/fs/file/read::read-node
+  conf: 0.9
+  unless:
+  - id: objectives/anti-static/pack/detect::dean-edwards
+  - id: micro-behaviors/communications/http/upload/
+  - id: well-known/tool/detection/
+  - id: thenify-create-wrapper-eval
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/harness/runtime::v8-native-intrinsic-call
+  - id: well-known/lib/firebug-lite/
+  - id: emscripten-run-script-bridge
+  # Inline decoder functions are common in legacy JS packers, so keep this
+  # as packed-payload component evidence instead of a standalone eval finding.
+- id: eval-inline-function-transform
+  desc: eval wraps inline transform function
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: 'eval(function'
+  unless:
+  - id: objectives/anti-static/pack/detect::dean-edwards
+  - id: metadata/package/testing/
+  # Function-constructor use is a neutral dynamic-execution capability. The
+  # canonical atom lives in micro-behaviors; supply-chain intent comes from
+  # the surrounding payload/decoder composites below.
+  # Core dropper pattern: small JS file that reads a file and eval's transformed content
+- id: eval-transform-ast
+  desc: eval of transformed local data
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: '\beval\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]{0,30}\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]{0,30}\s*\)'
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/harness/runtime::v8-native-intrinsic-call
+  - id: emscripten-run-script-bridge
+- id: thenify-create-wrapper-eval
+  desc: thenify eval createWrapper helper
+  crit: baseline
+  conf: 0.9
+  if:
+    type: text
+    substr: return eval(createWrapper($$__fn__$$.name, options))
+- id: hardcoded-hex-buffer-from-ast
+  desc: Hardcoded hex Buffer material
+  crit: component
+  conf: 0.82
+  mbc: C0027
+  count_min: 2
+  size_max: 2097152
+  if:
+    type: text
+    regex: "Buffer\\.from\\(['\"][0-9a-fA-F]{32,}['\"]\\s*,\\s*['\"]hex['\"]\\)"
+  unless:
+  - id: metadata/package/testing/harness/runtime/
+  - id: metadata/package/testing/harness/runtime::node-common-require
+- id: globalthis-dynamic-dispatch
+  desc: globalThis indexed dynamic dispatch
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: 'globalThis\s*\[\s*[A-Za-z_$][A-Za-z0-9_$]{0,30}\s*\]\s*\('
+  unless:
+  - id: metadata/package/testing/
+- id: decipher-update-from-hex-ast
+  desc: Decipher update from hex Buffer
+  crit: component
+  conf: 0.82
+  mbc: C0027
+  if:
+    type: text
+    regex: "\\.update\\(\\s*Buffer\\.from\\([^)]{1,200}['\"]hex['\"]\\s*\\)\\s*\\)"
+- id: huge-numeric-source-blob
+  desc: Large digit-dense JavaScript source
+  crit: notable
+  conf: 0.93
+  size_min: 250000
+  if:
+    type: metrics
+    field: text.digit_ratio
+    min: 0.8
+  unless:
+  - id: objectives/anti-static/obfuscation/payload/container::source-map-extension
+  - id: metadata/library/runtime::fontawesome-free-header
+  - id: metadata/file/format::sourcemap-sources-content
+  - id: metadata/package/testing/
+composite_rules:
+- id: packed-charcode-indirect-eval-loader
+  desc: Large JS char-code decoder feeds indirect eval
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1059.007
+  mbc: B0032
+  all:
+  - id: metadata/library/structure::js-large-minified-bundle
+  - id: micro-behaviors/data/encode/char-code::fromcharcode-xor-rebuild
+  - id: micro-behaviors/process/interpreter/eval::js-indirect-eval-variable
+  unless:
+  - id: well-known/app/google-web::google-recaptcha-runtime
+- id: string-table-function-loader
+  desc: String-table Function loader
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: objectives/anti-static/obfuscation/syntax::js-new-from-indexed-string-table
+  - id: micro-behaviors/process/interpreter/eval::function-ctor-call-expr-arg
+- id: file-read-eval-dropper
+  desc: Reads file and eval()s transformed content
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: metadata/import/builtin::require-fs
+  - id: micro-behaviors/fs/file/read::read-text-utf8
+  - id: metadata/file/metrics::javascript-small-file-5k
+  - id: eval-of-transform
+  unless:
+  - id: well-known/lib/duckdb/
+  - id: metadata/library/structure/
+- id: local-payload-transform-eval
+  desc: Local payload file transformed then eval
+  crit: suspicious
+  conf: 0.94
+  all:
+  - id: metadata/import/builtin::require-fs
+  - id: micro-behaviors/fs/path/construct::path-join-dirname
+  - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+  - id: eval-transform-ast
+  - id: micro-behaviors/fs/file/read::read-text-utf8
+  unless:
+  - id: objectives/anti-static/pack/detect::dean-edwards
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: emscripten-run-script-bridge
+- id: blockchain-remote-payload-eval
+  desc: Blockchain dead-drop payload eval
+  crit: hostile
+  conf: 0.98
+  mbc: B0024
+  attack: T1102
+  all:
+  - id: objectives/command-and-control/infrastructure/blockchain/multi-chain::blockchain-c2-fetch
+  - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+  # Small module that exports a decryption function with hardcoded crypto keys.
+  # Common in supply-chain attacks where a separate utility module handles
+  # payload decryption (e.g., AES decrypt with embedded key/IV).
+- id: supply-chain-crypto-decryptor
+  desc: Exported decryptor module with embedded keys
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: objectives/anti-static/obfuscation/payload/encoded::hardcoded-key-decryptor
+  - id: metadata/file/metrics::javascript-small-file-5k
+  - id: objectives/anti-static/obfuscation/payload/encoded::exported-decryptor
+- id: ast-crypto-decryptor
+  desc: AST-confirmed decryptor with embedded keys
+  crit: hostile
+  conf: 0.96
+  mbc: C0027
+  all:
+  - id: micro-behaviors/crypto/symmetric/aes/runtime-library::createDecipheriv
+  - id: hardcoded-hex-buffer-from-ast
+  - id: decipher-update-from-hex-ast
+  - id: metadata/file/metrics::javascript-small-file-5k
+  any:
+  - id: objectives/anti-static/obfuscation/payload/encoded::exported-decryptor
+  - id: objectives/anti-static/obfuscation/payload/encoded::hardcoded-key-decryptor
+- id: tiny-base64-dynamic-eval-loader
+  desc: Tiny base64 dynamic-eval loader
+  crit: hostile
+  conf: 0.96
+  attack: T1027,T1059.007
+  all:
+  - id: micro-behaviors/data/decode/base64::buffer-from-base64-to-utf8
+  - id: globalthis-dynamic-dispatch
+  - id: metadata/file/metrics::javascript-small-file-5k
+  unless:
+  - id: metadata/package/testing/
+# Self-contained packed eval dropper: a megabyte-plus single line that carries
+# a self-decoder (Caesar/char-code) and feeds the result straight into eval().
+# File-scoped, metric-driven, and filename-agnostic — fires on any single JS
+# file of this shape, no package.json or archive context required. The megabyte
+# single-line atom already excludes source maps, vscode webviews, tiktoken, and
+# many-module bundles, so legit minified output does not reach here; a 1 MB line
+# that self-decodes into eval has no benign explanation.
+- id: packed-payload-exec-sink
+  desc: Dynamic execution sink for a packed payload
+  crit: component
+  conf: 0.95
+  any:
+  - id: eval-of-transform
+  - id: eval-inline-function-transform
+  - id: micro-behaviors/process/interpreter/eval::function-ctor-call-expr-arg
+  - id: micro-behaviors/process/interpreter/eval::js-indirect-eval-variable
+  - id: objectives/supply-chain/hidden-payload/encoding::indirect-eval-comma
+  - id: objectives/anti-static/obfuscation/eval/loader::indirect-ctor-transform-iife
+- id: packed-single-line-payload-shape
+  desc: Megabyte single-line packed payload shape
+  crit: component
+  conf: 0.94
+  any:
+  - id: objectives/anti-static/obfuscation/code-metrics/line-shape::js-megabyte-single-line
+  - id: huge-numeric-source-blob
+- id: packed-charcode-decoder
+  desc: Charcode decoder for packed payload
+  crit: component
+  conf: 0.92
+  any:
+  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
+  - id: micro-behaviors/data/decode/custom::fromcharcode-map-array
+  - id: micro-behaviors/data/string/conversion::js-fromcharcode-alias
+  - id: metadata/file/metrics::high-digit-character-ratio
+  - id: objectives/anti-static/obfuscation/code-metrics/structure::js-digit-ratio-over-30pct
+- id: huge-numeric-array-indirect-eval
+  desc: Huge numeric array indirect eval loader
+  crit: hostile
+  conf: 0.97
+  near_bytes: 8192
+  mbc: B0032
+  attack: T1027,T1059.007
+  all:
+  - id: huge-numeric-source-blob
+  - id: micro-behaviors/data/string/conversion::js-fromcharcode-alias
+  - id: micro-behaviors/process/interpreter/eval::js-indirect-eval-variable
+  any:
+  - id: micro-behaviors/data/control-flow/loop::js-length-loop-compound-add
+  - id: objectives/supply-chain/hidden-payload/encoding::indirect-eval-comma
+  unless:
+  - id: objectives/anti-static/obfuscation/payload/container::source-map-extension
+  - id: metadata/file/format::sourcemap-sources-content
+  - id: metadata/package/testing/
+- id: megabyte-charcode-packed-payload
+  desc: Megabyte charcode-packed JavaScript payload
+  crit: hostile
+  conf: 0.96
+  mbc: B0032
+  attack: T1027
+  all:
+  - id: huge-numeric-source-blob
+  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
+  - id: micro-behaviors/data/decode/custom::fromcharcode-map-array
+- id: megabyte-charcode-direct-eval-loader
+  desc: Megabyte charcode-packed payload feeds direct eval
+  crit: hostile
+  conf: 0.97
+  mbc: B0032
+  attack: T1027,T1059.007
+  all:
+  - id: megabyte-charcode-packed-payload
+  - id: eval-inline-function-transform
+- id: packed-single-line-eval-dropper
+  desc: Megabyte single-line self-decoding eval dropper
+  crit: hostile
+  conf: 0.96
+  mbc: B0032
+  attack: T1027
+  all:
+  - id: packed-payload-exec-sink
+  - id: packed-single-line-payload-shape
+  - id: packed-charcode-decoder
+  unless:
+  - id: objectives/anti-static/obfuscation/code-metrics/structure/

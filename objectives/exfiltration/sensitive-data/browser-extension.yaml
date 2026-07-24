@@ -1,0 +1,242 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1041
+  mbc: B0030
+
+traits:
+- id: extension-user-id-key
+  desc: Extension user ID key
+  crit: notable
+  conf: 0.96
+  if:
+    type: text
+    word: extension_user_id
+
+- id: amazon-profile-report-methods
+  desc: Amazon profile report methods
+  crit: notable
+  conf: 0.96
+  if:
+    type: text
+    regex: \breport(Profiles|History|Bookmarks|Subscriptions)\b
+
+- id: send-history-to-metriq
+  desc: History reporting method
+  crit: notable
+  conf: 0.98
+  if:
+    type: symbol
+    exact: sendHistoryToMetriq
+
+- id: supabase-edge-function-upload
+  desc: Supabase edge upload endpoint
+  crit: notable
+  conf: 0.95
+  ref: sha256:b1b67c99d61609933fd4b7cc7a7a9fa1cdd193cc290590b3d377ab282aae4488
+  if:
+    type: text
+    regex: 'functions/v1/(upload-file-v2|gemini-proxy|claude-proxy|register-device-v2)'
+
+- id: synced-items-cloud-table
+  desc: Synced items cloud table
+  crit: notable
+  conf: 0.95
+  ref: sha256:b1b67c99d61609933fd4b7cc7a7a9fa1cdd193cc290590b3d377ab282aae4488
+  if:
+    type: text
+    regex: "from\\(['\"]synced_items['\"]\\)|synced_items\\|v1"
+
+- id: course-material-cloud-sync
+  desc: Course material cloud sync
+  crit: notable
+  conf: 0.94
+  ref: sha256:b1b67c99d61609933fd4b7cc7a7a9fa1cdd193cc290590b3d377ab282aae4488
+  if:
+    type: text
+    regex: 'sync(CourseMaterials|IndexedContent)ToSupabase|user_syllabi|courseMaterialSupabaseSync'
+
+- id: browser-extension-pdf-text-extraction
+  desc: Extension extracts PDF text
+  crit: notable
+  conf: 0.9
+  ref: sha256:b1b67c99d61609933fd4b7cc7a7a9fa1cdd193cc290590b3d377ab282aae4488
+  if:
+    type: text
+    regex: 'DocumentParser\.fetchAndParsePdf|extractTextFromPdf|parsed page text'
+
+- id: swagger-schema-llm-prompt
+  desc: Swagger schema sent to LLM
+  crit: notable
+  conf: 0.93
+  ref: sha256:14e6689d364517cfb12e021b84a1ef2e97550a387fcadde09fe40c706098410a
+  if:
+    type: text
+    substr: swagger schema JSON
+
+composite_rules:
+- id: extension-navigation-redirect-event-exfil
+  desc: Extension exfiltrates navigation redirect events
+  crit: hostile
+  conf: 0.98
+  attack: T1041,T1185
+  all:
+  - id: objectives/impact/ui/manipulation/core::extension-conditional-navigation-hijack
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-id
+  - id: micro-behaviors/communications/http/request/client::http-post-json
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+- id: extension-authenticated-request-transcript-exfil
+  desc: Broad extension uploads intercepted authenticated request transcripts
+  crit: suspicious
+  conf: 0.96
+  attack: T1041,T1539
+  scope: outer
+  unless:
+  - id: well-known/app/vouch-verifier::official-extension-context
+  # Keep the exact manifest identity as an archive-engine compatibility guard;
+  # the full context above is the stronger identity check for engines that
+  # correlate nested archive members before evaluating outer-scope rules.
+  - id: well-known/app/vouch-verifier::manifest-name
+  # Ad blockers legitimately combine webRequest/DNR, cookies, and broad host
+  # access to filter traffic; unrelated fetch(POST) in scriptlets must not
+  # elevate that into transcript exfiltration.
+  - id: well-known/app/browser-extension::adblock-extension-bundle
+  - id: well-known/app/browser-extension::adblock-marker-easylist
+  - id: well-known/app/browser-extension::adblock-marker-ublock
+  - id: metadata/permission/network::dnr-enabled-ruleset
+  - id: micro-behaviors/process/hook/webextension::dnr-block-request-rules
+  all:
+  - id: micro-behaviors/process/hook/webextension::webrequest-request-body-access
+  - id: metadata/permission/manifest::host-permission-all-urls
+  - id: metadata/permission/cookie::permission-cookies
+  - id: metadata/permission/network::network-request-modification
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+
+- id: extension-session-cookie-backend-transfer
+  desc: Extension exfiltrates LinkedIn session cookie while hiding presence
+  crit: hostile
+  conf: 0.995
+  attack: T1539,T1041
+  scope: archive
+  for: [crx, zip, archives]
+  all:
+  - id: micro-behaviors/communications/http/cookies::linkedin-session-cookie-backend-sync
+  - id: metadata/permission/cookie::permission-cookies
+  - id: objectives/anti-analysis/browser-detect::extension-presence-probe-evasion
+
+- id: linkedin-li-at-supabase-exfiltration
+  desc: LinkedIn li_at cookies are posted to Supabase REST tables
+  crit: hostile
+  conf: 0.99
+  attack: T1539,T1041
+  scope: archive
+  for: [crx, zip, archives]
+  all:
+  - id: micro-behaviors/communications/http/cookies::linkedin-session-cookie-name
+  - id: micro-behaviors/communications/http/cookies::linkedin-session-cookie-value-request
+  - id: micro-behaviors/communications/http/services/supabase::rest-api-endpoint
+  - id: micro-behaviors/communications/http/cookies::chrome-cookies-get-all
+  - id: metadata/permission/cookie::permission-cookies
+  - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+
+- id: amazon-profile-exfiltration
+  desc: Amazon profile telemetry exfiltration
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: extension-user-id-key
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  any:
+  - id: amazon-profile-report-methods
+  - id: send-history-to-metriq
+
+- id: primevideo-viewing-telemetry-exfiltration
+  desc: Prime Video viewing telemetry exfiltration
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: extension-user-id-key
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: objectives/collection/activity/browser::primevideo-react-view-tracking
+
+- id: extension-course-material-cloud-exfiltration
+  desc: Extension uploads course materials
+  crit: suspicious
+  conf: 0.96
+  attack: T1119
+  ref: sha256:b1b67c99d61609933fd4b7cc7a7a9fa1cdd193cc290590b3d377ab282aae4488
+  scope: archive
+  all:
+  - id: supabase-edge-function-upload
+  - id: course-material-cloud-sync
+  - id: browser-extension-pdf-text-extraction
+  any:
+  - id: metadata/permission/host::broad-host-access
+  - id: micro-behaviors/os/security/webextension::broad-scripting-host-authority
+
+- id: extension-broad-access-cloud-sync
+  desc: Broad extension syncs page data
+  crit: suspicious
+  conf: 0.94
+  ref: sha256:b1b67c99d61609933fd4b7cc7a7a9fa1cdd193cc290590b3d377ab282aae4488
+  scope: archive
+  all:
+  - id: synced-items-cloud-table
+  - id: supabase-edge-function-upload
+  - id: metadata/permission/manifest::privacy-sensitive-data-permissions
+  any:
+  - id: micro-behaviors/process/inject/webextension::webextension-scripting-execute
+  - id: micro-behaviors/os/security/webextension::broad-scripting-host-authority
+
+- id: extension-active-page-schema-to-llm
+  desc: Extension sends page schema to LLM
+  crit: suspicious
+  conf: 0.96
+  ref: sha256:14e6689d364517cfb12e021b84a1ef2e97550a387fcadde09fe40c706098410a
+  for: [javascript, typescript, chrome-manifest, crx]
+  scope: archive
+  all:
+  - id: micro-behaviors/process/inject/webextension::webextension-scripting-execute
+  - id: metadata/permission/manifest::permission-scripting
+  - id: metadata/permission/active-tab::permission-active-tab
+  - id: objectives/collection/app-data/metadata::swagger-ui-link-selector
+  - id: objectives/collection/app-data/metadata::active-page-hash-read
+  - id: swagger-schema-llm-prompt
+  - id: micro-behaviors/data/db/web-storage::dom-localstorage
+  - id: micro-behaviors/communications/http/endpoints::endpoint
+
+- id: extension-page-source-to-remote-llm
+  desc: All-site extension sends page scripts to a remote LLM
+  crit: hostile
+  conf: 0.97
+  attack: T1041,T1119
+  scope: archive
+  for: [xpi, crx, zip, archives]
+  all:
+  # Provider-agnostic: naming one vendor's host meant swapping the base URL to
+  # any other OpenAI-compatible provider evaded the rule entirely.
+  - id: micro-behaviors/communications/http/llm::llm-chat-api-endpoint
+  - id: metadata/permission/manifest::permission-all-urls
+  - id: micro-behaviors/communications/ipc/message::chrome-runtime-send-message
+  # Evidence that page markup/source is what gets captured. Requiring both of
+  # these at once was over-specification pinned to one sample: enumerating the
+  # page's <script> elements and naming a DOM-carrying message field are two
+  # independent ways of showing the same thing, so either suffices. Shipping
+  # visible page *text* to an LLM (an ordinary summariser) matches neither.
+  any:
+  - id: micro-behaviors/ui/window/manage/enumerate::page-script-element-enumeration
+  - id: micro-behaviors/communications/ipc/message::chrome-runtime-page-dom-field
+  unless:
+  - id: well-known/app/webbrain::webbrain-ai-agent-context
+
+- id: extension-page-text-with-credential-upload
+  desc: Extension uploads page text with login credentials
+  crit: hostile
+  conf: 0.99
+  attack: T1041,T1056.003
+  scope: archive
+  for: [crx, xpi, zip]
+  all:
+  - id: objectives/credential-access/phishing/credential::extension-credential-remote-post
+  - id: micro-behaviors/ui/window/manage/enumerate::browser-body-innertext-read

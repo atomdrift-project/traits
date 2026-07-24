@@ -1,0 +1,168 @@
+defaults:
+  attack: T1027
+  platforms:
+    - unix
+    - windows
+traits:
+  - id: xor-infection-marker
+    desc: XOR infection marker
+    crit: notable
+    conf: 0.9
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      substr: '@GOLJ]LM'
+  - id: xor-marker-extended
+    desc: Extended XOR marker
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      substr: EFE)@GOLJ]LM)HNH@G
+  - id: tab-terminated-strings
+    desc: Tab-terminated strings
+    crit: component
+    conf: 0.7
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      regex: '[a-zA-Z0-9]{4,}\t$'
+  - id: unusual-character-combinations
+    desc: Unusual character combinations
+    crit: component
+    conf: 0.5
+    for:
+      - elf
+    size_max: 2097152
+    if:
+      type: text
+      regex: '[^a-zA-Z0-9\s\.,\-_/\\:@]{8,}'
+    not:
+      - regex: ^[#;"'*?\[\]&|<>(){}$`^~!+]+$
+      - regex: ^!+$
+      - regex: ^=+$
+      - regex: ^[\xA0-\xFF]{8,}$
+      - substr: 0123456789
+      - substr: abcdefghijklmnopqrstuvwxyz
+  - id: dense-unusual-chars
+    desc: Dense unusual character patterns (obfuscation)
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+    size_max: 500000
+    count_min: 5
+    per_kb_min: 1.0
+    if:
+      type: text
+      regex: '[^a-zA-Z0-9\s\.,\-_/\\:@]{8,}'
+    not:
+      - regex: ^[#;"'*?\[\]&|<>(){}$`^~!+]+$
+      - regex: ^!+$
+      - regex: ^=+$
+      - regex: ^[\xA0-\xFF]{8,}$
+    unless:
+      - id: micro-behaviors/dylib/library/family/
+  - id: js-xor-decoder-loop
+    desc: JavaScript XOR decryption loop
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: string_literal
+      regex: String\.fromCharCode\s*\([^)]{0,80}\^[^)]{0,80}\)
+  - id: js-xor-decoder-ast
+    desc: JavaScript XOR decryption (AST)
+    crit: notable
+    conf: 0.95
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: tree-sitter
+      query: "((call_expression\n  function: (member_expression property: (property_identifier) @p)\n  (#eq? @p \"fromCharCode\")\n  arguments: (arguments\n    (binary_expression operator: \"^\")\n  )\n))\n"
+    unless:
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/file/magic/identity::macho-32
+      - id: metadata/file/magic/identity::macho-64
+      - type: text
+        substr: "fpdf.org/en/script/script37.php"
+      - type: basename
+        exact: carrotsearch.foamtree.js
+  - id: js-fromcharcode-numeric-xor
+    desc: String.fromCharCode numeric XOR reconstruction
+    crit: notable
+    conf: 0.9
+    mbc: B0032
+    for:
+      - javascript
+      - html
+    if:
+      type: text
+      regex: 'String\.fromCharCode\([^;\n]{0,120}\^\s*\d+\s*\)'
+  - id: js-fromcharcode-charcode-xor
+    desc: JavaScript fromCharCode charCode XOR
+    crit: notable
+    conf: 0.9
+    for:
+      - html
+      - javascript
+    if:
+      type: text
+      regex: 'fromCharCode\s*\([^)]{0,120}charCodeAt\s*\([^)]{0,40}\)\s*\^'
+    not:
+      - substr: 'n.generate(g,v)'
+      - substr: 'String.fromCharCode(y.charCodeAt(c)^b.charCodeAt(c))'
+      - regex: 'PSS signature verification|Encoded message does not end in 0xBC|Inconsistent parameters to PSS'
+    unless:
+      - id: well-known/app/bitwarden::bitwarden-extension-script
+      - id: well-known/lib/node-forge::node-forge-crypto-library
+  - id: js-charcode-xor-operation
+    desc: JavaScript charCodeAt XOR operation
+    crit: notable
+    conf: 0.9
+    for:
+      - html
+      - javascript
+    if:
+      type: text
+      regex: charCodeAt\([^)]{0,12}\)\s*\^
+composite_rules:
+  - id: xor-encoded-strings
+    desc: XOR-encoded strings
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    any:
+      - id: xor-infection-marker
+      - id: xor-marker-extended
+  - id: xor-obfuscation-evidence
+    desc: XOR obfuscation evidence
+    crit: suspicious
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    mbc: B0041
+    needs: 2
+    any:
+      - id: xor-encoded-strings
+      - id: dense-unusual-chars
+      - id: unusual-character-combinations
+    unless:
+      - id: micro-behaviors/ui/help::usage-help
+      - id: micro-behaviors/data/db/postgresql::libpq
+    downgrade:
+      any:
+        - id: micro-behaviors/data/compress/

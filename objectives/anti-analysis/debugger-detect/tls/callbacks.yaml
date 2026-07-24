@@ -1,0 +1,236 @@
+defaults:
+  platforms:
+    - windows
+  for:
+    - pe
+  attack: T1055.012
+traits:
+  - id: tls-dyn-init-callback-symbol
+    desc: TLS callback runs before main()
+    crit: component
+    conf: 0.7
+    if:
+      type: symbol
+      exact: __dyn_tls_init_callback
+  - id: tls-callback-anti-debug
+    desc: Anti-debug check via TLS callback
+    crit: suspicious
+    conf: 0.9
+    size_max: 5242880
+    if:
+      type: text
+      regex: \bTlsCallback.{0,100}IsDebuggerPresent
+      case_insensitive: true
+  - id: address-of-callbacks
+    desc: AddressOfCallBacks reference
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      word: AddressOfCallBacks
+      case_insensitive: true
+  - id: tls-callback-array-ref
+    desc: TlsCallbackArray reference
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      word: TlsCallbackArray
+      case_insensitive: true
+  - id: nttraceevent-reference
+    desc: NtTraceEvent API reference
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: NtTraceEvent
+composite_rules:
+  - id: tls-memory-loader-anti-debug
+    desc: Multi-TLS executable-memory loader with anti-debugging
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002,T1497.003,T1622"
+    all:
+      - id: metadata/binary/layout::pe-multiple-tls-callbacks
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/time/timing/delay::query-performance-counter
+      - id: micro-behaviors/time/query::get-tick-count
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/reverse-engineering/
+
+  - id: multi-tls-debugger-thread-control-loader
+    desc: Multi-TLS PE with anti-debug and thread-control imports
+    crit: hostile
+    conf: 0.99
+    attack: T1622,T1055,T1027
+    all:
+      - id: metadata/binary/layout::pe-multiple-tls-callbacks
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/process/inject/runtime/call::get-thread-context-dup
+      - id: micro-behaviors/process/inject/runtime/call::set-thread-context-dup
+      - id: metadata/binary/section/metrics::high-entropy-rdata-section
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/reverse-engineering/
+  - id: tls-anti-debug
+    desc: TLS callback with anti-debugging
+    crit: hostile
+    conf: 0.95
+    attack: T1622
+    all:
+      - id: metadata/binary/layout::pe-tls-callback-text-reference
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
+      - id: micro-behaviors/process/debug/detect::check-remote-debugger
+      - id: micro-behaviors/os/syscall/raw::nt-query-info-ssn
+    downgrade:
+      any:
+        - id: micro-behaviors/fs/file/section::pe-loader-tool
+        - id: well-known/app/tls-callback-demo::tls-callback-demo-pdb
+        - id: micro-behaviors/fs/file/section::pe-viewer-machine-types
+  - id: tls-callback-present
+    desc: PE uses TLS callbacks
+    crit: notable
+    conf: 0.8
+    needs: 2
+    any:
+      - id: metadata/binary/layout::pe-tls-callback-text-reference
+      - id: address-of-callbacks
+      - id: tls-callback-array-ref
+      - id: tls-dyn-init-callback-symbol
+      - id: metadata/binary/layout::pe-tls-callback-table
+    downgrade:
+      any:
+        - id: metadata/lang/compiler/native::mingw-runtime-marker
+        - id: metadata/lang/compiler/native/
+  - id: tls-nttraceevent-packed-dll
+    desc: TLS-capable packed DLL references NtTraceEvent
+    crit: hostile
+    conf: 0.95
+    attack: T1622
+    all:
+      - id: metadata/binary/section/names::pe-tls-section
+      - id: nttraceevent-reference
+      - id: metadata/binary/section/metrics::large-reloc-section
+      - id: metadata/binary/metrics/structural::minimal-exports
+    any:
+      - id: metadata/binary/layout::low-entropy-large-overlay
+      - id: metadata/binary/metrics/structural::high-code-entropy
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+  - id: tls-callbacks-with-ntquery
+    desc: TLS callbacks with process query
+    crit: suspicious
+    conf: 0.9
+    attack: T1622
+    all:
+      - id: metadata/binary/layout::pe-tls-callback-table
+      - id: micro-behaviors/os/syscall/raw::nt-query-info-ssn
+    any:
+      - id: metadata/binary/layout::pe-tls-callback-text-reference
+      - id: tls-callback-array-ref
+      - id: address-of-callbacks
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/tool/reverse-engineering/x64dbg/
+      - id: well-known/app/qbittorrent::qbittorrent-artifact-path
+      - id: well-known/app/qbittorrent::qbittorrent-product-name
+      - id: well-known/app/bitwarden::desktop-napi-module
+      - id: well-known/app/bitwarden::desktop-napi-path-fragment
+      - id: well-known/lib/electron::electron-windows-runtime-pdb
+      - id: well-known/app/qbittorrent/
+      - id: well-known/app/fastfetch/
+  - id: tls-callback-debugger-api-pair
+    desc: TLS callbacks with paired debugger checks
+    crit: suspicious
+    conf: 0.95
+    attack: T1622
+    all:
+      - id: metadata/binary/layout::pe-tls-callback-table
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
+      - id: micro-behaviors/process/debug/detect::check-remote-debugger
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/tool/reverse-engineering/x64dbg/
+      - id: well-known/app/qbittorrent::qbittorrent-artifact-path
+      - id: well-known/app/qbittorrent::qbittorrent-product-name
+      - id: well-known/app/bitwarden::desktop-napi-module
+      - id: well-known/app/bitwarden::desktop-napi-path-fragment
+      - id: well-known/lib/electron::electron-windows-runtime-pdb
+  - id: tls-tool-catalog-overlay-evasion
+    desc: TLS debugger checks with analyst-tool catalog and dominant overlay
+    crit: hostile
+    conf: 0.98
+    attack: "T1497,T1622,T1027"
+    all:
+      - id: tls-callback-debugger-api-pair
+      - id: objectives/anti-analysis/tool-detect/process::analysis-tool-enumeration
+      - id: metadata/binary/layout::overlay-over-90pct
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/app/protected-benign-pe/
+  - id: multi-tls-callbacks-with-analysis-catalog
+    desc: Multi TLS callbacks with analysis catalog
+    crit: suspicious
+    conf: 0.96
+    attack: "T1497, T1622"
+    all:
+      - id: metadata/binary/layout::pe-multiple-tls-callbacks
+      - id: objectives/anti-analysis/sandbox-detect/tool-references::analyst-tool-name-cluster
+      - id: objectives/anti-analysis/vm-detect/vendor::comprehensive-evasion
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::paired-rdtsc-timing
+      - id: objectives/anti-analysis/emulator-detect/vendor-strings::comprehensive
+  - id: garbled-tls-environment-probe
+    desc: Garbled PE combines TLS callbacks with environment probes
+    crit: hostile
+    conf: 0.98
+    attack: "T1027,T1497.001,T1622"
+    mbc: "B0032,B0007"
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/garble::go-garbled-type-pointer
+      - id: metadata/binary/layout::pe-multiple-tls-callbacks
+      - id: micro-behaviors/os/sysinfo/hardware::get-system-info
+      - id: micro-behaviors/time/timing/check::query-performance-frequency
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+  - id: multi-tls-opaque-anti-analysis-loader
+    desc: PE uses TLS anti-debugging with opaque memory staging
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1497.001,T1622
+    all:
+      - id: metadata/binary/layout::pe-multiple-tls-callbacks
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/os/sysinfo/hardware::get-system-info
+      - id: metadata/binary/metrics/size::giant-string-blob-metric
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/framework::dotnet-singlefilehost-runtime
+      - id: well-known/lib/electron::electron-windows-runtime-pdb
+      - id: well-known/tool/reverse-engineering/
+
+  - id: tls-empty-code-packed-entry-loader
+    desc: TLS entrypoint paired with packed empty-code layout
+    crit: hostile
+    conf: 0.98
+    attack: "T1622,T1027.002"
+    all:
+      - id: metadata/binary/layout::pe-tls-callback-table
+      - id: objectives/anti-static/obfuscation/payload/section::empty-text-section
+      - id: metadata/binary/section/metrics::multiple-nonstandard-section-names
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: metadata/binary/layout::pe-checksum-zeroed
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/app/protected-benign-pe/
+      - id: objectives/anti-static/pack/detect/
+      - id: objectives/anti-static/pack/asprotect/

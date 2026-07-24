@@ -1,0 +1,262 @@
+# IDE configuration injection
+# Detects writing to AI coding assistant MCP/config files to inject
+# malicious server configurations, exfiltrate tokens, or redirect
+# tool calls to attacker-controlled endpoints.
+defaults:
+  platforms: [windows, unix]
+  for:
+    - shell
+    - javascript
+    - typescript
+    - python
+    - powershell
+    - go
+  attack: T1195.002
+traits:
+  # === MCP config filenames ===
+  # These files are the config targets for AI IDE MCP injection.
+  # path.join() splits components into separate strings, so we
+  # match the config filename + IDE directory indicator separately.
+
+  - id: kiro-dir
+    desc: Kiro IDE config directory (.kiro)
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: ".kiro"
+
+  - id: python-path-open-write-mode
+    desc: Python pathlib open write mode
+    crit: component
+    conf: 0.84
+    ref: sha256:a709234609a3c0423f68d9ebc1c219f349879cb4f29786d2d5e797e6b098cfd3
+    for: [python]
+    if:
+      type: text
+      regex: '\.open\(["'']w["'']\)'
+
+  - id: python-mcp-config-backup-rename
+    desc: Python backs up MCP config
+    crit: component
+    conf: 0.84
+    for: [python]
+    if:
+      type: text
+      regex: 'config_path\.with_suffix\(["'']\.json\.backup["'']\)[\s\S]{0,160}config_path\.rename\('
+
+composite_rules:
+  # MCP config + any IDE directory = config injection
+  - id: mcp-config-injection
+    desc: MCP configuration injection (multi-IDE)
+    crit: hostile
+    conf: 0.95
+    near_lines: 80
+    all:
+      - id: micro-behaviors/fs/path/application/config::mcp-client-config-target
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+    any:
+      - id: objectives/supply-chain/install-hook
+      - id: objectives/supply-chain/hidden-payload
+      - id: objectives/exfiltration
+      - id: objectives/credential-access
+      - id: kiro-dir
+    unless:
+      - id: micro-behaviors/communications/ipc/mcp/
+      - id: well-known/tool/detection/
+      - id: well-known/tool/detection/agent-gate/
+      - id: well-known/app/tencent-codebuddy::codebuddy-marker
+
+  - id: claude-desktop-mcp-config-injection
+    desc: Package injects an npx MCP server into Claude Desktop
+    crit: hostile
+    conf: 0.98
+    near_bytes: 3500
+    all:
+      - id: micro-behaviors/fs/path/application/config::claude-desktop-config-path
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key
+      - id: micro-behaviors/communications/ipc/mcp::mcp-config-npx-command
+    unless:
+      - id: well-known/tool/detection/
+
+  # mcp_config.json variant (Windsurf)
+  - id: windsurf-mcp-injection
+    desc: Writes Windsurf MCP configuration during install or exfiltration
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/fs/path/application/config::mcp-config-json-filename
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+    any:
+      - id: objectives/supply-chain/install-hook
+      - id: objectives/supply-chain/hidden-payload
+      - id: objectives/exfiltration
+      - id: objectives/credential-access
+    unless:
+      - id: micro-behaviors/communications/ipc/mcp/
+      - id: well-known/tool/detection/
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/library/structure::vscode-extension-generated-asset
+      - id: metadata/library/structure::js-distribution-output-path
+      - id: metadata/library/structure::vscode-generated-escape-fragment
+
+  - id: python-mcp-config-writer
+    desc: Python writes AI MCP client configuration
+    crit: notable
+    conf: 0.9
+    all:
+      - id: micro-behaviors/fs/path/application/config::mcp-config-json-filename
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/app/qwen-code::qwen-code-bundle-text
+      - id: well-known/app/simba-ai::rlm-engine-path
+
+  - id: python-agent-mcp-config-command-writer
+    desc: Python writes agent MCP command config
+    crit: hostile
+    conf: 0.93
+    ref: sha256:a709234609a3c0423f68d9ebc1c219f349879cb4f29786d2d5e797e6b098cfd3
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-server-command-schema
+      - id: micro-behaviors/data/serialize/object::json-dump
+      - id: python-path-open-write-mode
+    any:
+      - id: micro-behaviors/fs/path/application/config::claude-mcp-json-target
+      - id: micro-behaviors/fs/path/application/config::codex-mcp-toml-target
+      - id: micro-behaviors/fs/path/application/config::mcp-client-config-target
+    unless:
+      - id: well-known/app/qwen-code::qwen-code-bundle-text
+      - id: well-known/app/simba-ai::rlm-engine-path
+
+  - id: service-credential-env-in-mcp-config
+    desc: Service credential env vars in MCP config
+    crit: notable
+    conf: 0.9
+    # This atom supports the Python-only writer composites below. Applying its
+    # line proximity to one-line JavaScript bundles conflates adjacent provider
+    # setup and MCP serialization functions without proving credential flow.
+    for: [python]
+    ref: sha256:f9b935ef1d644960445911670b391fed77ba2cc0a5024fc114eaa19c7b5c0aab
+    near_lines: 80
+    all:
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key
+      - id: micro-behaviors/os/env/vars/credentials::service-credential-env-var
+
+  - id: python-ai-mcp-config-credential-writer
+    desc: Python writes credentialed AI MCP config
+    crit: suspicious
+    conf: 0.93
+    ref: sha256:f9b935ef1d644960445911670b391fed77ba2cc0a5024fc114eaa19c7b5c0aab
+    all:
+      - id: micro-behaviors/fs/path/application/config::mcp-client-config-target
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key
+      - id: service-credential-env-in-mcp-config
+    any:
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+      - id: micro-behaviors/communications/ipc/mcp::python-mcp-server-env-renderer
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/tool/development/autohq::autohq-cli-package
+      - id: well-known/tool/development/autohq::autohq-cli-source-marker
+      - id: well-known/app/puppetmaster::python-package-source
+
+  - id: python-multi-agent-mcp-config-writer
+    # Legitimate MCP server installers write client configs for several AI
+    # tools; that is product behavior (notable), not trojan intent. Hostile
+    # escalation remains on python-multi-ide-mcp-config-rewriter (backup+rewrite)
+    # and credential-bearing writers.
+    desc: Python writes MCP config for multiple AI clients
+    crit: notable
+    conf: 0.92
+    ref: sha256:f9b935ef1d644960445911670b391fed77ba2cc0a5024fc114eaa19c7b5c0aab
+    all:
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+      - id: micro-behaviors/fs/path/application/config::ai-coding-tool-config-directory-cluster
+      - id: micro-behaviors/communications/ipc/mcp::mcp-client-config-key
+    any:
+      - id: micro-behaviors/communications/ipc/mcp::python-mcp-server-env-renderer
+      - id: service-credential-env-in-mcp-config
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/app/puppetmaster::python-package-source
+
+  - id: python-multi-ide-mcp-config-rewriter
+    desc: Python rewrites MCP config across AI IDEs
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: python-mcp-config-writer
+      - id: micro-behaviors/fs/path/application/config::ai-coding-tool-config-directory-cluster
+      - id: python-mcp-config-backup-rename
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/app/qwen-code::qwen-code-bundle-text
+
+  # Redirecting the AI CLI's API endpoint and planting an auth token into the
+  # agent's config file routes the victim's prompts/code through a chosen server.
+  # Dual-use: legitimate proxy/"router" tools do this too, so suspicious — the
+  # hostile escalation comes from co-resident beacon/sandbox-disable composites.
+  - id: ai-agent-api-endpoint-hijack
+    desc: Redirects AI CLI to third-party API endpoint
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/env/vars/access::anthropic-base-url-variable
+      - id: micro-behaviors/os/env/vars/access::anthropic-auth-token-variable
+    any:
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+    near_bytes: 8192
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/tool/development/autohq/
+      - id: well-known/app/entelligence-cli::router-settings-implementation
+      - id: metadata/package/quality/logfire::ai-gateway-benign-context
+      - id: well-known/app/ethan-agent::ethan-agent-package
+      - id: well-known/app/ethan-agent::ethan-agent-config-module
+
+  # Codex twin of the redirect above: overriding model_provider in config.toml
+  # and planting OPENAI_API_KEY into the Codex auth store routes Codex's traffic
+  # and key through a chosen server. Dual-use (relay tools), so suspicious.
+  - id: codex-provider-credential-hijack
+    desc: Writes Codex provider credential override
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/data/llm::model-provider-field
+      - id: objectives/credential-access/env/secrets/ai-provider::openai-api-key
+      - id: micro-behaviors/fs/path/sensitive/credentials::codex-auth-json
+      - id: micro-behaviors/fs/write/file/direct::js-file-write
+    unless:
+      - id: well-known/tool/detection/
+
+  # Endpoint+token redirect is dual-use; ALSO planting a SessionStart lifecycle
+  # hook into the same agent config is not — a benign API "router" never injects
+  # a session hook. The pair is a trojanized config-injection backdoor.
+  - id: ai-agent-config-hijack-with-hook
+    desc: Hijacks AI CLI config, injects session hook
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: ai-agent-api-endpoint-hijack
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-session-hook--sessionstart
+    unless:
+      - id: well-known/tool/detection/
+
+  # JWT decode + MCP config = token exfiltration
+  - id: mcp-token-exfiltration
+    desc: JWT token exfiltration via MCP config
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: well-known/lib/jwt-decode::jwt-decode-import
+    any:
+      - id: micro-behaviors/fs/path/application/config::mcp-json-filename
+      - id: micro-behaviors/fs/path/application/config::mcp-config-json-filename
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: well-known/app/atlascode/
+      - id: well-known/lib/benign-runtime-bundles/

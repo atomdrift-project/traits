@@ -1,0 +1,120 @@
+defaults:
+  platforms: [windows, unix]
+  for: [png]
+  mbc: B0032.001
+  attack: T1027.003
+traits:
+  - id: high-pixel-entropy
+    desc: Image pixel entropy in steganographic range
+    crit: component
+    conf: 0.7
+    if:
+      type: metrics
+      field: image.pixel_entropy
+      min: 7.5
+  - id: high-histogram-flatness
+    desc: Image histogram near-uniform distribution
+    crit: component
+    conf: 0.7
+    if:
+      type: metrics
+      field: image.histogram_flatness
+      min: 0.93
+  - id: r-channel-high
+    desc: Red channel entropy above normal
+    crit: component
+    conf: 0.6
+    if:
+      type: metrics
+      field: image.r_entropy
+      min: 7.0
+  - id: g-channel-high
+    desc: Green channel entropy above normal
+    crit: component
+    conf: 0.6
+    if:
+      type: metrics
+      field: image.g_entropy
+      min: 7.0
+  - id: b-channel-high
+    desc: Blue channel entropy above normal
+    crit: component
+    conf: 0.6
+    if:
+      type: metrics
+      field: image.b_entropy
+      min: 7.0
+  - id: jpeg-large-comment
+    desc: Unusually large JPEG comment marker
+    crit: suspicious
+    conf: 0.85
+    for: [jpeg]
+    if:
+      type: metrics
+      field: jpeg.comment_bytes
+      min: 1024
+  - id: jpeg-large-exif
+    desc: Unusually large EXIF block
+    crit: suspicious
+    conf: 0.7
+    for: [jpeg]
+    if:
+      type: metrics
+      field: jpeg.exif_size
+      min: 65536
+    unless:
+      - type: value
+        path: jpeg.exif.software
+        substr: Adobe Photoshop
+composite_rules:
+  - id: image-steganography-indicators
+    desc: Image with steganography indicators
+    crit: notable
+    conf: 0.8
+    size_min: 1048576
+    all:
+      - id: high-pixel-entropy
+      - id: high-histogram-flatness
+      - id: metadata/image/metrics::png-incompressible-pixels
+  # All-RGB-channels-high is a building block for the strong composite, not a
+  # standalone verdict: AI-generated art and many photographs naturally carry
+  # near-maximal per-channel entropy.
+  - id: all-channels-high
+    desc: All RGB channels contain high entropy
+    crit: component
+    conf: 0.8
+    size_min: 1048576
+    all:
+      - id: r-channel-high
+      - id: g-channel-high
+      - id: b-channel-high
+      - id: metadata/image/metrics::png-incompressible-pixels
+  # Structural evidence of a concealed payload: bytes appended past the image
+  # terminator, extra chunks after IEND, or data after the JPEG EOI. This is
+  # what separates a real stego carrier from a smooth, high-entropy
+  # AI-generated image (DALL-E/Midjourney/SD output), whose pixel statistics
+  # are otherwise indistinguishable from LSB-embedded data.
+  - id: image-appended-payload
+    desc: Image carries data past its terminator
+    crit: notable
+    conf: 0.85
+    any:
+      - id: metadata/image/metrics::jpeg-appended-data
+      - id: metadata/image/metrics::png-chunks-after-iend
+  - id: image-steganography-strong
+    desc: Image with strong steganography indicators
+    crit: hostile
+    conf: 0.95
+    size_min: 1048576
+    # Statistical profile (high entropy on every channel + flat histogram +
+    # incompressible + low edge) AND a concealed payload. The statistical legs
+    # alone match benign AI-generated art, so the appended-payload leg is
+    # mandatory for the hostile verdict.
+    all:
+      - id: image-steganography-indicators
+      - id: all-channels-high
+      - id: image-appended-payload
+    any:
+      - id: metadata/image/metrics::low-edge-density
+      - id: metadata/image/metrics::png-incompressible-pixels
+      - id: metadata/image/metrics::jpeg-appended-data

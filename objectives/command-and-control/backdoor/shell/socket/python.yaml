@@ -1,0 +1,131 @@
+defaults:
+  platforms: [windows, unix]
+  for: [scripts, binaries]
+traits:
+- id: python-bind-call
+  desc: Python socket bind call
+  crit: component
+  conf: 0.8
+  for: [python]
+  if:
+    type: text
+    substr: ".bind(("
+- id: python-listen-call
+  desc: Python socket listen call
+  crit: component
+  conf: 0.75
+  for: [python]
+  if:
+    type: text
+    substr: ".listen("
+- id: python-connect-call
+  desc: Python socket connect call
+  crit: component
+  conf: 0.8
+  for: [python]
+  if:
+    type: text
+    substr: ".connect(("
+- id: python-send-output
+  desc: Python socket sends encoded process output
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    regex: \.(send|sendall)\(.{0,40}(stdout|stderr|cmd_output).{0,20}\.encode
+composite_rules:
+- id: python-bind-shell-command-channel
+  desc: Python bind shell command channel
+  crit: hostile
+  conf: 0.97
+  attack: T1059.006
+  mbc: B0022
+  for: [python]
+  near_lines: 30
+  all:
+  - id: python-bind-call
+  - id: python-listen-call
+  - id: micro-behaviors/communications/socket/connect::socket-accept-call
+  - id: micro-behaviors/communications/socket/receive::socket-recv-call
+  - id: micro-behaviors/process/create/subprocess::process-execution
+  any:
+  - id: python-send-output
+  - id: micro-behaviors/communications/socket/bind/address::bind-all-interfaces
+  - id: micro-behaviors/process/create/thread::python-daemon-thread
+- id: python-env-triggered-reverse-shell
+  desc: Python env-triggered reverse shell
+  crit: hostile
+  conf: 0.96
+  attack: T1059.006
+  mbc: B0022
+  for: [python]
+  near_lines: 35
+  all:
+  - id: python-connect-call
+  - id: micro-behaviors/communications/socket/receive::socket-recv-call
+  - id: micro-behaviors/process/create/subprocess::process-execution
+  - id: micro-behaviors/os/env/config::python-named-secret-env-lookup
+  any:
+  - id: python-send-output
+  - id: micro-behaviors/os/env/access::os-environ-symbol
+- id: python-reverse-shell-command-loop
+  desc: Python socket command loop reverse shell
+  crit: hostile
+  conf: 0.98
+  attack: T1059.006
+  mbc: B0030.002
+  for: [python]
+  near_lines: 45
+  all:
+  - id: python-connect-call
+  - id: micro-behaviors/communications/socket/receive::socket-recv-call
+  - id: micro-behaviors/process/create/subprocess::shell-true
+  - id: python-send-output
+  unless:
+  - id: metadata/package/testing/presence/harness::python-test-file
+  - id: metadata/package/testing/presence/harness/
+  - id: well-known/tool/detection/llm-scanner/
+- id: python-reverse-shell-command-loop-pyc
+  desc: Python bytecode socket command loop reverse shell
+  crit: hostile
+  conf: 0.96
+  attack: T1059.006
+  mbc: B0030.002
+  for: [pyc]
+  near_bytes: 512
+  all:
+  - id: micro-behaviors/communications/socket/connect::socket-connect-pyc-name
+  - id: micro-behaviors/communications/socket/receive::socket-recv-pyc-name
+  - id: micro-behaviors/process/create/subprocess::subprocess-shell-pyc
+  - id: micro-behaviors/communications/socket/send::python-sendall-pyc-name
+
+- id: python-socket-shell-command-channel
+  desc: Python socket channel executes received shell commands
+  crit: hostile
+  conf: 0.98
+  for: [python]
+  # A socket receive and an unrelated shell=True subprocess are common in
+  # local IPC integrations (for example, a desktop compositor client).  A
+  # command channel keeps these operations in one short handler; require
+  # proximity so a file-wide coincidence is not hostile evidence.
+  near_lines: 45
+  all:
+  - id: micro-behaviors/communications/socket/connect::socket-connect-method
+  - id: micro-behaviors/communications/socket/receive::socket-data-transfer
+  - id: micro-behaviors/process/create/subprocess::shell-true
+  - id: micro-behaviors/process/create/subprocess::process-execution
+  - id: micro-behaviors/data/serialize/json::json-loads-call
+
+- id: python-socket-agent-command-file-control
+  desc: Python socket agent exposes shell and file control
+  crit: hostile
+  conf: 0.99
+  scope: archive
+  for: [python, whl]
+  all:
+  - id: python-socket-shell-command-channel
+  - id: micro-behaviors/communications/socket/bind/address::bind-all-interfaces
+  - id: micro-behaviors/communications/socket/connect::socket-accept-call
+  - id: micro-behaviors/communications/http/upload::upload-file-method-call
+  - id: micro-behaviors/communications/http/download/helper::download-file-method-call

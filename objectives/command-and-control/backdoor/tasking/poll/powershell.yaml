@@ -1,0 +1,139 @@
+---
+defaults:
+  platforms:
+  - windows
+  for:
+  - powershell
+  size_max: 5242880
+  attack: T1059.001
+traits:
+- id: ps1-c2-agent-registration
+  desc: PowerShell registers agent with C2
+  crit: suspicious
+  conf: 0.94
+  attack: T1071.001
+  if:
+    type: text
+    regex: '(?i)\bInvoke-RestMethod\b[^\r\n]{0,180}/register\b'
+- id: ps1-c2-command-poll-call
+  desc: PowerShell C2 command poll request
+  crit: suspicious
+  conf: 0.95
+  attack: T1071.001
+  if:
+    type: text
+    regex: '(?i)\bInvoke-RestMethod\b[^\r\n]{0,180}/poll(/|\b)'
+- id: ps1-c2-command-field
+  desc: PowerShell reads returned command field
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: '\$response\.command\b'
+- id: ps1-c2-command-report
+  desc: PowerShell reports command output to C2
+  crit: suspicious
+  conf: 0.95
+  attack: T1041
+  if:
+    type: text
+    regex: '(?i)\bInvoke-RestMethod\b[^\r\n]{0,180}/report\b'
+- id: ps1-c2-api-poll
+  desc: C2 client poll API endpoint pattern
+  crit: suspicious
+  conf: 0.88
+  attack: T1071.001
+  if:
+    type: text
+    substr: "/api/client/poll/"
+- id: ps1-c2-api-response
+  desc: C2 client response API endpoint pattern
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    substr: "/api/client/response"
+- id: ps1-default-servers
+  desc: defaultServers C2 server list variable
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    word: defaultServers
+- id: ps1-temp-guid-ps1
+  desc: Temp GUID ps1 path
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    substr: "$env:TEMP\\c$([guid]::NewGuid()).ps1"
+- id: ps1-temp-guid-txt
+  desc: Temp GUID txt path
+  crit: suspicious
+  conf: 0.88
+  if:
+    type: text
+    substr: "$env:TEMP\\o$([guid]::NewGuid()).txt"
+- id: ps1-temp-hidden-startprocess
+  desc: Hidden temp PowerShell runner
+  crit: suspicious
+  conf: 0.93
+  if:
+    type: text
+    regex: Start-Process powershell.{0,200}Out-File.{0,120}-WindowStyle Hidden
+- id: ps1-waitforexit-timeout
+  desc: WaitForExit timeout call
+  crit: suspicious
+  conf: 0.88
+  if:
+    type: text
+    substr: WaitForExit($config.commandTimeout * 1000)
+- id: ps1-parentprocessid-filter
+  desc: ParentProcessId kill filter
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: ParentProcessId=\$\(\$[A-Za-z_][A-Za-z0-9_.]*\)
+composite_rules:
+- id: ps1-agent-command-polling-backdoor
+  desc: PowerShell agent polls C2 and executes returned commands
+  crit: hostile
+  conf: 0.99
+  attack: T1059.001,T1071.001,T1041
+  mbc: B0030
+  near_lines: 100
+  all:
+  - id: ps1-c2-agent-registration
+  - id: ps1-c2-command-poll-call
+  - id: ps1-c2-command-field
+  - id: ps1-c2-command-report
+  - id: micro-behaviors/process/interpreter/eval::powershell-iex-call
+- id: ps1-aes-beacon-rat
+  desc: PowerShell RAT with AES-encrypted payload and C2 beacon polling
+  crit: hostile
+  conf: 0.96
+  attack: T1071.001
+  all:
+  - id: objectives/command-and-control/dropper/staging/encrypted::ps-aes-inline-payload
+  any:
+  - id: ps1-c2-api-poll
+  - id: ps1-c2-api-response
+  - id: ps1-default-servers
+- id: ps1-polling-command-runner
+  desc: PowerShell polling backdoor with hidden temp-script command runner
+  crit: hostile
+  conf: 0.98
+  attack: T1071.001
+  near_lines: 40
+  all:
+  - id: ps1-temp-guid-ps1
+  - id: ps1-temp-guid-txt
+  - id: ps1-temp-hidden-startprocess
+  - id: ps1-waitforexit-timeout
+  - id: micro-behaviors/process/terminate/kill::stop-process-force
+  - id: ps1-parentprocessid-filter
+  any:
+  - id: ps1-c2-api-poll
+  - id: ps1-c2-api-response
+  - id: micro-behaviors/communications/http/lib/invoke-webrequest::ps-post

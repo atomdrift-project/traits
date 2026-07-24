@@ -1,0 +1,95 @@
+defaults:
+  platforms: [macos]
+  for: [applescript]
+  attack: T1005
+  mbc: B0028
+traits:
+- id: grabfolderlimit-var
+  desc: AppleScript per-folder grab limit variable
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: (?i)\bGrabFolderLimit\b
+- id: mdls-filesize-query
+  desc: Queries macOS file size metadata with mdls
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: text
+    regex: mdls\s+-name\s+kMDItemFSSize
+- id: find-maxdepth-2
+  desc: Limits recursive search depth to 2
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: find.{0,120}-maxdepth\s+2\b
+- id: find-size-under-5m
+  desc: Filters collected files under 5 MB
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: text
+    regex: find.{0,120}-size\s+-5M\b
+composite_rules:
+- id: size-aware-folder-grabber
+  desc: Controlled folder grab with depth, size, or count limits
+  crit: suspicious
+  conf: 0.94
+  all:
+  - id: micro-behaviors/fs/path/location::common-user-folders
+  needs: 2
+  any:
+  - id: grabfolderlimit-var
+  - id: mdls-filesize-query
+  - id: find-maxdepth-2
+  - id: find-size-under-5m
+  - id: micro-behaviors/process/create/shell/pipeline::head-20-limit
+- id: applescript-targeted-document-grab
+  desc: AppleScript targeted document grab with controlled limits
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: size-aware-folder-grabber
+  - id: office-secret-extension-list
+- id: applescript-wallet-extension-store-targeting
+  desc: AppleScript wallet extension store targeting
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: objectives/credential-access/wallet/extension::wallet-extension-store-targeting
+  any:
+  - id: objectives/collection/stealer/workflow::chromium-browser-targets
+  - id: objectives/collection/stealer/workflow::wallet-target-bundle
+- id: applescript-controlled-archive-exfil
+  desc: AppleScript controlled file grab with archive staging and exfiltration
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: objectives/collection/stealer/workflow::applescript-profile-and-exfil
+  needs: 2
+  any:
+  - id: applescript-targeted-document-grab
+  - id: applescript-wallet-extension-store-targeting
+  - id: objectives/collection/stealer/workflow::applescript-browser-wallet-collection
+- id: office-secret-extension-list
+  # A genuine "mixed document AND secret" grab list pairs an office-document
+  # extension with a credential/wallet extension in proximity. A lone office
+  # extension (e.g. clinify writing a .docx report) is a neutral keyword, not a
+  # stealer tactic — hence the document + secret co-occurrence requirement.
+  desc: AppleScript mixed document and secret extension list
+  crit: suspicious
+  conf: 0.92
+  near_bytes: 200
+  all:
+  - id: metadata/file/extension/encrypted::office-document-extension
+  unless:
+  - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: metadata/library/structure::js-umd-wrapper-amd
+  - id: well-known/app/vscode-marketplace::wakatime-bundled-js
+  - id: metadata/library/structure::standalone-webapp-output
+  - id: well-known/lib/mime-db::javascript-mime-extension-map
+  any:
+  - id: metadata/file/extension/encrypted::credential-file-extension
+  - id: objectives/collection/file-targeting/filter::wallet-files

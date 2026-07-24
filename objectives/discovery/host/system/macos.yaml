@@ -1,0 +1,79 @@
+# macOS System Fingerprint Discovery
+# Detects reading macOS-specific system files and sysctl keys to build a host profile
+# for C2 beacon registration. Legitimate apps use Foundation APIs, not direct file reads
+# of internal system sentinel files like /var/db/.AppleSetupDone.
+# ATT&CK: T1082 (System Information Discovery)
+defaults:
+  platforms:
+  - macos
+  for: [scripts, binaries]
+  attack: T1082
+traits:
+- id: apple-setup-done-ctime
+  desc: 'apple setup done ctime'
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    substr: /var/db/.AppleSetupDone
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: sysctl-kern-osproductversion
+  desc: kern.osproductversion sysctl OS version query
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    substr: kern.osproductversion
+  unless:
+  - id: well-known/lib/sogen/
+- id: sysctl-hw-model
+  desc: hw.model hardware model sysctl query
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: \bhw\.model\b
+- id: loginwindow-system-version
+  desc: macOS version stamp query
+  crit: notable
+  conf: 0.86
+  if:
+    type: text
+    substr: SystemVersionStampAsString
+- id: safari-version-defaults
+  desc: Safari version defaults query
+  crit: notable
+  conf: 0.84
+  if:
+    type: text
+    regex: 'defaults\s+read\s+/Applications/Safari\.app/.{0,80}CFBundleShortVersionString'
+composite_rules:
+- id: macos-host-fingerprint
+  desc: macOS host fingerprinting for C2 registration
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: apple-setup-done-ctime
+  any:
+  - id: sysctl-kern-osproductversion
+  - id: micro-behaviors/os/sysinfo/cpu::sysctl-cpu-brand-string
+  - id: sysctl-hw-model
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: concealed-macos-host-command-capture
+  desc: Concealed macOS host command capture
+  crit: suspicious
+  conf: 0.9
+  for: [macho]
+  all:
+  - id: objectives/anti-static/obfuscation/payload/shell::concealed-devnull-command-capture-macho
+  - id: micro-behaviors/process/user/query::getpwuid
+  any:
+  - id: micro-behaviors/os/privilege/query::getuid
+  - id: metadata/signed/entitlements::temporary-exception-mach-lookup
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple

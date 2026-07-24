@@ -1,0 +1,272 @@
+# Python multi-layer obfuscation and loaders
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  attack: T1027
+  mbc: B0032
+traits:
+- id: python-hex-escaped-names--rx-4
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: x64\x65\x63\x6f\x6d\x70\x72\x65\x73\x73
+    case_insensitive: true
+  count_max: 1029377
+- id: python-hex-escaped-names--rx-5
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: x62\x36\x34\x64\x65\x63\x6f\x64\x65
+    case_insensitive: true
+  count_max: 1029378
+- id: python-hex-escaped-names--rx-6
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: x62\x61\x73\x65\x36\x34
+    case_insensitive: true
+  count_max: 1029379
+- id: python-hex-escaped-names--rx-7
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: x65\x78\x65\x63
+    case_insensitive: true
+  count_max: 1029380
+- id: python-hex-escaped-names--rx-8
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: x7a\x6c\x69\x62
+    case_insensitive: true
+  count_max: 1029381
+- id: inline-python-base64-decode-text
+  desc: Inline Python base64 decode
+  crit: component
+  conf: 0.94
+  for: [shell, github-actions]
+  if:
+    type: text
+    substr: base64.b64decode
+- id: inline-python-marshal-loads-text
+  desc: Inline Python marshal loads
+  crit: component
+  conf: 0.94
+  for: [shell, github-actions]
+  if:
+    type: text
+    substr: marshal.loads
+- id: inline-python-zlib-decompress-text
+  desc: Inline Python zlib decompress
+  crit: component
+  conf: 0.94
+  for: [shell, github-actions]
+  if:
+    type: text
+    substr: zlib.decompress
+- id: inline-python-exec-text
+  desc: Inline Python exec text
+  crit: component
+  conf: 0.92
+  for: [shell, github-actions]
+  if:
+    type: text
+    regex: '\b(exec|eval)\s*\('
+
+- id: python-very-large-string-carrier
+  desc: Very large Python string carrier
+  crit: component
+  conf: 0.9
+  size_min: 100000
+  if:
+    type: metrics
+    field: strings.max_length
+    min: 100000
+
+- id: python-base64-carrier-metric
+  desc: Base64-like Python carrier
+  crit: component
+  conf: 0.88
+  size_min: 100000
+  if:
+    type: metrics
+    field: strings.base64_candidates
+    min: 1
+
+- id: python-medium-base64-carrier
+  desc: Medium base64-like Python carrier
+  crit: component
+  conf: 0.9
+  size_min: 10000
+  if:
+    type: metrics
+    field: strings.max_length
+    min: 10000
+
+composite_rules:
+- id: python-large-base64-carrier
+  desc: Large Base64-like Python carrier
+  crit: notable
+  conf: 0.94
+  all:
+    - id: python-very-large-string-carrier
+    - id: python-base64-carrier-metric
+
+- id: exec-zlib-base64-hex-loader
+  desc: Hex-escaped zlib/base64 exec loader
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: python-hex-escaped-names
+  - id: micro-behaviors/os/api-resolution/dynamic::dunder-import-getattr
+
+- id: hostile-python-loader
+  desc: Hostile Python-based loader (layered obfuscation)
+  crit: hostile
+  conf: 0.95
+  needs: 2
+  any:
+  - id: exec-zlib-base64-loader
+  - id: exec-zlib-base64-hex-loader
+  - id: micro-behaviors/os/api-resolution/dynamic::dunder-import-getattr
+  - id: objectives/anti-static/obfuscation/syntax::setattr-builtins-tamper
+  unless:
+  - id: metadata/library/runtime/
+
+  # Multi-form obfuscation density: ≥2 distinct obfuscation primitives in
+  # a single small file. Each individual atom is `notable`; the
+  # combination escalates to `suspicious` because no benign script needs
+  # multiple decode/transform primitives co-located.
+- id: multi-form-obfuscation-density
+  desc: Multiple obfuscation primitives co-located in one file
+  crit: suspicious
+  conf: 0.93
+  size_max: 50000
+    # Requires 2 distinct *transform* primitives (XOR / arithmetic / ROT-N).
+    # The weaker `python-hex` and `code-metrics` indicators fire on any
+    # firmware/binary-handling tool (lots of `\xNN` literals + many helper
+    # functions), so they are not sufficient on their own.
+  needs: 2
+  any:
+  - id: micro-behaviors/data/encode/xor::xor-bytes-genexpr-key
+  - id: micro-behaviors/data/encode/xor::xor-bytes-genexpr-literal
+  - id: micro-behaviors/data/encode/xor::xor-bytearray-mutating-loop
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+
+  # Hostile escalation: the multi-form obfuscation pattern paired with
+  # any of the high-cost downstream actions that consume the decoded
+  # output. A "config builder" file that decodes to a URL/IP/secret is
+  # only meaningful when something consumes the result — and the consumer
+  # is itself diagnostic of malware intent (HTTP fetch, subprocess exec,
+  # crypto operations on attacker-controlled input).
+- id: stager-config-builder-hostile
+  desc: Multi-form obfuscation feeds remote stager
+  crit: hostile
+  conf: 0.96
+  size_max: 100000
+  all:
+  - id: multi-form-obfuscation-density
+  any:
+      # Output consumed for HTTP request — URL builder pattern
+  - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+  - id: micro-behaviors/communications/http/lib/requests
+  - id: micro-behaviors/communications/socket/ssl::tls-validation-fully-disabled
+      # Output fed to subprocess — exec stager pattern
+  - id: micro-behaviors/process/create/subprocess
+      # Output fed to crypto operation — encrypted-config pattern
+  - id: micro-behaviors/crypto/symmetric/aes
+  - id: objectives/evasion/security-bypass/tls::python-tls-validation-bypass
+      # Output consumed at module-import time via a first-touch hook
+  - id: objectives/command-and-control/trigger/activation::import-time-hook-installation
+  downgrade:
+    any:
+    - id: metadata/package/testing/presence/harness::python-test-file
+    - id: metadata/package/testing/presence/harness/
+- id: exec-zlib-base64-loader
+  desc: exec(zlib.decompress(base64.b64decode(...))) loader
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: micro-behaviors/data/decode/base64::b64decode-call
+  - id: micro-behaviors/data/compress/library::zlib-decompress-symbol
+  - id: micro-behaviors/process/interpreter/python::exec-builtin
+  near_bytes: 4096
+  unless:
+  - id: metadata/library/runtime/
+  - id: metadata/library/runtime/
+- id: inline-python-decoded-exec-loader
+  desc: Inline Python decoded exec loader
+  crit: suspicious
+  conf: 0.94
+  near_bytes: 1500
+  all:
+  - id: micro-behaviors/process/interpreter/python::python-inline-command
+  - id: inline-python-exec-text
+  any:
+  - id: inline-python-base64-decode-text
+  - id: inline-python-marshal-loads-text
+  - id: inline-python-zlib-decompress-text
+- id: python-hex-escaped-names
+  desc: Hex-escaped common function names in Python
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: python-hex-escaped-names--rx-4
+  - id: python-hex-escaped-names--rx-5
+  - id: python-hex-escaped-names--rx-6
+  - id: python-hex-escaped-names--rx-7
+  - id: python-hex-escaped-names--rx-8
+
+- id: python-multilayer-carrier-exec
+  desc: Python executes a dynamically unwrapped large encoded carrier
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1140,T1059.006
+  all:
+    - id: python-large-base64-carrier
+    - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+    - id: micro-behaviors/data/decode/base64::b64decode-call
+    - id: micro-behaviors/process/interpreter/python::exec-builtin
+  unless:
+    - id: metadata/library/runtime/
+    - id: metadata/package/testing/
+
+- id: python-large-base64-decode-exec
+  desc: Python executes a large encoded carrier
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1140,T1059.006
+  all:
+    - id: python-large-base64-carrier
+    - id: micro-behaviors/data/decode/base64::b64decode-call
+    - id: micro-behaviors/process/interpreter/python::exec-builtin
+    - id: objectives/anti-static/obfuscation/eval/scripting::python-single-line-dynamic-exec
+  unless:
+    - id: metadata/library/runtime/
+    - id: metadata/package/testing/
+
+- id: python-medium-base64-decode-exec
+  desc: Python executes a medium encoded carrier
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1140,T1059.006
+  all:
+    - id: python-medium-base64-carrier
+    - id: micro-behaviors/data/decode/base64::b64decode-call
+    - id: micro-behaviors/process/interpreter/python::exec-builtin
+    - id: objectives/anti-static/obfuscation/eval/scripting::python-single-line-dynamic-exec
+  unless:
+    - id: metadata/library/runtime/
+    - id: metadata/package/testing/

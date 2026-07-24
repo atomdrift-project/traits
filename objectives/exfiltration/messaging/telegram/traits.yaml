@@ -1,0 +1,391 @@
+defaults:
+  platforms:
+  - windows
+  - unix
+  for: [binaries, scripts]
+  attack: T1567
+traits:
+# Relocated for taxonomy compliance (matcher defines identity):
+#   - the api.telegram.org host marker  -> micro-behaviors/communications/http/services/telegram::telegram-api-host
+#   - generic /sendMessage,/sendDocument,/sendPhoto,sendDocument symbol
+#       -> micro-behaviors/communications/messaging/send (neutral, notable capabilities)
+# The composites below reference those new locations and supply the exfil intent.
+- id: go-telegram-bot-api
+  desc: Go Telegram Bot API package
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    substr: github.com/go-telegram-bot-api/telegram-bot-api
+- id: bot-token-pattern
+  desc: Hardcoded Telegram bot API path with token
+  crit: suspicious
+  conf: 0.95
+  for: [binaries, scripts, rust]
+  if:
+    type: literal
+    regex: 'api\.telegram\.org/bot\d{8,12}:[A-Za-z0-9_-]{40,}'
+  not:
+  - substr: api.telegram.org/bot0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefgh
+  - substr: api.telegram.org/bot01234567:abcdefghijklmn_ABCDEFGH
+  - substr: UseSTD3RulesAccept-
+  - regex: api\.telegram\.org/bot\d+:\d+$
+  - regex: api\.telegram\.org/bot\d{8}:[0-9a-f]{24,35}
+- id: hardcoded-chat-id-literal
+  desc: Hardcoded Telegram chat identifier
+  crit: notable
+  conf: 0.9
+  for: [javascript, typescript]
+  unless:
+  - id: well-known/app/google-web::official-google-web-asset
+  - id: well-known/tool/detection/redaction::sensitive-data-scanner
+  if:
+    type: text
+    regex: '(?i)chat_?id.{0,80}["'']-?\d{9,15}["'']'
+- id: python-hardcoded-bot-token
+  desc: Hardcoded Telegram bot token literal
+  crit: suspicious
+  conf: 0.95
+  for: [python]
+  if:
+    type: text
+    regex: '["'']\d{8,12}:[A-Za-z0-9_-]{30,60}["'']'
+- id: pytelegrambotapi-telebot-client
+  desc: pyTelegramBotAPI TeleBot client
+  crit: component
+  conf: 0.95
+  for: [python]
+  if:
+    type: text
+    regex: '\btelebot\.TeleBot\s*\('
+- id: python-telegram-send-document-method
+  desc: Python Telegram send_document method
+  crit: component
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    regex: '\.send_document\s*\('
+  # Only genuinely credential-bearing filenames (bare .docx/.xlsx match benign
+  # Office docs, so they're dropped). Split into <=3-alternation fragments,
+  # combined by the sensitive-document-name-targets composite below, per the ML
+  # alt-chain rule.
+- id: sensitive-document-name-targets--rx-1
+  desc: Sensitive doc filename targets (credentials)
+  crit: component
+  conf: 0.92
+  for: [python]
+  if:
+    type: text
+    regex: '\b(passwords|credentials)\.(txt|docx|xlsx)\b'
+- id: sensitive-document-name-targets--rx-2
+  desc: Sensitive doc filename targets (secrets/seed)
+  crit: component
+  conf: 0.92
+  for: [python]
+  if:
+    type: text
+    regex: '\b(secrets|seed[\w-]*)\.(txt|docx|xlsx)\b'
+- id: sensitive-document-name-targets--rx-3
+  desc: Sensitive document filename targets (wallet)
+  crit: component
+  conf: 0.92
+  for: [python]
+  if:
+    type: text
+    regex: '\bwallet[\w-]*\.(txt|docx|xlsx)\b'
+- id: api-endpoint-b64-fragment
+  desc: Base64 Telegram API endpoint fragment
+  crit: component
+  conf: 0.9
+  for: [powershell]
+  if:
+    type: text
+    substr: YXBpL
+- id: telegram-domain-b64-fragment
+  desc: Base64 Telegram domain fragment
+  crit: component
+  conf: 0.9
+  for: [powershell]
+  if:
+    type: text
+    substr: nRlbGVnc
+- id: telegram-bot-path-b64-fragment
+  desc: Base64 Telegram bot path fragment
+  crit: component
+  conf: 0.9
+  for: [powershell]
+  if:
+    type: text
+    substr: m9yZy9ib3Q
+- id: send-document-b64-fragment
+  desc: Base64 sendDocument fragment
+  crit: notable
+  conf: 0.9
+  for: [powershell]
+  if:
+    type: text
+    substr: VuZERvY3VtZW
+- id: seeds-txt-b64-fragment
+  desc: Base64 seeds.txt filename fragment
+  crit: component
+  conf: 0.9
+  for: [powershell]
+  if:
+    type: text
+    substr: lZHMudHh0YC
+- id: go-telegram-upload-methods--uploadfiles
+  desc: Go Telegram upload workflow (UploadFiles)
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    word: UploadFiles
+- id: go-telegram-upload-methods--uploaddata
+  desc: Go Telegram upload workflow methods (UploadData)
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    word: UploadData
+- id: go-telegram-upload-methods--needsupload
+  desc: Go Telegram upload workflow (NeedsUpload)
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    word: NeedsUpload
+composite_rules:
+- id: go-telegram-upload-methods
+  desc: Go Telegram upload workflow methods
+  crit: component
+  conf: 0.86
+  any:
+  - id: go-telegram-upload-methods--uploadfiles
+  - id: go-telegram-upload-methods--uploaddata
+  - id: go-telegram-upload-methods--needsupload
+- id: sensitive-document-name-targets
+  desc: Sensitive document filename targets
+  crit: component
+  conf: 0.92
+  any:
+  - id: sensitive-document-name-targets--rx-1
+  - id: sensitive-document-name-targets--rx-2
+  - id: sensitive-document-name-targets--rx-3
+- id: telegram-wallet-search-exfil
+  desc: Telegram exfiltrates wallet search results
+  crit: hostile
+  conf: 0.98
+  for: [scripts, source, macho]
+  near_bytes: 8192
+  all:
+  - id: telegram-wallet-search-source
+  any:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-send-message
+  - id: micro-behaviors/communications/http/services/telegram::go-telegram-sendmessage-client
+- id: telegram-wallet-search-source
+  desc: Wallet search results source
+  crit: component
+  for: [scripts, source, macho]
+  any:
+  - id: objectives/collection/stealer/wallet::crypto-wallet-shell-find
+  - id: objectives/collection/stealer/wallet::crypto-wallet-powershell-search
+  - id: objectives/collection/stealer/wallet::crypto-wallet-macho-shell-find
+- id: telegram-system-profile-exfil
+  desc: Telegram sends collected host and user profile
+  crit: hostile
+  conf: 0.94
+  attack: "T1041,T1082"
+  mbc: E1041
+  for: [javascript, typescript]
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-send-message
+  - id: objectives/discovery/system/fingerprint/hardware::js-victim-id
+  unless:
+  - id: metadata/package/testing/harness/runtime/
+- id: telegram-hidden-node-system-report
+  desc: Telegram hidden system report exfil
+  crit: hostile
+  conf: 0.96
+  for: [javascript, typescript]
+  attack: "T1041, T1082"
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+  - id: micro-behaviors/communications/messaging/send::chat-send-message
+  - id: micro-behaviors/process/create/spawn::stdio-ignore
+  - id: micro-behaviors/process/create/spawn-minified::windowshide-bang-true
+  any:
+  - id: micro-behaviors/os/sysinfo/hostname::hostname-cmd
+  - id: micro-behaviors/os/sysinfo/platform/runtime::process-platform-content
+- id: test-mock-marker
+  desc: Telegram API mock test fixture
+  crit: component
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/package/testing/harness/fixture::nock-mock
+  any:
+  - id: metadata/package/testing/presence/fixture::mocha-test-file
+  - id: metadata/package/testing/presence/fixture::jest-test-file
+  - id: metadata/package/testing/harness/runtime::test-basename-prefix
+  - id: metadata/package/testing/harness/runtime::test-basename-suffix
+  - id: metadata/package/testing/harness/runtime::test-basename-spec
+- id: telegram-hardcoded-file-exfil
+  desc: Telegram hardcoded file exfiltration
+  crit: hostile
+  conf: 0.96
+  for: [scripts]
+  all:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-api-file-upload
+  - id: objectives/command-and-control/channel/messaging::hardcoded-telegram-bot-token-literal
+  # Self-directory and http/services/telegram refs removed: they matched this
+  # composite's own telegram legs and suppressed it.
+  unless:
+  - id: well-known/app/opencode-router
+- id: telegram-bot-c2
+  desc: Telegram bot API data exfiltration
+  crit: hostile
+  conf: 0.92
+  near_bytes: 256
+  # No self-directory unless: it matched bot-token-pattern (this composite's own
+  # leg, which lives in this directory) and suppressed the composite.
+  all:
+  - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+  - id: bot-token-pattern
+- id: telegram-hardcoded-bot-config
+  desc: Telegram hardcoded bot configuration
+  crit: suspicious
+  conf: 0.96
+  for: [binaries, scripts, source]
+  near_bytes: 512
+  all:
+    - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+    - id: objectives/command-and-control/channel/messaging::hardcoded-telegram-bot-token-literal
+    - id: hardcoded-chat-id-literal
+  unless:
+    - id: well-known/app/opencode-router
+- id: telegram-hardcoded-system-profile-exfil
+  desc: Hardcoded Telegram bot exfiltrates a host profile
+  crit: hostile
+  conf: 0.99
+  attack: "T1041,T1082"
+  mbc: E1041
+  for: [javascript, typescript]
+  near_bytes: 8192
+  all:
+    - id: telegram-hardcoded-bot-config
+    - id: telegram-system-profile-exfil
+# Pairs credential/banking form automation with an operator-owned Telegram bot.
+# NOTE: the legs prove the two behaviors coexist in one script — they do NOT
+# prove the captured field values are what gets sent. Form-filling bots
+# commonly report only a status line or the target URL to the operator's bot.
+# Name and description are therefore scoped to the channel, not to a payload
+# this composite never inspects; escalate to a payload-specific rule only when
+# a matcher actually reads the message body.
+- id: credential-form-automation-telegram-channel
+  desc: Credential form automation reports to Telegram
+  crit: hostile
+  conf: 0.97
+  for: [javascript, typescript]
+  all:
+    - id: micro-behaviors/communications/messaging/send::telegram-bot-send-message
+  any:
+    - id: micro-behaviors/ui/window/form-input::browser-sensitive-field-automation
+    - id: micro-behaviors/ui/window/form-input::browser-banking-credential-data-record
+  unless:
+  - id: well-known/app/opencode-router
+- id: python-telegram-hardcoded-bot
+  desc: Python Telegram bot with hardcoded token
+  crit: suspicious
+  conf: 0.96
+  for: [python]
+  all:
+  - id: pytelegrambotapi-telebot-client
+  - id: python-hardcoded-bot-token
+- id: python-telegram-file-exfil
+  desc: Python Telegram file exfiltration
+  crit: suspicious
+  conf: 0.96
+  for: [python]
+  all:
+  - id: pytelegrambotapi-telebot-client
+  - id: python-telegram-send-document-method
+- id: python-telegram-bulk-file-exfil
+  desc: Python Telegram bulk filesystem file exfiltration
+  crit: hostile
+  conf: 0.98
+  attack: T1041
+  for: [python]
+  all:
+  - id: python-telegram-hardcoded-bot
+  - id: python-telegram-file-exfil
+  any:
+  - id: micro-behaviors/fs/directory/traverse::traverse-walk-call
+  - id: micro-behaviors/fs/directory/traverse::traverse-walk
+- id: python-telegram-sensitive-file-theft
+  desc: Python Telegram sensitive file theft
+  crit: hostile
+  conf: 0.98
+  for: [python]
+  all:
+  - id: python-telegram-hardcoded-bot
+  - id: python-telegram-file-exfil
+  - id: micro-behaviors/fs/directory/traverse::traverse-walk
+  - id: sensitive-document-name-targets
+- id: telegram-bot-encoded-file-exfil
+  desc: Encoded Telegram bot file exfiltration
+  crit: hostile
+  conf: 0.96
+  for: [powershell]
+  all:
+  - id: api-endpoint-b64-fragment
+  - id: telegram-domain-b64-fragment
+  - id: telegram-bot-path-b64-fragment
+  - id: send-document-b64-fragment
+  - id: seeds-txt-b64-fragment
+- id: telegram-archive-exfil
+  desc: Telegram upload of a staged sensitive archive
+  crit: hostile
+  conf: 0.96
+  near_bytes: 8192
+  unless:
+  - id: well-known/app/telegram::telegram-desktop-source-identity
+  - id: well-known/app/telegram::telegram-desktop-dictionary-updater
+  all:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-api-file-upload
+  - id: telegram-archive-writer
+  - id: telegram-archive-sensitive-source
+- id: telegram-archive-writer
+  desc: Code creates a ZIP archive for Telegram upload
+  crit: notable
+  conf: 0.9
+  any:
+  - id: micro-behaviors/data/archive/zip::python-zipfile-writer
+  - id: micro-behaviors/data/archive/zip::zip-writer
+  - id: micro-behaviors/data/archive/zip::zip-cli-create
+  - id: objectives/collection/archive/create::zip-output-file
+- id: telegram-archive-sensitive-source
+  desc: Sensitive collection or operator token beside Telegram archive upload
+  crit: component
+  conf: 0.9
+  any:
+  - id: objectives/command-and-control/channel/messaging::hardcoded-telegram-bot-token-literal
+  - id: sensitive-document-name-targets
+  - id: objectives/credential-access/browser/
+  - id: objectives/credential-access/wallet/
+  - id: objectives/credential-access/env/secrets/
+  - id: objectives/collection/stealer/
+  - id: micro-behaviors/fs/path/sensitive/credentials/
+- id: go-telegram-archive-exfil
+  desc: Go Telegram bot archive exfiltration
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+  - id: go-telegram-bot-api
+  - id: go-telegram-upload-methods
+  - id: micro-behaviors/data/archive/zip::archive-zip-import

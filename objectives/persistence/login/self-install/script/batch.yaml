@@ -1,0 +1,120 @@
+# Batch File Self-Installation/Persistence
+# ATT&CK: T1547.001 (Boot or Logon Autostart Execution)
+#
+# Detects batch files that copy themselves for persistence
+defaults:
+  attack: "T1547.001"
+  crit: suspicious
+  for: [batch]
+  platforms: [windows]
+traits:
+  # Self-copy using %~f0 (full path to current script)
+- id: batch-self-copy
+  desc: Batch script copies itself for persistence
+  crit: suspicious
+  conf: 0.9
+  unless:
+    - type: text
+      regex: '(?i)copy\s+/y\s+"?%~f0"?\s+"?%temp%\\[^"]+\.sed"?'
+    - id: metadata/file/string/identity/
+  if:
+    type: text
+    regex: '(?i)copy\s+(/[a-z]\s+)?"?%~f0"?'
+  downgrade:
+    any:
+      - id: well-known/tool/development/batch-scripts::everythingportable-launcher-path
+      - id: well-known/tool/development/batch-scripts::batch-scripts-iexpress-example-path
+      - id: well-known/tool/development/batch-scripts::batch-scripts-bat2exe-example-name
+  # Copy to AppData location
+- id: batch-copy-to-appdata
+  desc: Copies file to AppData directory
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?i)\b(copy|xcopy|robocopy|move)\b[^&|\r\n]{0,240}%AppData%[\\/]'
+  # Copy to ProgramData
+- id: batch-copy-to-programdata
+  desc: Copies file to ProgramData directory
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: text
+    regex: '(?i)\b(copy|xcopy|robocopy|move)\b[^\r\n]{0,240}%ProgramData%[\\\/]'
+
+- id: batch-copy-command-fragment
+  desc: Batch obfuscates a copy command fragment
+  crit: component
+  conf: 0.96
+  count_min: 2
+  if:
+    type: text
+    regex: '(?im)^set\s+"[A-Za-z_][A-Za-z0-9_]{5,}%[^"\r\n]{0,24}cop'
+
+- id: batch-obfuscated-current-script-command
+  desc: Obfuscated batch command uses current script
+  crit: suspicious
+  conf: 0.96
+  if:
+    type: text
+    regex: '(?m)^%[A-Za-z_]\w+%[^\r\n]{0,160}%~f0[^\r\n]{0,160}%\w+%'
+
+composite_rules:
+  # Self-copy to AppData persistence
+- id: batch-self-install-appdata
+  desc: Batch self-installs to AppData
+  crit: suspicious
+  conf: 0.95
+  mbc: "F0004"
+  all:
+  - id: batch-self-copy
+  - id: batch-copy-to-appdata
+- id: batch-obfuscated-self-copy
+  desc: Batch reconstructs an obfuscated self-copy command
+  crit: hostile
+  conf: 0.98
+  attack: "T1547.001,T1027"
+  all:
+  - id: batch-copy-command-fragment
+  - id: batch-obfuscated-current-script-command
+- id: batch-self-install-com-hijack
+  desc: Batch self-installs and registers a COM hijack launcher
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: batch-self-install-appdata
+  - id: objectives/persistence/login/registry/com-hijack::script-clsid-rundll32-com-hijack
+  any:
+  - id: micro-behaviors/fs/file/attributes::attrib-hidden
+  - id: micro-behaviors/fs/file/attributes::attrib-hidden-system
+  - id: objectives/command-and-control/dropper/execution/batch::temp-powershell-stage-rebuild
+- id: batch-appdata-hidden-policy-launcher
+  desc: Batch self-installs hidden policy-bypassed PowerShell
+  crit: hostile
+  conf: 0.97
+  mbc: "F0004"
+  attack: "T1547.001,T1059.001,T1564.003"
+  all:
+  - id: batch-self-install-appdata
+  - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+  - id: objectives/evasion/security-bypass/policy/execution::bypass-execution-policy
+- id: obfuscated-batch-appdata-self-install
+  desc: Obfuscated batch self-installs to AppData
+  crit: hostile
+  conf: 0.97
+  mbc: "F0004"
+  attack: "T1547.001,T1027"
+  all:
+  - id: batch-self-install-appdata
+  - id: objectives/anti-static/obfuscation/string/concat::batch-heavy-obfuscation
+  - id: objectives/anti-static/obfuscation/string/anomaly::batch-fragmentation-metrics
+- id: batch-motw-hidden-self-install
+  desc: Batch self-installs after clearing MOTW
+  crit: hostile
+  conf: 0.98
+  mbc: "F0004"
+  attack: "T1547.001,T1562.001,T1564.003"
+  all:
+  - id: batch-self-install-appdata
+  - id: objectives/evasion/indicator-removal/cleanup::motw-removal-stream
+  - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option

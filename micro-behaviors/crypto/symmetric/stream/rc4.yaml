@@ -1,0 +1,231 @@
+defaults:
+  platforms: [windows, linux, macos]
+  for: [binaries]
+  mbc: C0027
+  attack: T1573
+  size_max: 52428800
+traits:
+  - id: rc4-sbox-sequence
+    desc: RC4 sequential S-box initialization bytes
+    crit: component
+    conf: 0.4
+    for: [elf, macho, pe]
+    if:
+      type: hex
+      section: .text
+      pattern: 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21 22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31 32 33 34 35 36 37 38 39 3A 3B 3C 3D 3E 3F
+  - id: rc4-swap-pattern
+    desc: RC4 key scheduling swap byte pattern
+    crit: component
+    size_max: 10485760
+    if:
+      type: hex
+      section: text
+      pattern: 8A ?? ?? 8A ?? ?? 02 ?? 88 ?? ?? 88 ?? ??
+    for: [elf, macho, pe]
+  - id: rc4-xor-loop
+    # Generic x86: XOR r/m8,r8 then compare-to-(-1) + JNZ. Not RC4-specific on
+    # its own (any byte-XOR loop matches) — a building block for the rc4-bytecode
+    # composite (needs: 2), which establishes the actual RC4 identity.
+    desc: Byte XOR loop with -1 terminator (x86)
+    crit: component
+    if:
+      type: hex
+      section: .text
+      pattern: 30 ?? [1] 83 ?? FF 75
+    for: [elf, macho, pe]
+    unless:
+      - id: metadata/lang/compiled/
+  - id: rc4-ksa-swap-loop-i386
+    desc: RC4 KSA byte swap loop (i386)
+    crit: component
+    for:
+      - elf
+      - pe
+    if:
+      type: hex
+      section: .text
+      pattern: 0F B6 4C 3B FF 0F B6 C1 [0-24] 8D 14 07 [0-24] 0F B6 02 88 44 3B FF [0-24] 88 0A 75
+  - id: rc4-prga-xor-buffer-loop-i386
+    desc: RC4 PRGA XOR buffer loop (i386)
+    crit: component
+    for:
+      - elf
+      - pe
+    if:
+      type: hex
+      section: .text
+      pattern: 0F B6 02 88 03 89 F0 88 02 8B 55 ?? 02 0B 0F B6 C9 0F B6 04 0A 8B 55 ?? 30 04 ?? 83 C7 01 3B 7D ?? 75
+  - id: rc4-stack-key-ksa-i386
+    desc: RC4 stack key KSA (i386)
+    crit: component
+    conf: 0.9
+    arch: [x86]
+    for: [elf, pe]
+    if:
+      type: hex
+      section: .text
+      pattern: 8D BC 24 10 01 00 00 66 B9 00 01 F3 AA C6 84 24 10 01 00 00 ?? C6 84 24 11 01 00 00 ?? [0-128] E8 ?? ?? ?? ?? 89 C5 [0-128] 89 C8 31 D2 F7 F5
+  - id: rc4-stack-key-ksa-x64
+    desc: RC4 stack key KSA (x64)
+    crit: component
+    conf: 0.9
+    arch: [x86-64]
+    for: [elf, pe]
+    if:
+      type: hex
+      section: .text
+      pattern: 48 8D BC 24 00 01 00 00 C6 84 24 00 01 00 00 ?? C6 84 24 01 01 00 00 ?? [0-128] E8 ?? ?? ?? ?? [0-128] 48 89 C8 31 D2 88 0C 0B 48 F7 F6
+  - id: rc4-prga-swap-xor-x64
+    desc: RC4 PRGA swap XOR (x64)
+    crit: component
+    conf: 0.9
+    arch: [x86-64]
+    for: [elf, pe]
+    if:
+      type: hex
+      section: .text
+      pattern: 44 0F B6 0C 13 45 0F B6 C1 44 01 C9 [0-48] 41 0F B6 00 44 88 0A [0-24] 30 10 48 83 C0 01 49 39 C4 75
+  - id: rc4-decode-function
+    desc: RC4 decode function reference
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: rc4_decode
+    for: [elf, macho, pe]
+  - id: rc4-strings
+    desc: RC4 implementation text marker
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)rc4.{0,20}crypt
+  - id: rc4-init-symbol
+    desc: RC4 key scheduler symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: (?i)(rc4init__|arc4_setkey|rc4_set_key)
+    for: [elf, macho, pe]
+  - id: rc4-crypt-symbol
+    desc: RC4 stream transform symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: (?i)(rc4crypt__|arc4_crypt)
+    for: [elf, macho, pe]
+  - id: rc4-key-schedule-symbol
+    desc: RC4 key-scheduling routine
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '(?i)^rc4_(ksa|key_schedule|expand_key)$'
+    for: [elf, macho, pe]
+  - id: rc4-crypt-function-symbol
+    desc: RC4 stream transform routine
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: rc4_crypt
+    for: [elf, macho, pe]
+  - id: rc4-init-function-source
+    desc: RC4 init call source
+    crit: component
+    conf: 0.78
+    for: [c, cpp]
+    if:
+      type: symbol
+      kind: call
+      exact: rc4_init
+  - id: rc4-transform-function-source
+    desc: RC4 transform call source
+    crit: component
+    conf: 0.78
+    for: [c, cpp]
+    if:
+      type: symbol
+      kind: call
+      exact: rc4
+  - id: python-rc4-ksa-list
+    desc: Python RC4 KSA list
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: text
+      regex: 'S\s*=\s*list\s*\(\s*range\s*\(\s*256\s*\)\s*\)'
+  - id: python-rc4-prga-swap-xor
+    desc: Python RC4 PRGA swap XOR
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: text
+      regex: 'S\[i\],S\[j\]=S\[j\],S\[i\]'
+  - id: python-rc4-prga-xor-output
+    desc: Python RC4 PRGA XOR output
+    crit: notable
+    conf: 0.88
+    for: [python]
+    if:
+      type: text
+      regex: '\^S\[\(S\[i\]\+S\[j\]\)&255\]'
+composite_rules:
+  - id: rc4-bytecode
+    desc: RC4 encryption byte patterns
+    crit: suspicious
+    conf: 0.8
+    needs: 2
+    any:
+      - id: rc4-swap-pattern
+      - id: rc4-xor-loop
+      - id: rc4-ksa-swap-loop-i386
+      - id: rc4-prga-xor-buffer-loop-i386
+      - id: rc4-stack-key-ksa-i386
+      - id: rc4-stack-key-ksa-x64
+      - id: rc4-prga-swap-xor-x64
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+        - id: metadata/lang/compiled/
+  - id: rc4-stack-key-bytecode
+    desc: RC4 stack-key bytecode
+    crit: suspicious
+    conf: 0.93
+    any:
+      - id: rc4-stack-key-ksa-i386
+      - id: rc4-stack-key-ksa-x64
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library/family/
+        - id: micro-behaviors/dylib/library/family/
+  - id: rc4-symbol-chain
+    desc: RC4 init and crypt symbol chain
+    crit: notable
+    conf: 0.88
+    all:
+      - id: rc4-init-symbol
+      - id: rc4-crypt-symbol
+  - id: rc4-source-symbol-chain
+    desc: RC4 source function pair
+    crit: notable
+    conf: 0.82
+    for: [c, cpp]
+    all:
+      - id: rc4-init-function-source
+      - id: rc4-transform-function-source
+  - id: python-rc4-like-stream-cipher
+    desc: Python RC4-like stream cipher
+    crit: suspicious
+    conf: 0.94
+    for: [python]
+    all:
+      - id: python-rc4-ksa-list
+      - id: python-rc4-prga-swap-xor
+      - id: python-rc4-prga-xor-output

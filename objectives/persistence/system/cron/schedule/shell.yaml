@@ -1,0 +1,88 @@
+# Cron Persistence Detection for Shell Scripts
+# Detects shell scripts that establish persistence via crontab
+# ATT&CK: T1053.003 (Scheduled Task/Job: Cron)
+# MBC: B0030 (Persistence)
+defaults:
+  platforms: [unix, android, ios]
+  crit: suspicious
+  attack: "T1053.003"
+  mbc: "B0030"
+  for: [shell]
+traits:
+  # === Crontab Manipulation ===
+  - id: crontab-add
+    desc: Shell crontab pipeline entry
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      # Matches: crontab -l ... | crontab - or echo "..." | crontab -
+      regex: "(crontab\\s+-l|echo)[^\\n]{0,260}\\|[^\\n]{0,180}\\bcrontab\\s+-"
+    unless:
+      - type: basename
+        regex: '(^|[\\/])hack[\\/]jenkins[\\/]installers[\\/].*crons?\.sh$'
+      - type: text
+        regex: '\$HOME/cleanup_(and_reboot|go_modules)\.sh'
+      - type: text
+        regex: '(?s)/etc/cron\.hourly/cleanup\.sh.{0,240}@reboot rm -rf /var/run/reboot\.in\.progress'
+  - id: crontab-with-curl-wget
+    desc: Crontab with download and execute
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      # Matches crontab entries containing curl/wget piped to sh/shell
+      regex: "crontab[^;]{0,50}(curl|wget)[^|]{0,50}\\|\\s*(sh|shell)"
+  - id: crontab-sed-removal
+    desc: Removes crontab entries via sed
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: text
+      # Matches: crontab -l | sed '/pattern/d' | crontab -
+      regex: "crontab\\s+-l\\s*\\|\\s*sed\\s+['\"]?/[^/]{1,120}/d['\"]?\\s*\\|\\s*crontab\\s*-"
+  # Multiple cron manipulations indicates malware cleaning up competitors
+  - id: mass-crontab-cleanup
+    desc: Mass crontab cleanup (botkill)
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: text
+      regex: "crontab\\s+-l\\s*\\|\\s*sed"
+  - id: every-minute-cron-schedule
+    desc: Cron schedule running every minute
+    crit: component
+    conf: 0.85
+    if:
+      type: string_literal
+      regex: \* \* \* \* \*|crontab -l \| (grep|sed)
+composite_rules:
+  # Cron persistence with remote payload (shell scripts)
+  # Pattern: adds crontab entry that downloads and executes from remote URL
+  # Complexity: all(4) + for(1) = 5 >= 4 ✓ HOSTILE
+  - id: cron-shell-download-execute
+    desc: Cron persistence with download-execute (shell)
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: crontab-add
+      - id: crontab-with-curl-wget
+      - id: mass-crontab-cleanup
+      - id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec
+  - id: shell-hidden-tmp-cron-persistence
+    desc: Shell hidden tmp cron persistence
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: crontab-add
+      - id: objectives/persistence/system/cron/schedule::cron-hidden-tmp-entry
+      - id: micro-behaviors/fs/chmod/executable/mode::shell-plus-x
+  - id: shell-hidden-base64-detached-cron-persistence
+    desc: Shell installs a recurring decoded agent and launches it detached
+    crit: hostile
+    conf: 0.98
+    attack: T1053.003,T1027,T1564.001
+    all:
+      - id: crontab-add
+      - id: cron-with-base64
+      - id: micro-behaviors/process/daemonize/detach::nohup-shell-launch

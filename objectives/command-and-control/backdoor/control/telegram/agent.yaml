@@ -1,0 +1,93 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1102
+
+traits:
+  - id: telegram-http-control-route
+    desc: Telegram HTTP control route
+    crit: suspicious
+    conf: 0.96
+    attack: T1059.007,T1102
+    if:
+      type: text
+      regex: 'onPOST\s*\(\s*["'']/telegram/(connect|send-message)["'']'
+
+  - id: encoded-telegram-token-fallback
+    desc: Obfuscated Telegram token fallback
+    crit: suspicious
+    conf: 0.95
+    attack: T1027,T1102
+    if:
+      type: text
+      regex: '(from\d+|decode[A-Za-z0-9_]*)\s*\(\s*["''][0-9]{40,}["'']\s*\)'
+
+  - id: vscode-internal-command-dispatch
+    # Dispatching the extension's OWN namespaced internal command (e.g.
+    # `solopreneur.internalRunAgent`) is ordinary extension plumbing, not a
+    # standalone attack — notable, not suspicious. The hostile signal comes from
+    # the composite below (a Telegram poll loop driving it), which is what
+    # distinguishes remote command execution from local command dispatch.
+    desc: Dispatches an internal VS Code command
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      kind: call
+      exact: vscode.commands.executeCommand
+      arg:
+        kind: string
+        regex: '^solopreneur\.internal[A-Za-z]+$'
+
+  # This atom describes the application-specific, user-facing authorization
+  # flow.  A single approval prompt is not a benign verdict by itself.
+  - id: telegram-user-approval-binding
+    desc: Telegram user approval prompt
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      kind: call
+      exact: vscode.window.showWarningMessage
+      arg:
+        kind: string
+        regex: '(?i)(Telegram|Chat ID).{0,240}(authorize|授权)'
+
+composite_rules:
+  # A real backdoor may also read a token from configuration.  Keep this
+  # exception narrow: it requires the documented opt-in settings, Telegram
+  # polling, and explicit local approval.
+  - id: telegram-vscode-user-authorized-agent-context
+    desc: User-authorized Telegram agent integration
+    crit: exception
+    conf: 0.98
+    all:
+      - id: micro-behaviors/data/config/schema::javascript-telegram-bot-setting-read
+      - id: micro-behaviors/data/config/schema::javascript-telegram-opt-in-setting-read
+      - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+      - id: micro-behaviors/communications/http/services/telegram::telegram-get-updates-endpoint
+      - id: vscode-internal-command-dispatch
+      - id: telegram-user-approval-binding
+
+  - id: telegram-vscode-agent-control
+    desc: Telegram remote control of a local VS Code agent
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+      - id: micro-behaviors/communications/http/services/telegram::telegram-get-updates-endpoint
+      - id: vscode-internal-command-dispatch
+    unless:
+      - id: telegram-vscode-user-authorized-agent-context
+
+  - id: node-telegram-http-control-backdoor
+    desc: HTTP-controlled Node Telegram bot with an obfuscated token
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1102,T1027
+    mbc: B0032
+    all:
+      - id: micro-behaviors/communications/http/services/telegram::node-telegram-bot-api-package
+      - id: micro-behaviors/communications/http/services/telegram::node-telegram-api-alias-constructor
+      - id: telegram-http-control-route
+      - id: encoded-telegram-token-fallback

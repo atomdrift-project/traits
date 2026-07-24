@@ -1,0 +1,167 @@
+# Hidden Window Process Creation - Windows
+# Neutral observations of hidden window execution flags.
+# ATT&CK: T1564.003 (Hide Artifacts: Hidden Window)
+# Many legitimate tools (services, background workers, installers) use hidden windows.
+defaults:
+  platforms: [windows]
+  attack: "T1564.003"
+traits:
+  - id: conhost-headless
+    desc: conhost.exe --headless execution
+    crit: suspicious
+    conf: 0.9
+    for: [batch, powershell, pe, javascript, vbs]
+    if:
+      type: text
+      regex: '(?i)conhost\.exe\s+--headless'
+  - id: conhost-name-split-join
+    desc: Split-join conhost executable name
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, vbs]
+    if:
+      type: text
+      regex: '["'']con["''].{0,24}["'']host["''].{0,24}["'']\.ex["'']'
+  - id: headless-flag-split-join
+    desc: Split-join headless process flag
+    crit: suspicious
+    conf: 0.88
+    for: [javascript, vbs]
+    if:
+      type: text
+      regex: '["'']--h["''].{0,24}["'']ea["''].{0,24}["'']dles["'']'
+  - id: powershell-hidden-window
+    desc: PowerShell hidden window flag
+    # Keep this higher-signal atom narrow: it requires PowerShell immediately
+    # before the short hidden-window switch, with known maintenance/tooling
+    # contexts excluded below.
+    crit: suspicious
+    conf: 0.8
+    for: [batch, vbs, powershell, pe, oledoc]
+    if:
+      type: text
+      regex: '(?i)powershell[^\n]{0,30}-w\s+h(idden)?'
+    unless:
+      - type: text
+        regex: '(?i)#\s*Start-Process\b[^\r\n]{0,240}-WindowStyle\s+Hidden'
+      - type: text
+        regex: '(?i)\bDo\s+NOT\s+use\s+-WindowStyle\s+Hidden\b'
+      - type: text
+        substr: '@kagdaci/repo-switcher'
+      - type: text
+        substr: 'TITLE OPEN RYZEN MASTER MAXIMIZED'
+      - type: text
+        substr: 'TITLE OPEN WINDOWS WSL HERE'
+      - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-ssh-installer-context
+      - type: text
+        substr: 'PowerShell App Deployment Toolkit'
+      - type: text
+        substr: 'AppDeployToolkitMain.ps1'
+      - type: text
+        regex: '(?i)Docker Desktop|Get-Process\s+-Name\s+"Docker Desktop"'
+
+  - id: powershell-hidden-window-short
+    desc: PowerShell short hidden-window flag
+    crit: notable
+    conf: 0.88
+    for: [batch, powershell]
+    if:
+      type: text
+      regex: '(?i)(^|[\s"''])(-w)\s+h(idden)?\b'
+
+  - id: powershell-windowstyle-hidden-option
+    desc: PowerShell WindowStyle Hidden option
+    crit: notable
+    conf: 0.9
+    for: [batch, powershell, pe, oledoc]
+    if:
+      type: text
+      regex: '(?i)(^|[\s"''])(-WindowStyle)\s+Hidden\b'
+  - id: powershell-windowstyle-hidden
+    desc: PowerShell WindowStyle Hidden flag
+    crit: notable
+    conf: 0.86
+    for: [batch, vbs, powershell, pe, oledoc]
+    if:
+      type: text
+      regex: '(?i)powershell(\.exe){0,1}[^\r\n]{0,80}-WindowStyle\s+Hidden\b'
+  - id: go-powershell-windowstyle-hidden
+    desc: Go passes PowerShell a hidden-window option
+    crit: notable
+    conf: 0.94
+    for: [go]
+    if:
+      type: text
+      regex: '(?i)-WindowStyle(["'']\s*,\s*["'']|\s+)Hidden\b'
+  - id: start-process-windowstyle-hidden
+    desc: Start-Process hidden window flag
+    crit: notable
+    conf: 0.9
+    for: [powershell, pe, go]
+    if:
+      type: text
+      regex: '(?i)\bStart-Process\b[^\r\n]{0,200}-WindowStyle\s+Hidden\b'
+  - id: start-minimized-window
+    desc: Windows start minimized flag
+    crit: notable
+    conf: 0.82
+    for: [batch]
+    if:
+      type: text
+      regex: '(?i)\bstart\s+["'']?["'']?\s+/min\b'
+  - id: pyc-start-minimized-wait
+    desc: Python bytecode launches a minimized process
+    crit: notable
+    conf: 0.9
+    for: [pyc]
+    if:
+      type: raw
+      regex: '(?i)\bstart\s+["'']?["'']?\s+/min\s+/wait\b'
+  - id: start-minimized-self
+    desc: Batch relaunches self minimized
+    crit: suspicious
+    conf: 0.92
+    for: [batch]
+    if:
+      type: text
+      regex: '(?i)\bstart\s+["'']?["'']?\s+/min\s+"?%~f0"?'
+  - id: dotnet-create-no-window
+    desc: .NET process window suppression
+    crit: notable
+    conf: 0.86
+    for: [pe]
+    if:
+      type: text
+      exact: set_CreateNoWindow
+    downgrade:
+      any:
+        - id: metadata/binary/framework::dotnet-metadata
+        - id: metadata/lang/compiler/managed::winforms-ui
+  - id: sfx-hidcon-prefix
+    desc: SFX hidden console execution
+    crit: suspicious
+    conf: 0.93
+    for: [pe]
+    if:
+      type: text
+      regex: 'RunProgram\s*=\s*"hidcon:'
+composite_rules:
+  - id: conhost-headless-split-join
+    desc: Split-join conhost headless execution
+    crit: suspicious
+    conf: 0.92
+    for: [javascript, vbs]
+    all:
+      - id: conhost-name-split-join
+      - id: headless-flag-split-join
+  - id: hidden-console-execution
+    desc: Hidden console/window execution
+    conf: 0.9
+    any:
+      - id: conhost-headless
+      - id: conhost-headless-split-join
+      - id: powershell-hidden-window
+      - id: powershell-windowstyle-hidden
+      - id: start-process-windowstyle-hidden
+      - id: start-minimized-window
+      - id: sfx-hidcon-prefix

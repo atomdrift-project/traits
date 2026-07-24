@@ -1,0 +1,308 @@
+defaults:
+  # Linux kernel-module internals — linux-only by definition.
+  platforms: [linux]
+traits:
+  - id: asm-cr0-manipulation
+    desc: Inline assembly manipulating CR0 register
+    crit: notable
+    conf: 0.98
+    for:
+      - c
+    if:
+      type: tree-sitter
+      node: asm_statement
+      exact: cr0
+      case_insensitive: true
+  - id: current-files-access
+    desc: Current process file table access
+    crit: notable
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: current->files
+  - id: fdt-access
+    desc: File descriptor table access
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: ->fdt
+  - id: f-path-dentry-access
+    desc: File path dentry access (inode
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: f_path.dentry
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: d-inode-access
+    desc: Dentry inode access
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: ->d_inode
+  - id: i-ino-access
+    desc: "Inode number access"
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: i_ino
+  - id: i-rdev-access
+    desc: Inode device number access
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: i_rdev
+  - id: syscall-table-decl
+    desc: Syscall table pointer (syscall hooking)
+    crit: suspicious
+    conf: 0.99
+    attack: T1014
+    for:
+      - c
+    # `sys_call_table` is a cached identifier fact — match it directly (like the
+    # `sethi_opcode`/`jmp_opcode` identifier traits), no comment/string FPs.
+    if:
+      type: symbol
+      kind: identifier
+      exact: sys_call_table
+    unless:
+      - id: well-known/app/xilinx-onload::onload-kernel-source-context
+      - id: metadata/lang/source::linux-kernel-arch-source-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: metadata/lang/source::linux-kernel-source-tree-path
+  # task-struct-decl / cred-struct-decl moved to
+  # micro-behaviors/os/kernel/struct — bare kernel-struct mentions are
+  # ubiquitous in all kernel-adjacent C (glibc headers, drivers, tracers),
+  # not rootkit evidence on their own.
+  - id: linux-dirent-decl
+    desc: "dir entry structure (file/process hiding)"
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    # `linux_dirent` cached identifier fact (no per-node cursor walk).
+    if:
+      type: symbol
+      kind: identifier
+      exact: linux_dirent
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context
+  # pt-regs-decl deleted: a bare `pt_regs` mention is ubiquitous in
+  # kernel/ptrace-adjacent C (glibc, strace, gdb); the precise hooking
+  # signals are the member-access traits in lkm/syscalls.
+  # syscall-number-ref deleted: glibc/musl/seccomp code reference `__NR_*`
+  # constantly; specific high-value refs live in
+  # micro-behaviors/os/syscall/invoke (nr-getdents, nr-openat, ...).
+  - id: proc-root-ino-ref
+    desc: Proc filesystem root inode constant
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: text
+      substr: PROC_ROOT_INO
+    unless:
+      - type: path
+        dirname: true
+        regex: '(^|[\\/])(bindings?|generated|net_gen)([\\/]|$)'
+      - id: metadata/file/string/file::linux-vmlinux-header-basename
+      - id: well-known/tool/detection/cilium-tetragon::source-path
+      - type: text
+        regex: 'Automatically generated|bindgen|Code generated'
+  - id: cr0-wp-bit-manipulation
+    desc: CR0 write-protect bit manipulation
+    crit: suspicious
+    conf: 0.99
+    for:
+      - c
+    # WP bit = 0x10000; require the cr0 register near the complemented mask —
+    # the bare constant is a ubiquitous benign flag/size value.
+    if:
+      type: text
+      regex: 'cr0\b[^\n]{0,48}~\s*0x0*10000\b|~\s*0x0*10000\b[^\n]{0,48}\bcr0'
+  - id: this-module-ref
+    desc: Kernel module self-reference (module hiding)
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: symbol
+      kind: member
+      exact: THIS_MODULE
+  # esrch-return deleted: a bare ESRCH identifier is plain errno usage
+  # (glibc, strace, any process tool); error-code-return below captures the
+  # actual `return -E<NAME>` idiom.
+  - id: error-code-return
+    desc: Kernel error code return
+    crit: component
+    conf: 0.6
+    for:
+      - c
+    # `return -E<NAME>` — the negative-errno return idiom. The `return -E`
+    # prefix is the discriminator (a bare `E[A-Z]+` identifier would FP on
+    # EXIT/ERROR/etc.), so this stays a source-text match.
+    if:
+      type: text
+      regex: 'return\s+-E[A-Z]{2,}\b'
+  - id: sys-memfd-create-ref
+    desc: SYS_memfd_create constant reference
+    crit: suspicious
+    conf: 0.95
+    for:
+      - elf
+    unless:
+      - id: well-known/app/pihole::pihole-artifact
+      - id: metadata/package/files/dependency::os-image-root-file-path
+    if:
+      type: text
+      substr: SYS_memfd_create
+  - id: finit-module-call
+    desc: finit_module function call
+    crit: suspicious
+    conf: 0.95
+    for:
+      - elf
+      - c
+    if:
+      type: symbol
+      exact: 'finit_module'
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context
+    downgrade:
+      any:
+        - id: micro-behaviors/os/bpf/program/maps::bpf-map-hash
+  - id: sys-finit-module-ref
+    desc: SYS_finit_module constant reference
+    crit: component
+    conf: 0.95
+    for:
+      - elf
+      - c
+    if:
+      type: text
+      substr: SYS_finit_module
+  - id: lookup-address-call
+    desc: lookup_address kernel function call
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: symbol
+      kind: call
+      exact: lookup_address
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context
+  - id: page-rw-flag
+    desc: _PAGE_RW memory protection flag
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: string_literal
+      substr: _PAGE_RW
+  - id: page-nx-flag
+    desc: _PAGE_NX memory protection flag
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: string_literal
+      substr: _PAGE_NX
+  # elf64-{ehdr,shdr,phdr}-decl and elf-entry-field moved to
+  # micro-behaviors/data/format/executable/header (elf-structs.yaml) — ELF
+  # header-struct usage is a parsing capability (glibc ld.so, binutils,
+  # patchelf), not kernel-hide evidence; the elf-patching composite in
+  # lkm/rootkit references them cross-tier.
+  - id: patch-string-ref
+    desc: patch string reference
+    crit: component
+    conf: 0.6
+    for:
+      - c
+    if:
+      type: string_literal
+      word: patch
+  - id: hidden-task-flag-assignment
+    desc: Assigns a concealment-related task flag
+    crit: suspicious
+    conf: 0.98
+    attack: T1014
+    for:
+      - c
+    if:
+      type: text
+      # Ordinary kernel code sets scheduler and accounting flags such as
+      # PF_BLOCK_TS. Rootkit-style task hiding uses non-standard concealment
+      # flags; keep this objective-specific atom focused on those names.
+      regex: '\b(current|task)->flags\s*[|^&]=\s*(~\s*)?PF_(INVISIBLE|HIDDEN|STEALTH)\b'
+    unless:
+      - id: micro-behaviors/os/syscall/invoke/
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: metadata/lang/source::linux-kernel-source-tree-path
+      - type: path
+        regex: '(^|[\\/])lib[\\/]isc[\\/]task\.c$'
+  - id: pf-invisible-flag
+    desc: PF_INVISIBLE flag value (0x10000000)
+    crit: suspicious
+    conf: 0.99
+    attack: T1014
+    for:
+      - c
+    if:
+      type: tree-sitter
+      kind: binary_op
+      exact: '0x10000000'
+composite_rules:
+  - id: hooked-syscall-error-path
+    desc: Kernel hook returns errno path
+    crit: suspicious
+    conf: 0.75
+    for:
+      - c
+    all:
+      - id: syscall-table-decl
+      - id: error-code-return
+    unless:
+      - id: well-known/app/xilinx-onload::onload-kernel-source-context
+      - id: metadata/lang/source::linux-kernel-arch-source-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context

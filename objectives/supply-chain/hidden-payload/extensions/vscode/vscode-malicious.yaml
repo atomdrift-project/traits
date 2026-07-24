@@ -1,0 +1,366 @@
+defaults:
+  platforms:
+  - unix
+  - windows
+  for: [scripts, source, documents]
+traits:
+- id: postInstall-word
+  desc: postInstall keyword
+  crit: notable
+  conf: 0.7
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string_literal
+    substr: postInstall
+- id: exec-pattern
+  desc: exec function pattern
+  crit: component
+  conf: 0.7
+  for:
+  - javascript
+  - typescript
+  unless:
+  - type: basename
+    regex: (^|[\\/])app\.asar\.unpacked[\\/]dist[\\/]
+  if:
+    type: text
+    regex: exec(Sync|Async)\(
+  not:
+  - substr: node_modules/
+  - substr: xo && node test.js
+# single-char function-name ratio is a generic minification/obfuscation metric
+# — it lives canonically in objectives/anti-static/obfuscation/code-metrics/
+# functions::single-char-function-names. The vscode-decoy-source-map composite
+# below references it cross-tier rather than duplicating it into this
+# vscode-specific directory (where it mislabeled any minified JS/TS).
+- id: vscode-request-post-call
+  desc: request.post call
+  crit: component
+  conf: 0.92
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: "request\\.post\\s*\\("
+- id: vscode-formdata-object
+  desc: Appends a field to a FormData upload
+  crit: component
+  conf: 0.88
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'formData\\.append\\s*\\('
+- id: vscode-devcto-upload-endpoint
+  desc: VSCode extension uploads to devcto API
+  crit: suspicious
+  conf: 0.95
+  for: [javascript, typescript]
+  if:
+    type: string_literal
+    exact: https://api.devcto.com/v1/upload
+- id: vscode-hidden-powershell-helper-spawn
+  desc: VSCode extension spawns hidden PowerShell helper
+  crit: suspicious
+  conf: 0.95
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: "spawn\\(['\"]powershell['\"][\\s\\S]{0,360}['\"]-windowstyle['\"][\\s\\S]{0,80}['\"]hidden['\"]"
+- id: vscode-platform-clipboard-helper-paths
+  desc: VSCode extension platform clipboard helpers
+  crit: suspicious
+  conf: 0.92
+  for: [javascript, typescript]
+  if:
+    type: text
+    substr: ./lib/pc.ps1
+- id: vscode-osascript-helper-spawn
+  desc: VSCode extension spawns osascript helper
+  crit: component
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: "spawn\\(['\"]osascript['\"]"
+- id: node-install-sh-url-path
+  desc: Remote install.sh URL path construction
+  crit: component
+  conf: 0.86
+  for: [javascript, typescript]
+  if:
+    type: text
+    substr: /install.sh
+- id: node-install-sh-chmod-executable
+  desc: Downloaded install.sh made executable
+  crit: component
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: "install\\.sh[\\s\\S]{0,900}chmodSync\\([^)]{0,120},\\s*(493|0o?755)\\)"
+composite_rules:
+- id: vscode-decoy-source-map
+  desc: VSCode extension with clean source and obfuscated output divergence
+  crit: suspicious
+  conf: 0.95
+  for: [javascript, typescript]
+  all:
+  - id: objectives/anti-static/obfuscation/code-metrics/functions::single-char-function-names
+  - id: metadata/library/vscode::namespace
+  unless:
+  - id: metadata/library/structure::js-webpack-bundle
+  - id: metadata/library/structure::js-large-module-bundle
+  - id: metadata/build/bundler::has-sourcemap
+  - id: metadata/library/structure::vscode-extension-generated-asset
+  - id: metadata/package/quality/source/
+  - id: metadata/package/quality/false-positives::benign-build-tooling-context
+  - id: metadata/package/quality/false-positives::benign-build-tooling-context
+- id: vscode-persistence-state
+  desc: VSCode extension tracking state across sessions (potential persistence)
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  all:
+  - id: metadata/library/vscode::workspace-state
+  - id: metadata/library/vscode::activate-function
+- id: vscode-local-file-upload
+  desc: VSCode extension exfiltrates local files
+  crit: hostile
+  conf: 0.98
+  attack: T1041
+  mbc: B0024
+  # This is a file-level source composite. Applying it to an archive
+  # container lets unrelated members satisfy the read/upload legs (for
+  # example, a telemetry dependency plus an extension manifest), producing a
+  # false hostile finding on an otherwise benign VSIX. Malicious archive
+  # handling is provided by the archive-scoped composites below, which consume
+  # this finding from the relevant JavaScript/TypeScript member.
+  for: [javascript, typescript]
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: micro-behaviors/fs/file/read::create-read-stream
+  any:
+  - id: vscode-request-post-call
+  - id: vscode-formdata-object
+  - id: micro-behaviors/communications/http/endpoints::fetch-explicit-external-url
+  needs: 2
+  scope: file
+  near_bytes: 4096
+  unless:
+  - id: well-known/tool/development/anthropic-claude-agent/
+  - id: well-known/app/qwen-code::qwen-code-vscode-extension
+  - id: well-known/app/pinokio::app-bundle
+  - id: metadata/library/structure::standalone-webapp-output
+  - id: metadata/package/quality/false-positives::projen-package-context
+  downgrade:
+    any:
+    - id: metadata/library/structure::standalone-webapp-output
+- id: vscode-hidden-helper-file-upload
+  desc: VSCode extension uploads helper-captured local files
+  crit: hostile
+  conf: 0.98
+  attack: T1041
+  mbc: B0024
+  for: [javascript, typescript, archives]
+  scope: archive
+  all:
+  - id: vscode-local-file-upload
+  - id: vscode-devcto-upload-endpoint
+  - id: vscode-hidden-powershell-helper-spawn
+  any:
+  - id: vscode-platform-clipboard-helper-paths
+  - id: vscode-osascript-helper-spawn
+  unless:
+      - id: metadata/library/structure::standalone-webapp-output
+- id: vscode-http-response-eval
+  desc: VSCode extension evals HTTP response
+  crit: hostile
+  conf: 0.99
+  attack: T1059.007
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  near_bytes: 4096
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: objectives/command-and-control/dropper/delivery/fetch-eval::response-end-then-eval
+  any:
+  - id: micro-behaviors/communications/http/request/client::http-get-dup
+  - id: metadata/import/builtin::require-http
+- id: vscode-remote-installer-exec
+  desc: VSCode extension runs a downloaded installer
+  crit: suspicious
+  conf: 0.9
+  mbc: B0024
+  attack: T1059
+  for: [javascript, typescript, package.json, archives]
+  scope: archive
+  all:
+  - id: metadata/package/manifest/runtime::vscode-extension
+  - id: node-install-sh-url-path
+  - id: node-install-sh-chmod-executable
+  - id: micro-behaviors/process/create/system::js-execfile-call
+  any:
+  - id: micro-behaviors/process/create/shell/bridge::js-execfile-bash
+  - id: micro-behaviors/process/create/shell/bridge::js-function-bash-first-arg
+- id: hostile-geofencing
+  desc: Evasive geofencing targeting restricted regions (CIS/Iran/DPRK)
+  crit: hostile
+  conf: 0.99
+  attack: T1614
+  for: [javascript, typescript]
+  all:
+  - id: objectives/anti-analysis/geofencing/region/cluster::restricted-region-geofencing
+  - id: objectives/anti-analysis/geofencing/timezone::js-timezone-detection
+- id: advanced-russian-geofencing
+  desc: Advanced Russian region geofencing (TZ + Locale + JS Intl)
+  crit: hostile
+  conf: 0.99
+  attack: T1614
+  for: [javascript, typescript]
+  all:
+  - id: objectives/anti-analysis/geofencing/region/cluster::cis-region-indicator
+  - id: objectives/anti-analysis/geofencing/timezone::js-timezone-detection
+  - id: objectives/anti-analysis/geofencing/region/cluster::func-name-russian-specific
+- id: credential-paths
+  desc: Sensitive credential path references
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: micro-behaviors/fs/path/sensitive/ssh::keys
+  - id: objectives/credential-access/cloud/token/files::aws-config-dup
+  - id: micro-behaviors/fs/path/sensitive/credentials::npmrc-credentials
+  - id: metadata/package/config::dotenv-file
+- id: oauth-uri-exfil
+  desc: VSCode URI OAuth code exfiltration
+  crit: hostile
+  conf: 0.98
+  mbc: E1056
+  attack: T1041
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/permission/uri::oauth-code-capture
+  - id: micro-behaviors/communications/http/request/client::https-request
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: objectives/exfiltration/oob/endpoint::webhook-site
+- id: post-install-exec
+  desc: Post-install script execution (dropper pattern)
+  crit: suspicious
+  conf: 0.95
+  mbc: B0024
+  attack: T1059
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/permission/activation::activate-comp
+  - id: postInstall-word
+  - id: exec-pattern
+- id: auto-activated-reverse-shell
+  desc: Auto-activated VSCode reverse shell
+  crit: hostile
+  conf: 0.995
+  mbc: B0022
+  attack: T1059
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: metadata/permission/activation::activate-comp
+  - id: objectives/command-and-control/reverse-shell/dup::cmd-shell-rfc1918-bridge
+- id: credential-theft-comp
+  desc: VSCode extension accessing sensitive credentials
+  crit: suspicious
+  conf: 0.9
+  mbc: E1519
+  attack: T1555
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: credential-paths
+  - id: micro-behaviors/fs/file/read::read-node
+  - id: micro-behaviors/communications/http/request/
+  - id: micro-behaviors/process/interpreter/vm
+  unless:
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: metadata/package/testing/
+  - id: metadata/library/runtime/
+  - id: well-known/app/vscode/
+  downgrade:
+    any:
+    - id: objectives/anti-static/obfuscation/code-metrics/structure/
+    - id: metadata/package/quality/false-positives::benign-build-tooling-context
+# The autostart-location legs are inlined rather than wrapped in a local
+# `persistence-locations` composite. That wrapper matched any JS naming a
+# startup folder, Run key, launchd/crontab keyword or systemd unit — a generic
+# capability with no VSCode meaning — yet surfaced from this directory as a
+# standalone notable "References concrete persistence locations", firing on
+# every service installer that is not an extension at all. The VSCode-specific
+# intent lives here, in the `vscode-extension-marker` leg.
+- id: persistence
+  desc: Extension establishing persistence
+  crit: suspicious
+  conf: 0.95
+  mbc: F0011
+  attack: T1547
+  for:
+  - javascript
+  - typescript
+  near_bytes: 4096
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: micro-behaviors/fs/write/file/direct::js-file-write
+  any:
+  - id: objectives/persistence/login/startup/folder::win-startup-path
+  - id: objectives/persistence/login/startup/registry::software-run-key
+  - id: micro-behaviors/os/autorun/keyword::launchd-keyword
+  - id: micro-behaviors/os/autorun/scheduled::crontab-keyword
+  - id: micro-behaviors/os/service/config::systemd-keyword
+  needs: 1
+- id: vscode-graph-sharepoint-channel
+  desc: VSCode extension using Microsoft Graph SharePoint lists as a data channel
+  crit: suspicious
+  conf: 0.9
+  mbc: B0030
+  attack: T1102
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: micro-behaviors/communications/http/oauth::microsoft-graph-list-channel
+- id: vscode-graph-sharepoint-c2
+  desc: VSCode extension polling a Microsoft Graph SharePoint list command queue (C2)
+  crit: hostile
+  conf: 0.97
+  mbc: B0030
+  attack: T1102
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: micro-behaviors/communications/http/oauth::microsoft-graph-list-channel
+  - id: micro-behaviors/communications/http/oauth::odata-query-marker
+- id: vscode-encrypted-string-obfuscation
+  desc: VSCode extension AES-256-CBC decrypt capability
+  crit: notable
+  conf: 0.92
+  mbc: E1027
+  attack: T1027
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: metadata/library/vscode::vscode-extension-marker
+  - id: micro-behaviors/crypto/symmetric/aes/runtime-library::createDecipheriv
+  - id: micro-behaviors/crypto/symmetric/aes/runtime-library::aes-256-cbc

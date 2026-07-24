@@ -1,0 +1,203 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+
+traits:
+  - id: node-global-os-module-exposure
+    desc: Exposes Node os module through globalThis
+    crit: notable
+    conf: 0.9
+    if:
+      type: tree-sitter
+      kind: assignment
+      regex: 'globalThis\s*\[\s*["'']os["'']\s*\]\s*='
+
+  - id: node-module-wrap-override
+    desc: Assigns custom Node wrapper
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: "require\\(['\"]module['\"]\\)\\.wrap\\s*=\\s*(override|function)"
+
+  - id: node-require-resolve-package-name
+    desc: Resolves a named Node package
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '\brequire\.resolve\s*\(\s*(packageName|[A-Za-z_$][A-Za-z0-9_$]*PackageName)\b'
+
+  - id: node-require-wrapper-prototype
+    desc: Wraps Node require function
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: "Object\\.setPrototypeOf\\(function\\s+\\w*WrappedRequire"
+
+  - id: node-require-function-rebind
+    desc: Rebinds Node require function
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: "require\\s*=\\s*\\(function\\s*\\(req\\)"
+  - id: node-require-binding-reassignment
+    desc: Reassigns the CommonJS require binding
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '(?m)^[ \\t]*require[ \\t]*='
+  - id: local-native-addon-require
+    desc: Requires local native addon
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: "require\\(['\"]\\./[^'\"\\n]{1,120}\\.node['\"]\\)"
+  - id: prebuilt-native-addon-require
+    desc: Requires prebuilt native addon
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: "require\\(['\"]\\./prebuilt/[^'\"\\n]{1,120}\\.node['\"]\\)"
+  - id: js-side-effect-require
+    desc: Side-effect require without binding
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      regex: '^\s*require\s*\(\s*["''](\./|\.\./|/)[^"''\n]{1,80}["'']\s*\)\s*;?\s*$'
+    unless:
+      - type: text
+        regex: '^#!/usr/bin/env\s+node\b'
+  - id: cjs-side-effect-package-require
+    desc: CommonJS side-effect-only package require
+    crit: notable
+    conf: 0.93
+    if:
+      type: text
+      regex: "(?m)^\\s*require\\s*\\(['\"](@[^'/]{1,30}/)?[A-Za-z0-9][^'\"]{0,50}['\"]\\)\\s*;?\\s*$"
+  - id: esm-side-effect-package-import
+    desc: ESM side-effect-only package import
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?m)^\s*import\s+["''][^"''/][^"''\n]{0,70}["'']\s*;?\s*$'
+    unless:
+      # Declaration imports are erased and do not establish runtime loading.
+      - id: metadata/lang/scripted::dts-declaration-file
+  - id: js-require-extensions-mutate
+    desc: require.extensions mutated
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: 'require\.extensions\s*\[\s*["''][^"''\n]{1,40}["'']\s*\]\s*='
+  - id: js-module-resolvefilename-override
+    desc: Module._resolveFilename override
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: 'Module\._resolveFilename\s*='
+    not:
+      - substr: "originalModuleResolveFilename"
+  - id: dynamic-import-string-literal
+    desc: Dynamically imports a literal module path
+    crit: notable
+    conf: 0.8
+    if:
+      # Match a runtime import call node, not a TypeScript import type such as
+      # `import('pkg').Type`, which is erased and does not load a module.
+      type: tree-sitter
+      query: |
+        (
+          (_
+            (call_expression
+              function: (import)
+              arguments: (arguments (string) @module)) @call) @parent
+          (#not-match? @parent "\\)\\s*\\.")
+        )
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - type: basename
+        regex: '\.d\.ts$'
+
+  - id: dynamic-external-import-string-literal
+    desc: Dynamically imports a non-relative module path
+    crit: notable
+    conf: 0.9
+    if:
+      # The query constrains the match to a runtime import() call and keeps
+      # relative/absolute specifiers out of the external-loader signal.
+      type: tree-sitter
+      query: |
+        (
+          (_
+            (call_expression
+              function: (import)
+              arguments: (arguments (string) @module)) @call) @parent
+          (#match? @module "^[^./]")
+          (#not-match? @parent "\\)\\s*\\.")
+        )
+
+  - id: dynamic-imported-provider-reexport
+    desc: Dynamically imports and re-exports a provider
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: "import\\(\\s*['\"][^'\"]{1,80}['\"]\\s*\\)[\\s\\S]{0,180}Provider"
+    unless:
+      - type: basename
+        regex: '\.d\.ts$'
+
+  - id: dynamic-import-expression
+    desc: Dynamically imports a computed module reference
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '\bimport\s*\(\s*[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)?\s*\)'
+
+  - id: dynamic-import-function-constructor
+    desc: Function constructor wraps dynamic import
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'new\s+Function\s*\(\s*["''][A-Za-z_$][A-Za-z0-9_$]*["'']\s*,\s*["'']return\s+import\s*\('
+
+  - id: node-dynamic-import-file-url
+    desc: Node dynamically imports a file URL
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: 'import\s*\(\s*`file://.{1,120}`\s*\)'
+  - id: empty-arrow-catch-handler
+    desc: Empty arrow catch silently ignores errors
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      regex: "\\.catch\\(\\s*\\(\\s*\\w*\\s*\\)\\s*=>\\s*\\{\\s*\\}\\s*\\)"
+
+composite_rules:
+  - id: eager-import-error-swallowed
+    desc: Dynamic import with swallowed errors
+    crit: notable
+    conf: 0.8
+    all:
+      - id: dynamic-import-string-literal
+      - id: empty-arrow-catch-handler
+    near_bytes: 200

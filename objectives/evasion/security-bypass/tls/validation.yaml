@@ -1,0 +1,336 @@
+# TLS/SSL Certificate Validation Bypass
+# Detects code that disables SSL certificate verification, allowing MITM interception
+# or C2 communication over invalid/self-signed certificates
+# ATT&CK: T1553 (Subvert Trust Controls)
+defaults:
+  platforms: [windows, unix]
+  crit: notable
+  attack: T1553
+traits:
+- id: dotnet-cert-callback-delegate
+  desc: .NET SSL cert validation callback suppressed
+  crit: notable
+  conf: 0.9
+  for: [csharp, source]
+  if:
+    type: text
+    regex: ServerCertificateValidationCallback\s*=\s*delegate
+- id: dotnet-cert-callback-arrow
+  desc: .NET SSL callback arrow assignment
+  crit: notable
+  conf: 0.85
+  for: [csharp, source]
+  if:
+    type: text
+    regex: 'ServerCertificateValidationCallback\s*\+?=\s*[A-Za-z_][\w.]*\s*=>'
+- id: dotnet-cert-callback-anonymous
+  desc: .NET SSL callback anonymous assignment
+  crit: notable
+  conf: 0.85
+  for: [csharp, source]
+  if:
+    type: text
+    regex: 'ServerCertificateValidationCallback\s*\+?=\s*(\(|delegate\b|new\b)'
+- id: dotnet-cert-callback-method-ref
+  desc: .NET SSL callback method assignment
+  crit: notable
+  conf: 0.85
+  for: [csharp, source]
+  # Require a method-reference RHS. A bare `[+=]` also matched the windows-rs
+  # Rust type alias `...ServerCertificateValidationCallback = *mut ...`.
+  if:
+    type: text
+    regex: 'ServerCertificateValidationCallback\s*\+?=\s*[A-Za-z_]\w*\s*[;(]'
+- id: dotnet-sslpolicy-errors-ignored
+  desc: .NET SslPolicyErrors ignored in callback
+  crit: component
+  conf: 0.8
+  for: [csharp, source]
+  if:
+    type: text
+    regex: SslPolicyErrors\s+\w+\s*\)\s*\{?\s*return\s+true
+- id: dotnet-expect100-tls12
+  desc: .NET Expect100Continue with TLS 1.2 forced
+  crit: component
+  conf: 0.7
+  for: [csharp, source]
+  if:
+    type: text
+    regex: Expect100Continue\s*=\s*true
+- id: webclient-tls12
+  desc: .NET WebClient forced to TLS 1.2
+  crit: component
+  conf: 0.65
+  for: [csharp, source]
+  if:
+    type: text
+    regex: SecurityProtocol\s*=\s*SecurityProtocolType\.Tls12
+- id: python-self-signed-test-host
+  desc: Python self-signed test host
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: self-signed.pythontest.net
+- id: python-noverification-test-name
+  desc: Python no-verification test name
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: test_networked_noverification
+- id: python-gitcode-release-script-marker
+  desc: Python GitCode release automation marker
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    regex: 'Create a GitCode release|upload_release_asset'
+- id: tls-connection-evidence-class
+  desc: TLSConnectionEvidence class reference
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: TLSConnectionEvidence
+- id: tls-chain-verified-field
+  desc: TLS chain verified evidence field
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: chain_verified
+- id: tls-peer-cert-fetch
+  desc: TLS peer certificate fetch
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: getpeercert
+  unless:
+    - id: well-known/lib/requests-ntlm::requests-ntlm-library-context
+- id: xenapi-event-client-marker
+  desc: XenAPI event client marker
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: session.xenapi.event_from
+# A single requests call (or Session) with verify=False is a widespread,
+# benign-leaning weakness. The neutral mechanics live in
+# micro-behaviors/communications/http/ssl; this file only interprets them
+# when combined with stronger evasion evidence.
+- id: requests-external-ip-url
+  desc: requests URL uses external IP
+  crit: suspicious
+  conf: 0.93
+  for: [python]
+  if:
+    type: text
+    regex: 'requests\.[a-z]{3,7}\s*\([^\n]{0,80}https?://([0-9]{1,3}\.){3}[0-9]{1,3}'
+    is: external_ip
+  unless:
+    # Cloud instance-metadata endpoints (AWS/GCP/Azure/Aliyun/etc.) use
+    # link-local or provider metadata IPs; not C2 over a public address.
+    - type: text
+      regex: 'https?://(169\.254\.169\.254|100\.100\.100\.200)/'
+- id: urllib3-disable-warnings--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.85
+  for: [python]
+  if:
+    type: text
+    regex: urllib3\.disable_warnings\s*\([^)\n]{0,80}InsecureRequestWarning
+  count_max: 1030608
+- id: urllib3-disable-warnings--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.85
+  for: [python]
+  if:
+    type: text
+    regex: disable_warnings\s*\(\s*InsecureRequestWarning\s*\)
+  count_max: 1030609
+- id: pycurl-verify-peer-off
+  desc: Python pycurl SSL_VERIFYPEER disabled
+  crit: suspicious
+  conf: 0.92
+  for: [python]
+  if:
+    type: text
+    regex: setopt\s*\([^,)]{0,40}SSL_VERIFYPEER[^,)]{0,40},\s*0\b
+  unless:
+  - id: well-known/lib/tornado::library-code
+- id: pycurl-verify-host-off
+  desc: Python pycurl SSL_VERIFYHOST disabled
+  crit: suspicious
+  conf: 0.92
+  for: [python]
+  if:
+    type: text
+    regex: setopt\s*\([^,)]{0,40}SSL_VERIFYHOST[^,)]{0,40},\s*0\b
+  unless:
+  - id: well-known/lib/tornado::library-code
+  # Always-true cert callback (Python ssl SNI/sni callback)
+- id: ssl-callback-always-true
+  desc: SSL servername callback always returns True
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    regex: set_servername_callback\s*\(\s*lambda[^:]{0,40}:\s*True\b
+- id: java-hostname-verifier-default
+  desc: Java default hostname verifier override
+  crit: component
+  conf: 0.9
+  for: [java, class, jar, zip]
+  if:
+    type: text
+    substr: setDefaultHostnameVerifier
+- id: java-trustmanager-marker
+  desc: Java custom TrustManager marker
+  crit: component
+  conf: 0.88
+  for: [java, class, jar, zip]
+  if:
+    type: text
+    word: TrustManager
+- id: java-sslcontext-init
+  desc: Java SSLContext initialized manually
+  crit: component
+  conf: 0.84
+  for: [java, class, jar, zip]
+  if:
+    type: text
+    word: SSLContext
+composite_rules:
+  - id: tls-certificate-evidence-collector
+    desc: TLS certificate evidence collector marker
+    crit: notable
+    conf: 0.9
+    for: [python]
+    all:
+    - id: tls-connection-evidence-class
+    - id: tls-chain-verified-field
+    - id: tls-peer-cert-fetch
+  - id: python-ssl-unverified-recognized-marker
+    desc: Recognized Python SSL-unverified marker
+    crit: notable
+    conf: 0.9
+    any:
+    - id: python-self-signed-test-host
+    - id: python-noverification-test-name
+    - id: metadata/package/testing/presence/harness::test-directory
+    - id: metadata/package/testing/presence/harness::unittest-module
+    - id: metadata/package/testing/scripted::pytest
+    - id: metadata/package/testing/presence/harness::python-test-file
+    - id: micro-behaviors/communications/http/endpoints::loopback-https-url-or-proxy-text
+    - id: micro-behaviors/data/parse/analysis::nltk-corpus-bootstrap
+    - id: xenapi-event-client-marker
+    - id: metadata/build/pip::python-packaging-vendored-source
+    - id: metadata/build/pip::python-packaging-tool-tests
+    - id: tls-certificate-evidence-collector
+    - id: python-gitcode-release-script-marker
+  - id: dotnet-tls-bypass
+    desc: .NET SSL certificate validation bypassed
+    crit: suspicious
+    conf: 0.9
+    for: [csharp, source]
+    all:
+    - id: dotnet-cert-callback-delegate
+    any:
+    - id: dotnet-sslpolicy-errors-ignored
+    - id: dotnet-expect100-tls12
+    - id: webclient-tls12
+  - id: dotnet-tls-bypass-lambda
+    desc: .NET SSL callback lambda (cert bypass)
+    crit: suspicious
+    conf: 0.85
+    for: [csharp, source]
+    all:
+    - id: dotnet-sslpolicy-errors-ignored
+    any:
+    - id: dotnet-cert-callback-arrow
+    - id: dotnet-cert-callback-anonymous
+    - id: dotnet-cert-callback-method-ref
+  - id: powershell-cert-bypass-binary-launch
+    desc: PowerShell accepts any TLS certificate before launching a downloaded binary
+    crit: hostile
+    conf: 0.98
+    attack: T1105,T1204.002,T1553
+    all:
+      - id: micro-behaviors/communications/http/client/managed::server-certificate-validation-callback-accept-all
+      - id: micro-behaviors/communications/http/client/managed::getasync
+      - id: micro-behaviors/communications/http/client/managed::readasbytearrayasync
+      - id: micro-behaviors/fs/write/file/direct::write-all-bytes
+      - id: micro-behaviors/process/create/start-process::start-process-call
+    near_lines: 120
+    # Aggregator for Python TLS-bypass forms. The neutral Python ssl-context
+    # capability supplies the precise unverified-context evidence here, while
+    # the objective composite adds the intent-oriented interpretation.
+  - id: python-tls-validation-bypass
+    desc: Python TLS validation disabled
+    crit: suspicious
+    conf: 0.92
+    for: [python]
+    any:
+    - id: micro-behaviors/communications/http/ssl
+    unless:
+    - id: urllib3-disable-warnings
+    - id: micro-behaviors/communications/http/ssl::httpx-verify-false
+    - id: micro-behaviors/communications/http/ssl::aiohttp-tcpconnector-ssl-false
+    - id: micro-behaviors/communications/socket/ssl::tls-validation-fully-disabled
+    # Keep recognized test and packaging contexts from escalating this broad
+    # aggregator without expanding the large marker composite here.
+    - id: metadata/package/testing/
+    - id: micro-behaviors/data/parse/analysis::nltk-corpus-bootstrap
+    - id: metadata/build/pip::python-packaging-vendored-source
+    downgrade:
+      any:
+      - id: micro-behaviors/data/parse/analysis/
+    # Hostile pair: TLS validation off AND a hardcoded external IP. This
+    # combination has effectively no benign reason — disabling TLS to talk
+    # to a numeric address is the malware-grade DNS-and-cert evasion.
+  - id: tls-bypass-ip-target
+    desc: TLS validation disabled with hardcoded IP target
+    crit: hostile
+    conf: 0.96
+    for: [python]
+    near_bytes: 240
+    all:
+      - id: python-tls-validation-bypass
+      - id: requests-external-ip-url
+    downgrade:
+      any:
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+  - id: urllib3-disable-warnings
+    desc: urllib3 InsecureRequestWarning suppression
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    any:
+    - id: urllib3-disable-warnings--rx-1
+    - id: urllib3-disable-warnings--rx-2
+    unless:
+    - id: well-known/tool/development/stoobly-agent/
+  - id: java-tls-validation-bypass
+    desc: Java TLS validation disabled
+    crit: suspicious
+    conf: 0.96
+    for: [java, class, jar, zip]
+    all:
+    - id: java-hostname-verifier-default
+    - id: java-trustmanager-marker
+    - id: java-sslcontext-init
+    unless:
+    - id: well-known/lib/benign-runtime-bundles::openjdk-source-archive-path

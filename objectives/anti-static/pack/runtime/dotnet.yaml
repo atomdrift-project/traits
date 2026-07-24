@@ -1,0 +1,210 @@
+defaults:
+  attack: T1027.002
+  mbc: B0032
+  platforms: [windows]
+  for: [pe, dll]
+
+traits:
+  # .NET Core/5+ runtime assembly names. In an actual managed assembly these are
+  # ordinary metadata; in a NATIVE PE (no COM descriptor) their presence as
+  # plain strings means a .NET payload/runtime is embedded for reflective
+  # loading. Kept as separate substr atoms (a composite below requires several
+  # distinct names so a stray mention does not fire).
+  - id: dotnet-corelib-string
+    desc: Embedded System.Private.CoreLib name
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: "System.Private.CoreLib"
+    unless:
+      - id: metadata/binary/framework::dotnet-assembly
+  - id: dotnet-reflection-emit-string
+    desc: Embedded System.Reflection.Emit name
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: "System.Reflection.Emit"
+    unless:
+      - id: metadata/binary/framework::dotnet-assembly
+  - id: dotnet-reflection-primitives-string
+    desc: Embedded System.Reflection.Primitives name
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: "System.Reflection.Primitives"
+    unless:
+      - id: metadata/binary/framework::dotnet-assembly
+  - id: dotnet-interop-services-string
+    desc: Embedded System.Runtime.InteropServices name
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: "System.Runtime.InteropServices"
+    unless:
+      - id: metadata/binary/framework::dotnet-assembly
+
+composite_rules:
+  # >=3 distinct .NET runtime assembly names embedded as strings.
+  - id: embedded-dotnet-runtime-assembly-strings
+    desc: Embedded .NET runtime assembly-name strings
+    crit: notable
+    conf: 0.85
+    needs: 3
+    any:
+      - id: dotnet-corelib-string
+      - id: dotnet-reflection-emit-string
+      - id: dotnet-reflection-primitives-string
+      - id: dotnet-interop-services-string
+    # Default file scope can pool strings from decoded layers.  Suppress the
+    # inference for a real managed assembly even when a child layer supplied
+    # one of the string findings.
+    unless:
+      - id: metadata/binary/framework::dotnet-assembly
+  # A native PE (not itself a .NET assembly) that both embeds a .NET reflective
+  # payload AND conceals an encrypted stage in an oversized .reloc is a native
+  # loader for a managed second stage — the ACRStealer/Shelma host shape. The
+  # `unless` keeps real managed assemblies (which legitimately carry these
+  # names) from matching.
+  - id: native-host-embedded-dotnet-payload
+    desc: Native PE conceals embedded .NET payload
+    crit: hostile
+    conf: 0.95
+    attack: "T1620"
+    all:
+      - id: embedded-dotnet-runtime-assembly-strings
+      - id: objectives/anti-static/pack/section-anomaly::reloc-overhang-dominant
+    unless:
+      - id: metadata/binary/framework/
+      - id: metadata/binary/framework::dotnet-metadata
+  - id: dotnet-packed-loader
+    desc: Packed .NET dynamic loader chain
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/symbols/imports::single-import-raw
+      - id: metadata/binary/metrics/structural::high-code-entropy
+    any:
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-reflective-loader-chain
+    unless:
+      - id: objectives/anti-static/obfuscation/obfuscator/managed/
+      - id: well-known/app/connectify/
+    downgrade:
+      any:
+        - id: objectives/anti-static/obfuscation/obfuscator/managed/
+        - id: well-known/app/connectify/
+
+  - id: dotnet-sparse-import-encrypted-resource-stager
+    desc: Sparse-import .NET loader reflectively stages an encrypted resource
+    crit: hostile
+    conf: 0.97
+    attack: T1620,T1027
+    mbc: E1059
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/symbols/imports::single-import-raw
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      # The encrypted stage must be represented by a large, high-entropy
+      # managed resource.  A high-entropy .text section is normal for a
+      # compiled source generator and is not evidence of an encrypted blob.
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+    unless:
+      - id: metadata/signed/platform/
+      - id: objectives/anti-static/obfuscation/obfuscator/managed/
+      - id: well-known/app/protected-benign-pe/
+      - id: well-known/app/meshcentral::meshcentral-agent-binary-context
+
+  # Resource-backed pixel extraction plus reflective activation and high
+  # entropy is the characteristic of an in-memory packed payload, rather than
+  # ordinary .NET resource use.
+  - id: dotnet-bitmap-reflective-payload-loader
+    desc: .NET bitmap-backed reflective payload loader
+    crit: hostile
+    conf: 0.97
+    attack: "T1027.003,T1620"
+    mbc: E1059
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/resource::clr-resource-large
+      - id: micro-behaviors/data/embedded/payload/image::dotnet-resource-backed-bitmap
+      - id: micro-behaviors/data/embedded/payload/image::dotnet-resource-bitmap-pixel-readback
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: metadata/binary/metrics/structural::high-code-entropy
+
+  - id: dotnet-packed-stub
+    desc: Packed .NET stub (high entropy, sparse imports)
+    crit: suspicious
+    conf: 0.88
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+    needs: 2
+    any:
+      - id: objectives/command-and-control/dropper/execution/loader::dotnet-single-import
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: objectives/anti-static/pack/polymorphic::unusual-entry-point-section
+      - id: objectives/anti-static/pack/detect::themida-section
+    downgrade:
+      any:
+        - id: metadata/package/versioning::pe-version-resource
+        - id: metadata/binary/debug::pdb-visual-studio
+        - id: well-known/app/crayens/
+        - id: objectives/anti-static/obfuscation/obfuscator/managed/
+
+  - id: dotnet-dominant-resource-packed-stub
+    desc: .NET packed stub with dominant resource payload
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: metadata/binary/framework::clr-runtime-header
+      - id: objectives/anti-static/obfuscation/payload/encrypted::dominant-resource-packed-payload
+      - id: metadata/binary/metrics/pe-details::medium-pe-string-concealment-profile
+    unless:
+      - id: metadata/binary/installer/script/
+      - id: metadata/binary/installer/family/
+      - id: well-known/app/protected-benign-pe/
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+    ref: sha256:5fcb9d72408d6781741db2da86b7d4675d607f469a731a9786fc96d59a1e9eb6
+
+  - id: dotnet-resource-crypter-layout
+    desc: .NET resource crypter loader layout
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: dotnet-dominant-resource-packed-stub
+      - id: metadata/binary/framework::clr-runtime-header
+    any:
+      - id: metadata/binary/resource::minimal-resources
+      - id: metadata/binary/metrics/structural::pe-relocation-table-overhang
+      - id: metadata/binary/layout::has-overlay
+    ref: sha256:5fcb9d72408d6781741db2da86b7d4675d607f469a731a9786fc96d59a1e9eb6
+
+  - id: flattened-packer-clr-loader
+    desc: Control-flow-flattened packer with CLR loader marker
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: metadata/binary/section/metrics::inflated-data-section
+      - id: micro-behaviors/process/inject/runtime/clr::corexitprocess-string
+    unless:
+      - id: metadata/binary/vendor/
+
+  - id: dotnet-admin-reflective-resource-loader
+    desc: Admin-elevated reflective resource loader
+    crit: hostile
+    conf: 0.99
+    attack: T1027.009,T1620
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-getmanifestresourcestream
+      - id: micro-behaviors/data/embedded/payload/resource::assemblyresolve-hook
+      - id: metadata/lang/compiler/managed::get-method-token
+      - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-token
+      - id: micro-behaviors/process/interpreter/reflection/runtime::methodbase-class
+      - id: micro-behaviors/os/privilege/manifest::require-administrator
+      - id: metadata/hardening/memory::wx-section

@@ -1,0 +1,66 @@
+# Apple signature classification. Reads expose's typed
+# `macho.code_signature.*` view directly. Trait IDs are unchanged so
+# downstream composite consumers keep working.
+#
+# CRITICALITY PRINCIPLE — identity and trust-level are Notable across all
+# formats (Mach-O, PE, ELF). A binary's signing *identity* (who it claims to
+# be: bundle id, signer CN/Org) and its *trust level* (platform / developer /
+# ad-hoc / unsigned) are the questions a supply-chain analyst reads first in a
+# diff: a signer swap, a platform binary that turned ad-hoc, a Developer-ID
+# build that lost its team. So these are surfaced at Notable, not buried at
+# Baseline — they "define program provenance" the same way a capability
+# defines program purpose. Opaque per-build *identifiers* (CDHash, signing
+# time) stay as kv facts, not findings: you match them by exact value or flag
+# an anomaly at diff time, you don't read them. Entitlements/permissions are
+# already Notable-or-higher (Suspicious when dangerous) — see
+# `determine_entitlement_criticality` in src/analyzers/macho.rs.
+defaults:
+  platforms: [macos]
+  for: [macho]
+  crit: baseline
+  conf: 1.0
+traits:
+  - id: adhoc
+    desc: Ad-hoc code signature
+    crit: notable
+    # Expose emits `ad_hoc` (snake_case xnu CS_ADHOC flag name) in the
+    # `macho.code_signature.flags` array. The flag's presence is the
+    # adhoc-signing signal — there's no separate boolean.
+    if:
+      type: value
+      path: macho.code_signature.flags[*]
+      exact: ad_hoc
+    unless:
+      - id: metadata/library/sage-math/
+  - id: platform
+    desc: Apple platform binary
+    # Notable (trust-level classification): a `com.apple.`-signed platform
+    # binary is the macOS trust anchor; in a diff a non-Apple binary that
+    # claims platform trust, or a platform binary that lost it, is exactly
+    # what an analyst needs to see. Mirrors the `adhoc` trait above.
+    crit: notable
+    # Apple's first-party binaries identify themselves with a
+    # `com.apple.` bundle-id prefix in the code-signature
+    # CodeDirectory. Third-party developer-ID-signed binaries don't.
+    if:
+      type: value
+      path: macho.code_signature.identifier
+      regex: '^com\.apple\.'
+  - id: hardened-runtime-dup
+    desc: Hardened runtime enabled
+    # Hardened-runtime is a flag in the code-signature flags array
+    # (CS_RUNTIME bit). Match by exact flag-name rather than a
+    # separate `macho.hardened_runtime` metric.
+    if:
+      type: value
+      path: macho.code_signature.flags[*]
+      exact: runtime
+composite_rules:
+  - id: developer-signed
+    desc: Developer ID signed application
+    any:
+      - id: metadata/signed/developer
+  - id: app-store-signed
+    desc: Mac App Store signed application
+    any:
+      - id: metadata/signed/app-store

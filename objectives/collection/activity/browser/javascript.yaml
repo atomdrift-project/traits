@@ -1,0 +1,269 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+# User Activity Exfiltration
+traits:
+  - id: extension-user-guid-field
+    desc: Extension telemetry user GUID field
+    crit: component
+    conf: 0.9
+    if: { type: text, word: userGuid }
+  - id: extension-event-name-field
+    desc: Extension telemetry event-name field
+    crit: component
+    conf: 0.9
+    if: { type: text, word: eventName }
+  - id: extension-click-attribution-fields
+    desc: Extension click-attribution fields
+    crit: notable
+    conf: 0.9
+    count_min: 4
+    if: { type: text, regex: '\b(gclid|msclkid|fbclid|aff_sub[2-5]?)\b' }
+  - id: extension-session-identity-fields
+    desc: Extension user or session identity fields
+    crit: notable
+    conf: 0.93
+    count_min: 2
+    if:
+      type: text
+      regex: '\b(sessionGuid|user_session_(guid|id)|userGuid)\b'
+      case_insensitive: true
+  - id: extension-search-activity-fields
+    desc: Extension records search activity fields
+    crit: notable
+    conf: 0.94
+    count_min: 2
+    if:
+      type: text
+      regex: '\b(first_search|last_search|search_counter|hasSearched|Extension_Alive)\b'
+  - id: extension-ten-year-cookie
+    desc: Extension creates ten-year cookie
+    crit: notable
+    conf: 0.94
+    if: { type: text, regex: '3600\s*\*\s*24\s*\*\s*365\s*\*\s*10' }
+  - id: extension-heartbeat-path
+    desc: Extension heartbeat endpoint path
+    crit: component
+    conf: 0.8
+    if: { type: literal, kind: string, exact: /hb }
+  - id: extension-hourly-alarm
+    desc: Extension schedules hourly alarm
+    crit: component
+    conf: 0.88
+    if: { type: text, regex: 'periodInMinutes\s*:\s*60' }
+  - id: extension-uninstall-endpoint
+    desc: Extension uninstall telemetry endpoint
+    crit: component
+    conf: 0.9
+    if: { type: text, substr: /un/?uninstall=true }
+  - id: netflix-viewing-activity-api
+    desc: Netflix viewing activity API harvest
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: netflix\.com/api/aui/pathEvaluator/.{0,80}viewingActivity
+  - id: disney-userstate-api
+    desc: Disney userState API harvest
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      substr: disney.api.edge.bamgrid.com/explore/v1.3/userState
+  - id: disney-graphql-api
+    desc: Disney GraphQL profile harvest
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      substr: disney.api.edge.bamgrid.com/v1/public/graphql
+  - id: paramount-profile-api
+    desc: Paramount profile API harvest
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      substr: /api/user-profiles/graphql
+  - id: peacock-subscription-api
+    desc: Peacock subscription GraphQL harvest
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      substr: sas.peacocktv.com/graphql
+composite_rules:
+  - id: extension-image-event-telemetry
+    desc: Browser extension sends event telemetry by image request
+    crit: notable
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/request/client::image-src-network-request
+      - id: extension-user-guid-field
+      - id: extension-event-name-field
+      - id: extension-click-attribution-fields
+  - id: extension-periodic-heartbeat
+    desc: Browser extension sends hourly heartbeat
+    crit: notable
+    conf: 0.94
+    all:
+      - id: micro-behaviors/communications/http/request/client::image-src-network-request
+      - id: micro-behaviors/time/schedule/webextension::chrome-alarms-create
+      - id: extension-heartbeat-path
+      - id: extension-hourly-alarm
+  - id: extension-uninstall-telemetry
+    desc: Browser extension registers uninstall telemetry URL
+    crit: notable
+    conf: 0.95
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: extension-uninstall-endpoint
+  - id: extension-persistent-affiliate-tracking
+    desc: Browser extension persists affiliate tracking identifiers
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: extension-user-guid-field
+      - id: extension-click-attribution-fields
+      - id: extension-ten-year-cookie
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-set
+      - id: micro-behaviors/data/db/web-storage::chrome-storage-local-set
+    any:
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-on-changed-listener
+      - id: micro-behaviors/data/db/web-storage::dom-storage-getitem
+
+  # Reading the active tab's URL is neutral by itself: search helpers and
+  # attribution flows commonly inspect query parameters.  Combined with the
+  # extension's persistent click/user identifiers and cookie state, it is a
+  # cross-site tracking capability rather than a simple local search feature.
+  - id: extension-active-tab-attribution-tracking
+    desc: Persistent extension tracking correlates active-tab URL data
+    crit: suspicious
+    conf: 0.95
+    attack: T1217,T1041
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: extension-persistent-affiliate-tracking
+      - id: extension-session-identity-fields
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-query-active-url
+
+  # A content script that counts trusted keyboard/pointer events on arbitrary
+  # sites is materially different from a page-local analytics listener when
+  # it is joined to Chrome profile identity and a remote upload path.
+  - id: extension-broad-input-activity-telemetry
+    desc: Broad extension uploads cross-site input activity
+    crit: hostile
+    conf: 0.97
+    scope: archive
+    for: [javascript, typescript, crx, zip]
+    all:
+      - id: metadata/permission/host::broad-host-access
+      - id: micro-behaviors/process/inject/webextension::broad-content-script-injection
+      - id: micro-behaviors/communications/ipc/message::chrome-runtime-send-message
+      - id: micro-behaviors/communications/http/services/supabase::rest-api-endpoint
+    any:
+      - id: micro-behaviors/os/telemetry/activity::trusted-keyboard-activity-listener
+      - id: micro-behaviors/os/telemetry/activity::trusted-pointer-activity-listener
+
+  - id: extension-profile-linked-activity-upload
+    desc: Extension links browser identity to activity upload
+    crit: hostile
+    conf: 0.97
+    scope: archive
+    for: [javascript, typescript, crx, zip]
+    all:
+      - id: micro-behaviors/os/security/webextension::chrome-identity-profile-info
+      - id: micro-behaviors/communications/http/services/supabase::rest-api-endpoint
+      - id: micro-behaviors/communications/http/request/client::http-post-json
+      - id: micro-behaviors/data/db/web-storage::chrome-storage-sync-set
+    any:
+      - id: micro-behaviors/os/telemetry/activity::trusted-keyboard-activity-listener
+      - id: micro-behaviors/os/telemetry/activity::trusted-pointer-activity-listener
+
+  - id: extension-search-affiliate-heartbeat-tracking
+    desc: Search takeover with cookie tracking heartbeat
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1041,T1539
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: objectives/impact/ui/manipulation/core::browser-extension-default-search-override
+      - id: metadata/permission/host::broad-host-access
+      - id: metadata/permission/cookie::permission-cookies
+      - id: objectives/collection/activity/browser::extension-persistent-affiliate-tracking
+      - id: extension-periodic-heartbeat
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-get
+
+  - id: extension-search-host-profile-telemetry
+    desc: Search hijacker uploads host and search telemetry
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1041,T1119
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: metadata/permission/manifest::chrome-search-provider-override
+      - id: metadata/permission/manifest::chrome-default-search-provider
+      - id: metadata/permission/manifest::chrome-search-terms-template
+      - id: objectives/collection/stealer/host-profile::extension-os-profile-fields
+      - id: objectives/collection/stealer/host-profile::extension-runtime-identity-fields
+      - id: extension-search-activity-fields
+      - id: micro-behaviors/communications/http/request/client::http-post-json
+      - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  - id: browser-push-subscription-upload
+    desc: Browser push subscription upload
+    crit: suspicious
+    conf: 0.9
+    attack: T1041
+    all:
+      - id: micro-behaviors/communications/http/service-worker::push-subscribe
+      - id: micro-behaviors/communications/http/service-worker::notification-request-permission
+      - id: micro-behaviors/communications/http/request/client::xmlhttprequest-word
+      - id: micro-behaviors/communications/http/url/php-endpoint::url-php-endpoint-script
+    any:
+      - id: micro-behaviors/communications/http/service-worker::push-get-subscription
+      - id: micro-behaviors/communications/http/service-worker::api-register
+  - id: activity-exfiltration
+    desc: Coordinated exfiltration of user activity tracking
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/telemetry/activity::activity-tracker
+      - id: micro-behaviors/os/telemetry/logging/analytics::hardware-id-context
+    any:
+      - id: objectives/command-and-control/remote-command/config::remote-config-service
+      - id: micro-behaviors/os/telemetry/logging/analytics::telemetry-send
+  - id: streaming-account-api-harvest
+    desc: Harvests streaming account activity APIs
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+    any:
+      - id: netflix-viewing-activity-api
+      - id: disney-userstate-api
+      - id: disney-graphql-api
+      - id: paramount-profile-api
+      - id: peacock-subscription-api
+  - id: streaming-account-cache-and-exfil
+    desc: Caches streaming activity before exfiltration
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: streaming-account-api-harvest
+      - id: objectives/exfiltration/sensitive-data::extension-user-id-key
+    any:
+      - id: micro-behaviors/data/db/web-storage::indexeddb-open
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+
+  - id: browser-page-context-remote-code-upload
+    desc: Remote code uploads browser page context
+    crit: hostile
+    conf: 0.98
+    attack: T1119,T1041,T1059.007
+    all:
+      - id: micro-behaviors/communications/http/url/path::browser-page-url-referrer-read
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-open
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-send
+      - id: objectives/command-and-control/remote-command/control::eval-response-body

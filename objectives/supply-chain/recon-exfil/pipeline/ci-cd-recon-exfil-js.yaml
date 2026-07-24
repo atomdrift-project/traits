@@ -1,0 +1,144 @@
+# CI/CD Reconnaissance + Exfiltration - JavaScript/Node.js
+# Detects npm supply chain attacks targeting CI/CD environments
+# ATT&CK: T1195.001 (Supply Chain Compromise: Compromise Software Dependencies)
+defaults:
+  platforms: [linux, macos, windows, unix, android, ios]
+  crit: hostile
+  attack: "T1195.001"
+  for: [javascript, typescript]
+composite_rules:
+  # =====================================================
+  # HTTP EXFILTRATION (fetch, axios, http)
+  # =====================================================
+  - id: npm-runner-recon-http
+    desc: npm package exfiltrates CI/CD tokens via HTTP
+    conf: 0.95
+    attack: "T1041"
+    size_max: 500000
+    near_bytes: 4096
+    all:
+      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+    any:
+      - id: objectives/exfiltration/http/upload::node-upload-sink
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+      - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+      - id: micro-behaviors/communications/http/post::axios-with-data
+    unless:
+      - id: objectives/supply-chain/recon-exfil/tracking/
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: well-known/app/anthropic-claude-code
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: metadata/library/github-actions::action-bundle-context
+      - id: metadata/library/github-actions::actions-sdk
+      - id: well-known/tool/development/github-action-send-mail/
+      - id: metadata/package/files/dependency::node-modules-path
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-langfuse-package
+  - id: npm-runner-profile-http
+    desc: npm postinstall exfiltrates CI profile
+    conf: 0.97
+    attack: "T1041"
+    size_max: 500000
+    near_bytes: 4096
+    all:
+      - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-postinstall
+      - id: objectives/discovery/system/fingerprint/cicd::runner-fingerprinting
+      - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+    any:
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-tunnel
+    unless:
+      - id: metadata/package/testing/
+      - id: metadata/package/files/dependency::node-modules-path
+      - id: metadata/library/github-actions::actions-sdk
+  - id: node-runner-profile-native-http
+    desc: Node exfiltrates CI profile via HTTP
+    conf: 0.98
+    attack: "T1041"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::process-env-github-repository
+      - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+    any:
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-tunnel
+    unless:
+      - id: metadata/package/testing/
+      - id: metadata/library/github-actions::actions-sdk
+  # =====================================================
+  # DNS EXFILTRATION
+  # =====================================================
+  - id: npm-runner-recon-dns
+    desc: npm package exfiltrates CI/CD tokens via DNS
+    conf: 0.95
+    attack: "T1048.003"
+    near_bytes: 8192
+    all:
+      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+    any:
+      - id: micro-behaviors/communications/dns/lookup/resolver::node-dns-lookup
+    unless:
+      - id: well-known/app/macos-benign::podman-desktop-bundle
+      - id: well-known/app/macos-benign::podman-desktop-resource
+  # =====================================================
+  # WEBHOOK EXFILTRATION
+  # =====================================================
+  - id: npm-runner-recon-webhook
+    desc: npm package exfiltrates CI/CD tokens via webhook
+    conf: 0.95
+    attack: "T1567"
+    near_bytes: 8192
+    all:
+      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+    any:
+      - id: objectives/exfiltration/messaging/
+  # =====================================================
+  # TOKEN THEFT + EXFILTRATION
+  # =====================================================
+  - id: npm-token-theft
+    desc: npm package steals CI/CD tokens
+    conf: 0.98
+    attack: "T1552.001"
+    near_bytes: 8192
+    all:
+      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+    any:
+      - id: micro-behaviors/communications/http/request/
+      - id: micro-behaviors/communications/dns/lookup/resolver::node-dns-lookup
+      - id: objectives/exfiltration/messaging/
+    unless:
+      - id: well-known/tool/detection/threat-intel/
+      - id: well-known/tool/detection/sast/
+      # A GitHub API client sending GITHUB_TOKEN to GitHub's own API is the
+      # legitimate pattern (Actions, release tooling), not CI-token theft.
+      - id: micro-behaviors/communications/http/services/github
+      - id: micro-behaviors/communications/http/services/github/
+      - id: objectives/credential-access/env/secrets/npm-registry/
+      - id: metadata/package/quality/recognized-contexts::aube-external-tools-download-context
+    downgrade:
+      any:
+        - id: metadata/library/github-actions::actions-sdk
+  # =====================================================
+  # COMBINED DETECTION
+  # =====================================================
+  - id: npm-supply-chain-attack
+    desc: npm package CI/CD token exfiltration
+    conf: 0.95
+    near_bytes: 4096
+    all:
+      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+    any:
+      - id: objectives/exfiltration/http/upload::node-upload-sink
+      - id: micro-behaviors/communications/http/post::axios-with-data
+      - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+      - id: micro-behaviors/communications/dns/lookup/resolver::node-dns-lookup
+      - id: objectives/exfiltration/messaging/
+    unless:
+      - id: objectives/supply-chain/recon-exfil/tracking/
+      - id: well-known/tool/detection/threat-intel/
+      - id: well-known/tool/detection/sast/
+      - id: micro-behaviors/communications/http/services/github
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: metadata/package/files/dependency::node-modules-path
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-langfuse-package
+      - id: metadata/package/quality/recognized-contexts::aube-external-tools-download-context

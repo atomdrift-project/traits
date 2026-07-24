@@ -1,0 +1,201 @@
+defaults:
+  attack: T1622
+  platforms: [unix]
+  for: [go]
+  crit: suspicious
+  conf: 0.9
+
+traits:
+  - id: go-syscall-ptrace
+    desc: Go raw ptrace syscall
+    crit: component
+    mbc: B0001.m01
+    if:
+      type: symbol
+      kind: call
+      exact: syscall.Syscall
+
+  - id: go-sys-ptrace-constant
+    desc: Go SYS_PTRACE constant
+    crit: component
+    mbc: B0001.m01
+    if:
+      type: text
+      substr: SYS_PTRACE
+    unless:
+      - type: text
+        regex: 'Code generated for linux/[^ ]+ by .+--package-name=libc'
+
+  - id: go-ptrace-traceme-constant
+    desc: Go PTRACE_TRACEME constant
+    crit: component
+    mbc: B0001.m01
+    if:
+      type: text
+      substr: PTRACE_TRACEME
+    unless:
+      - type: text
+        regex: 'Code generated for linux/[^ ]+ by .+--package-name=libc'
+
+  - id: go-proc-self-status
+    desc: Go reads /proc/self/status
+    crit: component
+    if:
+      id: micro-behaviors/fs/proc/container::proc-self-status-read
+
+  - id: go-tracerpid-field
+    desc: Go reads and evaluates TracerPid
+    if:
+      # Emitting TracerPid is part of implementing /proc. A debugger check
+      # reads the proc status file and then parses or evaluates that field.
+      type: text
+      regex: '(?is)/proc/(self|[0-9]+)/status.{0,240}TracerPid:'
+
+  - id: go-ptrace-scope-path
+    desc: Go checks Linux ptrace policy
+    conf: 0.86
+    if:
+      type: string_literal
+      exact: /proc/sys/kernel/yama/ptrace_scope
+    unless:
+      # The Go runtime/test suite reads ptrace_scope to decide whether gdb can
+      # attach (runtime-gdb_test.go); in the Go source tree this is not evasion.
+      - id: well-known/tool/development/go-toolchain::go-toolchain-source-path
+
+  - id: go-proc-cmdline-path
+    desc: Go proc cmdline path component
+    crit: component
+    if:
+      type: string_literal
+      exact: cmdline
+    unless:
+      - id: metadata/package/testing/presence/harness::go-test-file
+
+  - id: go-frida-tool-name
+    desc: Go instrumentation tool name
+    if:
+      type: text
+      regex: '\bfrida-(server|gadget)\b'
+      case_insensitive: true
+
+  - id: go-objection-tool-name
+    desc: Go objection tool name
+    if:
+      type: string_literal
+      exact: objection
+
+  - id: go-proc-self-maps-path
+    desc: Go reads proc self maps
+    crit: notable
+    if:
+      type: string_literal
+      exact: /proc/self/maps
+
+  - id: go-cydia-app-path
+    desc: Go checks Cydia app path
+    if:
+      id: micro-behaviors/os/security/runtime::ios-cydia-artifact-path
+
+  - id: go-sileo-app-path
+    desc: Go checks Sileo app path
+    if:
+      id: micro-behaviors/os/security/runtime::ios-sileo-artifact-path
+
+  - id: go-mobilesubstrate-path
+    desc: Go checks MobileSubstrate path
+    if:
+      id: micro-behaviors/os/security/runtime::ios-mobilesubstrate-artifact-path
+
+  - id: go-ios-apt-path
+    desc: Go checks iOS apt path
+    if:
+      id: micro-behaviors/os/security/runtime::ios-apt-artifact-path
+
+  - id: go-lookpath-probe
+    desc: Go probes executable presence
+    crit: component
+    conf: 0.84
+    if:
+      type: symbol
+      kind: call
+      exact: exec.LookPath
+
+composite_rules:
+  - id: go-raw-ptrace-traceme-check
+    desc: Go raw ptrace TRACEME check
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: go-syscall-ptrace
+      - id: go-sys-ptrace-constant
+      - id: go-ptrace-traceme-constant
+
+  - id: go-proc-tracerpid-check
+    desc: Go proc TracerPid debugger check
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: go-proc-self-status
+      - id: go-tracerpid-field
+
+  - id: go-linux-anti-debug-gate
+    desc: Go Linux anti-debug gate
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: go-proc-tracerpid-check
+    any:
+      - id: objectives/anti-analysis/debugger-detect/check::go-ptrace-traceme
+      - id: go-raw-ptrace-traceme-check
+      - id: go-ptrace-scope-path
+
+  - id: go-proc-debugger-process-scan
+    desc: Go scans proc entries for debugger tools
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/fs/read/directory::readdir-call
+      - id: micro-behaviors/fs/proc/info/listing::go-proc-dir-literal
+      - id: go-proc-cmdline-path
+      - id: micro-behaviors/process/create/direct::debugger-tool-lookup
+
+  - id: go-frida-instrumentation-scan
+    desc: Go scans for dynamic instrumentation tools
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: go-frida-tool-name
+    any:
+      - id: go-proc-debugger-process-scan
+      - id: go-proc-self-maps-path
+      - id: go-objection-tool-name
+
+  - id: go-darwin-codesign-probe
+    desc: Go Darwin code-signing metadata probe
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: metadata/build/package::codesign-cli-tool-literal
+      - id: metadata/build/package::codesign-verbose-flag-literal
+
+  - id: go-ios-jailbreak-artifact-scan
+    desc: Go scans iOS jailbreak artifacts
+    crit: suspicious
+    conf: 0.94
+    needs: 2
+    any:
+      - id: go-cydia-app-path
+      - id: go-sileo-app-path
+      - id: go-mobilesubstrate-path
+      - id: go-ios-apt-path
+      - id: go-lookpath-probe
+
+  - id: go-mobile-anti-analysis-artifact-scan
+    desc: Go mobile anti-analysis artifact scan
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: go-ios-jailbreak-artifact-scan
+    any:
+      - id: go-frida-instrumentation-scan
+      - id: go-darwin-codesign-probe

@@ -1,0 +1,150 @@
+# NPM Install-Triggered Recon + Exfiltration
+# Detects npm packages that perform system reconnaissance and exfiltrate
+# host information via HTTPS POST during package installation.
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain),
+#         T1082 (System Information Discovery), T1041 (Exfiltration Over C2 Channel)
+# MBC: E1041
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript, package.json]
+
+traits:
+  # === C2 Domain Detection ===
+- id: resolver-io-net-c2
+  desc: References resolver-io.net C2 domain
+  crit: suspicious
+  conf: 0.95
+  attack: T1071.001
+  for: [javascript, typescript]
+  if:
+    type: text
+    substr: "resolver-io.net"
+
+  # === Reporter Delay Constants ===
+- id: report-delay-min-constant
+  desc: REPORT_DELAY_MIN constant (beacon timing)
+  crit: component
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'REPORT_DELAY_MIN\s*=\s*\d{3,}'
+
+- id: report-delay-max-constant
+  desc: REPORT_DELAY_MAX constant (beacon timing)
+  crit: component
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'REPORT_DELAY_MAX\s*=\s*\d{3,}'
+
+  # === JSON Beacon Shape ===
+- id: sysinfo-json-beacon-keys
+  desc: JSON beacon with sysinfo keys
+  crit: component
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: "platform:.{0,50}host:.{0,50}uptime:.{0,50}load:"
+
+  # === Manifest Spoof Detection ===
+- id: internal-repo-url
+  desc: Repository URL references internal hostname
+  crit: suspicious
+  conf: 0.88
+  attack: T1195.002
+  for: [package.json]
+  if:
+    type: value
+    path: "repository.url"
+    substr: internal.
+- id: internal-homepage-url
+  desc: Homepage references internal hostname
+  crit: suspicious
+  conf: 0.88
+  attack: T1195.002
+  for: [package.json]
+  if:
+    type: value
+    path: "homepage"
+    substr: internal.
+composite_rules:
+- id: node-multi-sysinfo-collection
+  desc: Install hook collects multiple system info fields
+  crit: notable
+  conf: 0.9
+  attack: T1082
+  for: [javascript, typescript]
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-postinstall
+  needs: 2
+  any:
+  - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+  - id: micro-behaviors/os/sysinfo/platform/runtime/
+
+  # === Hostile: Postinstall Recon + Exfil ===
+- id: npm-postinstall-sysinfo-beacon
+  desc: Postinstall hook beacons system info to C2
+  crit: hostile
+  conf: 0.96
+  attack: T1041
+  mbc: E1041
+  for: [archives]
+  scope: archive
+  near_lines: 120
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-postinstall
+  - id: micro-behaviors/communications/http/request/client::https-request
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: micro-behaviors/data/serialize/json::json-stringify-call
+  any:
+  - id: node-multi-sysinfo-collection
+  - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+- id: npm-postinstall-recon-exfil-c2
+  desc: Postinstall recon/exfil with known C2 domain
+  crit: hostile
+  conf: 0.98
+  attack: T1041
+  mbc: E1041
+  for: [archives]
+  scope: archive
+  near_lines: 120
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-postinstall
+  - id: micro-behaviors/communications/http/request/client::https-request
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: resolver-io-net-c2
+  any:
+  - id: node-multi-sysinfo-collection
+  - id: objectives/anti-analysis/sandbox-detect/timing::uptime-sandbox-gate
+- id: npm-internal-url-spoof
+  desc: Package claims internal/private URLs on public registry
+  crit: suspicious
+  conf: 0.9
+  attack: T1195.002
+  for: [package.json]
+  any:
+  - id: internal-repo-url
+  - id: internal-homepage-url
+
+  # === Suspicious: Delay Constants Pattern ===
+- id: npm-report-delay-constants
+  desc: Beacon delay constants (REPORT_DELAY_MIN/MAX)
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  all:
+  - id: report-delay-min-constant
+  - id: report-delay-max-constant
+
+  # === Suspicious: JSON Beacon Shape ===
+- id: npm-sysinfo-json-beacon
+  desc: JSON beacon with system-info payload shape
+  crit: suspicious
+  conf: 0.92
+  for: [javascript, typescript]
+  all:
+  - id: sysinfo-json-beacon-keys
+  - id: micro-behaviors/data/serialize/json::json-stringify-call

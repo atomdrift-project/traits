@@ -1,0 +1,61 @@
+# PDF stream encoding obfuscation patterns
+#
+# Detects stream-level obfuscation in PDF documents. Multi-filter chaining
+# and hex-encoded name tokens are used to evade static AV signature scanning.
+# These indicators appear in uncompressed object dictionaries and are always
+# visible to raw byte matching, even when stream content is compressed.
+#
+# ATT&CK: T1027 (Obfuscated Files or Information)
+defaults:
+  platforms: [windows, unix]
+  crit: suspicious
+  conf: 0.88
+  for: [pdf]
+traits:
+  # Multi-filter array — two or more chained decode filters on one stream.
+  # Pattern: /Filter [ /ASCII85Decode /FlateDecode ]
+  # Note: two-filter chains (ASCII85Decode+DCTDecode) are standard in pre-2000s
+  # PDFs for JPEG image streams. This indicator is notable but not sufficient
+  # alone for suspicious classification; combine with other PDF indicators.
+  - id: pdf-multi-filter
+    desc: PDF chained stream filter array
+    crit: notable
+    conf: 0.75
+    if:
+      type: text
+      regex: "/Filter\\s*\\["
+  # Hex-encoded PDF name starting with 0x2F ('/').
+  # In PDF name syntax, <2F4A53> is the hex string '/JS'. Attackers encode
+  # action keywords this way to defeat /JS substring scanner signatures.
+  # Pattern matches /S <2FXX...> which is the encoded action type specifier.
+  - id: pdf-hex-name
+    desc: "Hex-encoded PDF name token \u2014 keyword hiding"
+    if:
+      type: text
+      regex: "/S\\s+<2[Ff][0-9a-fA-F]+"
+  # ASCIIHexDecode filter — stream bytes encoded as ASCII hex pairs.
+  # Rarely used legitimately; present almost exclusively for evasion.
+  - id: pdf-ascii-hex-filter
+    desc: 'PDF ASCIIHexDecode filter — hex stream content'
+    crit: notable
+    conf: 0.82
+    if:
+      type: text
+      regex: "/ASCIIHexDecode\\b"
+  # ASCII85Decode filter — base-85 encoded stream.
+  # A second ASCII85 layer over FlateDecode is a strong obfuscation indicator.
+  - id: pdf-ascii85-filter
+    desc: "PDF ASCII85Decode filter \u2014 base85 stream"
+    crit: notable
+    conf: 0.75
+    if:
+      type: text
+      regex: "/ASCII85Decode\\b"
+  # PDF names can carry escaped base64-looking payloads outside normal streams.
+  - id: pdf-acroform-base64-js-name
+    desc: PDF AcroForm name stores base64 JavaScript
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      regex: '/V\s+/dmFy[A-Za-z0-9#+=]{80,}'

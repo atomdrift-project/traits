@@ -1,0 +1,146 @@
+# String Obfuscation Detection - Batch
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027, T1059.003
+defaults:
+  platforms: [windows]
+  for: [batch]
+  mbc: "B0032"
+  attack: "T1027"
+traits:
+  # set%VAR% trick (obfuscated set command)
+  - id: batch-obfuscated-set
+    desc: Obfuscated set command (set%VAR%)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)set%[^% \t\n]{1,80}%'
+  # %VAR%set trick (obfuscated command start)
+  - id: batch-obfuscated-command-start
+    desc: Obfuscated command start (%VAR%cmd)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: '(?i)%[^% \t\n]{1,80}%set\s+'
+  # Many short set fragments used as command pieces
+  - id: batch-short-set-fragments
+    desc: Many short set fragments
+    crit: suspicious
+    conf: 0.85
+    count_min: 6
+    if:
+      type: text
+      regex: '(?im)^\s*set\s+[^=\s"%!]{1,3}=[a-z]{1,3}\s*$'
+    not:
+      - regex: '=[0-9]'
+      - regex: '=["%!]'
+      - regex: '(?i)^set\s+"'
+  # Adjacent env-var expansions that rebuild commands or strings
+  - id: batch-adjacent-expansion-chain
+    desc: Adjacent env-var expansion chain
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)(%[a-z0-9_]{1,8}%|![a-z0-9_]{1,8}!){3,}'
+  # Base64-like payload in set command
+  - id: batch-base64-payload
+    desc: Large Base64-like payload in set command
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      regex: '(?i)\bset\s+[^=]{1,120}=[A-Za-z0-9+/]{100,}'
+  - id: batch-dense-base64-set-fragments
+    desc: Dense Base64 set fragments
+    crit: component
+    conf: 0.94
+    count_min: 20
+    if:
+      type: text
+      regex: '(?im)^\s*SET\s+[A-Z0-9_]{8,}=[A-Za-z0-9+/]{40,}'
+  - id: batch-dense-goto-label-thread
+    desc: Dense GOTO label threading
+    crit: component
+    conf: 0.9
+    count_min: 20
+    if:
+      type: text
+      regex: '(?im)^\s*GOTO\s+[A-Z0-9]{8,}\s*$'
+  - id: batch-env-expansion-megaline
+    desc: Batch environment expansion megaline
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      regex: '(%[A-Z0-9_]{8,}%){20,}'
+  # Fragmented command via undefined env vars
+  # Pattern: %VAR%s%VAR%e%VAR%t or %VAR%c%VAR%m%VAR%d
+  # When vars are undefined, they resolve to empty: %abc%s%def%et → "set"
+  - id: batch-fragmented-command-undefined-vars
+    desc: Command fragmented via undefined env vars
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      # Matches %VAR%<1-2 chars>%VAR% repeated pattern
+      regex: '(%[a-zA-Z][a-zA-Z0-9_]{0,30}%[a-z]{1,2}){2,}'
+    not:
+      # Exclude C printf format strings like %I64u%c%s%c
+      - regex: '%I64[udx]'
+      - regex: '%[0-9]*l{0,2}[duxscpf]%'
+      - substr: "unixepoch"
+      - substr: "%J%j%w%s"
+  # Excessive undefined variable references (noise generation)
+  - id: batch-excessive-undefined-vars
+    desc: Excessive undefined variable references
+    crit: suspicious
+    conf: 0.85
+    count_min: 100
+    size_max: 10000
+    if:
+      type: text
+      # Long random-looking variable names without underscores (noise vars)
+      regex: '%[a-z][a-zA-Z0-9]{5,30}%'
+    not:
+      - regex: '(?i)^%(appdata|commonprogramfiles|commonprogramfiles\(x86\)|commonprogramw6432|computername|comspec|homedrive|homepath|localappdata|programdata|programfiles|programfiles\(x86\)|programw6432|systemdrive|systemroot|temp|tmp|userprofile|windir)%$'
+      - substr: '_'
+      - regex: '^%[A-Z0-9]+%$'
+  # REM comment noise (random words as padding)
+  - id: batch-rem-noise-padding
+    desc: REM comments with random word padding
+    crit: notable
+    conf: 0.7
+    count_min: 4
+    if:
+      type: text
+      regex: '(?im)^REM\s+[a-z]+(\s+[a-z]+){14,}\s*$'
+composite_rules:
+  - id: batch-command-reconstruction
+    desc: Fragmented command reconstruction
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: batch-short-set-fragments
+      - id: batch-adjacent-expansion-chain
+  - id: batch-heavy-obfuscation
+    desc: Heavy batch script obfuscation
+    crit: suspicious
+    conf: 0.95
+    needs: 2
+    any:
+      - id: batch-obfuscated-set
+      - id: batch-obfuscated-command-start
+      - id: batch-command-reconstruction
+      - id: batch-base64-payload
+      - id: batch-fragmented-command-undefined-vars
+      - id: batch-excessive-undefined-vars
+  - id: batch-fragmented-env-loader
+    desc: Batch fragmented env-var loader
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: batch-dense-base64-set-fragments
+      - id: batch-dense-goto-label-thread
+      - id: batch-env-expansion-megaline

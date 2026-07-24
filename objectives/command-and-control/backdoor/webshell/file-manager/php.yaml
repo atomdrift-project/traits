@@ -1,0 +1,114 @@
+defaults:
+  platforms: [unix, windows]
+  for: [php]
+  attack: T1505.003
+  mbc: B0030
+
+traits:
+  - id: php-upload-copy-from-files
+    desc: PHP copies uploaded file
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: 'copy\s*\(\s*\$_FILES\[[^)]{1,120}\[''tmp_name''\]'
+    unless:
+      - id: metadata/lang/source::yara-rule-source
+      - id: well-known/tool/detection/security-scanner::anteumbra-package-tree-member
+  - id: php-post-file-edit
+    desc: PHP edits file from POST
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'fopen\s*\(\s*\$_POST\[[''"]path[''"]\]\s*,\s*[''"]w'
+  - id: php-post-file-delete
+    desc: PHP deletes POST-selected file
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '(unlink|rmdir)\s*\(\s*\$_POST\[[''"]path[''"]\]'
+  - id: php-post-chmod
+    desc: PHP chmod from POST
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: 'chmod\s*\(\s*\$_POST\[[''"]path[''"]\]\s*,\s*\$_POST\[[''"]perm[''"]\]'
+  - id: php-get-filesrc-read
+    desc: PHP reads GET-selected file
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: 'file_get_contents\s*\(\s*\$_GET\[[''"]filesrc[''"]\]'
+  - id: tiny-file-manager-marker
+    desc: Tiny File Manager PHP marker
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      substr: Tiny File Manager
+  - id: php-session-filemanager-auth
+    desc: PHP session file manager auth
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      substr: "define('FM_SESSION_ID'"
+composite_rules:
+  - id: php-authenticated-file-manager-webshell
+    desc: PHP authenticated file manager webshell
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/http/auth::php-basic-auth-challenge
+      - id: php-upload-copy-from-files
+    any:
+      - id: php-post-file-edit
+      - id: php-post-file-delete
+      - id: php-post-chmod
+      - id: php-get-filesrc-read
+  - id: php-upload-edit-webshell
+    desc: PHP upload edit webshell
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: php-upload-copy-from-files
+      - id: php-post-file-edit
+      - id: php-get-filesrc-read
+  - id: php-destructive-file-manager-webshell
+    desc: PHP destructive file manager webshell
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: php-post-file-delete
+      - id: php-post-chmod
+    any:
+      - id: php-upload-copy-from-files
+      - id: micro-behaviors/communications/http/auth::php-basic-auth-challenge
+  - id: php-tiny-file-manager-webshell
+    desc: Tiny File Manager PHP webshell
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: tiny-file-manager-marker
+      - id: php-session-filemanager-auth
+      - id: micro-behaviors/fs/write/file/direct::move-uploaded-file
+      - id: micro-behaviors/fs/enumerate/directory::php-scandir
+      - id: micro-behaviors/fs/delete/file::php-unlink
+    any:
+      - id: micro-behaviors/os/security/auth/password::php-common-default-password-literal
+      - id: micro-behaviors/communications/http/download/handler::php-content-disposition-readfile
+  - id: php-tiny-file-manager-default-webshell
+    desc: Tiny File Manager with default creds
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: tiny-file-manager-marker
+      - id: micro-behaviors/os/security/auth/password::php-common-default-password-literal
+      - id: php-session-filemanager-auth
+    any:
+      - id: micro-behaviors/fs/write/file/direct::move-uploaded-file
+      - id: micro-behaviors/communications/http/download/handler::php-content-disposition-readfile

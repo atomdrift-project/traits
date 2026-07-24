@@ -1,0 +1,67 @@
+defaults:
+  platforms: [windows, linux]
+  for: [pe, shell, batch, powershell]
+  attack: T1090
+traits:
+  # Attack-specific: disk image disguised with a non-disk extension so the
+  # sidecar VM looks like a database/DLL/log rather than a guest image.
+  - id: qemu-misleading-disk-ext
+    desc: QEMU disk image has misleading extension
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      regex: (?i)-drive\s+.*?file=.*?\.(db|dll|txt|log)\b
+
+composite_rules:
+  - id: qemu-sidecar-networking
+    desc: QEMU sidecar e1000 user-netdev bridge
+    crit: suspicious
+    all:
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-user-netdev
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-e1000-device
+    unless:
+      - id: metadata/package/testing/presence/harness::qemu-examples-tests
+
+  # Headless QEMU + hostfwd + a *disguised* disk image (not ordinary .qcow2/.img).
+  # Plain CI/Packer/Vagrant provisioning uses real disk extensions and must not
+  # match this hostile pattern.
+  - id: qemu-legacy-headless-backdoor
+    desc: Headless QEMU port forward with disguised disk
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-system-binary
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-headless-args
+      - id: micro-behaviors/os/virtualization/hypervisor::hostfwd-guest-forward
+      - id: qemu-misleading-disk-ext
+    unless:
+      - id: metadata/package/testing/presence/harness::qemu-examples-tests
+
+  - id: qemu-headless-image-launcher
+    desc: Headless QEMU image launcher via start
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-drive-image-file
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-nographic-flag
+      - id: objectives/command-and-control/dropper/execution/batch::start-exe
+
+  - id: qemu-sidecar-headless-backdoor
+    desc: Headless QEMU sidecar foothold
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-headless-args
+      - id: qemu-sidecar-networking
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-guest-disk
+      - id: micro-behaviors/os/virtualization/hypervisor::qemu-cpu-max-flag
+
+  - id: qemu-hidden-vm-backdoor
+    desc: QEMU used as a hidden virtualized backdoor
+    crit: hostile
+    conf: 0.95
+    any:
+      - id: qemu-legacy-headless-backdoor
+      - id: qemu-sidecar-headless-backdoor
+      - id: qemu-headless-image-launcher

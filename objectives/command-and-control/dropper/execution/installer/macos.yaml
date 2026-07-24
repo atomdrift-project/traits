@@ -1,0 +1,119 @@
+defaults:
+  platforms: [macos]
+  for: [macho, objc, swift, shell, applescript]
+  attack: T1105
+traits:
+  - id: pkg-installer-root-target
+    desc: macOS installer pkg target root
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: /usr/sbin/installer\s+-pkg\b.{0,160}-target\s+/
+  - id: pkg-file-basename
+    desc: macOS installer package basename
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      regex: '[^/\s]{1,120}\.pkg\b'
+  - id: installer-binary-path
+    desc: macOS installer binary path
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      substr: /usr/sbin/installer
+    unless:
+      - id: metadata/binary/framework/
+      - id: metadata/binary/framework::macos-updater-helper-framework
+  - id: installer-target-root-flag
+    desc: Installer targets system root
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: -target\s+/\b
+  - id: macos-interface-c2
+    desc: macOS interface C2 endpoint
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: https?://api\.[A-Za-z0-9.-]+/interface/mac/
+  - id: ppdserver-failure-endpoint
+    desc: ppdserver failure tracking endpoint
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: https://api\.ppdserver\.com/(exception|failed)\.php
+  - id: background-shell-launch
+    desc: Background shell script launch
+    crit: suspicious
+    conf: 0.82
+    if:
+      type: text
+      regex: do shell script.{0,220}> /dev/null 2>&1 &
+    unless:
+      - id: micro-behaviors/os/service/legitimate::macos-installed-helper-background-launch
+  - id: flat-pkg-preinstall-hook
+    desc: macOS pkg preinstall hook
+    crit: suspicious
+    conf: 0.9
+    for: [archives]
+    attack: T1546.016
+    if:
+      type: text
+      regex: '[^/\s]{1,120}\.pkg/Scripts\b|Scripts/(preinstall|postinstall)'
+composite_rules:
+  - id: pkg-payload-reference
+    desc: Downloaded pkg payload reference
+    crit: notable
+    conf: 0.8
+    all:
+      - id: pkg-file-basename
+    any:
+      - id: micro-behaviors/fs/path/temp::macos-package-archive-path
+      - id: micro-behaviors/fs/path/temp::unix-temp
+      - id: micro-behaviors/fs/path/temp::unix-var-temp
+    unless:
+      - id: well-known/tool/detection/proxy-sandbox
+      - id: metadata/lang/compiler/systems::go-binary-macho
+      - id: metadata/package/files/dependency::vsix-bundled-native-tool-path
+      - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
+  - id: macos-pkg-dropper
+    desc: macOS package-installing dropper
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: pkg-installer-root-target
+      - id: pkg-payload-reference
+    any:
+      - id: installer-binary-path
+      - id: installer-target-root-flag
+      - id: macos-interface-c2
+      - id: ppdserver-failure-endpoint
+      - id: micro-behaviors/fs/path/temp::macos-package-archive-path
+      - id: micro-behaviors/process/create/launch::usr-bin-open-command
+  - id: elevated-macos-pkg-dropper
+    desc: Elevated macOS package dropper
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: macos-pkg-dropper
+      - id: objectives/privilege-escalation/elevation-control/prompt-escalation::admin-privilege-escalation
+    any:
+      - id: background-shell-launch
+      - id: micro-behaviors/process/create/launch::usr-bin-open-command
+  - id: flat-pkg-preinstall-download-exec
+    desc: macOS pkg preinstall download exec
+    crit: hostile
+    conf: 0.96
+    for: [archives]
+    scope: archive
+    all:
+      - id: flat-pkg-preinstall-hook
+      - id: objectives/command-and-control/dropper/delivery/download::shell-silent-hardcoded-download-staging
+      - id: micro-behaviors/fs/chmod/executable/mode::shell-7xx
+      - id: micro-behaviors/process/daemonize/detach::nohup-command

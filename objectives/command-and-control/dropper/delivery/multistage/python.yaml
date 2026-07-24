@@ -1,0 +1,264 @@
+# Python multi-stage delivery patterns: stage 1 retrieves config or stage 2
+# from a non-HTTP channel (DNS TXT, image steganography, /sync-style API)
+# before the actual payload is fetched/executed.
+#
+# These complement the existing stego (delivery/stego/) and infrastructure
+# (channel/tunnel/, infrastructure/ip/stego-c2.yaml) traits which focus on
+# binary stego — this file covers script-side multi-stage retrieval.
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  attack: T1105
+  mbc: B0023
+
+traits:
+  # A DNS TXT lookup alone is ordinary service discovery. These atoms are
+  # intentionally incomplete; the composite below requires a nearby decode.
+- id: dns-txt-base64-decode
+  desc: Decodes DNS TXT data with base64
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: 'base64\.(b64decode|decodebytes)'
+- id: dns-txt-hex-decode
+  desc: Decodes DNS TXT data from hex
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: 'binascii\.(unhexlify|a2b_hex)|bytes\.fromhex'
+
+  # JSON configuration where a URL-bearing stage key drives retrieval.
+  #
+  # Atoms must match URL-shaped path components (leading `/`) or
+  # JSON-key shapes — bare words like `init` / `auth` / `data` show
+  # up in every Python stdlib file and cause cross-file FPs.
+- id: stage-config-endpoint-retrieve--stage-path
+  desc: stage_url JSON key
+  crit: component
+  conf: 0.85
+  if:
+    type: string_literal
+    regex: '"stage_url"|''stage_url'''
+- id: stage-config-endpoint-retrieve--data-path
+  desc: data_url JSON key
+  crit: component
+  conf: 0.85
+  if:
+    type: string_literal
+    regex: '"data_url"|''data_url'''
+- id: stage-config-endpoint-retrieve--init-path
+  desc: init_url JSON key
+  crit: component
+  conf: 0.85
+  if:
+    type: string_literal
+    regex: '"init_url"|''init_url'''
+- id: pil-image-bit-extract
+  desc: PIL bit-level extraction from image
+  crit: suspicious
+  conf: 0.93
+  if:
+    type: text
+    regex: 'Image\.open\s*\([^)\n]{0,160}\)\.getdata\s*\(\s*\)'
+
+  # Image LSB extraction shape: bit & 1 over PIL pixel data.
+  # Atoms below capture concrete PIL-LSB code shape, not bare words.
+- id: pil-lsb-loop--image-getdata
+  desc: PIL Image.getdata pixel iteration
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: '(Image|image|img)\.getdata\s*\('
+- id: pil-lsb-loop--image-getpixel
+  desc: PIL Image.getpixel pixel access
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: '(Image|image|img)\.getpixel\s*\('
+- id: pil-lsb-loop--lsb-bit-mask-a
+  desc: Bit & 1 LSB extraction mask
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    regex: '\b(pixel|byte|val)\s*&\s*1\b'
+- id: pil-lsb-loop--lsb-bit-mask-b
+  desc: Short variable LSB extraction mask
+  crit: component
+  conf: 0.85
+  if:
+    type: text
+    regex: '\b(p|b)\s*&\s*1\b'
+- id: exif-comment-retrieve
+  desc: EXIF comment field retrieved as payload
+  crit: notable
+  conf: 0.86
+  if:
+    type: text
+    regex: '_getexif\s*\(\s*\)\s*\.\s*get\s*\(\s*0x9286'
+
+  # Raw paste services can be stage-2 sources. GitHub Gist URLs are tracked as
+  # a neutral URL fact and only become staging evidence when paired with an
+  # actual decode or execution primitive.
+- id: hastebin-raw-url
+  desc: Hastebin raw URL marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: hastebin.com/raw
+  count_max: 1006459
+- id: pastebin-service-raw-url
+  desc: Pastebin raw URL marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: pastebin.com/raw
+  count_max: 1006460
+- id: controlc-raw-url
+  desc: ControlC raw URL marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: controlc.com
+  count_max: 1006461
+- id: pasteee-raw-url
+  desc: Paste.ee raw URL marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: paste.ee/r
+  count_max: 1006462
+composite_rules:
+- id: dns-txt-query
+  desc: Python DNS TXT lookup
+  crit: component
+  conf: 0.92
+  any:
+  - id: micro-behaviors/communications/dns/lookup/txt::python-dnspython-query-txt
+  - id: micro-behaviors/communications/dns/lookup/txt::python-dnspython-resolve-txt
+- id: dns-txt-response-decode
+  desc: Decodes DNS TXT response
+  crit: component
+  conf: 0.86
+  any:
+  - id: dns-txt-base64-decode
+  - id: dns-txt-hex-decode
+- id: dns-txt-config-retrieve
+  desc: Stage-2 config decoded from DNS TXT record
+  crit: suspicious
+  conf: 0.93
+  near_lines: 80
+  all:
+  - id: dns-txt-query
+  - id: dns-txt-response-decode
+  unless:
+  - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+  - id: well-known/app/remotepower::documented-rmm-release-context
+- id: multi-stage-delivery
+  desc: Multi-stage payload delivery (any form)
+  crit: suspicious
+  conf: 0.94
+  unless:
+    - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+  any:
+  - id: dns-txt-config-retrieve
+  - id: stage-config-endpoint-retrieve
+  - id: pil-image-bit-extract
+  - id: pil-lsb-loop
+  - id: exif-comment-retrieve
+  - id: pastebin-raw-fetch
+
+  # Stage-1 retrieve + stage-2 exec is the canonical two-stage pattern.
+- id: two-stage-fetch-and-exec
+  desc: Stage-2 retrieved then executed
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: multi-stage-delivery
+  any:
+  - id: micro-behaviors/process/create/subprocess::process-execution
+  - id: micro-behaviors/process/interpreter/python::exec-builtin
+  - id: micro-behaviors/process/interpreter/python::eval-builtin
+  # Keep retrieval and execution in the same local path; unrelated process
+  # calls elsewhere in a networking module are not staged execution.
+  near_lines: 80
+  downgrade:
+    any:
+    - id: metadata/package/testing/presence/harness::python-test-file
+    - id: metadata/package/testing/presence/harness/
+  unless:
+    - id: well-known/lib/scikit-learn
+    - id: well-known/lib/psutil/
+    - id: well-known/app/piglit
+    - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+    - id: well-known/app/remotepower::documented-rmm-release-context
+- id: stage-config-endpoint-retrieve
+  desc: Remote stage URL selected from configuration
+  crit: suspicious
+  conf: 0.85
+  near_lines: 80
+  all:
+  - id: stage-config-endpoint-retrieve--stage-control
+  any:
+  - id: micro-behaviors/communications/http/client/library::urllib-request
+  - id: micro-behaviors/communications/http/request/client::urllib-url-literal
+  - id: micro-behaviors/communications/http/request/client::requests-get-url-literal
+  - id: micro-behaviors/communications/http/request/client::requests-post-url-literal
+  unless:
+  - id: metadata/library/data::pulumi-python-provider-generated
+- id: stage-config-endpoint-retrieve--stage-control
+  desc: Remote stage URL key
+  crit: component
+  any:
+  - id: stage-config-endpoint-retrieve--stage-path
+  - id: stage-config-endpoint-retrieve--data-path
+  - id: stage-config-endpoint-retrieve--init-path
+- id: pil-lsb-loop
+  desc: PIL LSB extraction loop
+  crit: suspicious
+  conf: 0.94
+  near_lines: 30
+  all:
+  - id: pil-lsb-loop--lsb-bit-mask
+  any:
+  - id: pil-lsb-loop--image-getdata
+  - id: pil-lsb-loop--image-getpixel
+- id: pil-lsb-loop--lsb-bit-mask
+  desc: Bit & 1 LSB extraction mask
+  crit: component
+  conf: 0.85
+  any:
+  - id: pil-lsb-loop--lsb-bit-mask-a
+  - id: pil-lsb-loop--lsb-bit-mask-b
+- id: pastebin-raw-fetch
+  desc: Paste service raw URL fetched for stage-2
+  crit: suspicious
+  conf: 0.92
+  near_lines: 40
+  all:
+  - id: paste-service-raw-url
+  - id: pastebin-fetch-capability
+  unless:
+  - id: metadata/lang/source/
+- id: paste-service-raw-url
+  desc: Paste service raw URL marker
+  crit: component
+  any:
+  - id: hastebin-raw-url
+  - id: pastebin-service-raw-url
+  - id: controlc-raw-url
+  - id: pasteee-raw-url
+- id: pastebin-fetch-capability
+  desc: HTTP client fetch capability
+  crit: component
+  any:
+  - id: micro-behaviors/communications/http/request/client/
+  - id: micro-behaviors/communications/http/lib/requests/

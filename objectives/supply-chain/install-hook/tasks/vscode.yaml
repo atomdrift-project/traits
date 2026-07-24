@@ -1,0 +1,135 @@
+# VSCode Tasks Persistence
+# Detects malicious use of tasks.json for automatic code execution.
+defaults:
+  platforms: [unix, windows]
+  # .vscode/tasks.json is typed `json`; without it every rule below is
+  # skipped as a file-type mismatch and the persistence trigger is missed.
+  for: [javascript, json]
+traits:
+  - id: tasks-run-on-open
+    desc: VSCode task runs on folder open
+    crit: notable
+    conf: 1.0
+    if:
+      type: text
+      regex: '"runOn":\s*"folderOpen"'
+  - id: tasks-typescript-watch-build
+    desc: VSCode TypeScript watch build task
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '"command":\s*"tsc"[\s\S]{0,240}"args":\s*\[[\s\S]{0,120}"--watch"[\s\S]{0,120}\]'
+  - id: tasks-node-execution
+    desc: VSCode tasks.json command executes node.js
+    crit: component
+    conf: 0.9
+    if:
+      type: value
+      path: tasks[*].command
+      regex: '^node\s+'
+  - id: tasks-hidden
+    desc: VSCode task with hidden presentation
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '"presentation"\s*:\s*\{[^}]{0,300}"hide"\s*:\s*true'
+  - id: tasks-echo-disabled
+    desc: VSCode task with echo disabled
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '"echo":\s*false'
+  - id: tasks-command-curl-wget
+    desc: VSCode task command downloads URL
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '"command":\s*"[^\n"]{0,80}\b(curl|wget)\b'
+  - id: tasks-command-vercel
+    desc: VSCode task command uses Vercel
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '"command":\s*"[^"\n]{0,240}vercel\.app'
+  - id: tasks-command-shortlink
+    desc: VSCode task command uses shortlink
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '"command":\s*"[^"\n]{0,240}(short\.gy|bit\.ly|tinyurl\.com)'
+  - id: tasks-command-pipe-shell
+    desc: VSCode task command pipes shell
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\|\s*(sh|bash|cmd)\b'
+  - id: tasks-auto-approve-setting
+    desc: Workspace pre-approves automatic tasks
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '"task\.allowAutomaticTasks"\s*:\s*(true|"on")'
+  - id: tasks-command-exec-media
+    desc: VSCode task runs font file via node
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '\bnode\b[^"\n]{0,120}\.(woff2?|ttf|otf|eot)\b'
+composite_rules:
+  - id: vscode-task-persistence
+    desc: Malicious VSCode task persistence (run on folder open)
+    crit: hostile
+    conf: 1.0
+    mbc: "C0032"
+    attack: "T1547"
+    all:
+      - id: tasks-run-on-open
+    any:
+      - id: tasks-node-execution
+      - id: tasks-command-curl-wget
+      - id: tasks-command-exec-media
+      - id: tasks-command-vercel
+      - id: tasks-command-shortlink
+    unless:
+      - id: tasks-typescript-watch-build
+  - id: vscode-task-concealment
+    desc: VSCode task with concealment properties
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: tasks-run-on-open
+    any:
+      - id: tasks-hidden
+      - id: metadata/package/config::task-reveal-never
+      - id: tasks-echo-disabled
+    needs: 2
+  - id: vscode-task-media-masquerade
+    desc: VSCode autorun runs disguised media file
+    crit: hostile
+    conf: 0.98
+    attack: "T1547, T1036.008"
+    all:
+      - id: tasks-run-on-open
+      - id: tasks-command-exec-media
+  - id: vscode-task-download-execution
+    desc: VSCode task fetches remote shell
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002, T1105"
+    all:
+      - id: tasks-run-on-open
+      - id: metadata/package/config::vscode-task-shell-command
+      - id: tasks-command-curl-wget
+      - id: tasks-command-pipe-shell
+    any:
+      - id: tasks-command-vercel
+      - id: tasks-command-shortlink

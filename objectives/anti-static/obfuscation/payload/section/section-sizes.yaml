@@ -1,0 +1,148 @@
+defaults:
+  for: [binaries]
+  platforms:
+    - windows
+    - linux
+    - macos
+  attack: T1027
+traits:
+  - id: tiny-cstring-absolute-macos
+    desc: Abnormally small __cstring section
+    crit: notable
+    conf: 0.85
+    for:
+      - macho
+    size_min: 100000
+    if:
+      type: section
+      regex: ^__TEXT\.__cstring$
+      length_max: 100
+  - id: tiny-rodata-absolute-elf
+    desc: Abnormally small .rodata section
+    crit: suspicious
+    conf: 0.8
+    for:
+      - elf
+    size_min: 100000
+    if:
+      type: section
+      regex: ^\.rodata$
+      length_max: 100
+    unless:
+      - id: objectives/anti-static/obfuscation/payload/section/
+      - type: section
+        exact: .modinfo
+      - type: metrics
+        field: elf.e_type
+        min: 1
+        max: 1
+      - id: objectives/anti-static/obfuscation/payload/section/
+      - type: text
+        substr: linux-vdso.so.1
+      - type: text
+        regex: __vdso_[a-z_]+
+    downgrade:
+      any:
+        - id: micro-behaviors/os/bpf/program/maps::bpf-map-hash
+  - id: firmware-sections-40-plus
+    desc: ELF has 40 or more sections
+    crit: component
+    conf: 0.9
+    for:
+      - elf
+    size_min: 200000
+    if:
+      type: metrics
+      field: sections.count
+      min: 40
+    unless:
+    - type: trait
+      id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  - id: firmware-overlay-ratio-60-plus
+    desc: ELF has a large overlay region
+    crit: component
+    conf: 0.9
+    for:
+      - elf
+    size_min: 200000
+    if:
+      type: metrics
+      field: binary.overlay_ratio
+      min: 0.6
+  - id: merged-rodata-str-section
+    desc: Merged rodata string section
+    crit: component
+    conf: 0.95
+    for:
+      - elf
+    if:
+      type: section
+      exact: .rodata.str1.1
+    unless:
+    - type: trait
+      id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  - id: freebsd-modmetadata-section
+    desc: FreeBSD module metadata section
+    crit: component
+    conf: 0.95
+    for:
+      - elf
+    if:
+      type: section
+      exact: set_modmetadata_set
+  - id: freebsd-sysctl-section
+    desc: FreeBSD sysctl registration section
+    crit: component
+    conf: 0.95
+    for:
+      - elf
+    if:
+      type: section
+      exact: set_sysctl_set
+composite_rules:
+  - id: freebsd-relocatable-kmod-layout
+    desc: FreeBSD relocatable kernel-module layout
+    crit: component
+    conf: 0.95
+    for:
+      - elf
+    any:
+      - id: merged-rodata-str-section
+      - id: freebsd-modmetadata-section
+      - id: freebsd-sysctl-section
+  - id: obfuscated-data-payload-macos
+    desc: Obfuscated payload in data section
+    crit: suspicious
+    conf: 0.9
+    for:
+      - macho
+    all:
+      - id: tiny-cstring-absolute-macos
+      - id: metadata/binary/section/metrics::large-data-absolute-macos
+    any:
+      - id: objectives/anti-static/obfuscation/payload/string-sparse::high-entropy-data-macos
+      - id: micro-behaviors/process/create/shell/
+  - id: obfuscated-data-payload-elf
+    desc: Obfuscated payload in data section
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    all:
+      - id: tiny-rodata-absolute-elf
+      - id: metadata/binary/section/metrics::large-data-absolute-elf
+    unless:
+      - id: objectives/anti-static/obfuscation/payload/section/
+      - id: objectives/anti-static/obfuscation/payload/section/
+  - id: firmware-layout-elf
+    desc: Firmware-like ELF section layout
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+    size_min: 200000
+    all:
+      - id: firmware-sections-40-plus
+      - id: metadata/binary/metrics/structural::low-overall-entropy-large-elf
+      - id: metadata/binary/metrics/structural::many-strings-large-elf
+      - id: firmware-overlay-ratio-60-plus

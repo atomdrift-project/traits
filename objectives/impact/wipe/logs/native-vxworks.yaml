@@ -1,0 +1,111 @@
+defaults:
+  platforms: [appliance, unix]
+  for: [c, cpp, objc, elf]
+  attack: T1070.002
+  mbc: E1070
+
+traits:
+  - id: native-log-wipe-rm-command
+    desc: Native log rm wipe command
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: 'rm\s+-[rfv]+\s+'
+
+  - id: native-log-wipe-unlink-command
+    desc: Native log unlink wipe command
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      substr: 'unlink '
+
+  - id: native-log-wipe-shred-truncate
+    desc: Native log shred/truncate command
+    crit: component
+    conf: 0.88
+    if:
+      type: string_literal
+      regex: '^(/usr/bin/|/bin/)?(shred|truncate)\s+'
+
+  - id: native-log-wipe-null-redirection
+    desc: Native log null redirection
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: '(/dev/null\s*>+|>)\s*/var/log/'
+
+  - id: native-varlog-messages-path
+    desc: Native varlog messages path
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: /var/log/messages
+    unless:
+      - id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+
+  - id: native-varlog-dmesg-path
+    desc: Native varlog dmesg path
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: /var/log/dmesg
+    unless:
+      - type: trait
+        id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+
+  - id: native-history-wipe-path
+    desc: Native history wipe path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: /root/.bash_history
+
+  - id: native-wipedrive-command
+    desc: Native WIPEDRIVE command
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      substr: WIPEDRIVE
+
+composite_rules:
+  - id: native-log-wipe-paths
+    desc: Native log wipe paths
+    crit: notable
+    conf: 0.92
+    # The wipe command must target the log path: require adjacency. Without it,
+    # any binary that references /var/log/messages and also contains a stray `>`
+    # or `rm`/`unlink` elsewhere (bat, coreutils) false-positived.
+    near_bytes: 80
+    all:
+      - id: native-log-target-path
+    any:
+      - id: native-log-wipe-rm-command
+      - id: native-log-wipe-unlink-command
+      - id: native-log-wipe-shred-truncate
+      - id: native-log-wipe-null-redirection
+
+  - id: native-log-target-path
+    desc: Native log target path
+    crit: component
+    conf: 0.9
+    any:
+      - id: native-varlog-messages-path
+      - id: native-varlog-dmesg-path
+
+  - id: native-log-history-wipe
+    desc: Native log history wipe
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: native-log-wipe-paths
+      - id: native-history-wipe-path
+    any:
+      - id: native-wipedrive-command
+      - id: micro-behaviors/fs/file/write/direct::write

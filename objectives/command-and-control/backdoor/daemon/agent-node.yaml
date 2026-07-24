@@ -1,0 +1,111 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1071.001
+
+traits:
+  - id: six-digit-pairing-session
+    desc: Six-digit code used as WebSocket session
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: '(6-digit pairing code|/ws/daemon/\$\{code\}|sessionId:\s*code)'
+
+  - id: remote-agent-hub-url
+    desc: Remote agent hub URL argument
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: 'startNode\s*\(\s*\{[\s\S]{0,120}hubUrl\s*:'
+
+  - id: remote-agent-token-argument
+    desc: Agent-hub token from environment
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: 'token\s*:\s*process\.env\.AGENT_HUB_[A-Z0-9_]*TOKEN'
+
+  - id: cli-startup-auto-join-call
+    desc: CLI startup auto-joins agent pool
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: '(void\s+)?autoJoinPool\s*\(\s*\)\s*;'
+
+  - id: all-interface-shell-listener
+    desc: All-interface interactive shell listener
+    crit: suspicious
+    conf: 0.98
+    attack: T1046
+    if:
+      type: text
+      substr: 'server.listen(port2, host === "127.0.0.1" ? "0.0.0.0"'
+
+composite_rules:
+  - id: node-websocket-short-code-remote-shell
+    desc: Remote shell daemon uses short pairing code
+    crit: hostile
+    conf: 0.99
+    attack: "T1059.004,T1078"
+    scope: archive
+    all:
+      - id: six-digit-pairing-session
+      - id: objectives/command-and-control/backdoor/tasking/websocket-task-agent::websocket-task-request-message
+      - id: objectives/command-and-control/backdoor/tasking/websocket-task-agent::websocket-shell-tool-schema
+      - id: micro-behaviors/communications/http/websocket::websocket-constructor-call
+      - id: micro-behaviors/process/create/shell/spawn::bash-exec
+
+  - id: unauthorised-remote-agent-auto-enrollment
+    desc: Silent credentialed remote-agent enrollment
+    crit: hostile
+    conf: 0.99
+    scope: file
+    all:
+      - id: remote-agent-hub-url
+      - id: remote-agent-token-argument
+      - id: cli-startup-auto-join-call
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/process/create/spawn::detached-ignored-unref-spawn
+  - id: persistent-remote-npm-agent
+    desc: Persistent Node agent polls commands and self-updates via npm
+    crit: hostile
+    conf: 0.99
+    for: [npm]
+    scope: archive
+    attack: "T1053,T1071.001,T1105"
+    all:
+      - id: micro-behaviors/communications/http/endpoints::api-commands-path
+      - id: objectives/persistence/system/package-manager::npm-global-install-command
+      - id: micro-behaviors/process/create/spawn::detached-true
+      - id: micro-behaviors/process/daemonize/detach::node-handle-unref-call
+  - id: cross-platform-persistent-remote-agent
+    desc: Cross-platform persistent agent with remote command channel
+    crit: hostile
+    conf: 0.99
+    for: [npm]
+    scope: archive
+    attack: "T1053,T1071.001"
+    all:
+      - id: micro-behaviors/communications/http/endpoints::api-commands-path
+      - id: objectives/persistence/system/package-manager::npm-global-install-command
+      - id: micro-behaviors/process/create/spawn::detached-true
+      - id: micro-behaviors/process/daemonize/detach::node-handle-unref-call
+      - id: objectives/persistence/system/init/boot::systemctl-user-enable
+      - id: micro-behaviors/os/service/config::source-launchagents-join
+      - id: micro-behaviors/os/service/control::launchctl-load-command
+
+  - id: all-interface-websocket-shell-daemon
+    desc: All-interface daemon exposes interactive shell
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1046
+    scope: archive
+    all:
+      - id: objectives/command-and-control/backdoor/daemon::all-interface-shell-listener
+      - id: objectives/command-and-control/backdoor/shell/pty::websocket-shell-input-write
+      - id: objectives/command-and-control/backdoor/shell/pty::interactive-shell-spawn
+      - id: micro-behaviors/communications/http/websocket::websocket

@@ -1,0 +1,84 @@
+defaults:
+  platforms: [unix]
+  for: [scripts, binaries]
+traits:
+  - id: dd-zero
+    desc: Zero-fills a block device with dd
+    crit: suspicious
+    conf: 0.6
+    if:
+      type: text
+      regex: dd\s+if=/dev/zero.{0,50}of=/dev/
+    unless:
+      # AI-agent guardrails / security scanners list disk-wipe commands as
+      # threat signatures + test fixtures (scanner-context-inversion).
+      - id: well-known/tool/detection/ai-guardrail/
+      - id: well-known/app/kpango-dotfiles::kpango-claude-security-gate
+      - id: well-known/app/kpango-dotfiles::kpango-dotfiles-source-path
+      - id: metadata/package/testing/presence/harness::ndctl-nfit-shell-test
+      - id: well-known/app/clonezilla::package-context
+      - id: well-known/app/clonezilla::archive-name
+      - id: well-known/app/clonezilla::clonezilla-script-context
+      # Test suites commonly assert that a command policy rejects destructive
+      # dd input; that string is not an execution of the wipe operation.
+      - id: metadata/package/testing/presence/harness/
+      # A Python agent's shell policy lists this command as a denied example;
+      # the literal is not an invocation of dd.
+      - type: text
+        regex: 'SHELL_BLOCKLIST\s*='
+  - id: dd-random
+    desc: Overwrites block device with random data
+    crit: suspicious
+    conf: 0.6
+    if:
+      type: text
+      regex: dd\s+if=/dev/urandom.{0,50}of=/dev/
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: objectives/impact/destroy/keywords::target-source-test
+      - id: metadata/package/testing/presence/harness::ruby-test-file
+      - id: metadata/package/testing/presence/harness::rust-tests-path-filename
+      - id: metadata/package/testing/presence/harness::ndctl-nfit-shell-test
+      - type: path
+        dirname: true
+        regex: '(^|[\\/])tests([\\/]|$)'
+      - id: well-known/tool/detection/ai-guardrail/
+  # NOTE: generic `shred -<flag>` (secure overwrite of a regular file, e.g.
+  # `shred -u secrets.env`) is benign cleanup hygiene, not disk-device
+  # destruction — it lives in micro-behaviors/fs/delete/secure/shell.yaml as a
+  # neutral capability. Device-targeted (`shred /dev/...`) and forced overwrite
+  # remain here as wipe-impact signals.
+  #
+  # Require at least two letters after `/dev/` so the match covers the node
+  # name, then exclude non-block nodes. Without that, `shred ... 2>/dev/null`
+  # matched because `/dev/` sits inside the stderr redirect.
+  - id: shred-dev
+    desc: shred targets a raw /dev/ device
+    crit: suspicious
+    conf: 0.6
+    unless:
+      - id: well-known/tool/detection/ai-guardrail/
+    if:
+      type: text
+      regex: 'shred.{0,40}/dev/[a-z]{2,}'
+    not:
+      - regex: '/dev/null'
+      - regex: '/dev/shm'
+      - regex: '/dev/stdin'
+      - regex: '/dev/stdout'
+      - regex: '/dev/stderr'
+      - regex: '/dev/zero'
+      - regex: '/dev/random'
+      - regex: '/dev/urandom'
+      - regex: '/dev/fd/'
+      - regex: '/dev/pts/'
+      - regex: '/dev/tty'
+  - id: shred-force
+    desc: shred --force overwrites despite permissions
+    crit: suspicious
+    conf: 0.6
+    unless:
+      - id: well-known/tool/detection/ai-guardrail/
+    if:
+      type: text
+      substr: shred --force

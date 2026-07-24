@@ -1,0 +1,183 @@
+defaults:
+  platforms:
+  - unix
+  - windows
+  for:
+  - javascript
+  - typescript
+  mbc: F0001
+traits:
+- id: npm-owner-add-exec
+  desc: Executes npm owner add command
+  crit: suspicious
+  attack: T1098
+  if:
+    type: string_literal
+    regex: npm\s+owner\s+add
+- id: npm-whoami-exec
+  desc: Executes npm whoami command
+  crit: notable
+  attack: T1098
+  if:
+    type: string_literal
+    regex: npm\s+whoami
+- id: npm-profile-url
+  desc: NPM user profile URL pattern
+  crit: notable
+  attack: T1098
+  if:
+    type: string_literal
+    substr: npmjs.org/~
+- id: remove-postinstall
+  desc: Removes postinstall script
+  crit: suspicious
+  attack: T1098
+  if:
+    type: string_literal
+    regex: delete\s+\w+\.scripts\.postinstall
+- id: npm-maintainer-search-api
+  desc: Queries npm maintainer package search
+  crit: suspicious
+  conf: 0.94
+  attack: T1195.002
+  if:
+    type: text
+    regex: '(registry\.npmjs\.org)?/v1/search\?text=maintainer:'
+- id: npm-force-publish-token
+  desc: Force publishes packages with token
+  crit: suspicious
+  conf: 0.96
+  attack: T1195.002
+  if:
+    type: text
+    regex: 'npm\s+publish.{0,80}--access\s+public.{0,80}--token\s+\$?\{?\w+'
+- id: npm-publish-token-option
+  desc: Publishes npm package with token
+  crit: suspicious
+  conf: 0.94
+  attack: T1195.002
+  if:
+    type: text
+    regex: 'npm\s+publish[\s\S]{0,160}--token\s+\$?\{?\w+'
+- id: npm-version-patch-force
+  desc: Forces npm package patch version
+  crit: notable
+  conf: 0.9
+  attack: T1195.002
+  if:
+    type: text
+    regex: 'npm\s+version\s+patch\s+--force'
+- id: delete-private-field
+  desc: Deletes private package field
+  crit: component
+  conf: 0.85
+  attack: T1195.002
+  if:
+    type: text
+    regex: delete\s+\w+\.private
+  not:
+  - substr: "delete e.private"
+  - substr: "delete connection.private"
+  - substr: "delete error.private"
+  unless:
+  - id: well-known/tool/development/yarn::yarn-cli-bundle-marker
+- id: node-bundle-postinstall
+  desc: package postinstall executes bundle.js
+  crit: suspicious
+  conf: 0.95
+  for: [package.json]
+  if:
+    type: text
+    regex: '"post[Ii]nstall"\s*:\s*"node\s+bundle\.js"'
+- id: npm-token-whoami-validation
+  desc: Validates npm token with whoami
+  crit: notable
+  conf: 0.94
+  if:
+    type: text
+    regex: 'npm\s+whoami|/-/whoami\b|registry\.npmjs\.org/-/whoami'
+  unless:
+  - id: well-known/tool/development/yarn::yarn-cli-bundle-marker
+composite_rules:
+- id: npm-package-worm
+  desc: NPM package worm (adds owner to packages)
+  crit: hostile
+  all:
+  - id: npm-owner-add-exec
+  - id: npm-whoami-exec
+  any:
+  - id: npm-profile-url
+  - id: remove-postinstall
+- id: npm-package-spam
+  desc: Modifies and mass-publishes npm packages
+  crit: hostile
+  conf: 0.95
+  attack: T1195.002
+  all:
+  - id: micro-behaviors/os/package-manager/publish::npm-publish-command
+  - id: micro-behaviors/process/create/shell/bridge::js-exec
+  any:
+  - id: delete-private-field
+  - id: npm-owner-add-exec
+  - id: remove-postinstall
+- id: npm-maintainer-package-worm
+  desc: Republish worm targets maintainer packages
+  crit: hostile
+  conf: 0.96
+  attack: T1195.002
+  all:
+  - id: npm-maintainer-search-api
+  - id: npm-force-publish-token
+  any:
+  - id: npm-version-patch-force
+  - id: micro-behaviors/os/package-manager/publish::npm-publish-command
+  - id: npm-publish-token-option
+- id: npm-token-package-infection-worm
+  desc: NPM token package infection worm
+  crit: hostile
+  conf: 0.97
+  attack: T1195.002
+  all:
+  - id: npm-token-whoami-validation
+  - id: npm-publish-token-option
+  any:
+  - id: npm-version-patch-force
+  - id: objectives/credential-access/env/secrets/file::npm-auth-token-extraction
+  - id: objectives/credential-access/env/secrets/npm-registry::npm-token
+- id: npm-token-npmrc-publish-worm
+  desc: NPM token writes npmrc then publishes package
+  crit: hostile
+  conf: 0.97
+  attack: T1195.002
+  all:
+  - id: micro-behaviors/os/package-manager/publish::npm-publish-command
+  - id: objectives/credential-access/env/secrets/npm-registry::npm-token
+  any:
+  - id: objectives/supply-chain/impersonation/core-module::fs-write-sensitive
+  - id: objectives/credential-access/env/secrets/file::npm-auth-token-key-raw
+  - id: micro-behaviors/fs/path/sensitive/credentials::npmrc-credentials
+  needs: 2
+- id: npm-bundle-postinstall-workflow-worm
+  desc: NPM postinstall writes workflow worm
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: node-bundle-postinstall
+  any:
+  - id: micro-behaviors/communications/http/services/github::github-workflow-file-write-api
+  - id: npm-token-whoami-validation
+  - id: micro-behaviors/communications/http/services/github::github-create-repo-api
+  - id: objectives/credential-access/api-harvest/token::trufflehog-filesystem-root-scan
+  needs: 2
+- id: js-workflow-credential-worm
+  desc: JavaScript writes credential workflow worm
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: micro-behaviors/communications/http/services/github::github-workflow-file-write-api
+  any:
+  - id: npm-token-whoami-validation
+  - id: micro-behaviors/communications/http/services/github::github-create-repo-api
+  - id: objectives/credential-access/api-harvest/token::trufflehog-filesystem-root-scan
+  - id: objectives/credential-access/env/secrets/npm-registry::npm-token
+  needs: 2

@@ -1,0 +1,272 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+
+traits:
+- id: cookie-domain-filter
+  desc: Filters cookies by domain
+  crit: component
+  conf: 0.82
+  if:
+    type: text
+    regex: "domain\\s*:\\s*['\\\"][A-Za-z0-9._-]+\\.[A-Za-z]{2,}['\\\"]"
+
+# These match an admin/security/auth PAGE PATH sitting directly under a host
+# (host.tld/admin). The earlier `//admin` form matched the protocol-host
+# boundary instead, firing on any backend whose hostname starts with
+# "admin"/"security"/"sso" and on nested API paths like /api/security.
+- id: admin-security-url-targets--rx-1
+  desc: admin/security page path under host
+  crit: component
+  conf: 0.88
+  count_min: 3
+  if:
+    type: text
+    regex: '[a-z0-9]\.[a-z]{2,}/(admin|security)\b'
+- id: admin-security-url-targets--rx-2
+  desc: mfa/sso page path under host
+  crit: component
+  conf: 0.88
+  count_min: 3
+  if:
+    type: text
+    regex: '[a-z0-9]\.[a-z]{2,}/(mfa|sso)\b'
+- id: admin-security-url-targets--rx-3
+  desc: okta page path under host
+  crit: component
+  conf: 0.88
+  count_min: 3
+  if:
+    type: text
+    regex: '[a-z0-9]\.[a-z]{2,}/okta\b'
+- id: extension-page-block
+  desc: Rewrites an admin or security page
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)/(admin|security|mfa)\b.{0,400}(innerHTML|location\.\w+)'
+
+- id: management-id-comparison--rx-4
+  desc: 'chrome.management.* API access'
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \bchrome\.management\.
+- id: management-id-comparison--rx-7
+  desc: browser.management.* API access (Firefox/MV3)
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \bbrowser\.management\.
+- id: management-id-comparison--rx-8
+  desc: ".indexOf() call against extension/id ID"
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \b(ext|id|extension|installed)\w*\.indexOf\s*\(
+- id: management-id-comparison--rx-12
+  desc: ".includes() against extension/id list"
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \b(ext|id|extension|installed)\w*\.includes\s*\(
+- id: management-id-comparison--rx-9
+  desc: 'management id comparison rx 9'
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: chrome\.management\.getAll\s*\(
+- id: management-id-comparison--rx-10
+  desc: "plugin/addon vocabulary in extension-enum"
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \b(plugin|addon)\.(id|name|type)\b
+- id: management-id-comparison--rx-11
+  desc: '"addon" Firefox WebExtension identifier'
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: \baddon\.(getAll|id|name|enabled)\b
+- id: setupvpn-baselink-bundle
+  desc: SetupVPN Baselink extension state bundle
+  crit: component
+  conf: 0.98
+  if:
+    type: text
+    substr: 'portName:"com.setupvpn.extension.main"'
+
+- id: extension-devtools-response-handler
+  desc: Registers a callback for DevTools detection
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'ondevtool(open|Open)\s*[:=(]'
+- id: extension-devtools-page-close
+  desc: Nulls the opener before closing a page
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: 'window\.opener\s*=\s*null[\s\S]{0,240}window\.close\s*\('
+- id: extension-devtools-navigation
+  desc: Navigates after DevTools detection
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: '(?i)(devtools|inspect).{0,240}location\.href\s*='
+
+composite_rules:
+- id: extension-session-cookie-harvest
+  desc: Extension harvests session cookies for remote reporting
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: micro-behaviors/communications/http/cookies::chrome-cookies-get-all
+  - id: micro-behaviors/communications/http/cookies::session-cookie-name
+  any:
+  - id: micro-behaviors/communications/http/request/client::js-fetch-call
+  - id: micro-behaviors/communications/http/request/client::request-import
+  - id: cookie-domain-filter
+
+- id: extension-session-cookie-monitor
+  desc: Extension monitors session cookies with timers or change listeners
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: extension-session-cookie-harvest
+  any:
+  - id: micro-behaviors/communications/http/cookies::chrome-cookies-on-changed-listener
+  - id: micro-behaviors/time/schedule/webextension::chrome-alarms-create
+  - id: micro-behaviors/time/schedule/webextension::chrome-alarms-on-alarm
+
+- id: extension-session-cookie-injection
+  desc: Extension replays or injects session cookies
+  crit: hostile
+  conf: 0.97
+  near_bytes: 4096
+  all:
+  - id: micro-behaviors/communications/http/cookies::chrome-cookies-set
+  - id: micro-behaviors/communications/http/cookies::session-cookie-name
+  any:
+  - id: extension-session-cookie-harvest
+  - id: micro-behaviors/process/hook/webextension::dnr-cookie-header-mod
+
+- id: extension-security-tool-enumeration
+  desc: Extension enumerates installed security or privacy tools
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: micro-behaviors/browser-extension/management::browser-management-get-all
+  - id: metadata/permission/extension-id::extension-id-map
+  - id: management-id-comparison
+  unless:
+  - id: well-known/app/browser-extension::extension-id-oof
+  - id: setupvpn-baselink-bundle
+
+- id: extension-admin-page-blocker
+  desc: Extension blocks or redirects admin and security pages
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: admin-security-url-targets
+  - id: extension-page-block
+  any:
+  - id: micro-behaviors/browser-extension/tabs::chrome-tabs-update
+  - id: objectives/supply-chain/hidden-payload/extensions/backdoor::extension-dnr-header-bypass
+
+- id: extension-dnr-cookie-injector
+  desc: Extension uses DNR to inject Cookie headers
+  crit: hostile
+  conf: 0.97
+  near_bytes: 4096
+  all:
+  - id: micro-behaviors/process/hook/webextension::declarative-net-request-update
+  - id: micro-behaviors/process/hook/webextension::dnr-cookie-header-mod
+  any:
+  - id: micro-behaviors/communications/http/cookies::session-cookie-name
+  - id: micro-behaviors/communications/http/cookies::chrome-cookies-set
+
+- id: extension-google-session-cookie-replay
+  desc: Extension replays Google session cookies through DNR
+  crit: hostile
+  conf: 0.99
+  attack: T1539,T1550.004
+  scope: archive
+  for: [crx, xpi, zip, archives]
+  all:
+  - id: micro-behaviors/process/hook/webextension::chrome-dnr-update-dynamic-rules-text
+  - id: micro-behaviors/process/hook/webextension::dnr-cookie-header-mod-text
+  - id: micro-behaviors/communications/http/cookies::google-auth-cookie-name
+
+- id: extension-devtools-evasion
+  desc: Extension includes DisableDevtool anti-inspection logic
+  crit: suspicious
+  conf: 0.88
+  all:
+  - id: metadata/permission/dom::disable-devtools-lib
+  - id: metadata/permission/runtime::is-extension
+  unless:
+  - id: well-known/app/baidu-comate::baidu-comate
+  - id: well-known/lib/browser-automation/
+- id: admin-security-url-targets
+  desc: Targets admin or security pages
+  crit: component
+  conf: 0.88
+  any:
+  - id: admin-security-url-targets--rx-1
+  - id: admin-security-url-targets--rx-2
+  - id: admin-security-url-targets--rx-3
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+
+- id: management-id-comparison
+  desc: Compares installed extension IDs against hardcoded map
+  crit: component
+  conf: 0.9
+  any:
+  - id: management-id-comparison--rx-4
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-id
+  - id: management-id-comparison--rx-12
+  - id: management-id-comparison--rx-7
+  - id: management-id-comparison--rx-8
+  - id: management-id-comparison--rx-9
+  - id: management-id-comparison--rx-10
+  - id: management-id-comparison--rx-11
+  not:
+  - substr: "createCancellationTokenSource("
+  - substr: "knownCanceledRequests.has(requestMessage.id)"
+
+# DisableDevtool's redirect/close-on-inspection is dual-use: content/IP
+# protection (common in commercial extensions) as much as analysis evasion.
+# Without an actual hidden payload (exfil/injection/broad-permission hijack) it
+# is a notable anti-inspection detail that corroborates other hostile signals,
+# not hostile on its own; extension-devtools-evasion already flags the intent.
+- id: extension-devtools-page-close-response
+  desc: Extension closes its page when DevTools opens
+  crit: notable
+  conf: 0.97
+  all:
+  - id: extension-devtools-evasion
+  - id: extension-devtools-response-handler
+  - id: extension-devtools-page-close
+
+- id: extension-devtools-navigation-response
+  desc: Extension redirects when DevTools opens
+  crit: notable
+  conf: 0.97
+  all:
+  - id: extension-devtools-evasion
+  - id: extension-devtools-response-handler
+  - id: extension-devtools-navigation

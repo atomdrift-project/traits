@@ -1,0 +1,137 @@
+defaults:
+  platforms: [windows]
+  for: [batch, powershell, pe]
+  attack: T1567
+traits:
+- id: goodsync-name
+  desc: GoodSync sync tool reference
+  crit: component
+  if:
+    type: text
+    regex: '(?i)\bGoodSync(\.exe)?\b'
+- id: goodsync-job-action
+  desc: GoodSync job action switch
+  crit: suspicious
+  if:
+    type: text
+    regex: '(?i)\bGoodSync(\.exe)?\b.{0,120}\b(sync|analyze|jobs|run)\b'
+- id: bulk-common-data-path
+  desc: 'Bulk common data path list'
+    # Generic ProgramData/Users/inetpub path clusters are useful only when
+    # paired with sync/cloud tooling below; installers and uninstallers also
+    # enumerate these locations during cleanup.
+  crit: component
+  count_min: 2
+  not:
+  - substr: 'C:\users\builder\appdata\local'
+  - substr: 'C:\Users\victorbarac\AppData\Local\Microsoft\Windows'
+  - substr: 'victorbarac\AppData\Local\Microsoft\Windows'
+  - substr: 'victorbarac\AppData'
+  - substr: 'C:\ProgramData\Goodix'
+  - substr: 'C:\ProgramData\Microsoft\Windows'
+  - substr: 'C:\Users\Administrator\Downloads'
+  - substr: 'c:\users\administrator\downloads'
+  - substr: 'Cracker Tools'
+  - substr: '.cargo\registry'
+  - substr: '.cargo\git'
+  unless:
+  - type: text
+    substr: Bitdefender Active Threat Control Filesystem Minifilter
+  if:
+    type: text
+    regex: '(?i)([A-Z]:\\|\\\\)(ProgramData|Users|inetpub)(\\[\w .-]{1,40}){1,4}'
+
+- id: bulk-sensitive-server-data-path--rx-1
+  desc: Regex component marker
+  crit: component
+  count_min: 2
+  if:
+    type: text
+    substr: ProgramData\Microsoft\Crypto
+    case_insensitive: true
+  count_max: 1021345
+- id: bulk-sensitive-server-data-path--rx-2
+  desc: Regex component marker
+  crit: component
+  count_min: 2
+  if:
+    type: text
+    substr: Documents\Secrets
+    case_insensitive: true
+  count_max: 1021346
+- id: bulk-sensitive-server-data-path--rx-3
+  desc: Regex component marker
+  crit: component
+  count_min: 2
+  if:
+    type: text
+    substr: AppData\Roaming
+    case_insensitive: true
+  count_max: 1021347
+- id: bulk-sensitive-server-data-path--rx-4
+  desc: Regex component marker
+  crit: component
+  count_min: 2
+  if:
+    type: text
+    substr: inetpub\wwwroot
+    case_insensitive: true
+  count_max: 1021348
+- id: bulk-sensitive-server-data-path--rx-8
+  desc: Repeated sensitive user-profile paths
+  crit: component
+  count_min: 2
+  if:
+    type: text
+    regex: '(?i)\\Users\\[^\\\r\n]{1,40}\\(Documents|Desktop|AppData\\Roaming)'
+  count_max: 1021352
+- id: sync-recursive-flags--rx-9
+  desc: Regex component marker
+  crit: component
+  if:
+    type: text
+    regex: '(?i)(--recursive|/left=)'
+  count_max: 1021353
+- id: sync-recursive-flags--rx-10
+  desc: Regex component marker
+  crit: component
+  if:
+    type: text
+    regex: '(?i)(/right=|/sync.{0,40}/(left|right)=)'
+  count_max: 1021354
+composite_rules:
+- id: goodsync-backblaze-exfil
+  desc: GoodSync exfiltration to Backblaze
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: goodsync-name
+  - id: micro-behaviors/communications/http/services/backblaze::backblaze-b2-endpoint-reference
+  any:
+  - id: goodsync-job-action
+  - id: sync-recursive-flags
+  - id: bulk-common-data-path
+  - id: bulk-sensitive-server-data-path
+  needs: 2
+- id: bulk-sensitive-server-data-path
+  desc: Multiple sensitive server data paths
+  crit: notable
+  conf: 1.0
+  needs: 2
+  any:
+  - id: bulk-sensitive-server-data-path--rx-1
+  - id: bulk-sensitive-server-data-path--rx-2
+  - id: bulk-sensitive-server-data-path--rx-3
+  - id: bulk-sensitive-server-data-path--rx-4
+  - id: objectives/credential-access/ftp/filezilla::application-path
+  - id: bulk-sensitive-server-data-path--rx-8
+  downgrade:
+    any:
+    - id: metadata/signed/leaf::malwarebytes-inc
+- id: sync-recursive-flags
+  desc: Recursive sync transfer flags
+  crit: component
+  conf: 1.0
+  any:
+  - id: sync-recursive-flags--rx-9
+  - id: sync-recursive-flags--rx-10

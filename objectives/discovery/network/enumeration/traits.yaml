@@ -1,0 +1,236 @@
+defaults:
+  platforms:
+    - unix
+    - android
+    - ios
+traits:
+  - id: arp-discovery
+    desc: arp ARP table enumeration
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+      - python
+    if:
+      type: text
+      regex: '(?m)(^|[;&|(){}\[\]\s]|/)(arp\s+-[A-Za-z]*[ane][A-Za-z]*\b)'
+    unless:
+      - type: text
+        regex: "COMPREPLY[+]?=.*(arp -an|ip neigh show)"
+      - type: text
+        substr: 'Dummy "arp -an" emulator'
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: micro-behaviors/fs/path/binary::busybox-binary-basename
+    attack: T1018
+  - id: netsh-wlan-show-networks
+    desc: Netsh Wi-Fi network enumeration
+    crit: notable
+    conf: 0.88
+    platforms: [windows]
+    for: [python, batch, powershell, pe]
+    if:
+      type: text
+      regex: 'netsh\s+wlan\s+show\s+networks\b'
+    attack: T1016
+  - id: arp-discovery-go
+    desc: arp ARP table enumeration (Go source)
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: text
+      regex: (exec\.Command.{0,30}arp.{0,30}-a|"arp".{0,30}"-a")
+    unless:
+      - id: metadata/package/testing/presence/harness::go-test-file
+    attack: T1018
+  - id: ip-neigh-show
+    desc: ip neigh show ARP discovery
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      regex: (ip neigh show|ip neigh list)
+    unless:
+      - id: well-known/app/samba::samba-source-tree
+      - type: text
+        regex: "COMPREPLY[+]?=.*(arp -an|ip neigh show)"
+      - id: micro-behaviors/fs/path/binary::bin-busybox-path
+      - id: micro-behaviors/os/bpf/trace-tools::cilium
+      - id: well-known/app/olares
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: metadata/package/testing/presence/harness::test-directory
+      - id: micro-behaviors/fs/path/binary::busybox-binary-basename
+    attack: T1018
+  - id: netcat-port-scan
+    desc: netcat port scanning
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      regex: '\bnc\b[^\n]{0,80}\s-zv?\b[^\n]{0,80}\b([0-9]{1,5}-[0-9]{1,5}|[0-9]{1,5},[0-9,\s-]{1,80})\b'
+    not:
+      - substr: nc 127.0.0.1
+      - substr: nc localhost
+    unless:
+      - type: text
+        regex: \bnc\b.{0,40}(127\.0\.0\.1|localhost)\b
+      - type: text
+        substr: nc -z -w 1 127.0.0.1 $port | grep -ic succeeded
+      - type: text
+        regex: (until|while !)\s+nc\b.{0,24}\s-zv?(\s|$)
+    attack: T1046
+  - id: nmap-scanning
+    desc: nmap network scanning
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    if:
+      type: text
+      regex: \bnmap\s+-s[STUAFVNX]\b
+    attack: T1046
+  - id: shell-port-scanner
+    desc: shell port scanning loop
+    crit: suspicious
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: string_literal
+      regex: (for|while).{0,50}\{.{0,50}nc.{0,20}-z
+    attack: T1046
+  - id: ssh-port-check-p22
+    desc: SSH port availability check (-p 22)
+    crit: notable
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      regex: \bssh\b.{0,24}-p 22\b|-p 22.{0,24}\bssh\b
+    not:
+      - substr: complete -c mosh -l ssh
+      - substr: ssh -p 2222
+      - regex: 'example: "ssh -p 2222"\) \(default: "ssh"\)'
+    attack: T1046
+  - id: ssh-port-check-nmap
+    desc: SSH port availability check (nmap)
+    crit: suspicious
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    if:
+      type: raw
+      regex: \bnmap\b[^\n]{0,120}\s-p\s*([0-9,-]*,)?22(,[0-9,-]*)?\b
+    unless:
+      - type: symbol
+        exact: alias
+    attack: T1046
+  # `ssh -i <keyfile> host` is the standard way to connect with an explicit
+  # identity file (deploy scripts, CI, provisioning all do this) — a neutral
+  # SSH-client capability, not "stolen key" usage on its own. The lateral-
+  # movement intent comes from the network-recon composite that combines it
+  # with discovery/scanning legs.
+  - id: ssh-key-reuse
+    desc: SSH client uses explicit identity file (-i)
+    crit: notable
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    if:
+      type: text
+      regex: (ssh -i|-i /root/\.ssh|ssh\s+.{0,50}-i\s+)
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: well-known/app/github-cli/
+      - type: text
+        substr: QEMU examples & tests.
+    attack: T1021.004
+composite_rules:
+  - id: ssh-port-check
+    desc: SSH port availability check
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: ssh-port-check-p22
+      - id: netcat-port-scan
+      - id: ssh-port-check-nmap
+  - id: network-enumeration
+    desc: Queries local interface and routing information
+    crit: suspicious
+    conf: 0.88
+    for:
+      - elf
+      - shell
+    attack: T1016
+    unless:
+      - id: well-known/app/syslog-ng::syslog-ng-debun
+      - id: well-known/app/spoofdpi::spoofdpi-go-module
+      - id: metadata/package/testing/presence/harness::test-directory
+      - id: well-known/tool/sysadmin/busybox/
+    needs: 2
+    any:
+      - id: objectives/discovery/network/interface
+      - id: micro-behaviors/os/network/interface::ip-addr
+      - id: micro-behaviors/os/network/interface::ip-route-show
+      - id: arp-discovery
+      - id: ip-neigh-show
+  - id: network-enumeration-go
+    desc: Queries local network configuration in Go
+    crit: suspicious
+    conf: 0.88
+    for: [go]
+    attack: T1016
+    needs: 2
+    any:
+      - id: objectives/discovery/network/interface
+      - id: arp-discovery-go
+  - id: port-scanning
+    desc: Active port scanning
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+      - shell
+    attack: T1046
+    any:
+      - id: netcat-port-scan
+      - id: nmap-scanning
+      - id: shell-port-scanner
+  - id: lateral-movement-preparation
+    desc: Network enumeration with port scanning
+    crit: hostile
+    conf: 0.92
+    for:
+      - elf
+      - shell
+    attack: T1046
+    mbc: E1103
+    all:
+      - id: network-enumeration
+      - id: port-scanning
+      - id: ssh-port-check
+  - id: credential-plus-scanning
+    desc: Credential access with network scanning
+    crit: hostile
+    conf: 0.9
+    for:
+      - elf
+      - shell
+    attack: T1021.004
+    mbc: E1103
+    all:
+      - id: network-enumeration
+      - id: port-scanning
+      - id: ssh-key-reuse

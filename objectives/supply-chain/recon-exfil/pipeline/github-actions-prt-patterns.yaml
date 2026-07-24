@@ -1,0 +1,205 @@
+# GitHub Actions pull_request_target exploitation payload shapes observed in
+# automated PR campaigns. These traits avoid campaign names and focus on the
+# reusable mechanics: log-based token exfil, Actions API recon, temp workflow
+# dispatch attempts, and delayed /proc environment scraping.
+defaults:
+  platforms: [unix]
+  for: [shell, python, javascript, typescript, rust]
+  attack: "T1195.002, T1552.001"
+
+traits:
+- id: gha-env-gzip-base64-log
+  desc: GitHub environment gzip base64 log
+  crit: suspicious
+  conf: 0.94
+  for: [shell]
+  if:
+    type: text
+    regex: '\benv\b[\s\S]{0,260}\bgzip\s+-c\s*\|\s*base64|gzip\s+-c\s*\|\s*base64[\s\S]{0,260}\benv\b'
+
+- id: gha-extraheader-gzip-base64-log
+  desc: GitHub checkout token base64 log
+  crit: suspicious
+  conf: 0.98
+  for: [shell]
+  if:
+    type: text
+    regex: 'http\.https://github\.com/\.extraheader[\s\S]{0,260}gzip\s+-c\s*\|\s*base64'
+
+- id: gha-actions-secrets-api
+  desc: GitHub Actions secrets API enumeration
+  crit: suspicious
+  conf: 0.94
+  size_max: 1000000
+  if:
+    type: text
+    regex: '/repos/[^''"\s]{1,160}/actions/(secrets|organization-secrets)\b(?!/public-key)'
+  not:
+  - substr: /repos/{owner}/{repo}/actions/
+  - substr: /actions/secrets/public-key
+  - regex: '/actions/secrets/public-key\b'
+
+- id: gha-interesting-secret-keywords--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  count_min: 4
+  if:
+    type: text
+    regex: '\b(NPM_TOKEN|DOCKER)\b'
+
+  count_max: 1025129
+- id: gha-interesting-secret-keywords--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  count_min: 4
+  if:
+    type: text
+    regex: '\b(CLOUDFLARE|DATABASE_URL)\b'
+
+  count_max: 1025130
+- id: gha-interesting-secret-keywords--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  count_min: 4
+  if:
+    type: text
+    regex: '\b(PRIVATE_KEY|AWS_SECRET)\b'
+
+  count_max: 1025131
+- id: gha-interesting-secret-keywords--rx-4
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  count_min: 4
+  if:
+    type: text
+    regex: '\b(NETLIFY|OPENAI)\b'
+
+  count_max: 1025132
+- id: gha-interesting-secret-keywords--rx-5
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  count_min: 4
+  if:
+    type: text
+    regex: '\b(ANTHROPIC|GEMINI)\b'
+
+  count_max: 1025133
+- id: gha-interesting-secret-keywords--rx-6
+  desc: Regex component marker
+  crit: component
+  conf: 0.9
+  count_min: 4
+  if:
+    type: text
+    regex: '\b(SSH_PRIVATE)\b'
+
+  count_max: 1025134
+- id: python-proc-environ-loop--rx-7
+  desc: Regex component marker
+  crit: component
+  conf: 0.94
+  for: [python]
+  if:
+    type: text
+    regex: 'os\.listdir\s*\(\s*[''"]/proc[''"]\s*\)[\s\S]{0,600}/proc/\{?pid\}?/environ'
+
+  count_max: 1025135
+- id: python-proc-environ-loop--rx-8
+  desc: Regex component marker
+  crit: component
+  conf: 0.94
+  for: [python]
+  if:
+    type: text
+    regex: '/proc/\{?pid\}?/environ[\s\S]{0,600}os\.listdir\s*\(\s*[''"]/proc[''"]\s*\)'
+
+  count_max: 1025136
+composite_rules:
+- id: gha-log-token-exfil
+  desc: GitHub token exfiltrated through logs
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: gha-env-gzip-base64-log
+  - id: gha-extraheader-gzip-base64-log
+
+- id: gha-actions-secret-recon
+  desc: GitHub Actions secret name recon
+  crit: hostile
+  conf: 0.985
+  all:
+  - id: gha-actions-secrets-api
+  any:
+  - id: micro-behaviors/communications/http/services/github::github-actions-environments-api
+  - id: objectives/supply-chain/trojanized/build-pipeline::gha-checkout-extraheader-read
+  - id: objectives/credential-access/env/secrets/source-control::github-token-var
+
+- id: gha-temp-workflow-secret-capture
+  desc: Temporary workflow secret capture
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: micro-behaviors/communications/http/services/github::github-workflow-file-write-api
+  - id: micro-behaviors/communications/http/services/github::github-workflow-dispatch-api
+  any:
+  - id: gha-actions-secrets-api
+  - id: gha-interesting-secret-keywords
+  - id: metadata/build/github-actions::multiple-secret-references
+
+- id: gha-label-gate-bypass-attempt
+  desc: GitHub label gate bypass attempt
+  crit: suspicious
+  conf: 0.96
+  all:
+  - id: micro-behaviors/communications/http/services/github::github-issue-label-api
+  any:
+  - id: gha-actions-secrets-api
+  - id: micro-behaviors/communications/http/services/github::github-workflow-dispatch-api
+  - id: micro-behaviors/communications/http/services/github::github-workflow-dispatch-api
+
+- id: gha-delayed-proc-env-comment-exfil
+  desc: Delayed proc environment PR exfil
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: python-proc-environ-loop
+  - id: micro-behaviors/communications/http/services/github::github-issue-comment-api
+  - id: gha-interesting-secret-keywords
+- id: gha-interesting-secret-keyword-list
+  desc: Repeated high-value secret variable names
+  crit: component
+  conf: 0.9
+  any:
+  - id: gha-interesting-secret-keywords--rx-1
+  - id: gha-interesting-secret-keywords--rx-2
+  - id: gha-interesting-secret-keywords--rx-3
+  - id: gha-interesting-secret-keywords--rx-4
+  - id: gha-interesting-secret-keywords--rx-5
+  - id: gha-interesting-secret-keywords--rx-6
+  unless:
+  - id: micro-behaviors/crypto/library/blockchain/
+  - id: metadata/library/ai/
+- id: gha-interesting-secret-keywords
+  desc: High-value secret names in GitHub Actions activity
+  crit: suspicious
+  conf: 0.94
+  all:
+  - id: gha-interesting-secret-keyword-list
+  any:
+  - id: metadata/build/github-actions/
+  - id: gha-actions-secrets-api
+  - id: micro-behaviors/communications/http/services/github::github-workflow-dispatch-api
+  - id: micro-behaviors/communications/http/services/github::github-issue-comment-api
+- id: python-proc-environ-loop
+  desc: Python loops over proc environments
+  crit: suspicious
+  conf: 0.94
+  for: [python]
+  any:
+  - id: python-proc-environ-loop--rx-7
+  - id: python-proc-environ-loop--rx-8

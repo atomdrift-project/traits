@@ -1,0 +1,263 @@
+defaults:
+  platforms: [fortios, unix, windows]
+  for: [java, class, jar, zip]
+  attack: T1041
+
+traits:
+  - id: jvm-ftp-auth-command
+    desc: JVM FTP auth command strings
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '(^|[\r\n])(USER|PASS) '
+
+  - id: jvm-ftp-stor-command
+    desc: JVM FTP STOR command string
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '(^|[\r\n])STOR '
+
+  - id: java-ftp-command-source
+    desc: Java writes FTP commands
+    crit: component
+    conf: 0.88
+    for: [java]
+    if:
+      type: text
+      regex: 'out\.println\("USER "[\s\S]{0,220}out\.println\("PASS "'
+
+  - id: java-ftp-stor-source
+    desc: Java writes FTP STOR command
+    crit: component
+    conf: 0.88
+    for: [java]
+    if:
+      type: text
+      substr: 'out.println("STOR "'
+
+  - id: jvm-ftp-user-env-source
+    desc: Java source reads FTP_USER environment variable
+    crit: component
+    conf: 0.9
+    for: [java, kotlin]
+    if:
+      type: text
+      regex: 'System\.getenv\s*\(\s*["'']FTP_USER["'']'
+
+  - id: jvm-ftp-pass-env-source
+    desc: Java source reads FTP_PASS environment variable
+    crit: component
+    conf: 0.9
+    for: [java, kotlin]
+    if:
+      type: text
+      regex: 'System\.getenv\s*\(\s*["'']FTP_PASS["'']'
+
+  - id: jvm-ftp-exfil-filename
+    desc: JVM FTP exfil filename
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'exfil_[^"''\s]{0,80}\.txt|creds_dump\.txt'
+
+  - id: jvm-ftp-dat-exfil-name
+    desc: JVM FTP dat exfil name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: STOR exfil_
+
+  - id: jvm-ftp-dat-exfil-bytecode
+    desc: JVM FTP dat exfil bytecode
+    crit: suspicious
+    conf: 0.9
+    for: [class, java_class, jar]
+    if:
+      type: hex
+      pattern: 53 54 4F 52 20 65 78 66 69 6C 5F
+
+  - id: jvm-ftp-user-env-bytecode
+    desc: JVM bytecode reads FTP_USER from env
+    crit: suspicious
+    conf: 0.9
+    for: [class, jar, zip]
+    if:
+      type: text
+      regex: '(?is)java/lang/System[\s\S]{0,80}getenv[\s\S]{0,80}FTP_USER'
+
+  - id: jvm-ftp-pass-env-bytecode
+    desc: JVM bytecode reads FTP_PASS from env
+    crit: suspicious
+    conf: 0.9
+    for: [class, jar, zip]
+    if:
+      type: text
+      regex: '(?is)java/lang/System[\s\S]{0,80}getenv[\s\S]{0,80}FTP_PASS'
+
+  - id: jvm-ftp-exfil-filename-bytecode
+    desc: JVM bytecode FTP exfil filename
+    crit: suspicious
+    conf: 0.9
+    for: [class, jar, zip]
+    if:
+      type: hex
+      pattern: 63 72 65 64 73 5F 64 75 6D 70 2E 74 78 74
+
+  - id: jvm-ftpclient-ref-bytecode
+    desc: JVM bytecode FTP client ref
+    crit: suspicious
+    conf: 0.88
+    for: [class, jar, zip]
+    if:
+      type: hex
+      pattern: 4D 61 69 6E 24 46 54 50 43 6C 69 65 6E 74
+
+  - id: jvm-ftp-user-bytecode
+    desc: JVM bytecode FTP USER command string
+    crit: component
+    conf: 0.88
+    for: [class, jar, zip]
+    if:
+      type: hex
+      pattern: 55 53 45 52 20
+    unless:
+      - id: well-known/app/macos-benign::dbeaver-app-bundle
+      - id: well-known/app/macos-benign::dbeaver-plugin-jar
+      - id: well-known/app/macos-benign::dbeaver-java-package
+      - id: well-known/tool/reverse-engineering/frida/
+      - id: well-known/tool/detection/snort::dynamic-preprocessor-static-archive
+
+  - id: jvm-ftp-pass-bytecode
+    desc: JVM bytecode FTP PASS command string
+    crit: component
+    conf: 0.88
+    for: [class, jar, zip]
+    if:
+      type: hex
+      pattern: 50 41 53 53 20
+    unless:
+      - id: well-known/app/macos-benign::dbeaver-app-bundle
+      - id: well-known/app/macos-benign::dbeaver-plugin-jar
+      - id: well-known/app/macos-benign::dbeaver-java-package
+      - id: well-known/tool/detection/snort::dynamic-preprocessor-static-archive
+
+  - id: jvm-ftp-stor-bytecode
+    desc: JVM bytecode FTP STOR command string
+    crit: component
+    conf: 0.88
+    for: [class, jar, zip]
+    if:
+      type: hex
+      pattern: 53 54 4F 52 20
+    unless:
+      - id: well-known/tool/reverse-engineering/frida/
+
+composite_rules:
+  - id: jvm-ftp-env-credentials
+    desc: Java reads FTP credential environment vars
+    crit: suspicious
+    conf: 0.9
+    for: [java, kotlin]
+    all:
+      - id: jvm-ftp-user-env-source
+      - id: jvm-ftp-pass-env-source
+
+  - id: java-ftp-credential-exfil
+    desc: Java FTP credential exfiltration
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/fs/path/sensitive/credentials::package-or-netrc-credential-file
+      - id: jvm-ftp-exfil-filename
+    any:
+      - id: java-ftp-command-source
+      - id: jvm-ftp-auth-command
+    needs: 1
+
+  - id: jvm-ftp-credential-upload
+    desc: JVM FTP credential upload
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-ftp-env-credentials
+      - id: jvm-ftp-exfil-filename
+    any:
+      - id: java-ftp-stor-source
+      - id: jvm-ftp-stor-command
+    needs: 1
+
+  - id: jvm-bytecode-ftp-credential-stage
+    desc: JVM bytecode FTP credential stage
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-ftp-env-credentials-bytecode
+      - id: jvm-ftp-exfil-filename-bytecode
+      - id: jvm-ftpclient-ref-bytecode
+
+  - id: jvm-bytecode-manual-ftp-upload
+    desc: JVM bytecode manual FTP upload
+    crit: suspicious
+    conf: 0.94
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-ftp-user-pass-bytecode
+      - id: jvm-ftp-stor-bytecode
+    unless:
+      - id: well-known/tool/detection/snort::dynamic-preprocessor-static-archive
+      # A system package's lib*.a is native library content, not JVM bytecode.
+      # The archive parser exposes it as a deb member, where generic USER/PASS
+      # strings from libcurl can otherwise satisfy this composite.
+      - id: metadata/file/magic/identity::ar-archive
+      - id: metadata/package/files/system-package::os-bundled-static-library
+      - id: metadata/package/files/system-package::container-image-tar-name
+    scope: leaf
+
+  - id: jvm-sensitive-files-ftp-upload
+    desc: JVM sensitive files FTP upload
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-ftp-dat-exfil-name
+      - id: jvm-ftp-user-pass-bytecode
+      - id: objectives/exfiltration/stealer/credential/unix-files::jvm-unix-secret-file-set
+
+  - id: jvm-bytecode-sensitive-ftp-upload
+    desc: JVM bytecode sensitive FTP
+    crit: hostile
+    conf: 0.98
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-ftp-dat-exfil-bytecode
+      - id: jvm-ftp-user-pass-bytecode
+    any:
+      - id: objectives/exfiltration/http/upload::jvm-master-passwd-hex
+      - id: objectives/exfiltration/http/upload::jvm-root-id-rsa-hex
+
+  - id: jvm-ftp-env-credentials-bytecode
+    desc: JVM bytecode FTP credential env
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: jvm-ftp-user-env-bytecode
+      - id: jvm-ftp-pass-env-bytecode
+
+  - id: jvm-ftp-user-pass-bytecode
+    desc: JVM FTP auth command support
+    crit: notable
+    conf: 0.94
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-ftp-user-bytecode
+      - id: jvm-ftp-pass-bytecode
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::openjdk-rt-jar
+      - id: well-known/lib/benign-runtime-bundles::rt-jar-basename
+      - id: well-known/tool/detection/snort::dynamic-preprocessor-static-archive
+      - id: metadata/file/magic/identity::ar-archive
+      - id: metadata/package/files/system-package::os-bundled-static-library

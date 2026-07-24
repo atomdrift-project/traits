@@ -1,0 +1,230 @@
+defaults:
+  for:
+  - pe
+  - dll
+  - c
+  - cpp
+  platforms:
+  - windows
+  attack: T1055
+  mbc: E1055
+traits:
+- id: page-execute-read
+  desc: PAGE_EXECUTE_READ allocation
+  crit: component
+  conf: 0.7
+  if:
+    type: text
+    substr: PAGE_EXECUTE_READ
+  unless:
+  - id: well-known/tool/sysadmin/logapi::logapi-pipe-marker
+  - id: metadata/library/python-runtime::python-runtime
+- id: mem-commit-reserve
+  desc: MEM_COMMIT | MEM_RESERVE allocation
+  crit: component
+  conf: 0.6
+  if:
+    type: text
+    regex: MEM_COMMIT.{0,10}MEM_RESERVE
+- id: hotpatch-patch-array
+  desc: hotpatch_patch byte array
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    substr: hotpatch_patch
+- id: hotpatch-prefix
+  desc: Hot patch prefix reference
+  crit: component
+  conf: 0.75
+  if:
+    type: text
+    regex: (?i)\bhot.?patch(ing)?\b
+- id: stackwalker-main-source-path
+  desc: StackWalker main source path
+  crit: notable
+  conf: 0.98
+  if:
+    type: path
+    regex: 'StackWalker[\\/]main\.cpp$'
+composite_rules:
+- id: rwx-remote-thread-context-exception
+  desc: Known Windows runtime, tool, or platform context for remote-thread APIs
+  crit: exception
+  conf: 0.99
+  any:
+  - id: metadata/library/msys2-runtime::msys2-runtime
+  - id: well-known/tool/development/git-for-windows::mingit-getprocaddr-helper
+  - id: well-known/lib/wine/
+  - id: metadata/signed/platform/
+  - id: well-known/tool/reverse-engineering/windows-debugger/
+  - id: well-known/tool/reverse-engineering/radare2/
+  - id: well-known/tool/sysadmin/console/
+  - id: well-known/tool/sysadmin/conemu/
+  - id: well-known/lib/chromium-angle::vk-swiftshader-basename
+- id: injection-exec-primitives
+  desc: Executable memory or context primitives
+  crit: component
+  conf: 0.85
+  any:
+  - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite
+  - id: exec-read-commit
+  - id: micro-behaviors/process/info/thread::get-thread-context
+  - id: micro-behaviors/process/info/thread::set-thread-context
+- id: exec-read-commit
+  desc: Executable read with commit
+  all:
+  - id: page-execute-read
+  - id: mem-commit-reserve
+- id: rwx-allocation
+  desc: RWX memory allocation
+  crit: notable
+  conf: 0.85
+  any:
+  - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite
+  - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
+  - id: exec-read-commit
+  unless:
+  - id: metadata/library/python-runtime::python-runtime
+  - id: metadata/signed/leaf::microsoft-corporation
+  - id: well-known/tool/development/debugpy/
+  downgrade:
+    any:
+    - id: metadata/library/python-runtime::python-runtime
+    - id: metadata/binary/framework::dotnet-metadata
+    - id: metadata/binary/framework/
+    - id: well-known/tool/sysadmin/netch/
+- id: code-injection-flush
+  desc: Code injection with cache flush
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: micro-behaviors/mem/sync/cache
+  - id: injection-exec-primitives
+  unless:
+  - id: well-known/lib/harmony::harmonylib-marker
+  - id: well-known/lib/benign-runtime-bundles::dotnet-aspnetcore-crypto-runtime
+  - id: well-known/lib/benign-runtime-bundles::pinvoke-kernel32-library
+  - id: well-known/app/windows-desktop-tools::steamkit2-library
+  downgrade:
+    any:
+    - id: metadata/library/python-runtime::python-runtime
+    - id: well-known/tool/sysadmin/netch/
+- id: rwx-process-read-ipc-loader
+  desc: RWX allocation with process-read IPC loader traits
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: rwx-allocation
+  any:
+  - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+  - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-api-usage
+  - id: micro-behaviors/communications/ipc/mailslot::create-mailslot
+  - id: objectives/anti-analysis/debugger-detect/check::debugger-check-with-guards
+  needs: 2
+  unless:
+  - id: metadata/library/msys2-runtime::msys2-runtime
+  - id: well-known/tool/development/git-for-windows::mingit-getprocaddr-helper
+  - id: metadata/signed/platform/
+  - id: metadata/binary/framework::dotnet-metadata
+  - id: well-known/tool/sysadmin/conemu/
+  - id: well-known/tool/reverse-engineering/radare2/
+- id: rwx-writeprocessmemory-loader
+  desc: RWX allocation with WriteProcessMemory
+  crit: notable
+  conf: 0.95
+  all:
+  - id: rwx-allocation
+  - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/framework::dotnet-metadata
+- id: interactive-wpm-resource-loader
+  desc: WriteProcessMemory loader with resource and input probes
+  crit: hostile
+  conf: 0.94
+  all:
+  - id: rwx-allocation
+  - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+  - id: micro-behaviors/data/embedded/payload/resource::native-resource-api-resolution
+  any:
+  - id: micro-behaviors/process/create/shell/spawn::win-shellexecute
+  - id: micro-behaviors/hardware/input/keyboard/hook::get-async-key-state-str
+  needs: 2
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/framework::dotnet-metadata
+  - id: well-known/tool/reverse-engineering/windows-debugger/
+- id: ipc-process-read-rwx-loader
+  desc: IPC-backed RWX process-read loader
+  crit: hostile
+  conf: 0.94
+  all:
+  - id: rwx-process-read-ipc-loader
+  - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+  - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+  any:
+  - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-api-usage
+  - id: micro-behaviors/communications/ipc/mailslot::create-mailslot
+  needs: 1
+  unless:
+  - id: metadata/library/msys2-runtime::msys2-runtime
+  - id: well-known/tool/development/git-for-windows::mingit-getprocaddr-helper
+  - id: metadata/signed/platform/
+  - id: metadata/binary/framework::dotnet-metadata
+  - id: well-known/tool/sysadmin/conemu/
+  - id: well-known/tool/reverse-engineering/radare2/
+- id: rwx-remote-thread-loader
+  desc: RWX allocation with remote thread creation
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: rwx-allocation
+  - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
+  unless:
+  - id: rwx-remote-thread-context-exception
+  - id: metadata/binary/framework::dotnet-metadata
+  - id: metadata/binary/vendor::windows-system-implementer-dll
+- id: masqueraded-rwx-remote-thread-loader
+  desc: Masqueraded RWX remote-thread loader
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: rwx-remote-thread-loader
+  - id: objectives/evasion/masquerade/debug::pe-stem-differs-from-pdb-stem
+  - id: objectives/anti-static/obfuscation/string/junking::consonant-vowel-gibberish
+  any:
+  - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+  - id: micro-behaviors/ui/window/probe::ansi-gui-probe
+  - id: micro-behaviors/process/terminate/kill::terminate-process
+  needs: 2
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/framework::dotnet-metadata
+  - id: well-known/tool/reverse-engineering/windows-debugger/
+  - id: well-known/tool/reverse-engineering/radare2/
+  - id: well-known/tool/sysadmin/console/
+- id: ntdll-hotpatch
+  desc: ntdll hot patching technique
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: hotpatch-prefix
+  - id: hotpatch-patch-array
+  - id: code-injection-flush
+  downgrade:
+    any:
+    - id: metadata/library/python-runtime::python-runtime
+# An unsigned binary impersonating a benign signed OEM utility that also carries
+# a compiled x64 RWX VirtualAlloc(MEM_COMMIT, PAGE_EXECUTE_READWRITE) is a stager
+# allocating an executable buffer for an in-memory payload — a SilverFox/Winos
+# loader, not the real Panasonic app. Masquerade leg keeps FP near zero.
+- id: panasonic-masquerade-rwx-stager
+  desc: Panasonic masquerade with x64 RWX allocation
+  crit: hostile
+  conf: 0.95
+  for: [pe, dll]
+  arch: [x86-64]
+  all:
+  - id: objectives/evasion/masquerade/identity/mimicry::unsigned-panasonic-notification-masquerade
+  - id: micro-behaviors/mem/alloc/executable::virtualalloc-rwx-commit-x64

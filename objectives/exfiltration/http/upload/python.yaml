@@ -1,0 +1,109 @@
+defaults:
+  platforms: [unix, windows]
+  for: [python, pyc]
+  attack: T1041
+traits:
+  - id: credential-var-in-dict
+    desc: Credential variable used in dictionary
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: '["''](password|token|secret|key)["'']\s*:\s*\$'
+  - id: github-cli-download-auth-token-fragment
+    desc: "GitHub CLI download authz header fragment"
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      substr: 'GH_CLI_DOWNLOAD_LINK=$(curl -H "Authorization:token $GITHUB_TOKEN"'
+  - id: cicd-release-script-b64encode-marker
+    desc: CI release script base64 encoding marker
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      substr: "base64.b64encode((Path(__file__).parent / 'scripts' / 'cicd-release.sh')"
+  - id: python-encoded-archive-in-http-header
+    desc: Archive payload header field
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      # Require the header name itself to identify a data/payload transfer.
+      # This keeps ordinary integrity headers (for example Content-MD5) and
+      # authentication tokens out of the archive-exfiltration signal.
+      regex: '(?is)headers?\s*=\s*\{[^{}]{0,300}["''](x[-_])?(archive|payload|data)[-_]?\w*["'']\s*:'
+composite_rules:
+  - id: python-source-upload-to-transform-service
+    desc: Sends local Python source to a remote transform service
+    crit: hostile
+    conf: 0.99
+    attack: T1005,T1041
+    mbc: E1005
+    all:
+      - id: micro-behaviors/fs/read/file::file-open-content
+      - id: micro-behaviors/communications/http/request/client::requests-post-json-payload
+      - id: micro-behaviors/communications/http/url/domain::workers-dev-domain
+      - id: micro-behaviors/communications/http/url/path::code-transform-endpoint-path
+  - id: official-llm-provider-authenticated-request
+    desc: Official LLM provider authenticated request
+    crit: exception
+    conf: 0.93
+    all:
+      - id: micro-behaviors/communications/http/llm::llm-official-provider-api-call
+    any:
+      - id: micro-behaviors/communications/http/headers::authorization-header-map-entry
+      - id: micro-behaviors/communications/http/headers::x-api-key-header-map-entry
+  - id: hashicorp-infra-api-authenticated-request
+    desc: Authenticated HashiCorp infrastructure API request
+    crit: exception
+    conf: 0.93
+    all:
+      - id: micro-behaviors/communications/http/services/hashicorp::hashicorp-infra-api-token-auth
+      - id: micro-behaviors/communications/http/request/client::urllib-json-post
+  - id: browser-use-cloud-authenticated-api
+    desc: Browser Use Cloud authenticated API request
+    crit: exception
+    conf: 0.93
+    all:
+      - id: micro-behaviors/communications/http/services/browser-use::browser-use-cloud-api
+      - id: micro-behaviors/communications/http/services/browser-use::browser-use-api-key-header
+  - id: aws-shared-credentials-http-exfil
+    desc: AWS shared credentials exfiltrated over HTTP
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/credential-access/cloud/aws-token::python-aws-shared-credentials-file-access
+      - id: micro-behaviors/communications/http/client/library::urllib-request
+  - id: python-targz-requests-post
+    desc: Python script uploading tar.gz archive via requests
+    crit: hostile
+    conf: 0.98
+    unless:
+      - id: metadata/package/quality/source::source-archive-member
+      - id: metadata/package/testing/
+      - id: metadata/package/testing/presence/harness::python-info-test-path
+    all:
+      - id: micro-behaviors/data/compress/library::gzip-compress-call
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+    any:
+      - id: micro-behaviors/data/compress/library::tarfile-open-call
+      - id: metadata/file/extension/identity::archive-extension-reference
+  - id: python-header-archive-post
+    desc: Encoded archive in HTTP header
+    crit: hostile
+    conf: 0.98
+    unless:
+      - id: github-cli-download-auth-token-fragment
+      - id: cicd-release-script-b64encode-marker
+      - id: official-llm-provider-authenticated-request
+    all:
+      - id: python-encoded-archive-in-http-header
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+    any:
+      - id: micro-behaviors/data/archive/create/tar::python-tar-gz-write-mode
+      - id: micro-behaviors/data/compress/library::gzip-compress-call
+      - id: micro-behaviors/data/compress/library::tarfile-open-call
+      - id: metadata/file/extension/identity::archive-extension-reference
+    near_bytes: 512

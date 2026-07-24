@@ -1,0 +1,67 @@
+# JavaScript / Node.js DNS-pin / resolver-bypass patterns. JS analog of
+# objectives/command-and-control/infrastructure/dns-pin/traits.yaml
+# (which is Python-only).
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1090.004
+  mbc: B0030
+
+traits:
+  # Inverted DNS-validity check (JS form):
+  # `if (resolved.split('.')[0] !== '127') { return null; }` — same
+  # honeypot/sandbox DNS-rewrite evasion as the Python version.
+- id: js-inverted-dns-loopback-check
+  desc: "Inverted DNS check returns null non-loopback"
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: text
+    regex: '\.split\(\s*["'']\.["'']\s*\)\s*\[\s*0\s*\]\s*!==?\s*["'']127["'']'
+
+- id: js-doh-unrecognized-resolver
+  desc: DoH URL using an unrecognized resolver
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: text
+    regex: 'https?://[a-z0-9.-]{4,80}/dns-query\b'
+  not:
+      # Public resolver domains and their documented IP endpoints are
+      # ordinary resolver choices, not DNS-pinning evidence.
+  - regex: '(cloudflare-dns\.com|dns\.google|dns\.quad9\.net|dns\.adguard\.com|dns\.opendns\.com|1\.0\.0\.1|1\.1\.1\.1|8\.8\.4\.4|8\.8\.8\.8|9\.9\.9\.9)/dns-query'
+
+- id: js-hosts-file-write
+  desc: Script writes mapping to system hosts file
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: trait
+    id: micro-behaviors/fs/file/write/direct::js-etc-hosts-write
+
+composite_rules:
+- id: js-dns-pin-mechanism
+  desc: JS DNS resolution bypass mechanism
+  crit: suspicious
+  conf: 0.93
+  any:
+  - id: micro-behaviors/communications/dns/client::js-dns-lookup-monkey-patch
+  - id: micro-behaviors/communications/dns/client::js-dns-resolve-monkey-patch
+  - id: js-inverted-dns-loopback-check
+  - id: js-hosts-file-write
+  - id: js-doh-unrecognized-resolver
+  unless:
+  - id: well-known/tool/development/yarn::yarn-cli-bundle-marker
+  - id: metadata/package/testing/presence/harness::test-directory-path
+
+- id: js-dns-pinning-bypass
+  desc: JS DNS bypass for hardcoded fallback
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: js-dns-pin-mechanism
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-script
+  downgrade:
+    any:
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/harness/

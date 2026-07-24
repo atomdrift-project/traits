@@ -1,0 +1,214 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - python
+  mbc: B0024
+  attack: T1059.006
+  crit: notable
+traits:
+  - id: subprocess-install-string
+    desc: subprocess shell command runs pip install
+    conf: 0.9
+    if:
+      type: text
+      regex: 'subprocess\.[a-z_]+\(\s*["''][^"'']{0,360}\bpip\b[^"'']{0,160}\binstall\b'
+  - id: sys-executable
+    desc: pip install using sys.executable
+    conf: 0.95
+    if:
+      type: text
+      regex: sys\.executable.{0,120}--break-system-packages
+  - id: os-system
+    desc: String pip install via os.system
+    conf: 0.9
+    if:
+      type: text
+      regex: 'os\.system\(\s*["''][^"'']{0,220}\bpip\b[^"'']{0,120}\binstall\b'
+    unless:
+      - type: text
+        regex: 'os\.system\(\s*["'']pip install requests["'']\s*\)'
+    downgrade:
+      all:
+        - id: except-colon-pattern
+        - id: os-system-requests-install
+  - id: os-system-requests-install
+    desc: os.system pip install requests
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      regex: 'os\.system\(\s*["'']pip install requests["'']\s*\)'
+  - id: main-call-content
+    desc: Direct pip.main() call in source
+    conf: 0.85
+    if:
+      type: text
+      regex: pip\.main\(
+  - id: except-colon-pattern
+    desc: except statement with colon
+    crit: component
+    conf: 0.5
+    size_max: 50000
+    if:
+      type: text
+      regex: 'except\s+(ImportError|ModuleNotFoundError)\b[^:]{0,80}:'
+  - id: import-statement
+    desc: import statement for installer-related modules
+    crit: component
+    conf: 0.4
+    if:
+      type: text
+      regex: import\s+(pip|pkg_resources)\b
+  - id: install-status-print
+    desc: Printed dependency install notice
+    crit: notable
+    conf: 0.55
+    if:
+      type: text
+      regex: 'print\(\s*["'']Installing .{1,80}["'']\s*\)'
+  - id: github-vcs-install
+    desc: pip installs GitHub VCS package
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: '(os\.system|subprocess|pip\.)[\s\S]{0,60}git\+https://github\.com/[^"'']{1,60}'
+  - id: except-module-not-found-content
+    desc: except ModuleNotFoundError in source
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      regex: except ModuleNotFoundError[\s\S]{0,500}\bpip\b
+  - id: except-import-error-content
+    desc: except ImportError in source
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: except ImportError[\s\S]{0,500}\bpip\b
+  - id: python-pip-main-fallback-function
+    desc: Import-failure function calls pip.main
+    crit: component
+    conf: 0.9
+    if:
+      type: tree-sitter
+      kind: function
+      regex: '(?s)\btry\b.{0,600}\bexcept\s+(ImportError|ModuleNotFoundError)\b.{0,600}\bpip\.main\s*\('
+  - id: pip-break-system-packages
+    desc: pip install break-system-packages flag
+    crit: notable
+    conf: 0.9
+    if:
+      type: string_literal
+      exact: --break-system-packages
+  # Self-updater tell: a tool that queries the PyPI JSON API for its own latest
+  # release before offering an upgrade. Malware that abuses --break-system-packages
+  # to force-install attacker packages on PEP 668 systems does not check PyPI for
+  # its own version. Used to clear the break-system-packages-autoinstall FP on
+  # legitimate self-updating CLI packages.
+  - id: subprocess-requests-install
+    desc: Subprocess command includes the requests package
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      regex: 'subprocess\.(run|Popen|call)\(\s*\[[^\]]{0,240}["'']requests["'']'
+composite_rules:
+  - id: python-package-host-profile-install
+    desc: Python installs a dependency alongside host profiling and HTTP
+    # Dependency bootstraps commonly check the host and contact a package or
+    # update service.  This is useful triage context, but does not establish a
+    # supply-chain compromise or exfiltration without additional evidence.
+    crit: notable
+    conf: 0.85
+    all:
+      - id: subprocess-requests-install
+      - id: objectives/discovery/system/profile::python-device-host-profile-fields
+      - id: micro-behaviors/communications/http/request/client::request-python
+    unless:
+      - id: metadata/package/testing/
+  - id: subprocess-install
+    desc: Runtime pip install via subprocess
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/os/package-manager/install::subprocess-pip-install-list
+      - id: subprocess-install-string
+  - id: friendly-github-vcs-install
+    desc: Printed GitHub VCS install hint
+    crit: notable
+    conf: 0.7
+    all:
+      - id: install-status-print
+      - id: github-vcs-install
+  - id: try-import-install
+    desc: Try-except import with fallback pip
+    conf: 0.9
+    crit: suspicious
+    near_lines: 40
+    all:
+      - id: except-colon-pattern
+    any:
+      - id: subprocess-install
+      - id: sys-executable
+      - id: os-system
+      - id: main-call-content
+    unless:
+      - id: metadata/library/finance::dartlab-finance-context
+      - id: well-known/app/calvyn-code
+    downgrade:
+      any:
+        - id: os-system-requests-install
+        - id: subprocess-requests-install
+        - id: objectives/execution/autoinstall/pip/
+  - id: yara-pip-fallback-install
+    desc: Try import with pip install
+    conf: 0.95
+    crit: suspicious
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/build/pip::python-packaging-tool-tests
+    all:
+      - id: except-colon-pattern
+      - id: import-statement
+    any:
+      - id: subprocess-install
+      - id: sys-executable
+      - id: os-system
+      - id: main-call-content
+    downgrade:
+      any:
+        - id: objectives/execution/autoinstall/pip/
+  - id: pip-fallback-install-content
+    desc: Try-import with pip.main() auto-install
+    conf: 0.9
+    crit: suspicious
+    all:
+      - id: micro-behaviors/os/package-manager/install::python-pip-module-import
+      - id: python-pip-main-fallback-function
+      - id: main-call-content
+    any:
+      - id: except-module-not-found-content
+      - id: except-import-error-content
+  - id: break-system-packages-autoinstall
+    desc: Runtime pip install bypasses system package guard
+    conf: 0.94
+    crit: suspicious
+    all:
+      - id: pip-break-system-packages
+    any:
+      - id: subprocess-install
+      - id: sys-executable
+      - id: os-system
+      - id: main-call-content
+    unless:
+      # This library exposes an explicit opt-in helper for installing optional
+      # dependencies; its own package identity is benign context for that API.
+      - id: metadata/package/quality/false-positives::agent-utilities-library-context
+      # AI-agent tools self-install/uninstall their own package at runtime
+      # (e.g. clawmetry's `pip uninstall --break-system-packages clawmetry`).
+      - id: well-known/tool/detection/ai-guardrail/
+      # Legitimate self-updating CLI packages check PyPI for their own latest
+      # release, then offer `pip install --upgrade <self> --break-system-packages`.
+      - id: micro-behaviors/communications/http/services/registry::package-json-endpoint

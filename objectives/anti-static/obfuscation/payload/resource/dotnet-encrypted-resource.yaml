@@ -1,0 +1,137 @@
+# Encrypted second-stage payloads hidden in CLR MANAGED resources — the blind
+# spot the Win32 resource walk misses. filefacts scans the cor20 resources blob
+# and emits per-managed-resource entropy/size metrics. A .NET crypter stashes
+# its encrypted payload as a managed resource: a large, high-entropy chunk
+# sitting among the low-entropy `.resources`/bitmap streams (observed 6.5-7.1
+# vs 4.9-6.2 for the decoy resources). Entropy alone is a neutral capability
+# (apps embed compressed images/zips too), so the hostile verdict requires a
+# reflective-resource LOADER reading it — i.e. the assembly decrypts and runs
+# an embedded high-entropy blob. The size floor (64 KiB) filters small benign
+# high-entropy UI assets (icons, a lone PNG) from genuine packed stages.
+defaults:
+  for:
+    - pe
+    - dll
+  platforms:
+    - windows
+  attack: T1027.009
+composite_rules:
+  - id: dotnet-obfuscated-reflective-resource-payload
+    desc: .NET obfuscated resource payload with reflective dispatch
+    crit: hostile
+    conf: 0.95
+    attack: "T1027.009,T1620"
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+    any:
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-entrypoint-reflection
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-in-memory-assembly-invoke
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft-corporation
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+
+  - id: dotnet-encrypted-resource-command-stager
+    desc: .NET encrypted resource writes payload and invokes cmd.exe
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.009,T1140,T1059.001"
+    mbc: "B0009.014"
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-create-decryptor
+      - id: micro-behaviors/fs/write/file/direct::dotnet-writeallbytes-token
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/process/create/exec::cmd-exe-reference
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft-corporation
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+  - id: dotnet-reflective-encrypted-resource-loader
+    desc: Reflective loader reading a large encrypted managed resource
+    crit: hostile
+    conf: 0.93
+    mbc: B0009.014
+    all:
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-activator-resource-invoker
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+    any:
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-entrypoint-reflection
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-in-memory-assembly-invoke
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+  - id: dotnet-managed-resource-decryptor
+    desc: .NET decrypts a large high-entropy managed resource
+    crit: hostile
+    conf: 0.94
+    attack: T1140
+    mbc: B0009.014
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-decryptor
+    any:
+      - id: objectives/anti-static/pack/runtime::dotnet-packed-stub
+      - id: objectives/evasion/masquerade/identity/fabricated::dotnet-fabricated-identity-crypter
+      - id: objectives/anti-static/obfuscation/anti-decompile::suppress-ildasm
+      - id: objectives/anti-static/obfuscation/anti-decompile::suppress-ildasm-managed-pe
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+  # A managed assembly that decrypts a large resource and reflectively loads
+  # an embedded PE is a concealed second-stage loader, not ordinary resource
+  # handling.  The embedded-PE leg is deliberately structural rather than a
+  # filename or family signature so it generalizes to repacked variants.
+  - id: dotnet-encrypted-embedded-pe-loader
+    desc: .NET decrypts and reflectively loads embedded PE payload
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.009,T1140,T1620"
+    mbc: B0009.014
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-decryptor
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-activator-resource-invoker
+      - id: metadata/binary/layout::pe-embedded
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft-corporation
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+  - id: dotnet-reflective-aes-resource-crypter
+    desc: Reflective AES decryption of a CLR resource
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.009,T1140,T1620"
+    mbc: "B0009.014"
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-decryptor
+      - id: micro-behaviors/process/interpreter/reflection/runtime::delegate-invocation-chain
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-activator-resource-invoker
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft-corporation
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+  - id: dotnet-binaryformatter-encrypted-resource-loader
+    desc: .NET BinaryFormatter loader with encrypted managed resource
+    crit: hostile
+    conf: 0.93
+    mbc: C0026
+    all:
+      - id: dotnet-managed-resource-decryptor
+      - id: micro-behaviors/data/serialize/unsafe::binary-formatter
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker

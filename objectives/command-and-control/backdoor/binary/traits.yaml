@@ -1,0 +1,169 @@
+defaults:
+  platforms: [unix]
+  for: [elf, macho]
+  crit: hostile
+  conf: 0.82
+  attack: T1059
+
+composite_rules:
+  - id: benign-native-command-server-context
+    desc: Recognized benign native command-server tool context
+    crit: exception
+    conf: 0.99
+    any:
+      - id: well-known/app/godot::godot-native-runtime
+      - id: well-known/app/anthropic-claude-code::native-linux-cli-member
+      - id: well-known/app/falco::falco-monitoring-context
+      - id: well-known/tool/reverse-engineering/gdb::gdb-debugger-context
+      - id: well-known/app/samba::samba-configuration-library
+      - id: well-known/tool/development/qemu::qemu-system-emulator
+
+  - id: xor-unpacking-winsock-command-backdoor
+    desc: XOR-unpacking Winsock command backdoor
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.003,T1057
+    mbc: B0030
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: objectives/anti-static/obfuscation/payload/encrypted::nop-padded-dword-xor-decryptor
+      - id: micro-behaviors/communications/socket/init::socket-api
+      - id: micro-behaviors/communications/socket/init::bind-api
+      - id: micro-behaviors/communications/socket/init::listen-api
+      - id: micro-behaviors/communications/socket/init::accept-api
+      - id: micro-behaviors/process/create/exec::winexec
+      - id: micro-behaviors/os/msdos/internal::check-command-com
+      - id: micro-behaviors/process/enumerate/snapshot::dynamic-process32-first
+
+  - id: socket-command-backdoor
+    desc: Socket command backdoor surface
+    all:
+      - id: micro-behaviors/communications/socket/create::posix-socket-import
+      - id: micro-behaviors/communications/socket/receive::recv-symbol
+      - id: micro-behaviors/communications/socket/send::send-symbol
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+    unless:
+      # Stock shells/privileged tools (busybox, socat, gawk, sudo) — grouped
+      # into one exception. sudo's intercept preload lib opens a socket to the
+      # sudo process and hooks exec for the intercept policy, not a backdoor.
+      - id: well-known/tool/sysadmin/unix-benign::benign-native-shell-tools
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/tool/development/flow-bin/
+      - id: benign-native-command-server-context
+      - id: well-known/app/meshcentral::meshcentral-agent-binary-context
+
+  - id: accepting-command-backdoor
+    desc: Accepting command backdoor surface
+    all:
+      - id: micro-behaviors/communications/socket/listen::accepting-server-api-surface
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
+      - id: micro-behaviors/process/create/shell/command-mode::native-shell-command-invocation
+    unless:
+      - id: well-known/tool/sysadmin/network::socat-utility
+      - id: well-known/tool/development/gnu-awk::gawk-binary
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/tool/development/flow-bin/
+      - id: benign-native-command-server-context
+      - id: well-known/app/meshcentral::meshcentral-agent-binary-context
+  - id: malformed-native-network-exec-backdoor
+    desc: Malformed native binary exposes network control and process execution
+    crit: hostile
+    conf: 0.98
+    attack: T1027.002,T1059,T1071
+    mbc: B0030
+    for: [elf]
+    platforms: [linux]
+    all:
+      - id: metadata/binary/anomaly/format::elf-parse-failure
+      - id: micro-behaviors/communications/socket/listen::listen-import-text
+      - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
+    unless:
+      - id: well-known/tool/sysadmin/unix-benign/
+      - id: metadata/binary/vendor/
+  - id: native-address-shell-backdoor
+    desc: Native network address with shell execution
+    crit: hostile
+    conf: 0.98
+    attack: T1059.004
+    mbc: B0030.002
+    for: [elf]
+    platforms: [linux]
+    all:
+      - id: micro-behaviors/communications/ip/parse::inet-pton-symbol
+      - id: micro-behaviors/communications/ip/parse::htons-symbol
+      - id: micro-behaviors/communications/socket/create-wrapper::native-socket-wrapper-symbol
+      - id: micro-behaviors/communications/socket/connect-wrapper::native-connect-wrapper-symbol
+      - id: micro-behaviors/process/fd/dup-wrapper::native-dup2-wrapper-symbol
+      - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+
+  - id: daemonized-socket-command-backdoor
+    desc: Daemonized socket command backdoor
+    all:
+      - id: micro-behaviors/communications/socket/listen::accepting-server-api-surface
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
+      - id: micro-behaviors/process/create/shell/command-mode::native-shell-command-invocation
+      - id: micro-behaviors/process/daemonize/detach::setsid-import
+    unless:
+      - id: well-known/tool/sysadmin/network::socat-utility
+      - id: well-known/tool/development/gnu-awk::gawk-binary
+      - id: well-known/tool/sysadmin/busybox::busybox-binary
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/tool/development/flow-bin/
+      - id: benign-native-command-server-context
+      - id: well-known/app/meshcentral::meshcentral-agent-binary-context
+
+  - id: vless-upnp-native-backdoor
+    desc: Native VLESS proxy with UPnP exposure
+    crit: hostile
+    conf: 0.98
+    attack: T1090,T1105
+    all:
+      - id: micro-behaviors/communications/proxy/vless::native-vless-websocket-marker
+      - id: micro-behaviors/communications/http/request/upnp::add-port-mapping-soap
+      - id: micro-behaviors/os/syscall/raw::raw-network-syscalls
+
+  - id: local-setuid-file-replacement-backdoor
+    desc: Local setuid file replacement backdoor
+    crit: suspicious
+    conf: 0.86
+    all:
+      - id: micro-behaviors/process/identity/setuid::setuid-dup--setreuid
+      - id: micro-behaviors/os/privilege/query::geteuid
+      - id: micro-behaviors/fs/file/rename::rename
+    any:
+      - id: micro-behaviors/fs/file/rename::rename-account-file
+      - id: micro-behaviors/fs/file/rename::rename-loader-file
+    needs: 1
+    unless:
+      - id: metadata/binary/linking/runtime::musl-loader-basename
+      - id: metadata/package/files/included::so-extension-basename
+      - id: well-known/lib/bun-runtime/
+      - id: well-known/app/kilocode::kilo-code-native-runtime
+      - id: well-known/app/opencode::opencode-bun-runtime
+      - id: objectives/credential-access/dump/system/
+      - id: well-known/tool/sysadmin/container::podman-distribution
+      - id: metadata/package/files/dependency::os-image-root-file-path
+      - id: objectives/command-and-control/backdoor/binary::benign-native-library-context
+  - id: local-setuid-checked-file-replacement
+    desc: Checked setuid file replacement backdoor
+    crit: suspicious
+    conf: 0.88
+    all:
+      - id: local-setuid-file-replacement-backdoor
+      - id: micro-behaviors/fs/file/stat::stat-exists
+
+  - id: benign-native-library-context
+    desc: Recognized benign native-library context for standard file APIs
+    crit: exception
+    conf: 0.99
+    any:
+      - id: well-known/lib/sap-hana/
+      - id: well-known/lib/koffi/

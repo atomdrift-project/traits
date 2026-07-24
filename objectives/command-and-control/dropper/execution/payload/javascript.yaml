@@ -1,0 +1,85 @@
+# JavaScript/Electron loaders that conceal and launch a second executable.
+defaults:
+  platforms: [windows]
+  for: [javascript]
+  attack: T1027,T1059.007
+
+traits:
+  - id: payload-extraction-function
+    desc: Payload extraction function name fragment
+    crit: component
+    conf: 0.9
+    if:
+      type: symbol
+      kind: function
+      exact: extractPayload
+
+  - id: executable-output-path
+    desc: Executable output path identifier
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\\b(outputFile|payloadFile)\\b|\\b(executablePath|exePath)\\b'
+
+  - id: executable-output-extension
+    desc: Windows executable filename extension
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      regex: '(?i)\\.exe\\b'
+
+  - id: executable-output-process-api
+    desc: Process or file output API call
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: '(?i)\\b(writeFile|createWriteStream|execFile|spawn)(Sync)?\\s*\\('
+
+composite_rules:
+  - id: executable-output-process-correlation
+    desc: Executable output path with process API
+    crit: notable
+    conf: 0.92
+    unless:
+      - id: well-known/lib/nextjs/
+    all:
+      - id: executable-output-path
+      - id: executable-output-extension
+      - id: executable-output-process-api
+    near_bytes: 512
+
+  - id: encrypted-executable-payload-extraction
+    desc: AES-CBC encrypted executable payload extraction
+    crit: hostile
+    conf: 0.99
+    mbc: B0032
+    all:
+      - id: micro-behaviors/crypto/symmetric/aes/runtime-library::createDecipheriv
+      - id: micro-behaviors/data/decode/custom::decrypt-payload-function-name
+      - id: payload-extraction-function
+      - id: executable-output-process-correlation
+    scope: file
+    unless:
+      - id: metadata/package/testing/
+
+  # A computed child_process member, computed ASAR extraction, synchronous
+  # shell execution, and an HTTP client together describe the observed
+  # Electron updater/stager. Each atom remains useful independently; the
+  # hostile classification is reserved for this execution chain.
+  - id: obfuscated-electron-update-loader
+    desc: Obfuscated Electron update loader
+    crit: hostile
+    conf: 0.98
+    attack: T1105,T1059.007,T1027
+    all:
+      - id: objectives/supply-chain/hidden-payload/trojan::computed-child-process-destructure-text
+      - id: micro-behaviors/data/archive/extract/asar::computed-asar-method-call
+      - id: micro-behaviors/process/create/shell/bridge::js-execsync
+      - id: micro-behaviors/communications/http/request/client::axios-direct-call
+      - id: micro-behaviors/process/terminate/command::js-taskkill-force-command
+    scope: file
+    unless:
+      - id: metadata/package/testing/

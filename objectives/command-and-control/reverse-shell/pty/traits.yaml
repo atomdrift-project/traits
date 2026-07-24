@@ -1,0 +1,237 @@
+defaults:
+  platforms:
+  - linux
+  - windows
+  - macos
+traits:
+- id: py-popen-pipe-block
+  desc: Popen PIPE communicate block
+  crit: notable
+  conf: 0.8
+  for:
+  - python
+  - pyc
+  if:
+    type: raw
+    regex: Popen.{0,24}PIPE.{0,24}communicate
+- id: py-first-connection-banner
+  desc: First Connection banner string
+  crit: suspicious
+  conf: 0.8
+  for:
+  - python
+  - pyc
+  if:
+    type: text
+    substr: First Connection
+- id: socat-exec-sh
+  desc: socat EXEC shell pattern
+  crit: notable
+  conf: 0.8
+  for:
+  - shell
+  - package.json
+  if:
+    type: text
+    regex: socat\s+.{0,50}EXEC.{0,20}sh
+- id: shell-python-pty-spawn-bash
+  desc: Shell promotes Python PTY bash
+  crit: suspicious
+  conf: 0.96
+  attack: T1059.006
+  for:
+  - shell
+  - text
+  if:
+    type: text
+    regex: 'python3?\s+-c\s+[''"]import\s+pty;\s*pty\.spawn\([''"]/bin/bash'
+- id: socat-tcp-exec
+  desc: socat TCP EXEC pattern
+  crit: notable
+  conf: 0.8
+  for:
+  - shell
+  - package.json
+  if:
+    type: text
+    regex: socat\s+.{0,50}TCP.{0,30}EXEC
+- id: socat-pty
+  desc: socat PTY pattern
+  crit: notable
+  conf: 0.8
+  for:
+  - shell
+  - package.json
+  if:
+    type: text
+    regex: socat\s+.{0,50}PTY
+  unless:
+    - id: metadata/lang/source::linux-kernel-secondary-tree-path
+    - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+    - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+    - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+    - id: metadata/lang/source::linux-kernel-primary-tree-path
+- id: telnet-pipe
+  desc: telnet piped reverse shell pattern
+  crit: notable
+  conf: 0.8
+  for:
+  - shell
+  - package.json
+  if:
+    type: text
+    regex: telnet\s+\S+\s+\d+\s*\|.{0,50}\|\s*telnet
+- id: mknod-telnet
+  desc: mknod telnet reverse shell pattern
+  crit: notable
+  conf: 0.8
+  for:
+  - shell
+  - package.json
+  if:
+    type: text
+    regex: mknod.{0,30}telnet
+composite_rules:
+- id: python-pty
+  desc: Python PTY spawn reverse shell
+  crit: suspicious
+  conf: 0.95
+  attack: T1059.006
+  for:
+  - python
+  all:
+  - id: micro-behaviors/process/tty/pty/
+  - id: micro-behaviors/communications/socket/create::python-socket
+  - id: micro-behaviors/communications/socket/connect::connect-python
+  any:
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh
+  - id: micro-behaviors/process/create/shell/spawn::bin-shell
+  - id: micro-behaviors/process/create/shell/spawn::python-bash-path
+  unless:
+  - id: metadata/package/quality/false-positives::twicc-terminal-path
+  - id: well-known/app/skypilot::skypilot-source-file
+  - id: well-known/tool/detection/pipguard::pipguard-defensive-scanner-source
+  - id: well-known/tool/development/luma::archive-member
+- id: python-socket-shell
+  desc: Python socket-based reverse shell
+  crit: suspicious
+  conf: 0.95
+  attack: T1059.006
+  for:
+  - python
+  all:
+  - id: micro-behaviors/communications/socket/connect::socket-socket-call
+  - id: micro-behaviors/communications/socket/connect::socket-connect-method
+  - id: objectives/evasion/fileless/memory::subprocess-mod
+  - id: micro-behaviors/process/fd/stdio::python-subprocess-pipe-args
+  any:
+  - id: micro-behaviors/process/create/shell/spawn::bin-sh
+  - id: micro-behaviors/process/create/shell/spawn::bin-shell
+  - id: micro-behaviors/process/create/shell/spawn::python-bash-path
+  unless:
+  - id: micro-behaviors/communications/socket/family::af-unix-socket
+  downgrade:
+    any:
+    - id: micro-behaviors/process/fd/stdio::pipe-constant
+- id: python-command-loop-shell
+  desc: Python socket command loop shell
+  crit: suspicious
+  conf: 0.96
+  attack: T1059.006
+  for:
+  - pyc
+  all:
+  - id: metadata/file/magic/identity::python-bytecode
+  - id: py-popen-pipe-block
+  - id: micro-behaviors/process/create/subprocess::subprocess-output-options
+  - id: micro-behaviors/process/create/subprocess::subprocess-shell-cwd-options
+  - id: py-first-connection-banner
+- id: stdio-socket
+  desc: Python subprocess stdio bridged to socket
+  crit: suspicious
+  conf: 0.9
+  attack: T1059
+  for: [scripts, binaries]
+  all:
+  - id: micro-behaviors/process/fd/stdio::python-custom-stdio
+  any:
+  - id: micro-behaviors/communications/socket/connect::socket-connect-call
+  - id: micro-behaviors/communications/socket/connect::socket-connect-method
+  near_bytes: 4096
+  downgrade:
+    any:
+    - id: metadata/package/testing/presence/harness::python-test-file
+    - id: metadata/package/testing/presence/harness::unittest-module
+    - id: objectives/anti-static/obfuscation/payload/container::source-map-extension
+    - id: metadata/file/format::sourcemap-sources-content
+  unless:
+  - id: well-known/tool/offensive/sic-security/
+  - id: well-known/lib/benign-runtime-bundles::breezy-ssh-transport
+- id: stdio-dup2-socket
+  desc: Python socket descriptor bridged to stdio
+  crit: suspicious
+  unless:
+    - id: well-known/app/remotepower::documented-rmm-release-context
+    - id: well-known/tool/offensive/pentestkit/
+  conf: 0.9
+  attack: T1059.006
+  for: [python, pyc]
+  all:
+  - id: micro-behaviors/process/fd/stdio::py-stdio-dup2
+  any:
+  - id: micro-behaviors/communications/socket/connect::socket-connect-call
+  - id: micro-behaviors/communications/socket/connect::socket-connect-method
+- id: socat
+  desc: Socat reverse shell pattern
+  crit: suspicious
+  conf: 0.95
+  attack: T1059.004
+  for:
+  - shell
+  - package.json
+  any:
+  - id: socat-exec-sh
+  - id: socat-tcp-exec
+  - id: socat-pty
+- id: shell-python-pty-promotion
+  desc: Python PTY shell promotion
+  crit: hostile
+  conf: 0.98
+  attack: T1059.006
+  for:
+  - shell
+  - text
+  all:
+  - id: micro-behaviors/process/interpreter/python::python-inline-command
+  - id: shell-python-pty-spawn-bash
+- id: telnet-comp
+  desc: Telnet-based reverse shell
+  crit: suspicious
+  conf: 0.95
+  attack: T1059.004
+  for:
+  - shell
+  - package.json
+  any:
+  - id: telnet-pipe
+  - id: mknod-telnet
+- id: python-reverse-shell-c2
+  desc: Python reverse shell with hardcoded C2 IP
+  crit: hostile
+  conf: 0.99
+  attack: T1059.006
+  for:
+  - python
+  all:
+  - id: python-socket-shell
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-script
+- id: python-command-loop-c2
+  desc: Python socket command shell with hardcoded C2
+  crit: hostile
+  conf: 0.99
+  attack: T1059.006
+  for:
+  - pyc
+  all:
+  - id: python-command-loop-shell
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-binary

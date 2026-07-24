@@ -1,0 +1,185 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+  attack: T1071.001
+traits:
+  - id: remote-method-loader
+    desc: Remote method loader routine
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      exact: GetRemoteMethodAsync
+  - id: request-module-routine
+    desc: Remote module request routine
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      exact: RequestModule
+  - id: module-request-json
+    desc: get_module task request JSON
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      exact: '{"type":"get_module","args":{"name":"'
+  - id: module-source-buffer
+    desc: Remote module source buffer
+    crit: component
+    conf: 0.8
+    if:
+      type: text
+      exact: moduleSources
+  - id: remote-command-handler
+    desc: Remote command execution handler
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      exact: HandleCmd
+  - id: remote-file-upload-handler
+    desc: Remote file upload handler
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      exact: HandleUpload
+  - id: remote-file-download-handler
+    desc: Remote file download handler
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      exact: HandleDownload
+  - id: remote-fs-handler
+    desc: Remote filesystem list handler
+    crit: suspicious
+    conf: 0.86
+    if:
+      type: text
+      exact: HandleFsList
+  - id: remote-screenshot-handler
+    desc: Remote screenshot handler
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      exact: HandleScreenshot
+  - id: remote-keylogger-handler
+    desc: Remote keylogger handler
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      exact: HandleKeylogger
+  - id: killactor-task-handler
+    desc: KillActor task handler
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      exact: KillActor
+  - id: killactor-command-payload-log
+    desc: KillActor command payload log
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      exact: 'KillActor received string[] payload for command: {0}'
+  - id: killactor-payload-log
+    desc: KillActor payload log
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      exact: 'KillActor received payload: {0}'
+  - id: unicode-base64-scriptblock
+    desc: Unicode base64 decoded scriptblock execution
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: 'Unicode\.GetString.{0,80}scriptblock\]::Create'
+  - id: powershell-encodedcommand-template
+    desc: PowerShell EncodedCommand process template
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      exact: 'powershell.exe -NoLogo -NoProfile -EncodedCommand %s'
+composite_rules:
+  - id: killactor-encodedcommand-task
+    desc: KillActor EncodedCommand task
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: killactor-command-payload-log
+      - id: powershell-encodedcommand-template
+  - id: remote-module-fetch
+    desc: Remote module fetched over C2
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: remote-method-loader
+      - id: request-module-routine
+      - id: module-request-json
+    any:
+      - id: module-source-buffer
+      - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
+      - id: metadata/lang/compiler/managed::reflection-namespace
+      - id: objectives/anti-static/obfuscation/reflection/invoke::type-info
+  - id: rat-task-surface
+    desc: Multi-function RAT task surface
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: remote-command-handler
+      - id: remote-file-upload-handler
+      - id: remote-file-download-handler
+      - id: remote-fs-handler
+    any:
+      - id: remote-screenshot-handler
+      - id: remote-keylogger-handler
+      - id: micro-behaviors/hardware/input/keyboard/label::keylogger-string
+    needs: 2
+  - id: websocket-module-rat
+    desc: Modular .NET WebSocket RAT
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/http/websocket::dotnet-client-websocket
+      - id: remote-module-fetch
+      - id: objectives/execution/compile/runtime::runtime-compiled-module-loader
+      - id: rat-task-surface
+    any:
+      - id: objectives/evasion/security-bypass/tls::dotnet-managed-cert-bypass
+      - id: micro-behaviors/communications/http/websocket::wss-scheme
+  - id: websocket-surveillance-rat
+    desc: WebSocket surveillance RAT capability set
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/http/websocket::dotnet-client-websocket
+      - id: remote-module-fetch
+    any:
+      - id: remote-screenshot-handler
+      - id: remote-keylogger-handler
+      - id: micro-behaviors/hardware/input/keyboard/label::keylogger-string
+    needs: 2
+  - id: websocket-powershell-tasking-actor
+    desc: .NET WebSocket PowerShell tasking actor
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: killactor-task-handler
+      - id: killactor-command-payload-log
+      - id: powershell-encodedcommand-template
+      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+    any:
+      - id: killactor-payload-log
+      - id: unicode-base64-scriptblock
+      - id: micro-behaviors/communications/http/websocket::ws-scheme
+      - id: objectives/evasion/process/hidden/execution::dotnet-hidden-process-launch
+      - id: micro-behaviors/process/create/launch::create-process-api-name
+    needs: 2

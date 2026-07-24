@@ -1,0 +1,110 @@
+# Environment Checks - WSH vs Browser
+# Detects checks used to determine if running in Windows Script Host
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms: [windows]
+  for: [javascript, typescript]
+  attack: "T1497.001"
+  mbc: "B0003"
+traits:
+  - id: env-check-no-document
+    desc: Checks for absence of document (WSH context)
+    crit: component
+    if:
+      type: text
+      regex: "(?i)typeof\\s+document\\s*={2,3}\\s*['\"]undefined['\"]"
+  - id: env-check-no-document-var
+    desc: Assigns typeof document to variable
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      regex: "(?i)\\b\\w+\\s*=\\s*typeof\\s+document"
+  - id: env-check-no-window
+    desc: Checks for absence of window (WSH context)
+    crit: component
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/library/structure::js-emscripten-preamble-marker
+    if:
+      type: text
+      regex: "(?i)typeof\\s+window\\s*={2,3}\\s*['\"]undefined['\"]"
+  - id: env-check-wscript
+    desc: Checks for presence of WScript
+    if:
+      type: text
+      regex: "(?i)typeof\\s+WScript\\s*(=|!)=+\\s*['\"]object['\"]"
+  - id: obfuscated-wscript-host-check
+    desc: Obfuscated WScript host check
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'WScript\s*==.{0,80}V2luZGmeredith93cyBTY3JpcHQg'
+  - id: env-check-comspec-cmd
+    desc: Validates ComSpec path against cmd.exe
+    crit: suspicious
+    if:
+      type: text
+      regex: '(?i)ComS(pec)?\b.{0,100}%SystemRoot%\\system32\\cmd\.exe'
+  - id: vbs-computer-name-exit-gate
+    desc: VBS exits on computer-name analysis markers
+    crit: suspicious
+    conf: 0.94
+    for: [vbs]
+    if:
+      type: text
+      regex: '(?is)\bComputerName\b.{0,500}\bInstr\s*\(\s*UCase\s*\(.{0,120}\).{0,120}\bWScript\.Quit\b'
+composite_rules:
+  - id: vbs-gated-marker-obfuscated-launcher
+    desc: VBS gates an obfuscated hidden launcher on hostname markers
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.001,T1059.005,T1497.001,T1564.003
+    for: [vbs]
+    all:
+      - id: vbs-computer-name-exit-gate
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-run-hidden-zero
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-marker-cleanup
+    any:
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-split-frombase64string
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-split-powershell-path
+    needs: 1
+  - id: vbs-hostname-gated-fragmented-loader
+    desc: Hostname-gated fragmented hidden VBScript loader
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.005,T1497.001,T1564.003
+    for: [vbs]
+    all:
+      - id: vbs-computer-name-exit-gate
+      - id: objectives/command-and-control/dropper/execution/wsh::wsh-run-hidden-zero
+      - id: objectives/anti-static/obfuscation/multi-layer::vbs-base64-fragment-helper-calls
+  - id: browser-global-absence
+    desc: Checks for missing browser globals
+    crit: component
+    conf: 1.0
+    any:
+      - id: env-check-no-document
+      - id: env-check-no-window
+  - id: wsh-browser-global-absence-check
+    desc: WSH execution gated on missing browser globals
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: browser-global-absence
+    any:
+      - id: env-check-wscript
+      - id: micro-behaviors/os/wsh/file::wscript-shell-object
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+  - id: wsh-document-absence-gate
+    desc: WSH execution gated on document absence
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: env-check-no-document-var
+      - id: micro-behaviors/data/control-flow/analysis::js-undefined-string-compare
+    any:
+      - id: micro-behaviors/os/wsh/file::wscript-shell-object
+      - id: micro-behaviors/os/com/object::wscript-shell-literal

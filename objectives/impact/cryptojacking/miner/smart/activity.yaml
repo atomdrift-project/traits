@@ -1,0 +1,149 @@
+defaults:
+  platforms: [linux, macos, windows]
+  for: [python, javascript, powershell, pe, elf]
+  attack: T1496
+  mbc: B0004
+traits:
+  - id: get-last-input-info
+    desc: GetLastInputInfo API (idle detection)
+    crit: component
+    conf: 0.7
+    for: [powershell, pe, python, javascript]
+    if:
+      type: text
+      substr: GetLastInputInfo
+  - id: get-idle-time
+    desc: GetIdleTime function
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: (?i)\bget.?idle.?time\b
+  - id: pause-if-str
+    desc: PauseIf conditional string
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: (?i)pause.?if.?(task|active|idle|user)
+  - id: xmrig-str
+    desc: XMRig miner reference
+    crit: suspicious
+    conf: 0.9
+    count_min: 2
+    unless:
+      - id: metadata/package/quality/recognized-contexts::malcontent-defensive-scanner-context
+      - id: well-known/app/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+    if:
+      id: metadata/file/string/identity::xmrig-product
+  - id: mining-pool-monero
+    desc: Monero mining pool reference
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: text
+      regex: (?i)pool\.monero
+  - id: mining-pool-xmr
+    desc: XMR mining pool endpoint
+    crit: suspicious
+    conf: 0.75
+    unless:
+      - id: well-known/app/grafana::grafana-mimir-runtime
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-datadog-agent
+      - id: well-known/app/1password::onepassword-runtime-context
+      - id: well-known/app/1password::onepassword-native-module-context
+    if:
+      type: text
+      # Require URL/stratum framing — bare "2miners.com" appears in domain
+      # allowlists and tracker lists, not only miner configs.
+      regex: '(?i)(https?://|stratum://)[^\n"'']{0,40}(2miners|nicehash)\.(com|net)'
+  - id: cpu-usage-limit-str
+    desc: CPU usage limit string
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      regex: (?i)cpu.{0,4}(usage|percent).{0,24}(limit|throttle)
+  - id: pause-if-cpu-str
+    desc: Pause-if CPU string
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: (?i)pause.?if.{0,24}cpu
+composite_rules:
+  - id: cpu-usage-str
+    desc: CPU usage monitoring string
+    crit: notable
+    conf: 0.6
+    any:
+      - id: cpu-usage-limit-str
+      - id: pause-if-cpu-str
+  - id: monitoring-tool-checks
+    desc: System monitoring tool detection
+    crit: suspicious
+    conf: 0.85
+    needs: 3
+    any:
+      - id: micro-behaviors/process/enumerate/apps::taskmgr-process
+      - id: objectives/anti-analysis/tool-detect/process::procexp-process
+      - id: objectives/anti-analysis/tool-detect/process::procmon-process
+      - id: micro-behaviors/process/enumerate/apps::perfmon-process
+      - id: micro-behaviors/process/enumerate/apps::resmon-process
+    downgrade:
+      any:
+        - id: metadata/binary/resource/
+  - id: activity-monitoring
+    desc: User activity monitoring
+    crit: notable
+    conf: 0.8
+    any:
+      - id: get-last-input-info
+      - id: get-idle-time
+      - id: browser-visibility-mining-gate
+      - id: browser-activity-mining-gate
+  - id: browser-visibility-mining-gate
+    desc: Browser visibility gate for mining
+    crit: component
+    conf: 0.86
+    near_lines: 20
+    all:
+      - id: micro-behaviors/ui/window/manage/visibility::document-hidden-check
+      - id: micro-behaviors/ui/window/manage/visibility::visibilitychange-listener
+  - id: browser-activity-mining-gate
+    desc: Browser user activity gate for mining
+    crit: component
+    conf: 0.86
+    near_lines: 40
+    all:
+      - id: micro-behaviors/ui/window/manage/visibility::last-activity-variable
+      - id: micro-behaviors/ui/window/manage/visibility::user-activity-event-listener
+  - id: mining-indicators
+    desc: Cryptocurrency mining indicators
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: xmrig-str
+      - id: micro-behaviors/communications/socket/tcp::stratum-tcp-url
+      - id: micro-behaviors/communications/socket/tcp::stratum-ssl-url
+      - id: mining-pool-monero
+      - id: mining-pool-xmr
+      - id: objectives/impact/cryptojacking/miner/pool::known-pool-domains
+    downgrade:
+      any:
+        - id: metadata/package/testing/presence/fixture::mocha-describe-call
+        - id: metadata/package/testing/presence/harness/
+  - id: smart-miner
+    desc: Smart cryptocurrency miner with evasion
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: mining-indicators
+      - id: monitoring-tool-checks
+  - id: activity-aware-miner
+    desc: Activity-aware cryptocurrency miner
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: mining-indicators
+      - id: activity-monitoring

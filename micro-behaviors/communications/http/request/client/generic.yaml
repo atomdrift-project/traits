@@ -1,0 +1,196 @@
+defaults:
+  platforms: [windows, unix]
+  for: [binaries, scripts]
+traits:
+  - id: http-request-func
+    desc: Calls a function named httpRequest
+    crit: notable
+    conf: 0.5
+    mbc: C0002
+    attack: T1071.001
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)httpRequest$'
+  - id: user-agent-header
+    desc: User-Agent header
+    crit: baseline
+    conf: 0.5
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: text
+      regex: '(["'']User-Agent["'']\s*:|User-Agent:)'
+      not:
+        - substr: libcurl/
+  - id: chrome-121-user-agent
+    desc: Chrome 121 browser User-Agent string
+    crit: component
+    conf: 0.5
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: text
+      substr: 'Chrome/121.0.0.0 Safari/537.36'
+  - id: auth-header-dup
+    desc: Authorization header
+    crit: baseline
+    conf: 0.5
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: text
+      exact: Authorization
+      case_insensitive: true
+  - id: hardcoded-auth-token
+    desc: Hardcoded HTTP Authorization credential
+    crit: notable
+    conf: 0.85
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: text
+      regex: '(?i)Authorization["''`]??\s*[:=]\s*["''`]?\s*(Token|Bearer|Basic)\s+[0-9a-fA-F]{16,}'
+    unless:
+      - type: text
+        substr: "'Authorization': 'Bearer AAAAAA"
+  - id: hardcoded-token-config-field
+    desc: Hardcoded token-bearing configuration field
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\b[A-Za-z_][A-Za-z0-9_]*Token\s*:\s*["''][A-Za-z0-9._~-]{8,}["'']'
+    not:
+      - regex: '\b[A-Za-z_][A-Za-z0-9_]*Token\s*:\s*["''][A-Za-z_][A-Za-z0-9_]*Token["'']'
+  - id: x-admin-token-header
+    desc: x-admin-token request header
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '["'']x-admin-token["'']\s*:'
+  - id: http-version
+    desc: HTTP/1.x version string
+    crit: baseline
+    conf: 0.5
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: text
+      substr: HTTP/1.
+  - id: http-versions
+    desc: HTTP protocol version strings
+    crit: component
+    conf: 0.75
+    if:
+      type: text
+      regex: HTTP/(1\.0|1\.1|2\.0)
+  - id: http-response
+    desc: HTTP response reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      regex: (?i)http_response|response_body
+  - id: xmlhttprequest-word
+    desc: References the XMLHttpRequest HTTP client
+    crit: component
+    conf: 0.4
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/library/runtime/
+      - id: metadata/library/structure::js-emscripten-preamble-marker
+      - id: metadata/library/axios::axios-class
+      - id: metadata/library/axios::axios-version
+    if:
+      type: text
+      substr: XMLHttpRequest
+  - id: content-type-header
+    desc: References an HTTP Content-Type header
+    crit: component
+    conf: 0.5
+    if:
+      type: text
+      substr: 'Content-Type:'
+  - id: http-config-method
+    desc: HTTP configuration field (method)
+    crit: baseline
+    conf: 0.3
+    if:
+      type: text
+      regex: '["'']method["'']\s*:\s*["''][A-Z]{3,7}["'']'
+      case_insensitive: true
+  - id: http-config-body
+    desc: HTTP configuration field (body)
+    crit: baseline
+    conf: 0.3
+    if:
+      type: text
+      regex: 'fetch\s*\([^)]{0,240}["'']body["'']\s*:'
+      case_insensitive: true
+  - id: http-config-headers
+    desc: Configures HTTP request headers
+    crit: baseline
+    conf: 0.3
+    if:
+      type: text
+      regex: '(?s)(fetch\s*\(|XMLHttpRequest|httpRequest).{0,160}"?headers"?\s*:'
+composite_rules:
+  - id: http-config-fields
+    desc: HTTP configuration fields (method/body/headers)
+    crit: baseline
+    conf: 0.5
+    needs: 2
+    any:
+      - id: http-config-method
+      - id: http-config-body
+      - id: http-config-headers
+  # Size-gated variant of the plain JSON POST: a small script whose whole job
+  # is posting a JSON body. Neutral on its own — beacon/exfiltration intent is
+  # supplied by the objectives composites that pair it with payload signals.
+  - id: http-post-json-small-script
+    desc: JSON HTTP POST from a small script file
+    crit: notable
+    conf: 0.8
+    size_max: 5000
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+    any:
+      - id: micro-behaviors/communications/http/request/client::http-post-json
+      - id: micro-behaviors/communications/http/request/client::requests-post-json-payload
+
+  - id: http-client
+    desc: Uses common HTTP client APIs
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-word
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: xmlhttprequest-word
+
+  # Neutral transport evidence.  The source may use a POST, XHR, image
+  # request, or sendBeacon; the data source and intent belong in objectives.
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: browser-http-request-channel
+    desc: Browser HTTP request or beacon channel
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+      - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+      - id: micro-behaviors/communications/http/request/client::image-src-network-request
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-send
+      - id: micro-behaviors/communications/http/services/analytics::browser-send-beacon
+      - id: micro-behaviors/communications/http/post::xhr-post-open

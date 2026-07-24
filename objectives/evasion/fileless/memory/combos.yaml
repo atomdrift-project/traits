@@ -1,0 +1,208 @@
+traits:
+- id: create-thread-sym
+  desc: Remote thread creation symbol
+  crit: component
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  if:
+    id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
+- id: fexecve-symbol
+  desc: 'Linux fexecve symbol ref (fileless execution)'
+  crit: component
+  conf: 0.9
+  platforms:
+  - linux
+  for:
+  - elf
+  if:
+    type: symbol
+    regex: ^_?fexecve$
+- id: python-encode-call
+  desc: Python encode method call
+  crit: component
+  conf: 0.8
+  platforms:
+  - windows
+  - linux
+  - macos
+  for:
+  - python
+  if:
+    type: symbol
+    kind: call
+    exact: encode
+- id: python-b64decode-call
+  desc: Python base64 decode call
+  crit: component
+  conf: 0.8
+  platforms:
+  - windows
+  - linux
+  - macos
+  for:
+  - python
+  if:
+    type: symbol
+    kind: call
+    exact: b64decode
+- id: system-informer-marker
+  desc: System Informer product marker
+  crit: notable
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  if:
+    type: text
+    substr: System Informer
+- id: alloc-memory-sym--ntallocatevirtualmemory
+  desc: References the NtAllocateVirtualMemory API
+  crit: component
+  for:
+  - pe
+  - dll
+  platforms:
+  - windows
+  if:
+    type: symbol
+    exact: NtAllocateVirtualMemory
+- id: write-memory-sym--ntwritevirtualmemory
+  desc: References the NtWriteVirtualMemory API
+  crit: component
+  for:
+  - pe
+  - dll
+  platforms:
+  - windows
+  if:
+    type: symbol
+    exact: NtWriteVirtualMemory
+- id: protect-memory-sym--ntprotectvirtualmemory
+  desc: VirtualProtectEx/NtProtectVirtualMemory (NtProte
+  crit: component
+  for:
+  - pe
+  - dll
+  platforms:
+  - windows
+  if:
+    type: symbol
+    exact: NtProtectVirtualMemory
+composite_rules:
+- id: open-process-sym
+  desc: OpenProcess/NtOpenProcess symbol
+  crit: component
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  any:
+  - id: micro-behaviors/process/create/spawn::open-process
+  - id: micro-behaviors/os/syscall/raw::nt-open-process-ssn
+- id: alloc-memory-sym
+  desc: VirtualAllocEx/NtAllocateVirtualMemory symbol
+  crit: component
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  any:
+  - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+  - id: alloc-memory-sym--ntallocatevirtualmemory
+- id: write-memory-sym
+  desc: WriteProcessMemory/NtWriteVirtualMemory symbol
+  crit: component
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  any:
+  - id: micro-behaviors/process/inject/runtime/call::write-process-memory-binary
+  - id: write-memory-sym--ntwritevirtualmemory
+- id: protect-memory-sym
+  desc: VirtualProtectEx/NtProtectVirtualMemory symbol
+  crit: component
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  any:
+  - id: micro-behaviors/mem/protect/modify::virtual-protect-ex
+  - id: protect-memory-sym--ntprotectvirtualmemory
+- id: alloc-or-protect
+  desc: Memory allocation or protection change
+  crit: component
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  any:
+  - id: alloc-memory-sym
+  - id: protect-memory-sym
+- id: remote-injection
+  desc: Remote process memory manipulation
+  crit: suspicious
+  conf: 0.9
+  attack: T1055
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  all:
+  - id: open-process-sym
+  - id: write-memory-sym
+  - id: alloc-or-protect
+  - id: create-thread-sym
+  unless:
+  - id: metadata/binary/metrics/structural::many-exports
+  - id: system-informer-marker
+  - id: metadata/signed/leaf::google-inc
+  downgrade:
+    any:
+    - id: well-known/game/steam::valve-corp-string
+    - id: well-known/tool/development/debugpy
+    - id: well-known/game/mod/
+- id: linux-memfd
+  desc: Fileless execution via anonymous memory
+  crit: suspicious
+  conf: 0.9
+  attack: T1055
+  mbc: B0033
+  platforms:
+  - linux
+  for:
+  - elf
+  all:
+  - id: objectives/evasion/fileless/memory::memfd-create
+  any:
+  - id: fexecve-symbol
+  - id: micro-behaviors/process/create/direct::execve-import
+  - id: micro-behaviors/mem/protect/modify::mprotect-import
+  downgrade:
+    any:
+    - id: micro-behaviors/dylib/library/family/
+- id: python-shellcode
+  desc: Python shellcode injection via VirtualProtect
+  crit: suspicious
+  conf: 0.95
+  attack: T1055
+  mbc: B0033
+  platforms:
+  - windows
+  for:
+  - python
+  all:
+  - id: micro-behaviors/mem/protect/modify::virtualprotect-ctypes
+  any:
+  - id: python-encode-call
+  - id: python-b64decode-call

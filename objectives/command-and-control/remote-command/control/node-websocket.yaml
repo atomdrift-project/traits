@@ -1,0 +1,257 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1059.007
+
+traits:
+- id: websocket-tool-call-message
+  desc: WebSocket tool call message
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: "'tool_call'"
+
+- id: remote-terminal-tool-name
+  desc: Remote terminal tool name
+  crit: suspicious
+  conf: 0.96
+  if:
+    type: text
+    substr: run_terminal_command
+  downgrade:
+    any:
+    - id: micro-behaviors/process/interpreter/vm/
+    - id: metadata/library/structure::js-large-module-bundle
+  unless:
+  - id: well-known/tool/development/anthropic-claude-agent/
+
+- id: websocket-tool-result-send
+  desc: WebSocket tool result response
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: "'tool_result'"
+
+- id: websocket-onmessage-assignment--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: '\b(ws|sock)\.onmessage\s*='
+
+  count_max: 1017111
+- id: websocket-onmessage-assignment--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: '\b(socket|conn)\.onmessage\s*='
+
+  count_max: 1017112
+- id: websocket-onmessage-assignment--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: '\b(client)\.onmessage\s*='
+
+  count_max: 1017113
+- id: websocket-message-function-exec--new-function-message-a
+  desc: new Function applied to message contents
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: 'new\s+Function\s*\([^)\n]{0,80}(message|msg)\b'
+- id: websocket-message-function-exec--new-function-message-b
+  desc: new Function applied to message data
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: 'new\s+Function\s*\([^)\n]{0,80}(data)\b'
+- id: websocket-message-function-exec--onmessage-new-function
+  desc: onmessage handler invokes new Function
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: '\.onmessage\s*=\s*[^;\n]{0,200}new\s+Function\s*\('
+- id: socksmsg-type-enum
+  desc: SOCKS RAT message enum
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    regex: 'SOCKS5.{0,80}TERMINAL_COMMAND.{0,80}SLEEP'
+
+- id: socksmsg-file-transfer-enum
+  desc: SOCKS RAT file message enum
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: 'FILE_GET_SOCKS.{0,80}FILE_PUT_SOCKS'
+
+- id: socksmsg-update-init-enum
+  desc: SOCKS RAT update init enum
+  crit: component
+  conf: 0.94
+  if:
+    type: text
+    regex: 'UPDATE.{0,80}INITIALIZE'
+
+- id: socksmsg-framing-class
+  desc: SOCKS message framing class
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'class\s+SocksMsg\b.{0,160}HEADER_SIZE'
+
+- id: terminal-thread-class
+  desc: Terminal thread handler class
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'class\s+Terminal(Command)?Thread\s+extends\s+SocksThread'
+
+- id: file-thread-classes
+  desc: File transfer thread classes
+  crit: component
+  conf: 0.92
+  count_min: 2
+  if:
+    type: text
+    regex: 'class\s+(ReadFile|WriteFile|Update)Thread\s+extends\s+SocksThread'
+
+- id: update-thread-class
+  desc: UpdateThread class marker
+  crit: component
+  conf: 0.94
+  attack: T1105
+  if:
+    type: text
+    regex: 'class\s+UpdateThread\b'
+- id: current-script-filename-marker
+  desc: Current script filename marker
+  crit: component
+  conf: 0.94
+  attack: T1105
+  if:
+    type: text
+    substr: __filename
+
+composite_rules:
+- id: current-script-update-respawn
+  desc: Current script update handler
+  crit: suspicious
+  conf: 0.94
+  attack: T1105
+  all:
+  - id: update-thread-class
+  - id: current-script-filename-marker
+  near_bytes: 1200
+- id: node-websocket-remote-shell-tool
+  desc: Node WebSocket remote shell tool
+  crit: hostile
+  conf: 0.97
+  mbc: B0022
+  all:
+  - id: remote-terminal-tool-name
+  - id: websocket-tool-call-message
+  - id: micro-behaviors/process/create/shell/bridge::js-execsync
+  any:
+  - id: websocket-tool-result-send
+  - id: micro-behaviors/communications/websocket/receive::websocket-message-event-handler
+  - id: micro-behaviors/communications/ipc/message::js-event-on-message
+  - id: micro-behaviors/communications/http/websocket::websocket
+
+- id: node-websocket-function-c2-loop
+  desc: Node WebSocket Function C2 loop
+  crit: hostile
+  conf: 0.98
+  mbc: B0022
+  unless:
+  - id: well-known/app/alist::release-path
+  - id: well-known/app/decocms/
+  - id: well-known/lib/conda-package/
+  - id: well-known/app/tencent-codebuddy::codebuddy-marker
+  - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: well-known/app/egroupware/
+  all:
+  - id: websocket-message-function-exec
+  any:
+  - id: micro-behaviors/communications/websocket/receive::websocket-message-event-handler
+  - id: websocket-onmessage-assignment
+  - id: micro-behaviors/communications/http/websocket::websocket
+  - id: micro-behaviors/communications/http/websocket::ws-dynamic-import
+- id: node-websocket-recon-c2-loop
+  desc: Node WebSocket recon C2 loop
+  crit: hostile
+  conf: 0.985
+  mbc: B0022
+  unless:
+  - id: well-known/app/alist::release-path
+  - id: well-known/app/tencent-codebuddy::codebuddy-marker
+  - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - id: well-known/app/egroupware/
+  all:
+  - id: node-websocket-function-c2-loop
+  - id: micro-behaviors/communications/websocket/send::websocket-host-environment-data
+
+- id: node-socks-rat-file-transfer
+  desc: Node SOCKS RAT file transfer
+  crit: suspicious
+  conf: 0.94
+  attack: T1105
+  all:
+  - id: socksmsg-file-transfer-enum
+  - id: file-thread-classes
+  any:
+  - id: socksmsg-framing-class
+  - id: micro-behaviors/fs/file/read::create-read-stream
+  - id: micro-behaviors/fs/write/file/direct::create-write-stream
+
+- id: node-websocket-socks-rat
+  desc: Node WebSocket SOCKS RAT
+  crit: hostile
+  conf: 0.98
+  mbc: B0022
+  attack: T1219
+  all:
+  - id: socksmsg-type-enum
+  - id: socksmsg-file-transfer-enum
+  - id: terminal-thread-class
+  - id: micro-behaviors/process/create/shell/bridge::child-process-require
+  any:
+  - id: micro-behaviors/communications/http/websocket::websocket
+  - id: micro-behaviors/communications/proxy/socks::socks5-proto
+  - id: socksmsg-framing-class
+  - id: socksmsg-update-init-enum
+  - id: current-script-update-respawn
+  needs: 2
+- id: websocket-onmessage-assignment
+  desc: WebSocket onmessage assignment handler
+  crit: component
+  conf: 0.88
+  any:
+  - id: websocket-onmessage-assignment--rx-1
+  - id: websocket-onmessage-assignment--rx-2
+  - id: websocket-onmessage-assignment--rx-3
+- id: websocket-message-function-exec
+  desc: WebSocket message Function execution
+  crit: suspicious
+  conf: 0.96
+  any:
+  - id: websocket-message-function-exec--new-function-message-a
+  - id: websocket-message-function-exec--new-function-message-b
+  - id: websocket-message-function-exec--onmessage-new-function
+  unless:
+  - id: objectives/command-and-control/remote-command/control/

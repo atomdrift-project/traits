@@ -1,0 +1,159 @@
+defaults:
+  platforms:
+    - linux
+    - macos
+    - windows
+  for: [binaries]
+  attack: T1071.001
+  crit: suspicious
+traits:
+  # http-content-type moved to micro-behaviors/communications/http/request/client::content-type-header
+  - id: node-http-example-request-line
+    desc: Node HTTP example request line comment
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      substr: "firstLine in the case of request is: 'GET /index.html HTTP/1.1"
+  - id: generic-index-request-line-raw
+    desc: Generic index example request in raw data
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      substr: GET /index.html HTTP/1.1
+  - id: http-beacon-counter
+    desc: HTTP request with counter/sequence parameter
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: text
+      regex: (GET|POST) %s\?[a-z]{1,4}=%d HTTP/1\.
+  - id: ocsp-request-content-type
+    desc: OCSP request content type
+    crit: component
+    if:
+      type: text
+      substr: application/ocsp-request
+  - id: shifted-http-get-template
+    desc: Shifted HTTP GET template
+    crit: component
+    conf: 0.96
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: FFS &r ISSQ.0/0
+  - id: shifted-http-accept-header
+    desc: Shifted HTTP Accept header
+    crit: component
+    conf: 0.94
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: "@bddou9 +.)"
+  - id: fixed-193-ip-format
+    desc: Fixed-octet IP format string
+    crit: suspicious
+    conf: 0.92
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: "%u.193.%d.%d"
+  - id: yii-site-gcd-route
+    desc: Yii site GCD command route
+    crit: component
+    conf: 0.95
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: /?r=site/GCD
+  - id: yii-site-gce-route
+    desc: Yii site GCE command route
+    crit: component
+    conf: 0.95
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: text
+      exact: /?r=site/GCE
+composite_rules:
+  - id: http-protocol
+    desc: HTTP or HTTPS protocol marker
+    crit: notable
+    conf: 0.6
+    any:
+      - id: micro-behaviors/communications/http/message::http-prefix
+      - id: micro-behaviors/communications/http/message::https-prefix
+  - id: hardcoded-request
+    desc: Hardcoded HTTP request in binary
+    crit: suspicious
+    conf: 0.7
+    for: [pe, elf, macho]
+    all:
+      - id: http-protocol
+    any:
+      - id: micro-behaviors/communications/http/get::get
+      - id: micro-behaviors/communications/http/post::post-request-line
+    unless:
+      - id: generic-index-request-line-raw
+      - id: node-http-example-request-line
+      - id: well-known/app/vlc::windows-nsis-bundle
+      - id: well-known/lib/videolan::videolan-codec-lib
+      - id: well-known/lib/electron::electron-windows-runtime-pdb
+    downgrade:
+      any:
+        - id: micro-behaviors/communications/ip/resolve::resolve-getaddrinfo
+        - id: micro-behaviors/communications/dns/lookup/reverse::in-addr-arpa
+  - id: custom-client
+    desc: Custom HTTP client implementation
+    crit: notable
+    conf: 0.65
+    all:
+      - id: http-protocol
+      - id: micro-behaviors/communications/http/message::http-header-field-delimiter
+    any:
+      - id: micro-behaviors/communications/http/request/client::user-agent-header
+      - id: micro-behaviors/communications/http/request/client::content-type-header
+    unless:
+      - id: ocsp-request-content-type
+    downgrade:
+      any:
+        - id: micro-behaviors/communications/ip/resolve::resolve-getaddrinfo
+        - id: micro-behaviors/communications/dns/lookup/reverse::in-addr-arpa
+        - id: micro-behaviors/dylib/library/family::libcurl-ref
+  - id: shifted-http-winsock-c2
+    desc: Shift-encoded HTTP Winsock C2
+    crit: suspicious
+    conf: 0.96
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: shifted-http-get-template
+      - id: shifted-http-accept-header
+      - id: fixed-193-ip-format
+      - id: micro-behaviors/communications/socket/init::ws2-32-dll-marker
+      - id: micro-behaviors/communications/socket/init::socket-api-ordinal
+      - id: micro-behaviors/communications/socket/init::connect-api-ordinal
+      - id: micro-behaviors/communications/socket/init::winsock-startup-ordinal
+    unless:
+      - id: metadata/signed/platform/
+  - id: raw-winsock-yii-command-channel
+    desc: Raw Winsock HTTP command channel
+    crit: hostile
+    conf: 0.97
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: yii-site-gcd-route
+      - id: yii-site-gce-route
+      - id: micro-behaviors/communications/http/message::split-http10-get-template
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-binary
+    any:
+      - id: micro-behaviors/communications/socket/init::winsock-runtime-client-api-table
+      - id: micro-behaviors/communications/socket/init::ws2-32-dll-marker
+    unless:
+      - id: metadata/signed/platform/

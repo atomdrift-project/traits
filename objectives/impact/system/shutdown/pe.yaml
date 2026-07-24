@@ -1,0 +1,80 @@
+defaults:
+  platforms:
+    - windows
+  for:
+    - pe
+  attack: T1529
+  mbc: B0029
+traits:
+  - id: shutdown-exe-string
+    desc: Windows shutdown.exe string reference
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: shutdown.exe
+  - id: shutdown-restart-flag
+    desc: Shutdown restart flag in binary
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: shutdown.{0,30}-r
+  - id: shutdown-force-flag-pe
+    desc: Shutdown force flag in binary
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: shutdown.{0,30}-f
+  - id: shutdown-zero-delay
+    desc: Shutdown with zero-second delay
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      regex: shutdown.{0,50}-t\s*0\b
+composite_rules:
+  - id: forced-reboot-pe
+    desc: Forced immediate system reboot in PE
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: shutdown-exe-string
+      - id: shutdown-restart-flag
+      - id: shutdown-force-flag-pe
+      - id: shutdown-zero-delay
+  - id: shutdown-privilege-reboot-api
+    desc: Privilege-enabled reboot API use
+    crit: notable
+    conf: 0.94
+    all:
+      - id: micro-behaviors/ui/window/manage/control::exit-windows-ex
+      - id: micro-behaviors/os/privilege/token::shutdown-privilege-name
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+      - id: micro-behaviors/os/privilege/token::lookup-privilege-value
+    downgrade:
+      any:
+        - id: metadata/signed/platform::microsoft-corporation
+        - id: metadata/binary/installer/family/
+        - id: metadata/signed/developer::x-ways-software-technology-aktiengesellschaft
+        # Endpoint-security and OEM tools (Norton, antivirus installers)
+        # legitimately enable SeShutdownPrivilege + ExitWindowsEx to reboot
+        # after definition/driver updates.
+        - id: metadata/signed/leaf::nortonlifelock-inc.
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: well-known/app/telegram::telegram-desktop-signed-inno-installer
+  - id: nsis-opaque-overlay-reboot
+    desc: NSIS opaque payload with privilege-enabled reboot path
+    crit: hostile
+    conf: 0.97
+    attack: T1529,T1027.009
+    all:
+      - id: metadata/binary/installer/script::nsis
+      - id: metadata/binary/layout::high-entropy-overlay
+      - id: metadata/signed/certificate/identity::pe-cert-leaf-self-issued-kv
+      - id: shutdown-privilege-reboot-api
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

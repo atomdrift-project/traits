@@ -1,0 +1,82 @@
+# A package-side installer that retrieves a script, writes it locally, and
+# executes it with PowerShell policy bypass is an intent-level supply-chain
+# dropper signal. The atoms remain neutral capabilities elsewhere.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1195.002
+traits:
+  - id: unpinned-global-package-install-command
+    desc: Executes unpinned global npm install
+    crit: notable
+    conf: 0.97
+    if:
+      type: text
+      regex: 'execSync\s*\(\s*["'']npm\s+install\s+-g\s+[@A-Za-z0-9_./-]+["'']'
+
+  - id: configurable-release-server-url
+    desc: Configurable release server URL
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: 'RELEASE_SERVER_URL\s*=\s*process\.env\.[A-Z0-9_]+\s*\|\|'
+
+  - id: large-binary-size-threshold
+    desc: Checks binary size threshold
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'stats\.size\s*>\s*10\s*\*\s*1024\s*\*\s*1024'
+
+composite_rules:
+  - id: npm-postinstall-downloads-and-stages-native-binary
+    desc: npm postinstall downloads and stages native binary
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    attack: "T1195.002,T1105,T1222.002"
+    all:
+      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: micro-behaviors/communications/http/download/handler::node-http-stream-to-file
+      - id: configurable-release-server-url
+      - id: large-binary-size-threshold
+      - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-make-executable
+
+  - id: npm-postinstall-global-install-wrapper
+    desc: npm postinstall installs and wraps global dependency
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    attack: "T1195.002,T1105,T1222.002"
+    all:
+      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: unpinned-global-package-install-command
+      - id: micro-behaviors/os/module/load::node-require-resolve-package-name
+      - id: micro-behaviors/fs/file/write/wrapper::node-writes-wrapper-file
+      - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-make-executable
+
+  - id: remote-script-policy-bypass-installer
+    desc: Remote script installer bypasses PowerShell policy
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/import/builtin::require-https
+      - id: micro-behaviors/fs/write/file/direct::create-write-stream
+      - id: micro-behaviors/process/create/shell/bridge::child-process-exec
+      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+    near_bytes: 8192
+
+  - id: npm-postinstall-configurable-native-bootstrap
+    desc: npm postinstall stages configurable native binary
+    crit: hostile
+    conf: 0.99
+    scope: archive
+    attack: "T1195.002,T1105,T1222.002"
+    all:
+      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: configurable-release-server-url
+      - id: large-binary-size-threshold
+      - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-exec-mode-755
+      - id: micro-behaviors/process/create/shell/bridge::js-execsync

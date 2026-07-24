@@ -1,0 +1,135 @@
+# Remote Code Evaluation - Python
+# Detects eval/exec on data extracted from external sources
+# ATT&CK: T1059.006 (Python), T1195.002 (Supply Chain)
+# These patterns are strong indicators of supply-chain attacks
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  attack: "T1059.006"
+traits:
+  - id: python-post-route-to-exec
+    desc: Python POST route reaches variable exec
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: '@[\w.]+\.post[\s\S]{0,1000}exec\s*\(\s*\w+\s*,\s*\w+\s*\)'
+
+  # eval() on chained .get() calls — pulls a nested value out of a config
+  # or response object and executes it as Python.
+  # Pattern: eval(x.get(...).get(...).get(...))
+  #
+  # Trait calibration is *deliberately* suspicious even though this pattern
+  # ships in some legitimate ML SDKs (e.g. ultralytics's Triton client uses
+  # `eval(config.get("parameters",{}).get("metadata",{}).get("string_value","None"))`
+  # to unpack server-provided metadata). That is genuinely an RCE: anyone
+  # who controls the inference server can return arbitrary Python and the
+  # client executes it. Flagging it loudly is the right behavior — a security
+  # engineer reading the diff should see it, not have it suppressed because
+  # the upstream maintainers have accepted the risk.
+  #
+  # `\b` excludes `ast.literal_eval` (which does NOT execute arbitrary code).
+  - id: eval-chained-get
+    desc: Python eval executes chained get data
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "\\beval\\s*\\(.{0,220}\\.get\\s*\\(.{0,160}\\)\\s*\\.get\\s*\\("
+  # `\b` excludes ast.literal_eval, which is the safe stdlib alternative.
+  # exec() on chained .get() calls
+  - id: exec-chained-get
+    desc: exec on chained .get() calls
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "\\bexec\\s*\\(.{0,220}\\.get\\s*\\(.{0,160}\\)\\s*\\.get\\s*\\("
+  # eval/exec on response/config object access
+  - id: eval-config-access-1
+    desc: Built-in eval on config/response/data field
+    crit: notable
+    conf: 0.9
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      # Match the called function, not an arbitrary object's `.eval()`
+      # method (for example pandas.DataFrame.eval).
+      type: tree-sitter
+      kind: call
+      regex: '^eval\\s*\\(\\s*(config|response|data)\\s*[\\[\\.]'
+  - id: eval-config-access-2
+    desc: eval on result/payload/body field
+    crit: notable
+    conf: 0.9
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "\\beval\\s*\\(\\s*(result|payload|body)\\s*[\\[\\.]"
+  # Client config evaluation - ML/inference server pattern
+  - id: eval-client-config
+    desc: eval on client config value
+    crit: notable
+    conf: 0.9
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "\\beval\\s*\\(.{0,220}client.{0,120}\\.get"
+  # Evaluate string_value field - common malicious config pattern
+  - id: eval-string_value
+    desc: eval on string_value field
+    crit: notable
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "\\beval\\s*\\(.{0,220}string_value"
+  # eval/exec with bracket access on received data
+  - id: eval-bracket-access
+    desc: eval on bracket notation access
+    crit: notable
+    conf: 0.85
+    mbc: "E1059"
+    if:
+      # Match the parsed call node so comments and unrelated subscripts are
+      # excluded. The call text keeps the subscript inside eval's argument.
+      type: tree-sitter
+      kind: call
+      regex: '\\beval\\s*\\(\\s*\\w+\\s*\\['
+    unless:
+      - id: well-known/tool/detection/
+composite_rules:
+  - id: eval-config-access
+    desc: eval on config/response field
+    crit: notable
+    conf: 0.9
+    any:
+      - id: eval-config-access-1
+      - id: eval-config-access-2
+  - id: python-remote-response-code-execution
+    desc: Executes Python code returned by HTTP response
+    crit: hostile
+    conf: 0.99
+    mbc: "B0024"
+    near_bytes: 8000
+    all:
+      - id: micro-behaviors/communications/http/request/client::request-python
+      - id: micro-behaviors/data/serialize/json::mapping-get-code-key
+      - id: micro-behaviors/process/interpreter/python::compile-exec-mode
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+  - id: python-web-request-code-execution
+    desc: Web endpoint executes request-supplied Python code
+    crit: hostile
+    conf: 0.99
+    attack: "T1059.006,T1190"
+    mbc: "B0024"
+    all:
+      - id: python-post-route-to-exec
+      - id: micro-behaviors/process/interpreter/python::exec-variable-namespace

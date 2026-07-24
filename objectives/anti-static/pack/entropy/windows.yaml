@@ -1,0 +1,149 @@
+# Packing and Entropy-based Detection
+# Detects high entropy and structural indicators of packing
+defaults:
+  for: [pe]
+  platforms: [windows]
+traits:
+  - id: high-entropy-section
+    desc: "High entropy exe section (possible packing)"
+    crit: notable
+    conf: 0.85
+    if:
+      type: section
+      entropy_min: 7.8
+      # Only match executable sections (.text, CODE)
+      # High entropy in .data/.rsrc is normal (compressed resources, archives)
+      regex: '(?i)^(\.|__)(text|code)'
+    unless:
+      - id: metadata/lang/compiler/managed::reflection-namespace
+      - id: metadata/binary/framework/
+      - id: objectives/anti-static/pack/entropy::large-function-surface
+      - id: metadata/binary/metrics/size::massive-executable
+      - id: metadata/binary/installer/script/
+  # .NET assemblies with near-maximum entropy in .text carry encrypted payloads
+  # Normal .NET IL code has entropy ~5.5-6.5; 7.9+ means encrypted/packed blob
+  - id: dotnet-high-entropy-text-raw
+    desc: Near-maximum entropy in .text section
+    crit: component
+    if:
+      type: section
+      regex: '(?i)^(\.|__)(text|code)'
+      executable: true
+      entropy_min: 7.9
+    unless:
+    - type: trait
+      id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  - id: dotnet-large-near-high-entropy-text-raw
+    desc: Large near-high entropy .text section
+    crit: component
+    if:
+      type: section
+      regex: '(?i)^(\.|__)(text|code)'
+      executable: true
+      # 6.9 catches normal large .NET executables; keep this focused on
+      # genuinely packed/encrypted text sections.
+      entropy_min: 7.6
+      length_min: 900000
+    unless:
+    - type: trait
+      id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+  - id: dotnet-costura-bundle-marker
+    desc: Costura bundled .NET dependency marker
+    crit: notable
+    if:
+      type: text
+      regex: 'costura\.[a-z0-9.]+\.(dll|exe)\.compressed'
+  - id: dotnet-timezonenames-library-marker
+    desc: TimeZoneNames .NET library marker
+    crit: notable
+    if:
+      type: text
+      substr: "TimeZoneNames/obj/Release"
+  - id: dotnet-toolgood-words-dict-marker
+    desc: ToolGood.Words dictionary resource marker
+    crit: notable
+    if:
+      type: text
+      substr: "ToolGood.Words.dict."
+  - id: dotnet-wix-extension-marker
+    desc: WiX toolset extension marker
+    crit: component
+    if:
+      type: text
+      substr: "WixToolset.Extensibility"
+composite_rules:
+  - id: dotnet-known-packed-recognized-markers
+    desc: Known recognized packed .NET assemblies
+    crit: notable
+    any:
+      - id: dotnet-costura-bundle-marker
+      - id: dotnet-timezonenames-library-marker
+
+  - id: writable-entry-high-entropy-pe-loader
+    desc: High-entropy PE with writable entry section
+    crit: hostile
+    conf: 0.96
+    attack: T1027,T1620
+    mbc: B0032
+    all:
+      - id: high-entropy-section
+      - id: metadata/binary/section/metrics::writable-text-section
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/framework/
+      - id: dotnet-toolgood-words-dict-marker
+      - id: dotnet-wix-extension-marker
+  - id: rwx-entry-high-entropy-memory-loader
+    desc: High-entropy PE loader protects a writable entry region
+    crit: suspicious
+    conf: 0.98
+    attack: T1027,T1620
+    mbc: B0032
+    all:
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: metadata/binary/metrics/threshold::high-overall-entropy-binary
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
+      - id: metadata/binary/section/metrics::pe-multiple-executable-writable-sections
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/framework/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/sfx::freearc-sfx
+      - id: well-known/app/google-chrome-portable::portableapps-chrome-product
+      - id: well-known/app/google-chrome-portable::portableapps-chrome-killproc-helper
+  - id: dotnet-encrypted-text-section
+    desc: .NET assembly with encrypted .text section
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027.002"
+    all:
+      - id: dotnet-high-entropy-text-raw
+      - id: metadata/binary/framework::dotnet-assembly
+    unless:
+      - id: objectives/anti-static/pack/entropy/
+      - id: metadata/signed/developer
+    downgrade:
+      any:
+        - id: micro-behaviors/data/embedded/payload/resource/
+        - id: micro-behaviors/data/embedded/payload/resource/
+        - id: micro-behaviors/data/embedded/payload/image/
+  - id: dotnet-large-packed-text
+    desc: .NET assembly with giant packed .text
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027.002"
+    all:
+      - id: dotnet-large-near-high-entropy-text-raw
+      - id: metadata/binary/framework::dotnet-assembly
+    unless:
+      - id: objectives/anti-static/pack/entropy/
+    downgrade:
+      any:
+        - id: micro-behaviors/data/embedded/payload/resource/
+        - id: micro-behaviors/data/embedded/payload/resource/
+        - id: micro-behaviors/data/embedded/payload/image/
+        - id: micro-behaviors/hardware/block/device/

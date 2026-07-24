@@ -1,0 +1,228 @@
+defaults:
+  platforms: [windows, unix]
+  for: [scripts, binaries]
+traits:
+  - id: tiktoken-module-marker
+    desc: tiktoken JavaScript module marker
+    crit: component
+    conf: 0.9
+    for: [scripts]
+    if:
+      type: text
+      word: tiktoken
+
+  - id: esbuild-loader-basename
+    desc: esbuild JavaScript helper basename
+    crit: component
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: path
+      basename: true
+      regex: '^esbuild(\.js)?$'
+
+  - id: blob-loader-basename
+    desc: Blob JavaScript helper basename
+    crit: component
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: path
+      basename: true
+      regex: '(^|[\\/])Blob\.js$'
+
+  - id: firebug-function-constructor-basename
+    desc: Firebug function-constructor helper basename
+    crit: component
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: basename
+      regex: '(?i)^(commandLineInjected|domplate|tabContext)\.js$'
+  - id: function-constructor-require
+    desc: Function constructor with require access
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: text
+      regex: new\s*\(?\s*Function\.constructor\s*\)?\(\s*['"]require['"]
+    downgrade:
+      any:
+        - id: metadata/library/structure::js-large-module-bundle
+        - id: metadata/package/quality/false-positives::benign-build-tooling-context
+        - id: metadata/package/quality/false-positives::benign-build-tooling-context
+        - id: metadata/library/runtime::vscode-webview-bundle
+        - id: metadata/library/runtime::acquire-vscode-api
+
+  - id: function-constructor-require-arg
+    desc: "new func with require param (module smuggling)"
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.007
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: "new Function\\(['\"]require['\"]"
+    unless:
+      - id: metadata/library/structure::js-vite-rollup-vendor-chunk
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/library/runtime::acquire-vscode-api
+      - id: micro-behaviors/process/interpreter/vm/
+      - type: basename
+        regex: '^esbuild(\.js)?$'
+  - id: async-function-require-arg
+    desc: AsyncFunction receives require parameter
+    crit: suspicious
+    conf: 0.98
+    attack: T1059.007
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'new\s+AsyncFunction\s*\(\s*["'']require["'']'
+  - id: function-constructor-require-arg-base64
+    desc: Base64-decoded new Function require param
+    crit: suspicious
+    conf: 0.95
+    attack: T1059.007
+    for: [javascript, typescript]
+    if:
+      type: encoded
+      encoding: base64
+      regex: "new Function\\(['\"]require['\"]"
+  - id: function-constructor-module-smuggle-call
+    desc: "new func call with require/module/exports args"
+    crit: suspicious
+    conf: 0.95
+    attack: T1059.007
+    for: [javascript, typescript]
+    # `new Function("require","module","exports", body)` — CommonJS module
+    # smuggling. The three fixed string params in order are distinctive text.
+    if:
+      type: text
+      regex: 'new\s+Function\s*\(\s*[''"]require[''"]\s*,\s*[''"]module[''"]\s*,\s*[''"]exports[''"]'
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/library/runtime::vscode-webview-bundle
+
+  - id: message-payload-function-body
+    desc: Message payload becomes Function body
+    crit: suspicious
+    conf: 0.96
+    attack: T1059.007
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'new\s+Function\s*\(\s*[''"]require[''"]\s*,\s*msg\.payload'
+
+  - id: worker-run-task-token
+    desc: Worker message run task token
+    crit: component
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: RUN_ERROR_THREAD
+
+composite_rules:
+  - id: function-constructor-recognized-marker
+    desc: Function constructor recognized bundle marker
+    crit: component
+    conf: 0.95
+    for: [scripts]
+    any:
+      - id: well-known/tool/development/firebug
+      - id: metadata/library/structure::js-known-bundler-output
+      - id: metadata/library/structure::js-any-bundle-output
+      - id: metadata/library/structure::js-vite-rollup-vendor-chunk
+      - id: metadata/library/jquery
+      - id: metadata/library/runtime::acquire-vscode-api
+      - id: metadata/library/vscode::vscode-extension-marker
+      - id: micro-behaviors/os/module/load::dynamic-import-function-constructor
+      - id: tiktoken-module-marker
+      - id: esbuild-loader-basename
+      - id: blob-loader-basename
+      - id: metadata/library/runtime::shutter-reloaded-lightbox
+      - id: firebug-function-constructor-basename
+
+  - id: remote-code-module-smuggle
+    desc: Remote code executed via Function module smuggling
+    crit: hostile
+    conf: 0.96
+    attack: T1059.007
+    for: [javascript, typescript]
+    all:
+      - id: function-constructor-module-smuggle-call
+    any:
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/client::axios-direct-call
+      - id: micro-behaviors/communications/http/request/client::http-request
+      - id: micro-behaviors/communications/http/url/rpc::solana-rpc-method-any
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/runtime::vscode-webview-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+
+  - id: async-function-module-smuggling
+    desc: AsyncFunction dynamically receives CommonJS module access
+    crit: hostile
+    conf: 0.98
+    attack: T1059.007
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: async-function-require-arg
+      - id: micro-behaviors/process/interpreter/eval::js-async-function-constructor
+
+  - id: message-payload-module-smuggling
+    desc: Message payload executed with require
+    crit: hostile
+    conf: 0.98
+    attack: T1059.007
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: function-constructor-require-arg
+      - id: message-payload-function-body
+    any:
+      - id: micro-behaviors/communications/ipc/message::js-event-on-message
+      - id: micro-behaviors/communications/ipc/message::postmessage-listener
+      - id: micro-behaviors/process/create/workers::worker-threads-require
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+
+  - id: worker-message-payload-module-smuggling
+    desc: Worker task message executes payload
+    crit: hostile
+    conf: 0.97
+    attack: T1059.007
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: message-payload-module-smuggling
+      - id: worker-run-task-token
+    any:
+      - id: micro-behaviors/process/create/workers::worker-threads-require
+      - id: micro-behaviors/process/create/workers::worker-threads-import
+
+  - id: remote-worker-module-compile
+    desc: Remote code compiled inside worker thread
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007
+    mbc: B0009.016
+    for: [javascript, typescript]
+    all:
+      - id: objectives/command-and-control/dropper/delivery/fetch-eval::remote-worker-module-compile-loader
+      - id: micro-behaviors/process/create/workers::worker-eval-option
+
+  - id: font-steganography-hex
+    desc: Load JavaScript from font file (hex)
+    crit: suspicious
+    conf: 1.0
+    all:
+      - id: micro-behaviors/data/decode/hex::buffer-from-hex-string
+      - id: micro-behaviors/fs/file/read::read-font-file
+      - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor

@@ -1,0 +1,158 @@
+# Cross-format internal-consistency signals.  Cleave's binary kv
+# extractor compares fields populated from independent sources within
+# the same binary; when they disagree, the binary is internally
+# inconsistent — the canonical signature of post-build tampering.
+#
+# These are derived interpretations (boolean comparisons over kv
+# data), so they live on `consistency.*` metrics rather than in the
+# kv tree. All flags are conservative: only fire when both compared
+# fields are present and obviously incompatible. Absence of either
+# side is never a flag.
+defaults:
+  for: [pe, macho, elf]
+  conf: 1.0
+traits:
+  - id: bundle-identifier-mismatch
+    desc: Code-signature bundle id != embedded plist id
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: metrics
+      field: macho.bundle_identifier_mismatch
+      min: 1
+  - id: manifest-version-mismatch
+    desc: "PE manifest/VERSIONINFO mismatch"
+    crit: notable
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: metrics
+      field: pe.manifest_version_mismatch
+      min: 1
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+    unless:
+      - id: metadata/binary/section/names::upx-section
+      - type: value
+        path: pe.version.product_name
+        regex: (?i)(Sysinternals|7-Zip|PuTTY)
+  - id: distro-toolchain-implausible
+    desc: Unusual distro compiler string combination
+    crit: baseline
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: metrics
+      field: elf.distro_toolchain_implausible
+      min: 1
+  - id: dwarf-mixed-toolchains
+    desc: "Many DWARF producer strings (mixed compilers)"
+    crit: notable
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: metrics
+      field: elf.dwarf_mixed_producers
+      min: 1
+  - id: dwarf-mixed-comp-dirs
+    desc: Multiple DWARF comp_dir directories
+    crit: notable
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: metrics
+      field: elf.dwarf_mixed_comp_dirs
+      min: 1
+  - id: macho-slice-signing-divergence
+    desc: Some fat-binary slices signed, others not
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: metrics
+      field: macho.slice_signing_divergence
+      min: 1
+  - id: pe-signed-before-built
+    desc: "Authenticode time predates COFF"
+    crit: suspicious
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: metrics
+      field: pe.signing_time_before_timestamp
+      min: 1
+    downgrade:
+      any:
+        - id: metadata/signed/leaf::google-llc
+        - id: metadata/build/reproducible::pe-reproducible-build
+        - id: metadata/signed/leaf::.net-foundation
+        - id: metadata/signed/leaf::progress-software-corporation
+        - id: metadata/signed/leaf::eclipse.org-foundation-inc.
+        - id: metadata/signed/developer::heaventools-software
+  - id: elf-text-section-writable
+    desc: ELF .text section flag SHF_WRITE set
+    crit: suspicious
+    conf: 0.95
+    platforms: [linux, android]
+    for: [elf]
+    if:
+      type: metrics
+      field: elf.text_section_writable
+      min: 1
+    unless:
+      - id: well-known/tool/sysadmin/unix-benign/
+  - id: elf-rodata-writable
+    desc: ELF .rodata section flag SHF_WRITE set
+    crit: suspicious
+    conf: 0.95
+    platforms: [linux, android]
+    for: [elf]
+    if:
+      type: metrics
+      field: elf.rodata_writable
+      min: 1
+    unless:
+      # Linux kernel images legitimately have writable rodata
+      - id: metadata/lang/compiled::linux-kernel-banner
+      - id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+      - id: well-known/tool/development/swiftlint::swiftlint-release-binary
+      - type: path
+        regex: '(^|[\\/])vmlinux($|!!)'
+  - id: elf-stripped-but-symtab-present
+    desc: Stripped ELF retains a .symtab section
+    crit: notable
+    conf: 0.6
+    platforms: [linux, android]
+    for: [elf]
+    if:
+      type: metrics
+      field: elf.stripped_but_symtab_present
+      min: 1
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/package/quality/recognized-contexts::frida-server-artifact-path-context
+  - id: macho-text-segment-writable
+    desc: Mach-O __TEXT segment carries VM_PROT_WRITE
+    crit: suspicious
+    conf: 0.95
+    platforms: [macos, ios]
+    for: [macho]
+    if:
+      type: metrics
+      field: macho.text_segment_writable
+      min: 1
+  - id: macho-dylib-install-name-mismatch
+    desc: 'macho dylib install name mismatch'
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos, ios]
+    for: [macho]
+    if:
+      type: metrics
+      field: macho.dylib_install_name_mismatch
+      min: 1

@@ -1,0 +1,224 @@
+defaults:
+  platforms: [unix, windows]
+  for:
+    - java
+    - class
+traits:
+  - id: jarinputstream-string
+    desc: JarInputStream API reference
+    crit: component
+    conf: 0.9
+    for: [java, class, jar, zip]
+    if:
+      type: text
+      substr: java/util/jar/JarInputStream
+  - id: getnextjarentry-string
+    desc: JarInputStream entry iteration
+    crit: component
+    conf: 0.9
+    for: [java, class, jar, zip]
+    if:
+      type: text
+      substr: getNextJarEntry
+  - id: jar-manifest-string
+    desc: JAR manifest API reference
+    crit: component
+    conf: 0.88
+    for: [java, class, jar, zip]
+    if:
+      type: text
+      substr: java/util/jar/Manifest
+  - id: main-class-string
+    desc: MAIN_CLASS manifest key
+    crit: component
+    conf: 0.88
+    for: [java, class, jar, zip]
+    if:
+      type: text
+      substr: MAIN_CLASS
+  - id: bytearrayoutputstream-string
+    desc: ByteArrayOutputStream API reference
+    crit: component
+    conf: 0.88
+    for: [class, jar, zip]
+    if:
+      type: text
+      substr: java/io/ByteArrayOutputStream
+  - id: onejar-classloader-member
+    desc: One-Jar classloader member
+    crit: notable
+    conf: 0.95
+    for: [class]
+    if:
+      type: path
+      substr: simontuffs/onejar/JarClassLoader.class
+  - id: meta-inf-res-index-member
+    desc: META-INF resource index member
+    crit: component
+    conf: 0.94
+    for: [jar, zip]
+    if:
+      type: text
+      exact: META-INF/res/idx
+  - id: many-numbered-meta-inf-res-members
+    desc: Many numbered META-INF resources
+    crit: suspicious
+    conf: 0.9
+    for: [jar, zip]
+    count_min: 80
+    if:
+      type: text
+      regex: META-INF/res/[0-9]{1,3}
+  - id: staged-loader-member-set
+    desc: Staged loader max member name length
+    crit: component
+    conf: 0.88
+    for: [jar]
+    unless:
+      - type: basename
+        regex: '\.(zip|lottie|whl)$'
+    if:
+      type: metrics
+      field: archive.max_filename_length
+      min: 30
+      max: 30
+  - id: staged-loader-high-uncompressed-span
+    desc: Staged loader high archive span
+    # A narrow archive-size window is only meaningful with the other staged
+    # loader fingerprints below; many benign ZIP/XPI/JAR archives can land in
+    # this range by chance.
+    crit: component
+    conf: 0.94
+    for: [jar]
+    unless:
+      - type: basename
+        regex: '\.(zip|lottie)$'
+      - type: basename
+        regex: '\.graffle$'
+    if:
+      type: metrics
+      field: archive.total_uncompressed
+      min: 1500000
+      max: 1600000
+  - id: staged-loader-longest-member-thirty-nine
+    desc: Staged loader max member length
+    crit: component
+    conf: 0.93
+    for: [jar]
+    unless:
+      - type: basename
+        regex: '\.(zip|lottie)$'
+      - id: metadata/package/files/mobile-package::apk-secondary-dex
+      - type: text
+        substr: AndroidManifest.xml
+    if:
+      type: metrics
+      field: archive.max_filename_length
+      min: 39
+      max: 39
+composite_rules:
+  - id: nested-jar-unpack
+    desc: Nested JAR manifest staging
+    crit: notable
+    conf: 0.93
+    for: [java, class, jar, zip]
+    unless:
+      - id: well-known/lib/scala-compiler
+    all:
+      - type: trait
+        id: jarinputstream-string
+      - type: trait
+        id: getnextjarentry-string
+      - type: trait
+        id: jar-manifest-string
+      - type: trait
+        id: main-class-string
+  - id: streamed-jar-bytecode-loader
+    desc: Streamed JAR bytecode class staging
+    crit: suspicious
+    conf: 0.95
+    for: [class]
+    unless:
+      - id: onejar-classloader-member
+    all:
+      - type: trait
+        id: jarinputstream-string
+      - type: trait
+        id: getnextjarentry-string
+      - type: trait
+        id: micro-behaviors/data/compress/library::bytearrayinputstream
+      - type: trait
+        id: bytearrayoutputstream-string
+    any:
+      - type: trait
+        id: objectives/command-and-control/backdoor/loader/classloader::loadclassfrombytes-string
+      - type: trait
+        id: micro-behaviors/data/source/dynamic/reflect::java-defineclass
+  - id: staged-classloader-archive
+    desc: Staged Java classloader loader archive
+    crit: hostile
+    conf: 0.94
+    mbc: B0032
+    attack: T1140
+    for: [jar, zip]
+    all:
+      - type: trait
+        id: staged-loader-member-set
+      - type: trait
+        id: metadata/package/metrics::compact-jar-archive
+      - type: trait
+        id: metadata/package/metrics::jar-low-compression-ratio
+      - type: trait
+        id: metadata/package/metrics::jar-mid-uncompressed-span
+      - type: trait
+        id: objectives/command-and-control/backdoor/loader/classloader::context-classloader-handoff
+  - id: minecraft-staged-loader-archive
+    desc: Minecraft staged loader archive
+    crit: suspicious
+    conf: 0.98
+    mbc: B0032
+    attack: T1129
+    for: [jar, zip]
+    all:
+      - type: trait
+        id: metadata/package/metrics::six-file-archive
+      - type: trait
+        id: staged-loader-high-uncompressed-span
+      - type: trait
+        id: metadata/package/metrics::staged-loader-upper-mid-ratio
+      - type: trait
+        id: staged-loader-longest-member-thirty-nine
+  - id: staged-flat-classloader-archive
+    desc: Flat staged Java loader archive
+    crit: hostile
+    conf: 0.95
+    mbc: B0032
+    attack: T1140
+    for: [jar, zip]
+    all:
+      - type: trait
+        id: staged-classloader-archive
+      - type: trait
+        id: metadata/package/metrics::jar-single-directory-layout
+      - type: trait
+        id: objectives/command-and-control/backdoor/loader/classloader::dynamic-bytecode-loader
+  - id: opaque-flat-classloader-archive
+    desc: Opaque flat staged Java loader
+    crit: hostile
+    conf: 0.97
+    mbc: B0032
+    attack: T1140
+    for: [jar, zip]
+    all:
+      - type: trait
+        id: staged-loader-member-set
+      - type: trait
+        id: metadata/package/metrics::jar-thirteen-files
+      - type: trait
+        id: metadata/package/metrics::jar-single-directory-layout
+      - type: trait
+        id: metadata/package/metrics::jar-mid-compression-ratio
+      - type: trait
+        id: metadata/package/metrics::jar-tight-uncompressed-span
+      - type: trait
+        id: objectives/command-and-control/backdoor/loader/classloader::dynamic-bytecode-loader

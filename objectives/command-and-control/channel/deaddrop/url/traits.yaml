@@ -1,0 +1,329 @@
+# URL Indirection / Dead Drop Detection
+# ATT&CK: T1102.001 (Web Service: Dead Drop Resolver)
+# Detects pattern where fetched content is used as a URL for subsequent requests
+# This hides the real C2 infrastructure from static analysis
+defaults:
+  platforms: [windows, unix]
+  crit: suspicious
+  attack: "T1102.001"
+traits:
+  # === Go: Fetch then use result as URL ===
+  - id: go-http-get-readall-post
+    desc: http.Get body read before POST
+    crit: notable
+    conf: 0.85
+    for: [go]
+    if:
+      type: text
+      regex: 'http\.Get\([\s\S]{0,200}(ReadAll|\.Body)[\s\S]{0,200}http\.Post\('
+  - id: go-http-get-string-post
+    desc: http.Get content reused in POST
+    crit: notable
+    conf: 0.85
+    for: [go]
+    if:
+      type: text
+      regex: 'http\.Get\([\s\S]{0,200}(String\(|string\()[\s\S]{0,200}http\.Post\('
+  - id: go-get-then-get
+    desc: HTTP GET result used in second GET
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      # The qualifier is what makes this an HTTP pattern vs. a generic getter.
+      # Bare `.Get(name).String()...Get(` matched any Go code with two getter
+      # calls — Twitch bot argument parsers (`ArgsParser.Get(arg).String()`),
+      # `url.Values.Get`, `http.Header.Get`, map-of-strings wrappers, config
+      # libraries, etc. The leading `http.Get` or `<ident>Client.Get` anchor
+      # narrows it to actual HTTP clients (stdlib + custom typed clients like
+      # `restyClient`, `httpClient`, `apiClient`) without losing real deaddrops.
+      type: text
+      regex: '(http|\w+[Cc]lient)\.Get\s*\(\s*[^,\n()]{1,120}\s*\)\.String\s*\(\)[\s\S]{0,250}\.Get\s*\('
+  # === Python: requests chaining ===
+  - id: py-requests-url-chain
+    desc: URL variable reused after requests GET
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)\burl\s*=\s*requests\.get\(.{0,50}\)\.text[\s\S]{0,40}requests\.(get|post)\(\s*url\b'
+  - id: py-requests-endpoint-chain
+    desc: Endpoint variable reused after requests GET
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)endpoint\s*=\s*requests\.get\(.{0,10}\)\.text[\s\S]{0,9}requests\.(get|post)\(endpoint'
+  - id: py-requests-host-chain
+    desc: Host variable reused after requests GET
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)\bhost\s*=\s*requests\.get\(.{0,20}\)\.text[\s\S]{0,20}requests\.(get|post)\(\s*host\b'
+  # === JavaScript: fetch chaining ===
+  - id: js-fetch-chain
+    desc: Inline fetch text chained into fetch
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      # Keep the dataflow in one promise chain. A pair of fetches separated by
+      # ordinary statements is common application traffic, not a resolver.
+      type: text
+      regex: 'fetch\([^)]{1,50}\)\.then[\s\S]{0,100}\.text\(\)\)\.then[\s\S]{0,80}fetch\('
+    not:
+      - substr: 'fetch("config.json").text()'
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: metadata/package/testing/harness/runtime/
+      # A fetch→.text()→fetch sequence is ubiquitous app logic in minified
+      # SPA/extension bundles (login-then-follow, paginated APIs). The real
+      # dead-drop signal is the *chained URL reuse*, which this weak atom
+      # cannot prove; gate it out of known bundler output to avoid flagging
+      # legitimate front-end bundles (e.g. Vite/Rollup) as C2.
+      - id: metadata/library/structure/
+      # Font importers commonly fetch a stylesheet, then fetch each referenced
+      # font file and convert it to a data: URL. That is URL-following app
+      # logic, not a remote dead-drop resolver.
+  - id: js-axios-chain
+    desc: Axios response data passed as URL
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: text
+      # The second request must receive a response-data member as its URL.
+      # Merely returning `response.data` before the next exported API method
+      # is normal client code and is not a dead-drop resolver.
+      regex: 'axios\.get\([^)]{1,40}\)[\s\S]{0,40}\.data[\s\S]{0,30}axios\.(get|post)\(\w+\.data'
+    # Minified HTTP client wrappers often end each method with `return (await
+    # axios.get(...)).data` immediately before the next `async post/get` —
+    # that is adjacent method bodies, not response-as-URL chaining.
+    not:
+      - regex: '\.data\}\s*async\s+'
+    unless:
+      - id: js-vite-api-url-marker
+      - id: metadata/library/vscode::vscode-extension-marker
+      - id: metadata/package/manifest/runtime::vscode-extension
+  - id: js-axios-app-api-marker
+    desc: Axios application API marker
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(API_URL|apiUrl|baseURL).{0,120}axios\.'
+  - id: js-vite-api-url-marker
+    desc: Vite API URL marker
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: import.meta.env.VITE_API_URL
+  - id: js-font-stylesheet-fetch-marker
+    desc: Font stylesheet fetch marker
+    crit: component
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: Failed to fetch stylesheet
+  - id: js-font-file-fetch-marker
+    desc: Font file fetch marker
+    crit: component
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: Failed to fetch font file
+  - id: js-font-mime-marker
+    desc: Font MIME type marker
+    crit: component
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'font/(woff2?|ttf|otf)'
+  - id: security-rule-runtime-script-floating-url
+    desc: Security rule quotes floating script URL
+    crit: component
+    conf: 0.95
+    for: [rust, shell]
+    if:
+      type: text
+      substr: 'id: "runtime_script_fetched_from_floating_url"'
+  # === Shell: curl/wget result used as URL ===
+  - id: shell-curl-to-shell
+    desc: curl output piped to shell
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: text
+      regex: '\$\(curl.{1,120}\)\s*(bash|sh)\b'
+    unless:
+      - id: security-rule-runtime-script-floating-url
+      - id: well-known/app/brev-cli::source-tree-marker
+  - id: shell-curl-to-python
+    desc: curl output piped to Python
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: text
+      regex: '\$\(curl.{1,120}\)\s*(python|perl|ruby)\b'
+  - id: shell-curl-to-script-host
+    desc: curl output piped to script host
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: text
+      regex: '\$\(curl.{1,120}\)\s*(php|powershell|cmd|nc)\b'
+  - id: shell-backtick-curl-chain
+    desc: backtick curl output reused
+    crit: suspicious
+    conf: 0.8
+    for: [shell]
+    if:
+      type: text
+      regex: '`curl.{1,120}`\s*(bash|sh|python)'
+    unless:
+      - id: security-rule-runtime-script-floating-url
+      - id: well-known/app/brev-cli::source-tree-marker
+  - id: shell-wget-to-interpreter
+    desc: wget result piped to interpreter
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: text
+      regex: '`wget[^`]{1,80}`\s*(bash|sh|python)'
+    unless:
+      - id: security-rule-runtime-script-floating-url
+  # === Ruby: Net::HTTP chaining ===
+  - id: ruby-http-get-assign
+    desc: Net::HTTP.get response assignment
+    crit: component
+    conf: 0.8
+    for: [ruby]
+    if:
+      type: text
+      regex: '[a-z_]\w*\s*=\s*Net::HTTP\.get'
+
+  - id: ruby-http-uri-followup
+    desc: Net::HTTP follow-up via URI variable
+    crit: component
+    conf: 0.8
+    for: [ruby]
+    if:
+      type: text
+      regex: 'Net::HTTP\.(get|post)\s*\(\s*URI\([a-z_]\w*'
+    not:
+      - regex: "Net::HTTP\\.get_print\\s+URI\\('http://www\\.example\\.com/"
+composite_rules:
+  - id: js-font-import-fetch-marker
+    desc: Font import fetch marker
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    needs: 2
+    any:
+      - id: js-font-stylesheet-fetch-marker
+      - id: js-font-file-fetch-marker
+      - id: js-font-mime-marker
+  # === URL Dead Drop Pattern ===
+  - id: url-deaddrop-go
+    desc: Go URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    mbc: "C0002"
+    any:
+      - id: go-http-get-readall-post
+      - id: go-http-get-string-post
+      - id: go-get-then-get
+    unless:
+      - id: metadata/package/testing/presence/harness::go-test-file
+      - id: metadata/package/testing/harness/unit/
+  - id: py-urllib-chain
+    desc: Python urllib fetch-chain pattern
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    scope: leaf
+    all:
+      - id: micro-behaviors/communications/http/lib/urllib::urlopen-response-body-assignment
+      - id: micro-behaviors/communications/http/lib/urllib::urlopen-variable-argument
+      - id: micro-behaviors/communications/http/lib/urllib::urlopen-multiple-calls
+    near_lines: 12
+    unless:
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/package/testing/presence/harness/
+      - id: well-known/lib/pygments::source-tree
+  - id: url-deaddrop-python
+    desc: Python URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: py-requests-url-chain
+      - id: py-requests-endpoint-chain
+      - id: py-requests-host-chain
+      - id: py-urllib-chain
+    scope: leaf
+    unless:
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/package/testing/presence/harness/
+  - id: url-deaddrop-javascript
+    desc: JavaScript URL dead drop pattern
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: js-fetch-chain
+      - id: js-axios-chain
+    unless:
+      - id: well-known/app/browser-extension/
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: metadata/library/structure/
+      - id: metadata/package/testing/presence/harness/
+  - id: url-deaddrop-shell
+    desc: Shell URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: shell-curl-to-shell
+      - id: shell-curl-to-python
+      - id: shell-curl-to-script-host
+      - id: shell-backtick-curl-chain
+      - id: shell-wget-to-interpreter
+    unless:
+      - id: security-rule-runtime-script-floating-url
+  - id: ruby-http-chain
+    desc: HTTP response used as URL
+    crit: suspicious
+    conf: 0.8
+    for: [ruby]
+    all:
+      - id: ruby-http-get-assign
+      - id: ruby-http-uri-followup
+  - id: url-deaddrop
+    desc: URL dead drop / indirection pattern
+    crit: hostile
+    conf: 0.95
+    mbc: "C0002"
+    any:
+      - id: url-deaddrop-go
+      - id: url-deaddrop-python
+      - id: url-deaddrop-javascript
+      - id: url-deaddrop-shell
+      - id: ruby-http-chain
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: security-rule-runtime-script-floating-url
+      - id: metadata/library/structure/
+      - id: metadata/package/testing/presence/harness/
+      - id: well-known/lib/web-ui-vendors/

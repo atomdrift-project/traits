@@ -1,0 +1,138 @@
+defaults:
+  for:
+    - pe
+    - dll
+  platforms:
+    - windows
+traits:
+  - id: virus-detected-error-code
+    desc: References Windows virus-detection error code
+    crit: baseline
+    conf: 0.95
+    for: [pe, dll, python, c]
+    if:
+      type: text
+      exact: ERROR_VIRUS_INFECTED
+  - id: set-error-mode
+    desc: Suppress error dialogs
+    crit: baseline
+    conf: 0.8
+    if:
+      type: text
+      exact: SetErrorMode
+  - id: get-last-error
+    desc: Get system error code
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: GetLastError
+  - id: set-last-error
+    desc: Set last error code
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      exact: SetLastError
+  - id: unhandled-exception-filter
+    desc: Handle unhandled exceptions
+    crit: baseline
+    conf: 0.8
+    for:
+      - c
+      - cpp
+    if:
+      type: text
+      word: UnhandledExceptionFilter
+  - id: set-unhandled-exception-filter
+    desc: Register exception handler
+    crit: baseline
+    conf: 0.85
+    for:
+      - c
+      - cpp
+    if:
+      type: text
+      word: SetUnhandledExceptionFilter
+  - id: add-vectored-exception-handler
+    desc: Register vectored exception handler
+    crit: baseline
+    conf: 0.9
+    mbc: B0001
+    if:
+      type: symbol
+      exact: AddVectoredExceptionHandler
+    unless:
+      - type: basename
+        regex: \.pyd$
+      - id: metadata/binary/framework/
+    downgrade:
+      # Go's runtime registers a vectored exception handler for panic/signal
+      # translation on Windows; every Go Windows binary imports it.
+      any:
+        - id: metadata/lang/compiled/
+        - id: metadata/lang/compiler/systems::go-pe-symtab
+  - id: add-vectored-exception-handler-source
+    desc: Register vectored exception handler in source
+    crit: notable
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: symbol
+      kind: call
+      regex: ^(Rtl)?AddVectoredExceptionHandler$
+    unless:
+      - id: metadata/package/testing/compiled/
+  - id: remove-vectored-exception-handler-source
+    desc: Remove vectored exception handler in source
+    crit: notable
+    conf: 0.88
+    for:
+      - c
+    if:
+      type: symbol
+      kind: call
+      regex: ^(Rtl)?RemoveVectoredExceptionHandler$
+    unless:
+      - id: metadata/package/testing/compiled/
+  - id: seh-common-exit-comment
+    desc: SEH used for common exit
+    crit: suspicious
+    conf: 0.94
+    for:
+      - c
+    if:
+      type: string_literal
+      substr: uses SEH for common code exit
+  - id: rtl-unwind
+    desc: Runtime library unwind operation
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: RtlUnwind
+composite_rules:
+  - id: vectored-exception-handler-source
+    desc: Vectored exception handler lifecycle in source
+    crit: notable
+    conf: 0.94
+    for:
+      - c
+    all:
+      - id: add-vectored-exception-handler-source
+      - id: remove-vectored-exception-handler-source
+    unless:
+      - id: metadata/package/testing/compiled/
+  - id: exception-filter-pair
+    desc: Register and invoke exception filters
+    crit: notable
+    conf: 0.87
+    for:
+      - c
+      - cpp
+    unless:
+      - id: metadata/binary/framework/
+    all:
+      - id: unhandled-exception-filter
+      - id: set-unhandled-exception-filter

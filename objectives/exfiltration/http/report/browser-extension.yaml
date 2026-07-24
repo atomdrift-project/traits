@@ -1,0 +1,119 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, crx, zip, archives]
+  attack: T1041
+
+traits:
+  - id: external-jwt-response-field
+    desc: External message carries JWT field
+    crit: component
+    conf: 0.98
+    for: [javascript]
+    if:
+      type: text
+      regex: '(?i)onMessageExternal[\s\S]{0,800}\b(jwt|token)\b\s*:'
+
+  - id: pageview-report-fields
+    desc: Report body contains page URL and referrer
+    crit: notable
+    conf: 0.96
+    for: [javascript]
+    if:
+      type: text
+      regex: 'docref\s*:.{0,80}uri\s*:'
+  - id: browser-anal-upload-path
+    desc: Targets an /api/anal endpoint
+    crit: component
+    conf: 0.96
+    for: [javascript, typescript]
+    if:
+      type: literal
+      kind: string
+      regex: '^https?://[^/]+/api/anal$'
+  - id: stored-anal-json-post-body
+    desc: Serializes stored anal records for HTTP POST
+    crit: component
+    conf: 0.96
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'body:\s*JSON\.stringify\([A-Za-z_$][\w$]*\.anal\)'
+
+composite_rules:
+  - id: external-jwt-session-token-exfiltration
+    desc: Extension returns a captured session token through external messaging
+    crit: hostile
+    conf: 0.99
+    attack: T1041,T1539
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: external-jwt-response-field
+      - id: objectives/credential-access/browser/session-hijack::jwt-shaped-value-validator
+      - id: micro-behaviors/communications/ipc/message::chrome-runtime-on-message-external
+      - id: metadata/permission/manifest::externally-connectable
+
+  - id: extension-proxy-request-history-upload
+    desc: Uploads buffered browser request history
+    crit: suspicious
+    conf: 0.97
+    for: [crx, xpi, zip]
+    scope: archive
+    all:
+      - id: objectives/collection/activity/browser::extension-proxy-request-history-buffer
+      - id: micro-behaviors/communications/http/request/client::browser-http-request-channel
+      - id: browser-anal-upload-path
+      - id: stored-anal-json-post-body
+  - id: all-site-pageview-exfiltration
+    desc: All-site extension uploads pageview telemetry
+    crit: hostile
+    conf: 0.99
+    for: [crx, zip, archives]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: micro-behaviors/communications/http/url/path::browser-page-url-referrer-read
+      - id: objectives/collection/monitor/tracking::pageview-runtime-dispatch
+      - id: pageview-report-fields
+      - id: micro-behaviors/communications/http/request/credentials::fetch-credentials-include
+  - id: all-url-browsing-activity-report
+    desc: All-URL extension relays data with an embedded credential
+    crit: hostile
+    conf: 0.98
+    attack: T1041,T1217
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: metadata/permission/host::content-script-all-urls
+      - id: micro-behaviors/communications/ipc/message::chrome-runtime-send-message
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: objectives/collection/activity/browser::hardcoded-jwt-credential
+
+  - id: extension-credential-forwarding-to-auth-service
+    desc: Extension forwards credentials remotely
+    crit: hostile
+    conf: 0.99
+    attack: T1041,T1056.003
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: objectives/credential-access/phishing/credential::extension-remote-auth-endpoint
+      - id: micro-behaviors/data/serialize/json::username-password-json-body
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+
+  - id: all-site-extension-cookie-forward
+    desc: All-site extension forwards enumerated cookies over HTTP
+    crit: hostile
+    conf: 0.98
+    attack: T1539,T1041
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: metadata/permission/manifest::host-permission-all-urls
+      - id: metadata/permission/cookie::permission-cookies
+      - id: micro-behaviors/communications/http/cookies::chrome-cookies-get-all
+      - id: micro-behaviors/communications/http/cookies::cookie-field-in-request-object
+      - id: micro-behaviors/communications/http/request/client::browser-http-request-channel

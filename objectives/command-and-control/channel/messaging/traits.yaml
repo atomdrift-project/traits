@@ -1,0 +1,185 @@
+defaults:
+  platforms: [windows, linux, macos]
+  for: [elf, macho, pe]
+traits:
+  - id: discord-invite
+    desc: 'Discord invite URL'
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      regex: discord\.gg/[a-zA-Z0-9]+
+    not:
+      - substr: "discord.gg/Vn7BjmzhtF"
+  - id: dns-query-symbol
+    desc: DNS query symbol (potential C2 channel)
+    crit: notable
+    mbc: B0030
+    attack: T1071.004
+    conf: 0.4
+    if:
+      type: symbol
+      exact: dns_query
+  - id: telegram-session-store
+    desc: Telegram local session store
+    crit: notable
+    conf: 0.88
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      substr: telegram.session
+      section: .rdata
+  - id: telegram-auth-request-code
+    desc: Telegram auth request code command
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      substr: cmd_auth_request_code
+      section: .rdata
+  - id: telegram-auth-login-commands
+    desc: Telegram sign-in and password commands
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      regex: 'cmd_auth_(sign_in|check_password)'
+      section: .rdata
+  - id: telegram-auth-methods
+    desc: Telegram MTProto auth method cluster
+    crit: suspicious
+    conf: 0.92
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      regex: 'auth\.(sendCode|signIn|checkPassword)'
+      section: .rdata
+  - id: telegram-list-command
+    desc: Telegram remote file listing command
+    crit: suspicious
+    conf: 0.94
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      substr: cmd_get_files
+      section: .rdata
+  - id: telegram-download-command
+    desc: Telegram remote file download command
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      substr: cmd_download_fil
+      section: .rdata
+  - id: telegram-upload-move-command-set
+    desc: Telegram upload and move commands
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      regex: 'cmd_(upload_file|move_files)'
+      section: .rdata
+  - id: telegram-folder-command-set
+    desc: Telegram create and delete folder commands
+    crit: suspicious
+    conf: 0.96
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      regex: 'cmd_(create_folde|delete_folde)'
+      section: .rdata
+  - id: telegram-drive-folder-tag
+    desc: Telegram drive folder workflow tag
+    crit: component
+    conf: 0.92
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      substr: "[telegram-drive-folder]"
+      section: .rdata
+  - id: telegram-state-command
+    desc: Telegram state command handler
+    crit: component
+    conf: 0.9
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: text
+      substr: app_lib::commands::TelegramState
+      section: .rdata
+composite_rules:
+  - id: dns-query
+    desc: DNS queries (potential C2 channel)
+    crit: suspicious
+    mbc: B0030
+    attack: T1071.004
+    conf: 0.4
+    any:
+      - id: micro-behaviors/communications/dns/lookup/native::lookup-res-query
+      - id: dns-query-symbol
+    unless:
+      - id: well-known/tool/reverse-engineering/frida/
+  - id: telegram-remote-file-command-matrix
+    desc: Telegram remote file command matrix
+    crit: suspicious
+    conf: 0.96
+    platforms: [windows]
+    for: [pe]
+    any:
+      - id: telegram-list-command
+      - id: telegram-download-command
+      - id: telegram-upload-move-command-set
+      - id: telegram-folder-command-set
+    needs: 3
+  - id: telegram-mtproto-remote-file-workflow
+    desc: Telegram MTProto remote file workflow
+    crit: suspicious
+    conf: 0.96
+    platforms: [windows]
+    for: [pe]
+    all:
+      - id: telegram-remote-file-command-matrix
+      - id: telegram-folder-command-set
+    any:
+      - id: telegram-auth-request-code
+      - id: telegram-auth-login-commands
+      - id: telegram-auth-methods
+  - id: telegram-mtproto-file-c2
+    desc: Telegram MTProto remote file C2
+    crit: hostile
+    conf: 0.98
+    platforms: [windows]
+    for: [pe]
+    all:
+      - id: telegram-mtproto-remote-file-workflow
+    any:
+      - id: telegram-session-store
+      - id: telegram-state-command
+      - id: telegram-drive-folder-tag
+      - id: micro-behaviors/process/create/exec::tauri-shell-open-plugin
+    needs: 2
+  - id: telegram-mtproto-surveillance-c2
+    desc: Telegram remote file and surveillance C2
+    crit: hostile
+    conf: 0.98
+    platforms: [windows]
+    for: [pe]
+    all:
+      - id: telegram-mtproto-file-c2
+    any:
+      - id: objectives/collection/keylog/capture::windows-rawinput
+      - id: objectives/collection/screenshot/capture::gdi-dib-capture
+      - id: micro-behaviors/process/create/shell/lang::powershell-keyword

@@ -1,0 +1,490 @@
+# Sensitive Data Exfiltration - JavaScript/Node.js
+# GuardDog-inspired: Detects exfiltration of sensitive data
+# ATT&CK: T1041 (Exfiltration Over C2 Channel)
+# MBC: B0030 (Data Exfiltration)
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: "T1041"
+  mbc: "B0030"
+traits:
+- id: js-private-key-request-field
+  desc: JS request body carries private-key data
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: '(?i)JSON\.stringify\s*\(\s*\{[^}]{0,250}\bprivate[_ -]?key\b\s*[:=]'
+
+- id: js-seed-phrase-request-field
+  desc: JS request body carries seed-phrase data
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: '(?i)JSON\.stringify\s*\(\s*\{[^}]{0,250}\b(seedPhrase|mnemonic)\b\s*[:=]'
+
+- id: js-wallet-secret-data-field
+  desc: Wallet secret in object data field
+  crit: suspicious
+  conf: 0.96
+  if:
+    type: text
+    regex: '(?i)\bdata\s*:\s*(seedPhrase|passphrase|mnemonic|privateKey)[A-Za-z0-9_$]*'
+
+- id: js-input-value-data-field
+  desc: DOM input value in object data
+  crit: component
+  conf: 0.9
+  if:
+      type: text
+      regex: '\bdata\s*:\s*[A-Za-z_$][\w$]*\.value\b'
+
+- id: json-stringify-env-key-body
+  desc: JSON body includes env-like key
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,500}\benv\b'
+- id: json-stringify-token-secret-body
+  desc: JSON body includes token or secret
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,500}\b(token|secret)\b'
+- id: json-stringify-key-password-body
+  desc: JSON body includes key or password
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,500}\b(key|password)\b'
+- id: json-stringify-env-access-body
+  desc: JSON body includes env secret
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,500}process\.env\.[A-Z0-9_]*(TOKEN|SECRET|KEY|PASS)'
+- id: json-stringify-file-data-body
+  desc: JSON body includes file data field
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: '(?i)JSON\.stringify\s*\(\s*\{[^}]{0,200}\b(file|fileData|fileContent|filePath)\s*:'
+- id: json-stringify-payload-body
+  desc: JSON body includes payload field
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,240}\b(payload|fileData)\b'
+- id: json-stringify-creds-body
+  desc: JSON body includes credential field
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,240}\b(creds|credentials|credential)\b'
+- id: json-stringify-secret-file-body
+  desc: JSON body includes secret field
+  crit: component
+  conf: 0.86
+  if:
+    type: text
+    regex: 'JSON\.stringify\s*\(\s*\{[^}]{0,240}\b(token|secret|password|key)\b'
+- id: http-body-raw-data-variable
+  desc: HTTP request body uses raw variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\b(fetch|axios|request)\s*\([^;\n]{0,500}\bbody\s*:\s*(raw|file)\b'
+- id: http-body-payload-variable
+  desc: HTTP body uses payload variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\bbody\s*:\s*(payload|fileData)\b'
+- id: http-body-credential-variable
+  desc: HTTP body uses credential variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\bbody\s*:\s*(config|creds|credentials)\b'
+- id: http-body-secret-variable
+  desc: HTTP body uses secret variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\bbody\s*:\s*(token|secret|password|key)\b'
+- id: request-write-raw-data-variable
+  desc: HTTP request writes raw data variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\.(write|post|send)\s*\(\s*([^,]{1,100},\s*)?(raw|data)\b'
+- id: request-write-content-file-variable
+  desc: HTTP request writes content file variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\.(write|post|send)\s*\(\s*(content|file)\b'
+- id: request-write-secret-variable
+  desc: HTTP request writes secret variable
+  crit: component
+  conf: 0.84
+  if:
+    type: text
+    regex: '\.[A-Za-z]+\s*\(\s*(creds|credentials|token)\b'
+- id: github-mint-repo-token-tool
+  desc: GitHub repo token mint tool
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    substr: MINT_REPO_TOKEN
+- id: github-repo-scoped-token-text
+  desc: GitHub repo-scoped token text
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: repo-scoped GitHub
+composite_rules:
+- id: js-sensitive-env-source
+  desc: Sensitive environment secret access (JS)
+  crit: component
+  conf: 0.9
+  any:
+  - id: objectives/credential-access/env/secrets/
+  unless:
+  - id: metadata/package/quality/false-positives::benign-app-fp-context
+  - id: well-known/app/heroui-pro/
+- id: js-env-secret-json-body
+  desc: Environment secret serialized into JSON body
+  crit: component
+  conf: 0.92
+  near_bytes: 2048
+  all:
+  - id: js-sensitive-env-source
+  any:
+  - id: objectives/exfiltration/serialization::js-serialize-environment
+  - id: micro-behaviors/data/serialize/json::process-env-json-stringify
+  - id: json-stringify-env-key-body
+  - id: json-stringify-token-secret-body
+  - id: json-stringify-key-password-body
+  - id: json-stringify-env-access-body
+  # GuardDog: Environment variable exfiltration
+- id: js-env-exfiltration
+  desc: Environment variable exfiltration (JS)
+  crit: hostile
+  conf: 0.95
+  size_max: 262144
+  near_bytes: 4096
+  all:
+  - id: js-sensitive-env-source
+      # HTTP sink
+  - id: micro-behaviors/communications/http/request/client::http-client-usage
+  any:
+  - id: js-env-secret-json-body
+  - id: micro-behaviors/communications/http/request/credentials::js-env-token-to-fetch
+  - id: micro-behaviors/communications/http/request/credentials::js-env-key-to-fetch
+  - id: micro-behaviors/communications/http/request/credentials::js-env-object-post-body
+  unless:
+    - id: objectives/exfiltration/sensitive-data/
+    - id: metadata/library/structure/
+  downgrade:
+    any:
+      - id: metadata/signed/platform/
+      - id: micro-behaviors/process/create/shell/bridge/
+      - id: metadata/library/github-actions::actions-sdk
+      - id: objectives/exfiltration/sensitive-data/
+  # Product code that provisions a GitHub connection token for its own backend.
+- id: github-repo-token-provisioning
+  desc: GitHub repo token provisioning
+  crit: baseline
+  all:
+    - id: github-mint-repo-token-tool
+    - id: github-repo-scoped-token-text
+  # GuardDog: Sensitive file source
+- id: js-sensitive-file-read-source
+  desc: Sensitive file read source
+  crit: component
+  conf: 0.9
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/fs/file/read::read-node
+  any:
+  - id: micro-behaviors/fs/path/sensitive/credentials/
+  - id: micro-behaviors/fs/path/sensitive/browser/
+  unless:
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  # GuardDog: HTTP upload/request-body sink
+- id: js-http-upload-or-body-sink
+  desc: HTTP upload or body sink
+  crit: component
+  conf: 0.86
+  any:
+  - id: micro-behaviors/communications/http/upload/
+  - id: micro-behaviors/communications/http/post/
+  - id: micro-behaviors/communications/http/request/client::request-write-call
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: micro-behaviors/communications/http/request/client::http-post-json
+- id: js-sensitive-file-request-body
+  desc: Sensitive file data appears in HTTP request body
+  crit: component
+  conf: 0.9
+  near_bytes: 4096
+  all:
+  - id: js-sensitive-file-read-source
+  any:
+  - id: json-stringify-file-data-body
+  - id: json-stringify-payload-body
+  - id: json-stringify-creds-body
+  - id: json-stringify-secret-file-body
+  - id: http-body-raw-data-variable
+  - id: http-body-payload-variable
+  - id: http-body-credential-variable
+  - id: http-body-secret-variable
+  - id: request-write-raw-data-variable
+  - id: micro-behaviors/communications/http/post::request-write-payload-variable
+  - id: micro-behaviors/communications/http/post::request-write-file-data-variable
+  - id: request-write-content-file-variable
+  - id: request-write-secret-variable
+  # GuardDog: Sensitive file exfiltration
+- id: js-sensitive-file-exfiltration
+  desc: Sensitive file read and exfiltration (JS)
+  crit: hostile
+  conf: 0.95
+  near_bytes: 8192
+  all:
+      # A credential/config read near an unrelated POST is not exfiltration;
+      # require evidence that file-like data is placed into the request body.
+  - id: js-sensitive-file-request-body
+  - id: js-http-upload-or-body-sink
+  unless:
+    - id: micro-behaviors/communications/http/oauth/
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/fixture::test-filename-pattern
+    - id: metadata/library/structure/
+    - id: well-known/lib/stacksjs-ts-cloud::ts-cloud-aws-runtime-context
+  downgrade:
+    any:
+      - id: metadata/signed/platform/
+      - id: objectives/exfiltration/sensitive-data/
+  # System discovery is routine in desktop agents. Treat it as exfiltration
+  # only when the source is an explicit profile/environment serialization, not
+  # merely because a file also contains an HTTP POST.
+- id: js-system-info-exfiltration
+  desc: Explicit host profile or environment serialization sent over HTTP (JS)
+  crit: hostile
+  conf: 0.93
+  near_bytes: 8192
+  all:
+      # System discovery
+  - id: micro-behaviors/communications/http/request/client::http-client-usage
+  - id: micro-behaviors/communications/http/request/client::http-post-json
+  any:
+  - id: objectives/discovery/system/profile::host-process-software-locale-form
+  - id: objectives/discovery/system/fingerprint/runtime::process-env-dump
+  - id: objectives/discovery/system/fingerprint/runtime::full-fingerprint
+  unless:
+    - id: micro-behaviors/communications/http/oauth/
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  downgrade:
+    any:
+      - id: metadata/signed/platform/
+      - id: objectives/exfiltration/sensitive-data/
+  # Env-spread POST: entire process.env spread into HTTP POST body
+- id: js-env-spread-http-post
+  desc: Full environment dump via HTTP POST (spread operator)
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: objectives/exfiltration/http/env::axios-post-env-spread
+  downgrade:
+    any:
+      - id: metadata/package/testing/
+      - id: metadata/signed/platform/
+- id: js-wallet-key-http-exfiltration
+  desc: Private key HTTP POST flow
+  crit: hostile
+  conf: 0.98
+  near_lines: 120
+  all:
+  - id: micro-behaviors/os/env/vars/credentials::javascript-private-key-environment-variable
+  - id: micro-behaviors/communications/http/request/client::http-client-usage
+  any:
+  - id: micro-behaviors/communications/http/request/client::post-method-text
+  - id: micro-behaviors/communications/http/post/
+  - id: micro-behaviors/communications/http/request/client::request-write-call
+  unless:
+    - id: micro-behaviors/communications/http/services/github::github-app-installation-token-api
+    - id: objectives/credential-access/env/secrets/source-control::github-app-private-key
+  downgrade:
+    any:
+      - id: metadata/package/testing/
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/signed/platform/
+
+- id: js-private-key-input-and-request-field
+  desc: Wallet private-key input paired with a request field
+  crit: notable
+  conf: 0.98
+  all:
+  - id: objectives/credential-access/wallet/mnemonic::wallet-private-key-entry-label
+  - id: js-private-key-request-field
+
+- id: js-private-key-http-exfiltration
+  desc: User-entered wallet private key sent in an HTTP POST body
+  crit: hostile
+  conf: 0.99
+  near_lines: 120
+  all:
+  - id: js-private-key-input-and-request-field
+  - id: micro-behaviors/communications/http/request/client::http-post-json
+
+  # Hex-obfuscated C2: hex decode + env exfil + eval response = full C2 loop
+- id: js-hex-obfuscated-env-c2
+  desc: Hex-obfuscated env exfil with C2 eval callback
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: micro-behaviors/data/decode/hex::hex-pair-regex-byte-parser
+  - id: micro-behaviors/os/env/vars/access::js-process-env-spread
+  - id: objectives/command-and-control/remote-command/control::eval-response-data
+  downgrade:
+    any:
+      - id: metadata/package/testing/
+      - id: metadata/signed/platform/
+  # GuardDog: Comprehensive sensitive data exfiltration
+- id: js-sensitive-data-exfiltration
+  desc: Sensitive data exfiltration (JS)
+  crit: hostile
+  conf: 0.95
+  unless:
+  - id: micro-behaviors/communications/http/services/github::github-app-installation-token-api
+  - id: objectives/credential-access/env/secrets/source-control::github-app-private-key
+  - id: metadata/package/files/dependency::node-modules-path
+  - id: well-known/lib/stacksjs-ts-cloud::ts-cloud-aws-runtime-context
+  any:
+  - id: js-env-exfiltration
+  - id: js-sensitive-file-exfiltration
+  - id: js-system-info-exfiltration
+  - id: js-env-spread-http-post
+  - id: js-wallet-key-http-exfiltration
+  - id: js-private-key-http-exfiltration
+- id: js-has-tests-without-obfuscation
+  desc: Package has tests and no obfuscation/decoding/encoded URLs
+  crit: baseline
+  all:
+  - id: metadata/package/quality/profile::has-tests
+  unless:
+  - id: objectives/anti-static/obfuscation/
+  - id: micro-behaviors/data/decode/
+  - id: micro-behaviors/communications/url/encoded::encoded-http-url
+  - id: micro-behaviors/communications/url/encoded::encoded-https-url
+  # Obfuscated JS credential-stealer class (e.g. paysafe-kyc): a runtime
+  # string decoder hides the HTTP sink and env keywords, so the cleartext
+  # decoder + host-recon / env-harvest signals carry the verdict.
+- id: js-custom-string-decoder
+  desc: Custom string decoder obfuscation
+  crit: notable
+  conf: 0.85
+  any:
+  - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+  - id: micro-behaviors/data/decode/base64::multiple-node-hex-base64-decodes
+  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
+- id: js-obfuscated-host-recon-stealer
+  desc: Obfuscated host and user reconnaissance sent over HTTP
+  crit: hostile
+  conf: 0.95
+  size_max: 262144
+  all:
+  - id: js-custom-string-decoder
+  - id: objectives/discovery/system/fingerprint/user::node-host-user-query-pair
+  any:
+  - id: micro-behaviors/communications/http/request/configuration::node-http-request-configured
+  - id: micro-behaviors/communications/http/request/client::js-fetch-call
+  needs: 1
+  downgrade:
+    any:
+    - id: metadata/package/testing/
+    - id: metadata/signed/platform/
+  unless:
+  - id: well-known/app/qwen-code::qwen-code-benign-bundle-context
+  - id: well-known/app/qwen-code::qwen-code-bundle-text
+  - id: well-known/app/qwen-code::qwen-code-cli-bundle-path
+- id: js-obfuscated-env-exfil
+  desc: Obfuscated env credential exfiltration
+  crit: hostile
+  conf: 0.95
+  size_max: 262144
+  all:
+  - id: js-custom-string-decoder
+  - id: objectives/credential-access/env/secrets/filtered-access::env-filter-method
+  - id: json-stringify-env-key-body
+  downgrade:
+    any:
+    - id: metadata/package/testing/
+    - id: metadata/signed/platform/
+- id: js-env-harvest-obfuscated-sink
+  desc: Env harvest via obfuscated HTTP sink
+  crit: hostile
+  conf: 0.93
+  size_max: 262144
+  near_bytes: 4096
+  all:
+  - id: micro-behaviors/communications/http/request/configuration::node-http-request-configured
+  any:
+  - id: objectives/credential-access/env/secrets/filtered-access::env-filter-method
+  - id: json-stringify-env-key-body
+  - id: objectives/discovery/system/fingerprint/user::node-host-user-query-pair
+  needs: 1
+  downgrade:
+    any:
+    - id: metadata/package/testing/
+    - id: metadata/signed/platform/
+- id: js-host-recon-env-harvest
+  desc: Host recon with env secret harvest
+  crit: suspicious
+  conf: 0.85
+  size_max: 262144
+  all:
+  - id: objectives/discovery/system/fingerprint/user::node-host-user-query-pair
+  any:
+  - id: objectives/credential-access/env/secrets/filtered-access::env-filter-method
+  - id: json-stringify-env-key-body
+  needs: 1
+  downgrade:
+    any:
+    - id: metadata/package/testing/
+    - id: metadata/signed/platform/
+- id: js-filtered-env-http-exfil
+  desc: Filtered environment secrets sent over HTTP
+  crit: hostile
+  conf: 0.99
+  attack: "T1552.001,T1041"
+  mbc: "E1552,E1041"
+  near_bytes: 900
+  all:
+  - id: objectives/credential-access/env/secrets/filtered-access::env-secret-filter-keyword-list
+  - id: micro-behaviors/os/env/vars/access::js-object-keys-env
+  - id: micro-behaviors/os/env/vars/access::js-env-index-copy-to-object
+  - id: micro-behaviors/data/serialize/json::json-stringify-call
+  - id: micro-behaviors/communications/http/request/client::h-request-call
+  - id: micro-behaviors/communications/http/request/client::request-write-call
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/signed/platform/

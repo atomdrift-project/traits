@@ -1,0 +1,201 @@
+# Python Packer/Loader Obfuscation Patterns
+# Detects multi-stage Python obfuscation: base85/zlib/compile/exec chains,
+# heavy crypto imports in small scripts, and other packer indicators.
+# Covers techniques used by PyOBFUSCATE, ShadowCoil packer, VIPERTUNNEL loader.
+# ATT&CK: T1027 (Obfuscated Files or Information)
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1027
+
+traits:
+  # These crypto imports are component-only: a bare blake3/ChaCha20/HKDF import
+  # is ordinary in legitimate cryptography code (KDFs, AEAD, token signing).
+  # They only signal a packer when combined with a base85/exec unpack chain in
+  # a small script — which the composites below require. Standalone they must
+  # not surface as suspicious.
+  - id: blake3-import
+    desc: blake3 hash library import
+    crit: component
+    conf: 0.88
+    if:
+      type: symbol
+      exact: blake3
+
+  - id: chacha20-import
+    desc: ChaCha20 cipher import
+    crit: component
+    conf: 0.88
+    if:
+      type: symbol
+      exact: ChaCha20.new
+
+  - id: hkdf-import
+    desc: HKDF key derivation import
+    crit: component
+    conf: 0.88
+    if:
+      type: symbol
+      exact: HKDF
+  - id: cpython-libclinic-marker
+    desc: CPython libclinic generator marker
+    crit: baseline
+    conf: 0.95
+    if:
+      type: text
+      substr: "from libclinic"
+  - id: cpython-pegen-marker
+    desc: CPython pegen generator marker
+    crit: baseline
+    conf: 0.95
+    if:
+      type: text
+      substr: "PythonParserGenerator"
+
+  - id: mode-gcm-ref
+    desc: AES MODE_GCM cipher mode reference
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: MODE_GCM
+
+  - id: mode-ctr-ref
+    desc: AES MODE_CTR cipher mode reference
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: MODE_CTR
+
+  # Metrics-based: high import density in small script = packer stub
+  - id: high-import-density
+    desc: High import density in small script
+    crit: component
+    conf: 0.8
+    size_max: 10240
+    if:
+      type: metrics
+      field: text.import_density
+      min: 30.0
+
+  - id: cpython-run-startup
+    desc: CPython startup audit hook
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      substr: "cpython.run_startup"
+
+composite_rules:
+  - id: heavy-crypto-packer
+    desc: Heavy crypto imports in Python packer
+    crit: suspicious
+    conf: 0.93
+    size_max: 20480
+    all:
+      - id: micro-behaviors/data/encode/base85::b85decode-script
+    any:
+      - id: blake3-import
+      - id: chacha20-import
+      - id: hkdf-import
+      - id: micro-behaviors/crypto/kdf/algorithm::key-derivation
+      - id: mode-gcm-ref
+      - id: mode-ctr-ref
+
+  - id: b85-zlib-exec-packer
+    desc: Base85+zlib+exec Python unpacker chain
+    crit: suspicious
+    conf: 0.94
+    size_max: 32768
+    all:
+      - id: micro-behaviors/data/encode/base85::b85decode-script
+      - id: micro-behaviors/data/compress/library::zlib-decompress-symbol
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+    # The compile+exec variant below is the canonical finding when this
+    # unpacker also compiles the decoded source; avoid duplicate verdicts.
+    unless:
+      - id: micro-behaviors/process/interpreter/python::compile-builtin
+
+  - id: import-heavy-packer-stub
+    desc: Import-heavy packer stub with exec
+    crit: suspicious
+    conf: 0.9
+    size_max: 10240
+    unless:
+      - id: cpython-run-startup
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness/
+      - id: cpython-libclinic-marker
+      - id: cpython-pegen-marker
+      - id: metadata/library/runtime/
+      - id: metadata/library/runtime/
+    all:
+      - id: high-import-density
+      - id: metadata/file/metrics::script-many-imports-10-small
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+    any:
+      - id: micro-behaviors/data/decode/base64::base64-decoding
+      - id: micro-behaviors/data/encode/base85::b85decode-script
+      - id: micro-behaviors/data/compress/library::zlib-decompress
+      - id: micro-behaviors/data/serialize/unsafe::marshal-loads
+      - id: micro-behaviors/data/decode/hex::python-fromhex
+      - id: objectives/anti-static/obfuscation/string/encoding::bytes-fromhex-call
+
+  - id: multi-layer-python-packer
+    desc: Multi-layer Python packer with crypto
+    crit: hostile
+    conf: 0.97
+    size_max: 65536
+    all:
+      - id: micro-behaviors/data/encode/base85::b85decode-script
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+    any:
+      - id: blake3-import
+      - id: chacha20-import
+      - id: hkdf-import
+      - id: micro-behaviors/crypto/kdf/algorithm::key-derivation
+      - id: micro-behaviors/process/interpreter/python::compile-synthetic-filename
+    needs: 2
+
+  - id: compile-exec-decompress
+    desc: Compiles and executes decompressed Python source
+    # Compilation and execution of compressed source is an anti-static signal,
+    # but model runtimes, plugin systems, and protected libraries can use it.
+    # Hostile intent requires additional delivery or impact evidence.
+    crit: suspicious
+    conf: 0.96
+    size_max: 65536
+    scope: archive
+    all:
+      - id: micro-behaviors/process/interpreter/python::compile-builtin
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+      - id: micro-behaviors/data/compress/library::zlib-decompress-symbol
+    any:
+      - id: micro-behaviors/data/encode/base85::b85decode-script
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+    unless:
+      - id: metadata/package/quality/recognized-contexts::clokai-opaque-engine-context
+      - id: metadata/package/quality/recognized-contexts::clokai-model-runtime-context
+
+  # A module-shaped loader is a stronger form of the generic compile/exec
+  # signal: it keeps the source opaque in a large encoded blob, reconstructs
+  # it through zlib, and installs the result in a fresh ModuleType namespace.
+  # This remains suspicious rather than hostile because protected runtimes can
+  # use the same mechanism; package-level supply-chain context is assessed by
+  # a separate composite.
+  - id: base85-zlib-module-loader
+    desc: Base85 zlib Python module loader
+    crit: suspicious
+    conf: 0.97
+    size_max: 65536
+    scope: archive
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/data/encode/base85::b85decode-script
+      - id: micro-behaviors/data/compress/library::zlib-decompress-symbol
+      - id: micro-behaviors/os/api-resolution/dynamic::python-types-moduletype-create
+      - id: micro-behaviors/os/api-resolution/dynamic::python-module-dict-exec
+    unless:
+      - id: metadata/package/quality/recognized-contexts::clokai-opaque-engine-context
+      - id: metadata/package/quality/recognized-contexts::clokai-model-runtime-context

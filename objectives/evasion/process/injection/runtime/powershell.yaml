@@ -1,0 +1,87 @@
+defaults:
+  for: [powershell, batch]
+  platforms: [windows]
+  attack: T1055
+  mbc: B0033
+
+traits:
+  - id: ps-targets-explorer
+    desc: Targets explorer process for injection
+    crit: notable
+    conf: 0.86
+    if:
+      type: text
+      regex: '(?i)Get-Process\s+-Name\s+explorer\b'
+
+composite_rules:
+  - id: ps-kernel32-dllimport
+    desc: .NET kernel32 P/Invoke with injection API references
+    crit: suspicious
+    conf: 0.88
+    near_lines: 80
+    all:
+      - id: micro-behaviors/dylib/load/ffi::dotnet-kernel32-pinvoke
+    any:
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-name
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/inject/runtime/call::queue-user-apc
+
+  - id: powershell-process-memory-injector
+    desc: PowerShell process-memory injection loader
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/create/launch::create-process-api-name
+    any:
+      - id: ps-kernel32-dllimport
+      - id: metadata/lang/scripted::add-type-definition
+    needs: 2
+
+  - id: powershell-remote-thread-memory-injector
+    desc: PowerShell remote-thread memory injector
+    crit: hostile
+    conf: 0.99
+    attack: T1055.001
+    all:
+      - id: micro-behaviors/process/create/spawn::open-process-script
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-name
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-text
+      - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-script
+    any:
+      - id: micro-behaviors/mem/query/info::virtualquery-ex-script
+      - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+    needs: 1
+
+  - id: encrypted-powershell-process-injector
+    desc: Encrypted PowerShell process-memory injector
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: powershell-process-memory-injector
+      - id: objectives/command-and-control/dropper/staging/encrypted::ps-aes-inline-payload
+    any:
+      - id: ps-targets-explorer
+      - id: micro-behaviors/process/sync/mutex::global-mutex-single-instance-script
+      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+    needs: 2
+
+  - id: powershell-apc-process-injection
+    desc: PowerShell APC process-injection loader
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: micro-behaviors/dylib/load/ffi::dotnet-kernel32-pinvoke
+      - id: micro-behaviors/process/create/launch::create-process-api-name
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-name
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/inject/runtime/call::queue-user-apc
+      - id: micro-behaviors/process/info/thread::resume-thread
+
+  - id: powershell-apc-shellcode-loader
+    desc: PowerShell APC loader with hex-decoded byte payload
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: powershell-apc-process-injection
+      - id: micro-behaviors/data/encode/hex::powershell-csharp-hex-byte-decoder

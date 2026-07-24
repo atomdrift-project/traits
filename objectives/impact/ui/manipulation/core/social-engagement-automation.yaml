@@ -1,0 +1,95 @@
+# Coordinated social-media engagement automation — "engagement pods" / auto-likers.
+#
+# A content script on a social platform programmatically clicks the platform's
+# own like / bookmark / retweet / follow buttons instead of the user doing so,
+# usually against a target set pushed from a remote server. This manufactures
+# platform engagement without a per-action user click (coordinated inauthentic
+# behavior) and turns each install into a node that amplifies whoever the server
+# names. It is grayware/PUA: unwanted, policy-violating automation of the user's
+# authenticated session, distinct from a hostile RAT or stealer.
+#
+# The related `remote-config-gated-like-automation` composite uses the neutral
+# page-action atom plus a remote-config endpoint and remains suspicious rather
+# than hostile because a user-installed helper may intentionally automate it.
+# These traits instead key on stable action-button test ids plus a programmatic
+# `.click()`, so the capability and proximity composite survive variable
+# renaming and detect the technique, not one sample's strings.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1491
+
+composite_rules:
+  # The individual click and observer capabilities are neutral. Proximity is
+  # what distinguishes an autonomous feed action from a user-facing helper.
+  - id: autonomous-engagement-trigger
+    desc: Feed observer drives engagement button click
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/ui/window/manage/control::social-engagement-button-click
+      - id: micro-behaviors/ui/window/manage/dom::browser-mutation-observer
+    near_bytes: 8000
+
+  # Deployed engagement bot: an extension whose manifest targets Twitter/X and
+  # whose content script auto-clicks the engagement buttons on that page.
+  - id: social-engagement-automation
+    desc: Extension auto-engages with posts on Twitter/X
+    crit: suspicious
+    conf: 0.94
+    scope: archive
+    for: [crx, xpi, archives]
+    all:
+      - id: metadata/permission/host::content-script-social-twitter
+      - id: autonomous-engagement-trigger
+
+  # Autonomous variant: engagement clicks are wired to a DOM observer, so the
+  # extension likes/bookmarks each new post as the feed loads — no user action.
+  - id: autonomous-feed-engagement-bot
+    desc: Auto-engages new feed posts via DOM observer
+    crit: suspicious
+    conf: 0.95
+    scope: archive
+    for: [crx, xpi, archives]
+    all:
+      - id: autonomous-engagement-trigger
+    any:
+      - id: metadata/permission/host::content-script-social-twitter
+      - id: metadata/permission/host::content-script-social-meta
+      - id: metadata/permission/host::content-script-social-linkedin-reddit
+      - id: metadata/permission/host::content-script-social-tiktok
+
+  # Invitation controls are a distinct social-manipulation action from
+  # likes/follows.  Require the scroll-and-click pattern so a UI that merely
+  # displays an invitation button is not classified as automation.
+  - id: autonomous-social-invitation-trigger
+    desc: Social invitation controls are driven by a scroll-and-click loop
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: micro-behaviors/ui/window/manage/dom::dom-click-call
+      - id: micro-behaviors/ui/window/manage/control::social-scroll-click-loop
+      - id: micro-behaviors/ui/window/manage/control::social-invitation-button-selection
+    near_bytes: 5000
+
+  # REMOVED: `social-invitation-automation` (was hostile).
+  #
+  # Its legs were only `content-script-social-meta` + the trigger above, i.e.
+  # "a Facebook content script that scrolls to invite-labelled buttons and
+  # clicks them". That is exactly how every legitimate Page-admin "Invite all
+  # friends to like your Page" helper is written — matching buttons by
+  # `innerText.includes(label)`, `scrollIntoView()`, then `.click()` — so the
+  # rule convicted that whole product category as hostile. Verified with a
+  # minimal benign helper of that shape, which scored HOSTILE before this change.
+  #
+  # No leg established an attack: no exfiltration, no deception of the person
+  # who installed it, no hijack, no monetisation, no anti-abuse evasion. Bulk
+  # invitations burden the user's own contacts, but the tool serves the knowing
+  # installer — that is greyware, and `autonomous-social-invitation-trigger`
+  # above already records it once at suspicious. Naming the target platform is
+  # not independent evidence of malice, so this composite only double-counted
+  # one behaviour (Single-Trait Rule).
+  #
+  # The escalated case keeps its hostile: `monetized-social-invitation-bot`
+  # (objectives/impact/ui/manipulation/core/social-monetization.yaml) requires
+  # the same trigger *plus* a remote ad-configuration fetch.

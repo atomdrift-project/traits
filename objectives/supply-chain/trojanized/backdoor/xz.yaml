@@ -1,0 +1,624 @@
+defaults:
+  platforms:
+  - linux
+  - macos
+  - windows
+  for: [binaries]
+  attack: T1195.002
+  mbc: B0025
+traits:
+- id: high-entropy-strings-dup
+  desc: Large obfuscated data blob
+  crit: notable
+  conf: 0.7
+  if:
+    type: metrics
+    field: binary.high_entropy_string_count
+    min: 200
+  unless:
+  - type: metrics
+    field: binary.avg_string_entropy
+    max: 3.2
+  - type: metrics
+    field: binary.string_count
+    min: 1000
+  - id: metadata/binary/resource::kernel-driver-idata
+  downgrade:
+    all:
+    - id: metadata/binary/metrics/structural::many-imports
+    - id: micro-behaviors/dylib/library/abi-graphics::opengl-ref-a
+    any:
+    - id: micro-behaviors/dylib/library/abi-graphics::opengl-ref-b
+    - id: metadata/binary/metrics/threshold::many-exports-200
+- id: massive-code-blob
+  desc: Extremely large average function size
+  crit: component
+  conf: 0.85
+  if:
+    id: metadata/lang/compiler/aot::huge-runtime-average-function
+  unless:
+  - type: metrics
+    field: functions.count
+    max: 50
+  - id: micro-behaviors/ui/help/
+  - type: basename
+    exact: sh
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: lzma-crc64-table
+  desc: lzma_crc64_table reference
+  crit: component
+  conf: 0.4
+  if:
+    type: text
+    substr: lzma_crc64_table
+- id: xz-obf-pattern
+  desc: XZ obfuscated function marker bytes
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: hex
+    section: .text
+    pattern: 0F B6 ?? ?? 0F B6 ?? ?? 31 ?? 0F B6 ?? ?? 31
+- id: xz-cpuid-mask-check
+  desc: 'CPUID mask check'
+    # NOTE: this byte pattern matches xz's own CPU feature dispatch — the
+    # path that picks SSE2/AVX CRC implementations at startup. It appears in
+    # clean liblzma 5.4.5 (1 hit) and 5.6.3 (2 hits) and is *absent* from the
+    # backdoored 5.6.0. Standalone it is not a backdoor signal; keeping it as
+    # `component` so it only contributes when composed with other backdoor
+    # evidence (xz-backdoor-entry, ifunc-pattern, multiple-compressed-payloads).
+  crit: component
+  conf: 0.4
+  for:
+  - elf
+  if:
+    type: hex
+    section: .text
+    pattern: 0F A2 F7 D1 81 E1 02 02 08 00
+  unless:
+  - type: basename
+    regex: '^liblzma\.so\.5\.4\.5$'
+- id: mm-answer-keyallowed
+  desc: mm_answer_keyallowed SSH function
+  crit: component
+  conf: 0.8
+  if:
+    type: symbol
+    exact: mm_answer_keyallowed
+  for: [elf, macho, so]
+  unless:
+  - type: basename
+    regex: '\.o$'
+- id: mm-answer-authpassword
+  desc: mm_answer_authpassword SSH function
+  crit: component
+  conf: 0.8
+  if:
+    type: symbol
+    exact: mm_answer_authpassword
+  for: [elf, macho, so]
+  unless:
+  - type: basename
+    regex: '\.o$'
+- id: pubkey-auth-ref
+  desc: pubkey_auth reference
+  crit: notable
+  conf: 0.6
+  if:
+    type: text
+    substr: pubkey_auth
+  unless:
+  - type: basename
+    regex: '\.o$'
+- id: rtld-global-ref
+  desc: __rtld_global reference
+  crit: component
+  conf: 0.6
+  for:
+  - elf
+  if:
+    type: text
+    substr: __rtld_global
+  unless:
+  - id: micro-behaviors/dylib/library/family/
+- id: la-symbind-ref
+  desc: la_symbind audit hook
+  crit: component
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: text
+    substr: la_symbind
+  unless:
+  - id: objectives/evasion/hijack-execution-flow/linker/
+  - id: micro-behaviors/dylib/library/family/
+- id: plaintext-sleep-command-token
+  desc: Plaintext sleep command token in writable data
+  crit: component
+  conf: 0.55
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  if:
+    type: text
+    word: sleep
+    section: .data
+  unless:
+  - id: metadata/lang/compiler/systems::go-buildinfo
+  - id: metadata/lang/compiler/systems/
+  - id: metadata/lang/compiler/systems::go-pe-symtab
+- id: plaintext-hello-beacon-token
+  desc: Plaintext hello beacon token in writable data
+  crit: component
+  conf: 0.55
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  if:
+    type: text
+    word: hello
+    section: .data
+  unless:
+  - id: metadata/lang/compiler/systems::go-buildinfo
+  - id: metadata/lang/compiler/systems/
+  - id: metadata/lang/compiler/systems::go-pe-symtab
+- id: tokenizer-vocab-json
+  desc: Tokenizer vocabulary JSON blob
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: '{"!": 0, "\"": 1'
+- id: loopback-winsock-exec-profile
+  desc: Loopback Winsock exec backdoor profile
+  crit: component
+  conf: 0.96
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  if:
+    type: hex
+    section: .data
+    pattern: 65 78 65 63 00 00 00 00 73 6C 65 65 70 00 00 00 68 65 6C 6C 6F 00 00 00 31 32 37 2E
+- id: glibc-runtime-basename
+  desc: glibc runtime basename
+  crit: notable
+  conf: 0.7
+  for:
+  - elf
+  if:
+    type: path
+    basename: true
+    regex: ^libc\.so(\.[0-9]{1,3}){0,4}$
+  count_max: 1013919
+- id: ssh-hook-pattern-cond-1--inline-13920
+  desc: SSH executable basename marker
+  crit: notable
+  conf: 0.85
+  for: [elf, pe]
+  if:
+    type: path
+    basename: true
+    regex: ^ssh(-.{1,32})?(\.exe)?$
+  count_max: 1013921
+composite_rules:
+- id: loopback-winsock-exec-backdoor
+  desc: Loopback Winsock exec backdoor
+  crit: hostile
+  conf: 0.96
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  all:
+  - id: loopback-winsock-exec-profile
+  - id: micro-behaviors/communications/ip/literal::loopback-ipv4-binary
+  - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+  - id: micro-behaviors/process/create/spawn::create-process-a
+- id: symbol-interposition
+  desc: XZ-style glibc symbol interposition
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  # XZ scope: dlsym + RTLD_NEXT alone is the universal LD_PRELOAD hook
+  # idiom and fires on any preload shim (PAM hooks, runtime tracers,
+  # benign sanitizers). Require an XZ-specific glibc-internals marker
+  # so this stays inside the trojanized-xz-utils family.
+  all:
+  - id: micro-behaviors/dylib/lookup::dlsym-symbol
+  - id: micro-behaviors/dylib/lookup::rtld-next
+  any:
+  - id: rtld-global-ref
+  - id: la-symbind-ref
+  downgrade:
+    any:
+    - id: glibc-runtime-basename
+  unless:
+  - id: micro-behaviors/dylib/library/libc/
+  - id: micro-behaviors/dylib/library/family/
+- id: xz-crc-pattern
+  desc: XZ CRC64 patterns
+  crit: suspicious
+  conf: 0.6
+  for:
+  - elf
+  needs: 2
+  any:
+  - id: lzma-crc64-table
+  - id: metadata/binary/linking/runtime::ifunc
+- id: xz-backdoor-signature
+  desc: XZ Utils backdoor signature (CVE-2024-3094)
+  crit: hostile
+  conf: 0.99
+  for:
+  - elf
+  all:
+  - id: xz-crc-pattern
+  - id: xz-obf-pattern
+- id: xz-ifunc-pattern
+  desc: IFUNC resolver pattern (potential function
+  crit: suspicious
+  conf: 0.4
+  for:
+  - elf
+  all:
+  - id: metadata/binary/instruction::cpuid-instr
+  - id: metadata/binary/linking/runtime::resolver-markers
+  - id: metadata/binary/linking/runtime::ifunc-markers
+- id: rsa-in-compression-lib
+  desc: RSA operations in compression library
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
+  - id: metadata/library/compression::compression-lib
+- id: ssh-hook-pattern
+  desc: SSH authentication hooking pattern
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: micro-behaviors/os/service/remote::sshd-ref
+  any:
+  - id: micro-behaviors/crypto/asymmetric/rsa::rsa-public-decrypt
+  - id: mm-answer-keyallowed
+  - id: mm-answer-authpassword
+  - id: pubkey-auth-ref
+  unless:
+  - id: metadata/signed/platform::apple
+  downgrade:
+    any:
+    - id: micro-behaviors/communications/ssh/connect::openssh
+    - id: ssh-hook-pattern-cond-1--inline-13920
+- id: glibc-hijack
+  desc: Dynamic linker interposition markers
+  crit: suspicious
+  conf: 0.7
+  for:
+  - elf
+  all:
+  - id: micro-behaviors/dylib/lookup::dlsym-symbol
+  any:
+  - id: rtld-global-ref
+  - id: la-symbind-ref
+  - id: micro-behaviors/os/linker/env::ld-preload
+  - id: micro-behaviors/os/linker/env::ld-audit
+  unless:
+  - id: metadata/binary/provenance/
+  - id: objectives/evasion/hijack-execution-flow/linker/
+  - id: micro-behaviors/dylib/library/libc/
+  - id: micro-behaviors/dylib/library/family/
+  - id: well-known/tool/sysadmin/unix-benign/
+  - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+  downgrade:
+    any:
+    - id: micro-behaviors/dylib/library/family/
+    - id: micro-behaviors/dylib/library/family/
+- id: unexpected-socket-ops
+  desc: Socket operations in non-network library
+  crit: suspicious
+  conf: 0.6
+  all:
+  - id: micro-behaviors/communications/socket/create::create
+  - id: micro-behaviors/communications/socket/connect::connect
+  unless:
+  - id: objectives/supply-chain/trojanized/backdoor/
+  - id: metadata/lang/compiled/
+  - id: metadata/signed/platform::apple
+  - id: well-known/app/mcu-ai-debug/
+  - id: well-known/tool/sysadmin/alpine-packages::alpine-filebrowser-binary
+  downgrade:
+    any:
+    - id: objectives/supply-chain/trojanized/backdoor/
+- id: plaintext-command-vocabulary
+  desc: Plaintext command protocol vocabulary
+    # Generic command words are only meaningful when a backdoor composite adds
+    # execution and socket context. Keep this as a building block so benign
+    # network tools with unrelated protocol strings do not surface standalone.
+  crit: component
+  conf: 0.82
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  needs: 2
+  any:
+  - id: plaintext-sleep-command-token
+  - id: plaintext-hello-beacon-token
+  unless:
+  - id: micro-behaviors/communications/ssh/client/
+  - id: micro-behaviors/communications/ssh/client/
+  - id: tokenizer-vocab-json
+- id: winsock-command-exec-backdoor
+  desc: Winsock command execution backdoor
+  crit: hostile
+  conf: 0.94
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  all:
+  - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: plaintext-command-vocabulary
+  unless:
+  - id: well-known/tool/development/luarocks::luarocks-source-path
+  any:
+  - id: micro-behaviors/process/sync/mutex::mutex-api
+  - id: micro-behaviors/time/timing/delay::sleep-dup
+- id: winsock-token-command-backdoor
+  desc: Winsock token command backdoor
+  crit: hostile
+  conf: 0.96
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  all:
+  - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: micro-behaviors/time/timing/delay::sleep-dup
+  - id: micro-behaviors/process/sync/mutex::named-uppercase-mutex
+  - id: plaintext-sleep-command-token
+  - id: plaintext-hello-beacon-token
+- id: loopback-winsock-command-backdoor
+  desc: Loopback Winsock command backdoor
+  crit: suspicious
+  conf: 0.9
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  all:
+  - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: plaintext-command-vocabulary
+  - id: micro-behaviors/communications/ip/literal::loopback-ipv4-binary
+  any:
+  - id: micro-behaviors/communications/socket/init::winsock-port-80-client
+  - id: micro-behaviors/process/create/flags::detached-createprocessa
+- id: unexpected-process-ops
+  desc: Process operations in utility library
+  crit: suspicious
+  conf: 0.75
+  needs: 2
+  any:
+  - id: micro-behaviors/process/fork/clone::fork
+  - id: micro-behaviors/process/create/shell/
+  unless:
+  - id: metadata/lang/compiled/
+  - id: metadata/binary/layout::shared-object-type
+  - id: micro-behaviors/dylib/library
+  - id: well-known/tool/sysadmin/unix-benign/
+  - id: metadata/lang/compiler/native::libllvm
+  - id: metadata/signed/platform::apple
+  - id: micro-behaviors/os/security/sandbox::pledge
+  downgrade:
+    any:
+    - id: micro-behaviors/ui/help/
+    - id: metadata/binary/metrics/structural::many-imports
+- id: unexpected-crypto
+  desc: Cryptographic operations in non-crypto library
+  crit: suspicious
+  conf: 0.75
+  needs: 2
+  any:
+  - id: micro-behaviors/crypto/symmetric/aes/constant::aes-sbox-bytes
+  - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
+  - id: micro-behaviors/crypto/asymmetric/rsa::ed25519-constant-bytes
+  unless:
+  - id: micro-behaviors/dylib/library/ssl::libcrypto-ref
+  - id: well-known/lib/openssl::openssl-project-copyright
+  - id: metadata/library/data::cryptography-binding
+  - id: well-known/app/telegram::telegram-desktop-official-client
+  - id: metadata/package/files/system-package/
+  - id: metadata/package/files/system-package::os-package-manager-library
+  - id: metadata/package/files/system-package::jvm-bundled-native-dependency
+  - id: well-known/tool/sysadmin/alpine-packages::alpine-jitsu-bulker-binary
+  downgrade:
+    any:
+    - id: metadata/binary/metrics/structural::very-high-section-count
+- id: unexpected-capabilities
+  desc: Unexpected capability combination in library
+  crit: suspicious
+  conf: 0.8
+  needs: 2
+  any:
+  - id: unexpected-socket-ops
+  - id: unexpected-process-ops
+  - id: unexpected-crypto
+- id: injected-code-pattern
+  desc: Injected code pattern in library
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: objectives/supply-chain/trojanized/backdoor::high-entropy-strings-dup
+  any:
+  - id: unexpected-crypto
+  - id: unexpected-socket-ops
+- id: packed-rust-http-ws-c2
+  desc: Packed Rust HTTP/WebSocket C2 implant
+  crit: hostile
+  conf: 0.95
+  for:
+  - pe
+  platforms:
+  - windows
+  all:
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::binary-encrypted-overlay
+  - id: objectives/evasion/indicator-removal/timestamps::timestamp-anomaly
+  needs: 2
+  any:
+  - id: micro-behaviors/communications/http/lib/crate::reqwest-crate
+  - id: micro-behaviors/communications/http/lib/crate::hyper-crate
+  - id: micro-behaviors/communications/http/websocket::websocket-class
+  - id: micro-behaviors/os/registry/access::internet-settings-key
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
+- id: packed-rust-proxy-aware-ws-c2
+  desc: Packed Rust proxy-aware WebSocket implant
+  crit: hostile
+  conf: 0.96
+  attack: T1090
+  for:
+  - pe
+  platforms:
+  - windows
+  all:
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape::binary-encrypted-overlay
+  - id: objectives/evasion/indicator-removal/timestamps::timestamp-anomaly
+  - id: micro-behaviors/communications/proxy/tunnel::windows-http-proxy-tunnel
+  needs: 2
+  any:
+  - id: micro-behaviors/communications/http/lib/crate::reqwest-crate
+  - id: micro-behaviors/communications/http/lib/crate::hyper-crate
+  - id: micro-behaviors/communications/http/websocket::websocket-class
+  - id: micro-behaviors/os/registry/access::internet-settings-key
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
+- id: xz-style-attack
+  desc: XZ-style supply chain backdoor pattern
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: metadata/binary/metrics/structural::many-huge-functions
+  any:
+  - id: xz-crc-pattern
+  - id: xz-obf-pattern
+  - id: ssh-hook-pattern
+  - id: rsa-in-compression-lib
+- id: potential-code-injection
+  desc: Potential code injection indicators
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: massive-code-blob
+  any:
+  - id: metadata/binary/metrics/structural::many-huge-functions
+  - id: glibc-hijack
+- id: auth-bypass-indicator
+  desc: Authentication bypass backdoor indicator
+  crit: suspicious
+  conf: 0.95
+  any:
+  - id: ssh-hook-pattern
+  - id: rsa-in-compression-lib
+  - id: symbol-interposition
+- id: function-hooking-behavior
+  desc: XZ-style glibc symbol interposition
+  crit: suspicious
+  conf: 0.8
+  # XZ-style: dlsym + RTLD_NEXT alone is too generic (any LD_PRELOAD shim
+  # qualifies). Require an XZ-specific glibc-internals marker so this
+  # composite stays inside the XZ family scope.
+  all:
+  - id: glibc-hijack
+  any:
+  - id: rtld-global-ref
+  - id: la-symbind-ref
+  unless:
+  - id: micro-behaviors/dylib/library/libc/
+  - id: micro-behaviors/dylib/library/family/
+- id: permission-constant-with-interposition
+  desc: Permission constant with linker interposition markers
+  crit: suspicious
+  conf: 0.75
+  all:
+  - id: micro-behaviors/mem/protect/modify::repeated-07-byte-constant
+  any:
+  - id: glibc-hijack
+  - id: symbol-interposition
+  - id: objectives/supply-chain/trojanized/backdoor::high-entropy-strings-dup
+  downgrade:
+    any:
+    - id: glibc-runtime-basename
+    - id: metadata/binary/provenance/
+    - id: micro-behaviors/dylib/library/family::sanitizer-runtime
+  unless:
+  - id: micro-behaviors/dylib/library/libc/
+  - id: micro-behaviors/dylib/library/family/
+  - id: well-known/tool/sysadmin/unix-benign/
+- id: compression-lib-backdoor
+  desc: Compression library with hidden payload and geofencing
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  all:
+  - id: metadata/library/compression::compression-lib
+  - id: micro-behaviors/data/embedded/payload/compression::multiple-compressed-payloads
+  any:
+  - id: objectives/evasion/masquerade/naming/
+  - id: objectives/anti-analysis/geofencing/timezone::cis-timezone
+- id: compression-lib-embedded-binary
+  desc: Compression library with embedded executable
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  all:
+  - id: metadata/library/compression::compression-lib
+  any:
+  - id: micro-behaviors/data/embedded/payload/header::elf-magic-embedded
+  - id: micro-behaviors/data/embedded/payload/header::pe-magic-embedded
+  unless:
+  - id: metadata/library/compression/
+- id: library-payload-geofencing
+  desc: Library with embedded payload and geofencing
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  all:
+  - id: micro-behaviors/data/embedded/payload/compression::multiple-compressed-payloads
+  - id: objectives/anti-analysis/geofencing/region/cluster::cis-geofencing
+- id: compression-lib-backdoor-cpuid
+  desc: Compression library with hidden payload and suspicious CPUID
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  all:
+  - id: metadata/library/compression::compression-lib
+  - id: micro-behaviors/data/embedded/payload/compression::multiple-compressed-payloads
+  - id: xz-cpuid-mask-check

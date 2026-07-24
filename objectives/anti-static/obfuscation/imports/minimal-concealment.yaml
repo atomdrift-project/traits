@@ -1,0 +1,246 @@
+defaults:
+  platforms: [linux, macos, windows]
+  for: [pe, elf, macho]
+traits:
+  - id: very-low-strings
+    desc: Very few extracted strings
+    crit: suspicious
+    conf: 0.7
+    size_min: 49152
+    if:
+      type: metrics
+      field: binary.string_count
+      max: 20
+    not:
+      - regex: \.(tar\.gz|tgz|zip)$
+    unless:
+      - id: objectives/anti-static/obfuscation/imports/
+      - id: metadata/binary/metrics/threshold::many-imports-50
+      # Embedded eBPF/relocatable object files (libbpf skeletons, .o) are
+      # intrinsically string-sparse bytecode, not import-concealed code. ELF type
+      # is the value `elf.type`, not a numeric `elf.e_machine` metric (which was
+      # dead), and cleave reports BPF e_machine as "unknown" — so key on ET_REL.
+      - id: metadata/binary/metrics/structural::elf-relocatable-object
+  - id: extremely-low-strings
+    desc: Extremely few extracted strings
+    crit: suspicious
+    conf: 0.7
+    size_min: 49152
+    if:
+      type: metrics
+      field: binary.string_count
+      max: 10
+    not:
+      - regex: \.(tar\.gz|tgz|zip)$
+    unless:
+      - id: objectives/anti-static/obfuscation/imports/
+      - id: metadata/binary/metrics/threshold::many-imports-50
+      - id: metadata/binary/framework::electron-desktop-runtime
+      - id: metadata/binary/installer/script/
+      # Embedded eBPF/relocatable object files are intrinsically string-sparse
+      # bytecode; key on ET_REL (the elf.e_machine metric was dead and BPF reads
+      # as "unknown" — see very-low-strings).
+      - id: metadata/binary/metrics/structural::elf-relocatable-object
+  - id: sparse-strings-under-25-pe
+    desc: Sparse strings under twenty-five
+    crit: component
+    conf: 0.82
+    for: [pe]
+    size_min: 32768
+    size_max: 65535
+    if:
+      type: metrics
+      field: binary.string_count
+      max: 24
+    unless:
+      - id: objectives/anti-static/obfuscation/imports/
+      - id: objectives/anti-static/obfuscation/imports/
+      - id: metadata/binary/framework/
+      - id: metadata/signed/platform/
+  - id: five-plus-sections-pe
+    desc: Five or more PE sections
+    crit: component
+    conf: 0.8
+    for: [pe]
+    if:
+      type: metrics
+      field: sections.count
+      min: 5
+    unless:
+      - id: metadata/lang/compiler/systems::go-pe-symtab
+  - id: low-strings-package-extension
+    desc: Low-string packaged binary extension
+    crit: component
+    conf: 0.8
+    if:
+      type: path
+      basename: true
+      regex: \.(node|pak|map|asar)$
+  - id: low-strings-data-extension
+    desc: Low-string data-like extension
+    crit: component
+    conf: 0.8
+    if:
+      type: path
+      basename: true
+      regex: \.(bin|dat)$
+  - id: low-strings-font-extension
+    desc: Low-string asset extension
+    crit: component
+    conf: 0.8
+    if:
+      type: path
+      basename: true
+      regex: \.(json|svg|ttf)$
+composite_rules:
+  - id: low-string-extension-soft-noise
+    desc: Low-string extension soft compat noise
+    crit: component
+    conf: 0.85
+    any:
+      - id: low-strings-package-extension
+      - id: low-strings-data-extension
+      - id: low-strings-font-extension
+  - id: low-strings-soft-noise
+    desc: Recognized low-string binary marker
+    crit: component
+    conf: 0.85
+    any:
+      - id: metadata/signed/developer::open-source-developer
+      - id: metadata/binary/metrics/structural::small-elf-binary
+      - id: metadata/binary/metrics/structural::many-functions
+      - id: metadata/binary/installer/script::nullsoft-install-system
+      - id: metadata/binary/metrics/threshold::many-imports-50
+      - id: metadata/binary/framework::electron-desktop-runtime
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/signed/platform::microsoft
+      # Wine/ReactOS builtin PEs implement (export) the Windows API rather than
+      # importing it; their thin forwarder stubs are string-sparse by design.
+      - id: metadata/binary/vendor::windows-system-implementer-dll
+  - id: small-zero-import-pe
+    desc: Small PE with empty imports and sparse strings
+    crit: suspicious
+    conf: 0.88
+    for: [pe]
+    attack: T1027
+    mbc: B0032
+    size_min: 32768
+    size_max: 65535
+    all:
+      - id: metadata/binary/symbols/compat::zero-import-raw
+      - id: sparse-strings-under-25-pe
+      - id: five-plus-sections-pe
+  - id: minimal-imports-suspicious-apis
+    desc: Minimal imports with suspicious API combination
+    crit: suspicious
+    conf: 0.75
+    for: [pe]
+    attack: T1027
+    needs: 3
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute
+      - id: micro-behaviors/process/create/exec::shell-execute-ex
+      - id: micro-behaviors/crypto/certificate/store::cert-open-store
+      - id: micro-behaviors/mem/alloc/heap::heap-alloc
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-30
+      - id: objectives/anti-static/pack/asprotect
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/binary/metrics/threshold::many-imports-40
+  - id: go-sparse-dynamic-api-imports
+    desc: Go PE sparse dynamic imports
+    crit: suspicious
+    conf: 0.9
+    for: [pe]
+    attack: T1027.007
+    all:
+      - id: metadata/lang/compiler/systems::go-pe-rich-symbols
+      - id: metadata/binary/symbols/imports::pe-single-import-dll
+      - id: micro-behaviors/os/api-resolution/manual::go-syscall-dynamic-api-dispatch
+    any:
+      - id: metadata/binary/resource::no-resources
+      - id: metadata/package/metrics::import-count-under-80
+      - id: metadata/binary/section/metrics::inflated-data-section
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+  - id: concealed-capabilities-pe
+    desc: Concealed capabilities via import minimization
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    attack: T1027
+    mbc: B0032
+    all:
+      - id: very-low-strings
+    needs: 4
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute
+      - id: micro-behaviors/crypto/certificate/store::cert-open-store
+      - id: micro-behaviors/mem/alloc/heap::heap-alloc
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-25
+      - id: metadata/binary/metrics/structural::many-imports
+  - id: import-concealed-ransomware-pattern
+    desc: Ransomware with concealed import table
+    crit: hostile
+    conf: 0.9
+    for: [pe]
+    attack: T1486
+    mbc: C0027
+    all:
+      - id: extremely-low-strings
+      - id: micro-behaviors/crypto/certificate/store::cert-open-store
+    needs: 2
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/fs/
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-20
+      - id: metadata/binary/metrics/structural::many-imports
+  - id: import-concealed-dropper-pattern
+    desc: Dropper with heavily minimized imports
+    crit: hostile
+    conf: 0.9
+    for: [pe]
+    attack: T1027
+    mbc: B0032
+    all:
+      - id: extremely-low-strings
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+    needs: 2
+    any:
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute
+      - id: micro-behaviors/crypto/certificate/store::cert-open-store
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/fs/
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-20
+  - id: themida-minimal-import-concealment
+    desc: Themida-packed PE minimizes visible imports
+    crit: hostile
+    conf: 0.98
+    for: [pe]
+    attack: T1027,T1027.007
+    all:
+      - id: objectives/anti-static/pack/detect::themida-boot-loader-layout
+      - id: metadata/binary/symbols/imports::pe-imports-max-six
+      - id: metadata/binary/section/names::blank-section-name-cluster
+      - id: metadata/signed/certificate/identity::pe-cert-leaf-self-issued-kv
+      - id: metadata/signed/unknown/
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

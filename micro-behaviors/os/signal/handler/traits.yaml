@@ -1,0 +1,133 @@
+defaults:
+  platforms: [linux, macos, windows]
+# Signal Handling
+# C runtime signal handlers (Windows and Unix)
+traits:
+  # === Signal Management ===
+  - id: sig-ign-sighup-x64
+    desc: SIGHUP signal ignore pattern (x86_64)
+    # Component-only: the 10-byte pattern `mov edi, 1; mov esi, 1` is common
+    # compiler-generated code — two small immediate loads that collide with
+    # arbitrary function prologues in large binaries. Only meaningful paired
+    # with a signal-handler import inside `signal-ignore-pattern`.
+    crit: component
+    conf: 0.4
+    for:
+      - elf
+      - macho
+    size_max: 10485760
+    if:
+      type: hex
+      section: .text
+      pattern: BF 01 00 00 00 BE 01 00 00 00
+    unless:
+      - id: metadata/file/string/identity::system-shell-basename
+      - id: micro-behaviors/os/event/library/tokio::tokio-crate-path
+      - type: trait
+        id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
+      - id: well-known/app/drivers/
+  - id: sig-ign-sigpipe-x64
+    desc: SIGPIPE signal ignore pattern (x86_64)
+    crit: component
+    conf: 0.4
+    for:
+      - elf
+      - macho
+    if:
+      type: hex
+      section: .text
+      pattern: BF 0D 00 00 00 BE 01 00 00 00
+  - id: signal
+    desc: Install signal handler
+    crit: baseline
+    conf: 0.90
+    for: ["pe", "elf", "macho"]
+    if:
+      type: symbol
+      exact: "signal"
+  - id: sigaction
+    desc: Install signal handler (POSIX sigaction)
+    crit: baseline
+    conf: 0.90
+    for: ["elf", "macho"]
+    platforms: [linux, macos, android]
+    if:
+      type: symbol
+      exact: "sigaction"
+  - id: sigaltstack
+    desc: Configure alternate signal stack
+    crit: baseline
+    conf: 0.86
+    for: [elf, macho]
+    platforms: [linux, macos, android]
+    if:
+      type: symbol
+      exact: "sigaltstack"
+  # Source-level signal-handler install (sigaction(SIGxxx, &act)) and the
+  # SA_SIGINFO flag. Universal benign C; the inline-hook objective composite
+  # references these and supplies the RWX/context-hijack evidence for intent.
+  - id: sigaction-source-call
+    desc: sigaction() handler-install source call
+    crit: baseline
+    conf: 0.85
+    for: ["c", "cpp", "objc", "elf"]
+    platforms: [linux, macos]
+    if:
+      type: text
+      regex: 'sigaction\(SIG[A-Z0-9]+\s*,\s*&'
+  - id: sa-siginfo-flag
+    desc: SA_SIGINFO sigaction flag
+    crit: component
+    conf: 0.8
+    for: ["c", "cpp", "objc", "elf"]
+    platforms: [linux, macos]
+    if:
+      type: text
+      substr: SA_SIGINFO
+  - id: raise
+    desc: Send signal to self
+    crit: baseline
+    conf: 0.85
+    for: ["pe", "elf", "macho"]
+    if:
+      type: symbol
+      exact: "raise"
+  - id: abort
+    desc: Abort program execution
+    crit: baseline
+    conf: 0.90
+    for: ["pe", "elf", "macho"]
+    if:
+      type: symbol
+      exact: "abort"
+composite_rules:
+  - id: sig-ign-pattern
+    desc: Signal ignore byte pattern (x86_64)
+    crit: notable
+    conf: 0.4
+    for:
+      - elf
+      - macho
+    any:
+      - id: sig-ign-sighup-x64
+      - id: sig-ign-sigpipe-x64
+    unless:
+      - id: metadata/lang/compiler/systems::rustc-path
+  - id: signal-ignore-pattern
+    desc: Sets SIGHUP/SIGPIPE to SIG_IGN
+    crit: notable
+    conf: 0.3
+    for:
+      - elf
+      - macho
+    all:
+      - id: signal
+      - id: sig-ign-pattern
+    any:
+      - id: signal
+      - id: sigaction
+    unless:
+      - id: metadata/file/string/identity::system-shell-basename
+      - id: metadata/library/data/
+      - id: metadata/lang/compiler/systems::rustc-path
+      - id: metadata/lang/compiler/systems::go-binary-macho

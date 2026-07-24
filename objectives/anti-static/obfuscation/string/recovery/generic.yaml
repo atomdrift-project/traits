@@ -1,0 +1,199 @@
+defaults:
+  platforms: [windows, unix]
+traits:
+  - id: self-modifying-string-replace
+    desc: Self-modifying strings via replace chains
+    crit: suspicious
+    conf: 0.85
+    for: [scripts, binaries]
+    count_min: 3
+    if:
+      type: string_literal
+      regex: \$\w+\s*=\s*\$\w+\.replace\(
+  # Bare %word% delimiters also name template/markup tokens (e.g. PmWiki
+  # wikistyle shortcuts %note%, %rfloat%). They only signal deobfuscation when
+  # paired with a replace/split decode step, so this is a component feeding the
+  # multi-layer-deobfuscation / obfuscation-with-duplicate-names composites
+  # rather than a standalone verdict.
+  - id: custom-delimiter-obfuscation
+    desc: Uses custom delimiters in encoded strings
+    crit: component
+    conf: 0.9
+    for: [scripts]
+    size_max: 500000
+    count_min: 3
+    if:
+      type: string_literal
+      regex: '%[a-zA-Z]{3,}%'
+    not:
+      - regex: ^%Get[A-Za-z0-9]+%$
+      - regex: ^%[A-Z][A-Za-z0-9]+%$
+      - regex: ^%[A-Z]{4,}%$
+      - regex: ^%(wkday|date1|date2|time|tz|weekday|month|day|year)%$
+      - regex: ^%(post|page)name%$
+      - substr: "%LIB%"
+      - '%SbieVer%'
+      - '%USERNAME%'
+      - '%USERPROFILE%'
+      - '%APPDATA%'
+      - '%LOCALAPPDATA%'
+      - '%DESKTOP%'
+      - '%COMP%'
+      - '%HOME%'
+      - '%HYPERV%'
+      - '%MSSQL%'
+      - '%TEMP%'
+      - '%TMP%'
+      - '%PATH%'
+      - '%SYSTEMROOT%'
+      - '%COMSPEC%'
+      - '%this%'
+      - '%exports%'
+      - '%local%'
+      - '%IMPORTS%'
+      - '%NAME%'
+      - '%author%'
+      - '%category%'
+      - '%day%'
+      - '%hour%'
+      - '%minute%'
+      - '%monthnum%'
+      - '%pagename%'
+      - '%postname%'
+      - '%second%'
+      - '%tag%'
+      - '%year%'
+      - regex: ^%[sdifjoOc]
+    downgrade:
+      any:
+        - type: metrics
+          field: text.whitespace_ratio
+          max: 0.1
+  - id: powershell-replace-operator
+    desc: PowerShell -replace operator for deobfuscation
+    crit: component
+    conf: 0.7
+    for:
+      - javascript
+      - powershell
+    count_min: 2
+    if:
+      type: string_literal
+      regex: \-replace\s+['"]
+    unless:
+      - type: string_literal
+        regex: \-join\s+['"]\|['"]\s+\-replace\s+["']=["']\s*,\s*["']\\=
+      - type: string_literal
+        regex: \$_\s+\-replace\s+['"]\[\^a-z\]\(\.\*\$\)['"]\s*,\s*['"]\$1\-\-
+  - id: chained-replace-calls
+    desc: Chained string replacement calls
+    crit: component
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    count_min: 1
+    if:
+      type: symbol
+      regex: \.replace\.replace
+    not:
+      - regex: replaceAll
+    unless:
+      - type: text
+        substr: replace(/~/g,"~0").replace(/\//g,"~1")
+      - type: raw
+        regex: '&amp;[\s\S]{0,200}&lt;[\s\S]{0,200}&gt;'
+      - id: micro-behaviors/data/manipulation::filename-sanitization-replace
+      - id: micro-behaviors/data/manipulation::filename-sanitization-function
+
+  - id: variable-self-assignment-replace
+    desc: Variable reassigned with replace operation
+    crit: suspicious
+    conf: 0.75
+    for: [scripts, binaries]
+    count_min: 3
+    if:
+      type: string_literal
+      regex: \$\w+\s*=\s*\$\w+\.replace
+  # A substitution token array holds string fragments; the old `\w+` element
+  # pattern also matched bare-integer arrays such as a counter `[0,0,0,0,0,0,0]`,
+  # which carry no tokens. Require quoted string elements so the expression
+  # matches the real technique. Even so, benign code keeps string arrays
+  # (month/weekday/option tables), so this stays a component feeding
+  # js-token-substitution-deobfuscation, where the paired replacement loop is
+  # the actual verdict.
+  - id: js-parallel-token-arrays
+    desc: Parallel token arrays for substitution
+    crit: component
+    conf: 0.82
+    for:
+      - javascript
+      - typescript
+    count_min: 2
+    unless:
+      - id: objectives/anti-static/obfuscation/string/recovery/
+    if:
+      type: text
+      regex: var\s+\w+\s*=\s*\[\s*['"][^'"]{1,40}['"](\s*,\s*['"][^'"]{1,40}['"]){5,}\s*\]
+  - id: js-regexp-substitution-loop
+    desc: Token replacement loop using RegExp
+    crit: suspicious
+    conf: 0.92
+    for:
+      - javascript
+      - typescript
+    size_max: 500000
+    count_min: 2
+    if:
+      type: text
+      regex: \.replace\s*\(\s*new\s+RegExp\s*\(\s*\w+\s*,\s*\w+\s*\)
+  - id: js-indirect-replace-call
+    desc: Indirect string replacement call
+    crit: component
+    conf: 0.75
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: \[\s*\w+\s*\]\s*\(\s*\w+\s*,\s*\w+\s*\)
+  - id: js-global-replace-flag
+    desc: Global case-insensitive replacement flag
+    crit: component
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: var\s+\w+\s*=\s*["']gi["']
+composite_rules:
+  - id: js-parallel-token-arrays-recognized-marker
+    desc: Recognized marker for parallel token array patterns
+    crit: component
+    conf: 0.95
+    any:
+      - id: metadata/package/testing/harness/runtime::is-test
+      - id: metadata/library/structure::js-emscripten-preamble-marker
+      - id: metadata/library/runtime::browserify-crypto-bundle
+      - id: metadata/library/runtime::crypto-js-bundled-library
+      - id: metadata/build/bundler::webpack-bundled
+      - id: metadata/library/structure::js-known-bundler-output
+      - id: metadata/library/ai::mediapipe-selfie-segmentation-bundle
+      - id: metadata/library/ai::mediapipe-selfie-distribution-js
+      - id: metadata/library/ai::mediapipe-wasm-loader-basename
+      - id: metadata/library/ai::tensorflow-js-vision-model-bundle
+      - id: well-known/tool/development/vscode-svelte::extension-bundle
+  - id: js-token-substitution-deobfuscation
+    desc: Token substitution string deobfuscation
+    crit: suspicious
+    conf: 0.92
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: js-parallel-token-arrays
+      - id: js-regexp-substitution-loop
+    any:
+      - id: js-global-replace-flag
+      - id: js-indirect-replace-call

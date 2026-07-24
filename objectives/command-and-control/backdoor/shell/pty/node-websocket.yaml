@@ -1,0 +1,216 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+
+traits:
+  - id: websocket-pty-input-write
+    desc: WebSocket data written to pseudo-terminal
+    crit: suspicious
+    conf: 0.97
+    attack: T1059.007
+    if:
+      type: text
+      regex: '(?i)(pty|terminal)\w*\.write\s*\(\s*(message|msg)\.data\s*\)'
+
+  - id: websocket-shell-input-write
+    desc: WebSocket input reaches interactive shell
+    crit: suspicious
+    conf: 0.97
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\bwriteTerminal\s*\(\s*ws\s*,\s*(message|msg)\.data\s*\)'
+
+  - id: interactive-shell-spawn
+    desc: Spawns an interactive shell for terminal access
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\bspawn\w*\s*\(\s*(this\.)?shell\s*,\s*\[\s*["'']-i["'']'
+
+  - id: agentto-terminal-rpc-dispatch
+    desc: Dispatches terminal RPC to host
+    crit: suspicious
+    conf: 0.98
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'String\s*\(\s*method\s*\)\.startsWith\s*\(\s*["'']terminal\.["'']\s*\)'
+
+  - id: agentto-terminal-input-write
+    desc: Writes remote input to host process
+    crit: suspicious
+    conf: 0.98
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\bterminal\.process\.write\s*\(\s*data\s*\)'
+
+  - id: agentto-login-shell-spawn
+    desc: Spawns a login shell for terminal RPC
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\b(ptySpawn|this\.spawn)\s*\(\s*this\.shell\s*,\s*\[\s*["'']-l["'']'
+
+  - id: websocket-pty-output-handler
+    desc: Pseudo-terminal output relay handler
+    crit: component
+    conf: 0.94
+    if:
+      type: symbol
+      kind: call
+      regex: '^(pty|terminal)\w*\.on(Data|Output)$'
+
+  - id: websocket-agent-role-query
+    desc: WebSocket client uses agent role
+    crit: notable
+    conf: 0.94
+    if:
+      type: literal
+      kind: string
+      regex: '\?(role|type)=agent(&|$)'
+
+  - id: controller-access-url-member
+    desc: Controller access URL member
+    crit: component
+    conf: 0.95
+    if:
+      type: symbol
+      kind: member
+      regex: '\.controllerUrl$'
+
+  - id: viewer-access-url-member
+    desc: Viewer access URL member
+    crit: component
+    conf: 0.95
+    if:
+      type: symbol
+      kind: member
+      regex: '\.viewerUrl$'
+
+  - id: session-open-pty-dispatch
+    desc: Dispatches remote session-open request to PTY
+    crit: suspicious
+    conf: 0.98
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'case\s+["'']session\.open["''][\s\S]{0,140}\bonOpen\s*\('
+
+  - id: session-input-pty-forward
+    desc: Forwards decoded remote input to PTY
+    crit: suspicious
+    conf: 0.98
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'managed\.session\.write\s*\(\s*decodeBytes\s*\('
+
+  - id: http-command-relay-pending-stream
+    desc: HTTP endpoint streams pending remote commands
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: '["'']?/api/commands/pending/stream["'']?'
+
+  - id: terminal-open-handler
+    desc: Opens a PTY terminal session
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'function\s+openTerminal[\s\S]{0,800}(pty|child_process|spawn)\s*\('
+
+  - id: pty-module-spawn-call
+    desc: PTY module spawns a terminal
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '\bptyMod\.spawn\s*\('
+
+composite_rules:
+  - id: http-relay-pty-command-control
+    desc: HTTP command relay controls a local PTY
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1071.001
+    scope: archive
+    all:
+      - id: micro-behaviors/process/tty/pty::node-pty-module-ref
+      - id: http-command-relay-pending-stream
+      - id: terminal-open-handler
+      - id: pty-module-spawn-call
+    any:
+      - id: micro-behaviors/process/tty/pty::node-terminal-write-parsed-data
+      - id: micro-behaviors/process/tty/pty::node-terminal-write-payload-data
+    unless:
+      - id: well-known/app/codeam-cli::codeam-cli-benign-remote-agent
+
+  - id: websocket-pty-remote-command-relay
+    desc: WebSocket drives interactive pseudo-terminal
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007
+    all:
+      - id: micro-behaviors/process/tty/pty::node-pty-spawn
+      - id: objectives/command-and-control/backdoor/shell/pty::websocket-pty-input-write
+      - id: micro-behaviors/communications/websocket/receive::websocket-message-event-handler
+    any:
+      - id: micro-behaviors/communications/http/websocket::websocket-constructor-call
+      - id: micro-behaviors/communications/http/websocket::websocket-class
+    unless:
+      - id: well-known/app/codeplane/
+      - id: well-known/lib/opentui/
+
+  - id: remote-session-access-urls
+    desc: Separate controller and viewer session URLs
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: controller-access-url-member
+      - id: viewer-access-url-member
+
+  - id: websocket-interactive-shell-relay
+    desc: WebSocket forwards input to an interactive shell
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007
+    scope: archive
+    all:
+      - id: objectives/command-and-control/backdoor/shell/pty::websocket-shell-input-write
+      - id: objectives/command-and-control/backdoor/shell/pty::interactive-shell-spawn
+      - id: micro-behaviors/communications/http/websocket::websocket
+
+  - id: websocket-remote-pty-command-relay
+    desc: WebSocket remotely controls a command-capable PTY
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007
+    scope: archive
+    all:
+      - id: micro-behaviors/process/tty/pty::node-pty-spawn-command-options
+      - id: objectives/command-and-control/backdoor/shell/pty::session-open-pty-dispatch
+      - id: objectives/command-and-control/backdoor/shell/pty::session-input-pty-forward
+      - id: micro-behaviors/communications/websocket/receive::websocket-message-event-handler
+    any:
+      - id: micro-behaviors/communications/http/websocket::websocket-constructor-call
+      - id: micro-behaviors/communications/http/websocket::websocket-class
+
+  - id: agentto-remote-terminal-rpc-shell
+    desc: Remote terminal RPC controls a host login shell
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1071.001
+    scope: archive
+    all:
+      - id: objectives/command-and-control/backdoor/shell/pty::agentto-terminal-rpc-dispatch
+      - id: objectives/command-and-control/backdoor/shell/pty::agentto-terminal-input-write
+      - id: objectives/command-and-control/backdoor/shell/pty::agentto-login-shell-spawn
+      - id: micro-behaviors/communications/http/websocket::websocket

@@ -1,0 +1,62 @@
+# ARM64 Obfuscation Patterns
+# Detects low-level code patterns used for decryption and evasion on ARM64
+# ATT&CK: T1027 (Obfuscated Files or Information)
+defaults:
+  platforms: [macos, linux]
+  for: [macho, elf]
+  crit: suspicious
+traits:
+  # Raw hex patterns (internal - used by composite rules)
+  - id: xor-ror-hex-pattern
+    desc: "ARM64 XOR+ROR instruction sequence"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: hex
+      section: ".text"
+      # Matches eor/strb/ror sequence often used in simple obfuscators
+      # eor: ?? ?? ?? 4a
+      # strb: ?? ?? ?? 39
+      # ror: ?? ?? ?? 93
+      pattern: "?? ?? ?? 4a ?? ?? ?? 39 ?? ?? ?? 93"
+  - id: svc-hex-pattern
+    desc: "ARM64 svc instruction sequence"
+    crit: baseline
+    conf: 0.3
+    count_min: 4
+    if:
+      type: hex
+      pattern: "01 00 00 d4"
+      section: "text"
+composite_rules:
+  # ARM64 XOR+ROR decryption loop - only fires on ARM64 binaries
+  - id: xor-ror-decryption-loop
+    desc: "ARM64 XOR+ROR decryption loop"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    all:
+      - id: xor-ror-hex-pattern
+    any:
+      - id: metadata/arch/arm64
+    unless:
+      # Go's crypto/cipher, AES, and ChaCha20 implementations on ARM64 use
+      # EOR+STRB+ROR sequences as part of normal crypto operations, not obfuscation.
+      - id: metadata/lang/compiler/systems::go-version-string
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/lang/compiler/systems::go-binary-macho
+      - id: metadata/binary/linking/runtime::cosmopolitan-marker
+      - id: metadata/lang/compiler/systems/
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: metadata/signed/issuer::apple
+  # Repeated ARM64 svc instructions - only fires on ARM64 binaries
+  - id: svc-instruction
+    desc: "Repeated ARM64 svc instructions in executable code"
+    crit: baseline
+    conf: 0.4
+    all:
+      - id: svc-hex-pattern
+    any:
+      - id: metadata/arch/arm64

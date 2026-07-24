@@ -1,0 +1,83 @@
+# Shell Timestomping Detection
+# Detects shell scripts that modify file timestamps to cover tracks
+# ATT&CK: T1070.006 (Indicator Removal: Timestomp)
+# MBC: F0006 (Indicator Removal)
+defaults:
+  platforms: [unix, android, ios]
+  crit: suspicious
+  attack: "T1070.006"
+  mbc: "F0006"
+  for: [shell]
+traits:
+  # touch -r (copy timestamp from another file)
+  - id: touch-reference
+    desc: Copies timestamp from reference file
+    crit: notable
+    conf: 0.9
+    not:
+      - substr: "touch -r $(SRCDIR)"
+    if:
+      type: text
+      regex: '(^|\n)[ \t]*touch\s+-r\s+\S+'
+  # touch -d (set specific timestamp)
+  - id: touch-date
+    desc: Sets specific file timestamp
+    crit: notable
+    conf: 0.8
+    not:
+      - substr: doc/interpreter/version-octave.texi
+      - substr: doc/interpreter/octave-doc-version.texi
+      - substr: doc/liboctave/version-liboctave.texi
+    unless:
+      - id: octave-doc-rebuild-timestamp-marker
+      - id: well-known/tool/sysadmin/munin/
+    if:
+      type: text
+      # Quoted argument must contain a literal date/time value (a digit),
+      # not a bare shell variable expansion like "$date" used by reproducible
+      # build scripts (e.g. find-debuginfo). Malware sets explicit timestamps.
+      regex: '(^|\n)[ \t]*touch\s+-d\s+["\x27].{0,80}\d.{0,80}["\x27]'
+  - id: octave-doc-rebuild-timestamp-marker
+    desc: Octave doc rebuild timestamp workaround
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: avoid triggering a doc rebuild
+  # touch -t (set timestamp with STAMP)
+  - id: touch-timestamp
+    desc: Sets non-epoch file timestamp
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: text
+      regex: '(^|\n)[ \t]*touch\s+-t\s+\d+'
+    not:
+      - regex: '(^|\n)[ \t]*touch\s+-t\s+1970\d+'
+    unless:
+      - id: well-known/lib/wine::wine-source-tree
+      - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+      - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
+      - id: metadata/package/testing/presence/harness::shell-crate-test-path
+      - id: metadata/package/testing/presence/harness::shell-testsuite-script
+      - id: well-known/app/moonshiner::seed-fixture-tree
+      - type: path
+        regex: '(^|[\\/])bin[\\/]tests[\\/]system[\\/]'
+  # Multiple touch -r operations (strong indicator)
+  - id: touch-reference-multiple
+    desc: Multiple timestamp copy operations
+    crit: suspicious
+    conf: 0.95
+    count_min: 2
+    # Conda recipe build scripts legitimately restore timestamps after
+    # replacing compiler-generated files.  UCSC genome automation pipelines
+    # propagate source mtimes onto derived artifacts the same way.
+    unless:
+      - id: metadata/build/conda::conda-recipe-build-script
+      - type: path
+        regex: 'kent[/\\]src[/\\]hg[/\\]utils[/\\]automation'
+    not:
+      - substr: "touch -r $(SRCDIR)"
+    if:
+      type: text
+      regex: '(^|\n)[ \t]*touch\s+-r\s+\S+'

@@ -1,0 +1,137 @@
+defaults:
+  crit: suspicious
+  attack: T1071.001
+  mbc: B0030
+  for: [binaries]
+  platforms:
+    - unix
+    - windows
+traits:
+  # http-versions moved to micro-behaviors/communications/http/request/client::http-versions
+  - id: http-methods-main
+    desc: HTTP method (PUT)
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: ^PUT\s+\S+\s+HTTP/[0-9.]+$
+  - id: http-method-head
+    desc: HTTP method (HEAD)
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: ^HEAD\s+\S+\s+HTTP/[0-9.]+$
+  - id: http-method-delete
+    desc: HTTP method (DELETE)
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: ^DELETE\s+\S+\s+HTTP/[0-9.]+$
+  - id: http-method-patch
+    desc: HTTP method (PATCH)
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: ^PATCH\s+\S+\s+HTTP/[0-9.]+$
+  - id: go-dial-string
+    desc: Network dial pattern in strings
+    crit: suspicious
+    conf: 0.85
+    if:
+      id: micro-behaviors/communications/socket/connect::go-dial-methods
+  - id: callback-pattern
+    desc: Callback function pattern
+    crit: component
+    conf: 0.75
+    for: [go]
+    if:
+      type: string_literal
+      regex: (callback|Callback|CallBack).{0,50}Handler
+  - id: polling-pattern-a
+    desc: Polling/beacon loop pattern
+    # A heartbeat/check-in phrase is only supporting evidence.  Libraries and
+    # protocol implementations document benign liveness loops in strings.
+    crit: component
+    conf: 0.7
+    unless:
+      - id: well-known/app/grafana::grafana-mimir-runtime
+      - id: well-known/tool/sysadmin/alpine-packages/
+      - id: metadata/package/files/system-package::container-runtime-binary
+    if:
+      type: text
+      regex: \b(beacon|heartbeat|checkin)\b.{0,50}\bloop\b
+      case_insensitive: true
+  - id: polling-pattern-b
+    desc: Polling/beacon loop pattern
+    crit: component
+    conf: 0.7
+    unless:
+      - id: well-known/tool/sysadmin/alpine-packages/
+      - id: metadata/package/files/system-package::container-runtime-binary
+    if:
+      type: text
+      regex: \bloop\b.{0,50}\b(beacon|heartbeat|checkin)\b
+      case_insensitive: true
+  - id: c2-marker
+    desc: C2 identifier in strings
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: text
+      regex: (?i)\b(c2Handler|c2Server|c2Beacon)\b|c2\s*=\s*https?://
+  - id: go-http-do
+    desc: Go http.Do call
+    crit: component
+    if:
+      type: text
+      exact: http.Do
+composite_rules:
+  - id: go-http-client
+    desc: Go HTTP client pattern
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: micro-behaviors/communications/http/get::http-get
+      - id: objectives/command-and-control/channel/messaging::http-post
+      - id: objectives/evasion/fileless/memory::http-client-dup
+      - id: go-http-do
+  - id: http-methods-comp
+    desc: HTTP methods (GET, POST, HEAD)
+    crit: notable
+    conf: 0.6
+    any:
+      - id: http-methods-main
+      - id: http-method-head
+      - id: http-method-delete
+      - id: http-method-patch
+  - id: polling-pattern
+    desc: Polling/beacon loop pattern
+    crit: suspicious
+    conf: 0.7
+    unless:
+      - id: well-known/tool/sysadmin/alpine-packages/
+      - id: metadata/package/files/system-package::container-runtime-binary
+    any:
+      - id: polling-pattern-a
+      - id: polling-pattern-b
+  - id: http-beacon-network
+    desc: HTTP beacon network comms
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-versions
+      - id: go-dial-string
+  - id: http-c2-beacon-detected
+    desc: HTTP-based C2 beacon
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: http-beacon-network
+      - id: go-http-client
+    any:
+      - id: c2-marker
+      - id: polling-pattern
+      - id: callback-pattern

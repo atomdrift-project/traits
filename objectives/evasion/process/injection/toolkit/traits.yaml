@@ -1,0 +1,129 @@
+# Process Injection Toolkit Detection
+# Detects binaries with comprehensive injection capabilities that don't match
+# specific injection patterns (e.g., Pool Party ALPC, early bird, etc.)
+# ATT&CK: T1055 (Process Injection)
+defaults:
+  attack: T1055
+  platforms: [windows]
+  for: [pe, dll]
+
+traits:
+  # Delphi/C ports of PoolParty embed these unit names; they are unique to
+  # offensive thread-pool injection toolkits (SafeBreach PoolParty / BOF ports).
+  - id: poolparty-bof-unit
+    desc: PoolPartyBof injection module name
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      substr: PoolPartyBof
+
+  - id: pool-inject-lib-unit
+    desc: PoolInjectLib injection framework unit
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      substr: PoolInjectLib
+
+composite_rules:
+  - id: recognized-rat-process-scraping-marker
+    desc: Recognized process scraping toolkit marker
+    crit: notable
+    conf: 0.9
+    any:
+      - id: metadata/binary/vendor::is-microsoft-named
+      - id: metadata/signed/platform::microsoft
+      - id: metadata/lang/compiled::autoit-compiled-script
+      - id: well-known/tool/offensive/mimikatz::mimikatz
+      - id: well-known/tool/reverse-engineering/x64dbg::x64dbg-release-component
+      - id: well-known/tool/reverse-engineering/scylla::scylla-unpacker
+      - id: well-known/tool/reverse-engineering/radare2::radare2-release-binary
+      - id: well-known/tool/sysadmin/conemu::conemu-component
+
+  - id: poolparty-toolkit
+    desc: PoolParty thread-pool injection toolkit
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: poolparty-bof-unit
+      - id: pool-inject-lib-unit
+
+  - id: pool-party-alpc
+    desc: Pool Party ALPC worker factory injection
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/ipc/alpc::alpc-worker-injection
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+    unless:
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/binary/metrics/structural::many-exports
+
+  - id: evasive-process-injector
+    desc: Evasive process injection toolkit
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: objectives/impact/degrade/edr/enumerate::process-enumeration-terminate
+    any:
+      - id: objectives/anti-analysis/self-modify/runtime::active
+      - id: objectives/anti-analysis/debugger-detect/check/
+      - id: micro-behaviors/os/syscall/raw/
+    unless:
+      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/binary/metrics/structural::many-exports
+    downgrade:
+      any:
+        - id: metadata/binary/vendor::is-microsoft-named
+        - id: metadata/signed/platform/
+
+  - id: steam-registry-remote-injector
+    desc: Steam registry hijack remote injector
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
+    any:
+      - id: micro-behaviors/process/create/spawn::create-process-w
+      - id: micro-behaviors/process/info/commandline::get-command-line
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
+    unless:
+      - id: metadata/binary/vendor/
+      - id: well-known/tool/reverse-engineering/scyllahide/
+      - id: objectives/evasion/process/injection/toolkit/
+    downgrade:
+      any:
+        - id: metadata/binary/vendor::is-microsoft-named
+        - id: metadata/signed/platform/
+
+  - id: known-legitimate-remote-injector-marker
+    desc: Known legitimate remote injection marker
+    crit: notable
+    conf: 0.95
+    any:
+      - id: well-known/tool/browser::chromium-browser-main
+      - id: well-known/tool/offensive/mimikatz::mimikatz
+      - id: well-known/lib/electron::electron-chromium-runtime-strong
+      - id: well-known/tool/sysadmin/console::ansicon-console-hook-component
+
+  - id: rat-process-scraping-toolkit
+    desc: RAT process memory scraping toolkit
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: micro-behaviors/process/create/spawn::open-process
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+    any:
+      - id: micro-behaviors/ui/window/manage/enumerate::enum-child-windows-import
+      - id: objectives/collection/clipboard/capture::clipboard-marker
+      - id: objectives/command-and-control/infrastructure/ip-port::hardcoded-c2-ip-port
+    needs: 2
+    unless:
+      - id: objectives/evasion/process/injection/toolkit/

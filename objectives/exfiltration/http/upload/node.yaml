@@ -1,0 +1,102 @@
+# Node.js HTTP Exfiltration Patterns
+# ATT&CK: T1041 (Exfiltration Over C2 Channel), T1071 (Application Layer Protocol)
+#
+# NOTE: Atomic HTTP request capabilities moved to micro-behaviors/communications/http/request/javascript.yaml
+# This file contains only objective-level composites that infer exfiltration intent.
+defaults:
+  attack: T1041
+  platforms: [linux, macos, windows, unix, android, ios]
+  for: [javascript, typescript]
+composite_rules:
+  - id: node-upload-sink
+    desc: Node HTTP upload sink
+    crit: component
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/http/request/client::http-post-json
+      - id: micro-behaviors/communications/http/request/client::request-write-call
+      - id: micro-behaviors/communications/http/post::axios-with-data
+  - id: node-system-info-source
+    desc: Node system info source
+    crit: component
+    conf: 0.9
+    any:
+      - id: objectives/discovery/system/profile::host-process-software-locale-form
+      - id: objectives/discovery/system/fingerprint/runtime::process-env-dump
+      - id: objectives/credential-access/env/secrets/filtered-access::env-secret-filter-keyword-list
+      - id: objectives/discovery/system/fingerprint/runtime::full-fingerprint
+      - id: objectives/discovery/system/fingerprint/runtime::js-system-info-discovery
+  # Generic system discovery plus an HTTP client is common in local agents and
+  # model managers; require a concrete profile or environment serialization
+  # source before inferring exfiltration.
+  - id: node-collect-exfil
+    desc: Sends an explicitly serialized host profile through native Node HTTP
+    crit: hostile
+    conf: 0.97
+    near_bytes: 8192
+    all:
+      - id: node-system-info-source
+      - id: micro-behaviors/communications/http/request/configuration::node-http-request-configured
+      - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+      - id: micro-behaviors/data/serialize/json::json-stringify-call
+    any:
+      - id: objectives/discovery/system/profile::host-process-software-locale-form
+      - id: objectives/discovery/system/fingerprint/runtime::process-env-dump
+      - id: objectives/discovery/system/fingerprint/runtime::full-fingerprint
+    unless:
+      - id: micro-behaviors/communications/http/services/payment::payment-provider-api-flow
+
+  - id: node-shell-recon-output-exfil
+    desc: Sends privileged Node shell reconnaissance to an HTTP sink
+    crit: hostile
+    conf: 0.99
+    attack: "T1041,T1059.007,T1087,T1069,T1548.001"
+    all:
+      - id: objectives/discovery/account/enum::node-privileged-surface-enum
+      - id: micro-behaviors/process/create/shell/bridge::js-execsync
+      - id: micro-behaviors/communications/http/request/client::http-request
+      - id: micro-behaviors/communications/http/request/client::request-write-call
+
+  - id: node-host-profile-env-exfil
+    desc: Sends a serialized Node host profile through an HTTP POST
+    crit: hostile
+    conf: 0.99
+    attack: "T1041,T1082,T1552.001"
+    all:
+      - id: micro-behaviors/data/serialize/json::json-stringify-call
+      - id: micro-behaviors/os/env/access::process-env
+      - id: micro-behaviors/communications/http/request/client::https-request
+      - id: micro-behaviors/communications/http/request/client::post-method-text
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+      - id: objectives/exfiltration/stealer/host-profile/socket::node-runs-hostname
+      - id: micro-behaviors/process/user/query::os-userinfo-call
+      - id: micro-behaviors/process/user/query::os-homedir-call
+  # A silent upload alone is not enough to infer exfiltration: SDKs and agents
+  # routinely suppress expected transport failures. Require a concrete host
+  # profile or environment serialization source as well.
+  - id: node-stealthy-exfil
+    desc: Uploads host data through HTTP while suppressing transport errors
+    crit: suspicious
+    conf: 0.88
+    all:
+      - id: micro-behaviors/communications/http/request/client::silent-error-handler
+      - id: node-upload-sink
+    any:
+      - id: objectives/discovery/system/profile::host-process-software-locale-form
+      - id: objectives/discovery/system/fingerprint/runtime::process-env-dump
+      - id: objectives/discovery/system/fingerprint/runtime::full-fingerprint
+  # Removed: `node-foreign-brand-credential-telemetry`. It read "reads a
+  # credential-shaped env var + swallows transport errors + POSTs it", which is
+  # precisely how every analytics SDK works — a PostHog/Sentry/Segment project
+  # key is a *publishable* value whose documented use is to be sent as the
+  # `api_key` field of the vendor's own capture call, and suppressing telemetry
+  # transport failures is expected. The only thing making that combination fire
+  # was a fourth leg hardcoding one vendor's env var name
+  # (`CODEBUFF_POSTHOG_*`), so the rule convicted exactly one package and could
+  # never generalise. Genuine env-credential theft — a real secret
+  # (cloud keys, registry tokens, JWTs) leaving for a non-vendor endpoint — is
+  # covered by the dedicated hostiles in
+  # objectives/supply-chain/credential-theft/env/harvesting.yaml and
+  # objectives/credential-access/env/.

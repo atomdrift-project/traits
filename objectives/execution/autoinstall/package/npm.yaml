@@ -1,0 +1,365 @@
+defaults:
+  platforms: [unix, windows]
+  conf: 0.9
+  attack: T1059.007
+
+traits:
+- id: src-npm-install-package
+  desc: Source invokes npm install package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  # The autoinstall threat is `npm install <pkg>` executed as a COMMAND. Anchor
+  # at command position (line start, shell separator, quote, `$`/`RUN` prefix)
+  # so English prose ("...so npm install succeeds") and comments don't match the
+  # following word as a package. Also: same-line package only (`[ \t]+`, not
+  # `\s+`, which spanned a newline after a bare `npm install`) and a valid
+  # package-name start (`[A-Za-z0-9@]`, never `-`) so flag-only dependency
+  # installs (`npm install --omit=dev` / `--production`) no longer match.
+  if:
+    type: text
+    regex: '(?m)(^|[;&|''"`])[ \t]*npm[ \t]+install[ \t]+[A-Za-z0-9@][A-Za-z0-9._/-]{1,79}'
+  unless:
+    - id: objectives/execution/autoinstall/package/
+    - id: well-known/app/calvyn-code
+    - id: npm-install-global-tool
+    - id: objectives/execution/autoinstall/package/
+    - id: objectives/execution/autoinstall/package/
+    # Package-manager help text embedded in a large bundle is not execution.
+    - id: metadata/library/structure::js-large-minified-bundle
+- id: src-npm-i-package
+  desc: Source invokes npm i package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\bnpm[ \t]+i[ \t]+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9@][A-Za-z0-9._-]{1,79}'
+  not:
+    # Driver/error copy that tells users how to install an optional peer
+    # (`Please install it (e.g. \`npm i pg-query-stream\`)`) is documentation,
+    # not an autoinstall execution vector.
+    - regex: '(?i)(please install|e\.g\.|for example|optional peer)[^\n]{0,80}npm[ \t]+i[ \t]+'
+  unless:
+    - id: objectives/execution/autoinstall/package/
+    - id: package-manager-ui-install-snippet
+    - id: well-known/app/cloudflare::framework-autoconfig
+    - id: metadata/library/structure::js-large-module-bundle
+    - id: metadata/library/structure::js-large-minified-bundle
+    - id: metadata/library/vscode::vscode-extension-marker
+- id: shell-npx-yes-package
+  desc: Shell invokes npx auto-install
+  crit: suspicious
+  for: [shell, makefile]
+  unless:
+    - id: metadata/package/testing/presence/harness::test-directory-path
+    - id: metadata/package/testing/presence/harness::test-directory
+    - type: path
+      basename: true
+      regex: '(?i)^run-tests\.(sh|bash)$'
+  if:
+    type: text
+    # Unpinned `npx -y pkg` pulls latest at runtime. Version-pinned forms
+    # (`npx -y pkg@1.2.3` / `npx -y pkg@$VER`) are normal CI/release tooling.
+    regex: '(?m)(^|[;&|])\s*npx\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?)\b(?!@)'
+- id: src-npx-package-flag
+  desc: Source npx declares transient package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\bnpx\s+(--package|-p)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+  unless:
+    - id: objectives/execution/autoinstall/package/
+    - id: objectives/execution/autoinstall/package/
+    - id: well-known/app/cloudflare::framework-autoconfig
+    - id: metadata/library/structure/
+- id: src-npx-versioned-package
+  desc: Source npx runs versioned package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\bnpx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}@[0-9]'
+  unless:
+    - id: objectives/execution/autoinstall/package/
+    - id: objectives/execution/autoinstall/package/
+    - id: well-known/app/cloudflare::framework-autoconfig
+    - id: metadata/library/structure/
+- id: src-npm-exec-yes-package
+  desc: Source npm exec auto-installs unpinned package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  unless:
+    - id: metadata/library/structure/
+  if:
+    type: text
+    # Do not match the package-name prefix of a pinned spec such as
+    # `@scope/pkg@1.2.3`; pinned release tooling is materially different from
+    # an unpinned latest-at-runtime install.
+    regex: '\bnpm\s+exec\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}(?!@)'
+- id: src-npm-exec-package-flag
+  desc: Source npm exec declares package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  unless:
+    - id: well-known/lib/benign-runtime-bundles::bundled-npm-source
+    # npm CLI option definitions embed markdown bash examples of `npm exec
+    # --package` inside description strings — not autoinstall behavior.
+    - type: text
+      regex: 'new Definition\(\s*[''"](?:call|package)[''"]'
+    - type: text
+      regex: 'Optional companion option for\s+\\?`npm exec'
+    - type: text
+      regex: '```bash\s*\nnpm\s+exec\s+(?:--package|-p)'
+  if:
+    type: text
+    regex: '\bnpm\s+exec\s+(--package|-p)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: src-npm-x-package-flag
+  desc: Source npm x declares package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\bnpm\s+x\s+(--package|-p)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: src-pnpx-package
+  desc: Source pnpx transient package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\bpnpx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+  unless:
+    - id: objectives/execution/autoinstall/package/
+    - id: objectives/execution/autoinstall/package/
+    - id: well-known/app/cloudflare::framework-autoconfig
+    - id: makefile-pnpx-prettier-local-file
+- id: src-yarn-dlx-package
+  desc: Source yarn dlx transient package
+  crit: notable
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\byarn\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+  unless:
+    - id: well-known/tool/development/yarn::yarn-cli-bundle-marker
+    - id: metadata/library/ai/
+- id: src-bunx-package
+  desc: Source bunx transient package
+  crit: suspicious
+  for: [shell, javascript, typescript, makefile]
+  if:
+    type: text
+    regex: '\bbunx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+  unless:
+    - id: objectives/execution/autoinstall/package/
+    - id: well-known/app/localai/
+# `npm install <pkg>` is a supply-chain concern only in the auto-run install
+# lifecycle hooks (preinstall/install/postinstall/prepare), where it pulls an
+# undeclared package the moment a consumer installs. The same command in a
+# `test`/`build`/custom script is normal dev tooling the maintainer runs by hand
+# (e.g. setprototypeof's `testversion: docker run ... npm install mocha && npm t`),
+# so it is matched per-hook rather than across every `scripts[*]` entry.
+- id: script-npm-install-preinstall
+  desc: preinstall hook installs a package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.preinstall
+    regex: '\bnpm\s+install\s+(@?[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]{1,79}'
+- id: script-npm-install-install
+  desc: install hook installs a package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.install
+    regex: '\bnpm\s+install\s+(@?[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]{1,79}'
+- id: script-npm-install-postinstall
+  desc: postinstall hook installs a package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.postinstall
+    regex: '\bnpm\s+install\s+(@?[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]{1,79}'
+- id: script-npm-install-prepare
+  desc: prepare hook installs a package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.prepare
+    regex: '\bnpm\s+install\s+(@?[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]{1,79}'
+- id: script-npx-yes-package
+  desc: preinstall hook npx auto-installs package
+  crit: notable
+  for: [package.json]
+  unless:
+    - id: micro-behaviors/os/service/legitimate/
+    - id: metadata/library/automation::playwright-browser-install-script
+  if:
+    type: value
+    path: scripts.preinstall
+    regex: '\bnpx\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-npx-yes-install
+  desc: install hook npx auto-installs package
+  crit: notable
+  for: [package.json]
+  unless:
+    - id: micro-behaviors/os/service/legitimate/
+    - id: metadata/library/automation::playwright-browser-install-script
+  if:
+    type: value
+    path: scripts.install
+    regex: '\bnpx\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-npx-yes-postinstall
+  desc: postinstall hook npx auto-installs package
+  crit: notable
+  for: [package.json]
+  unless:
+    - id: micro-behaviors/os/service/legitimate/
+    - id: metadata/library/automation::playwright-browser-install-script
+  if:
+    type: value
+    path: scripts.postinstall
+    regex: '\bnpx\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-npx-yes-prepare
+  desc: prepare hook npx auto-installs package
+  crit: notable
+  for: [package.json]
+  unless:
+    - id: micro-behaviors/os/service/legitimate/
+    - id: metadata/library/automation::playwright-browser-install-script
+  if:
+    type: value
+    path: scripts.prepare
+    regex: '\bnpx\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-npx-versioned-package
+  desc: Package script npx versioned package
+  crit: notable
+  for: [package.json]
+  if:
+    type: value
+    path: scripts[*]
+    regex: '\bnpx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}@[0-9]'
+# pnpm/yarn dlx fetch-and-run an undeclared package; only an install-lifecycle
+# hook auto-runs it on a consumer's machine. In a test/build/custom script it is
+# dev tooling the maintainer runs by hand, so match per-hook (matches the
+# script-npm-install-* pattern above), not across every scripts[*] entry.
+- id: script-pnpm-dlx-preinstall
+  desc: preinstall hook pnpm dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.preinstall
+    regex: '\bpnpm\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-pnpm-dlx-install
+  desc: install hook pnpm dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.install
+    regex: '\bpnpm\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-pnpm-dlx-postinstall
+  desc: postinstall hook pnpm dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.postinstall
+    regex: '\bpnpm\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-pnpm-dlx-prepare
+  desc: prepare hook pnpm dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.prepare
+    regex: '\bpnpm\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-yarn-dlx-preinstall
+  desc: preinstall hook yarn dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.preinstall
+    regex: '\byarn\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-yarn-dlx-install
+  desc: install hook yarn dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.install
+    regex: '\byarn\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-yarn-dlx-postinstall
+  desc: postinstall hook yarn dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.postinstall
+    regex: '\byarn\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: script-yarn-dlx-prepare
+  desc: prepare hook yarn dlx package
+  crit: suspicious
+  for: [package.json]
+  if:
+    type: value
+    path: scripts.prepare
+    regex: '\byarn\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: build-npx-yes-package
+  desc: Build npx auto-installs package
+  crit: notable
+  for: [dockerfile, github-actions]
+  if:
+    type: text
+    regex: '\bnpx\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: build-npx-versioned-package
+  desc: Build npx runs versioned package
+  crit: notable
+  for: [dockerfile, github-actions]
+  if:
+    type: text
+    regex: '\bnpx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}@[0-9]'
+- id: build-npm-exec-yes-package
+  desc: Build npm exec auto-installs package
+  crit: notable
+  for: [dockerfile, github-actions]
+  if:
+    type: text
+    regex: '\bnpm\s+exec\s+(-y|--yes)\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: build-pnpx-package
+  desc: Build pnpx transient package
+  crit: notable
+  for: [dockerfile, github-actions]
+  if:
+    type: text
+    regex: '\bpnpx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: build-yarn-dlx-package
+  desc: Build yarn dlx transient package
+  crit: notable
+  for: [dockerfile, github-actions]
+  if:
+    type: text
+    regex: '\byarn\s+dlx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+- id: build-bunx-package
+  desc: Build bunx transient package
+  crit: notable
+  for: [dockerfile, github-actions]
+  if:
+    type: text
+    regex: '\bbunx\s+(@?[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]{2,80}'
+
+composite_rules:
+- id: script-npm-install-package
+  desc: Install hook auto-installs a package
+  crit: suspicious
+  for: [package.json]
+  any:
+    - id: script-npm-install-preinstall
+    - id: script-npm-install-install
+    - id: script-npm-install-postinstall
+    - id: script-npm-install-prepare

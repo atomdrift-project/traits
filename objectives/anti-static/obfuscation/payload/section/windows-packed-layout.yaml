@@ -1,0 +1,117 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+traits:
+  - id: empty-text-section
+    desc: Empty .text executable section
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: section
+      exact: ".text"
+      executable: true
+      length_max: 0
+    downgrade:
+      any:
+        - id: well-known/app/protected-benign-pe/
+    unless:
+      - id: metadata/package/testing/presence/harness::binary-test-directory
+  - id: tiny-text-section
+    desc: One-byte executable .text section
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: section
+      exact: ".text"
+      executable: true
+      length_min: 1
+      length_max: 1
+    downgrade:
+      any:
+        - id: well-known/app/protected-benign-pe/
+  - id: ezdun-section-name
+    desc: Non-standard ezdun section name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: section
+      regex: "^ezdun[0-9]+$"
+  - id: ezdun-packed-payload-section
+    desc: Large high-entropy ezdun payload
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: section
+      exact: "ezdun1"
+      executable: true
+      entropy_min: 7.8
+      length_min: 1048576
+  - id: m-padded-hex-shellcode-prefix
+    desc: M padded hex shellcode prefix
+    crit: suspicious
+    conf: 0.99
+    for: [pe, dll]
+    if:
+      type: text
+      section: ".rdata"
+      exact: "1M8bM54M24108A02M88M0141424E75M"
+  - id: long-hexm-string-cluster
+    desc: Long hex M strings in rdata
+    crit: component
+    conf: 0.84
+    for: [pe, dll]
+    count_min: 3
+    if:
+      type: text
+      section: ".rdata"
+      regex: '[0-9A-Fa-fM]{200,}'
+composite_rules:
+  - id: empty-code-high-entropy-overlay
+    desc: Empty code with dominant entropy overlay
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: empty-text-section
+      - id: metadata/binary/layout::high-entropy-overlay
+      - id: metadata/binary/layout::overlay-dominates-third
+      - id: metadata/binary/layout::large-overlay-1mb
+
+  - id: empty-code-dominant-packed-loader
+    desc: Empty-code PE with dominant packed loader section
+    crit: hostile
+    conf: 0.99
+    attack: T1027.002
+    all:
+      - id: empty-text-section
+      - id: packed-loader-largest-section-dominates
+      - id: metadata/binary/section/metrics::multiple-nonstandard-section-names
+      - id: metadata/binary/metrics/structural::high-code-entropy
+      - id: metadata/binary/symbols/imports::pe-imports-max-six
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/app/protected-benign-pe/
+      - id: objectives/anti-static/pack/asprotect/
+
+  - id: custom-packed-pe-layout
+    desc: Packed PE with empty .text and ezdun payload
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: empty-text-section
+      - id: ezdun-packed-payload-section
+      - id: objectives/anti-static/obfuscation/payload/section::unusual-alignment-pe
+    any:
+      - id: ezdun-section-name
+      - id: metadata/binary/metrics/structural::dominant-section
+  - id: m-padded-shellcode-rdata
+    desc: M padded hex shellcode hidden in rdata
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: m-padded-hex-shellcode-prefix
+      - id: long-hexm-string-cluster
+      - id: metadata/binary/section/metrics::encoded-rdata-loader-layout
+    any:
+      - id: metadata/binary/layout::medium-overlay-size
+      - id: micro-behaviors/dylib/library/legacy::mfc42-ref

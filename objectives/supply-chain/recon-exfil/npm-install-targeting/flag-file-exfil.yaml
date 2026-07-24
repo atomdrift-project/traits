@@ -1,0 +1,144 @@
+defaults:
+  platforms: [unix]
+  for: [javascript]
+
+traits:
+  - id: container-flag-path
+    desc: Targets container flag file
+    crit: suspicious
+    conf: 0.99
+    attack: T1005
+    if:
+      type: text
+      substr: /usr/src/app/flag
+
+  - id: req-write-postdata
+    desc: Writes JSON payload to HTTP body
+    crit: suspicious
+    conf: 0.92
+    attack: T1041
+    if:
+      type: text
+      substr: req.write(postData)
+    unless:
+      - id: metadata/lang/scripted::dts-declaration-file
+      - id: metadata/lang/source/
+
+  - id: recursive-root-ctf-flag-grep
+    desc: Greps root filesystem for CTF flag
+    crit: suspicious
+    conf: 0.98
+    attack: T1005
+    if:
+      type: text
+      regex: "grep\\s+-R\\s+[\"']RM\\{\\s*[\"']\\s+/"
+
+  - id: external-ip-http-host
+    desc: HTTP host field uses IPv4
+    crit: notable
+    conf: 0.95
+    attack: T1071.001
+    if:
+      type: text
+      regex: host['"]?\s*:\s*['"][0-9]{1,3}(\.[0-9]{1,3}){3}
+      is: external_ip
+
+  - id: uncommon-http-port-8009
+    desc: HTTP exfil targets port 8009
+    crit: suspicious
+    conf: 0.94
+    attack: T1571
+    if:
+      type: text
+      regex: port['"]?\s*:\s*8009\b
+
+  - id: small-postinstall-sidecar
+    desc: Tiny postinstall sidecar payload
+    crit: component
+    conf: 0.88
+    size_max: 2048
+    if:
+      type: path
+      basename: true
+      exact: postinstall.js
+
+composite_rules:
+  - id: local-file-fallback-targeting
+    desc: Targets flag file with passwd fallback
+    crit: suspicious
+    conf: 0.99
+    attack: T1005
+    all:
+      - id: container-flag-path
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd-node-read
+
+  - id: raw-http-body-exfil
+    desc: Raw Node HTTP body exfiltration
+    crit: suspicious
+    conf: 0.97
+    attack: T1041
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-request
+      - id: micro-behaviors/communications/http/post::post
+      - id: micro-behaviors/communications/http/request/client::req-write
+    any:
+      - id: micro-behaviors/communications/http/header/content-type::plain-text-body-header
+      # A specifically named post-data variable is a stronger exfiltration
+      # clue than the generic request-body capability above.  Do not make
+      # every local JSON-RPC request look like data theft.
+      - id: req-write-postdata
+
+  - id: direct-ip-http-post
+    desc: Node POST exfil to direct IP
+    crit: suspicious
+    conf: 0.98
+    attack: T1041
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-request
+      - id: external-ip-http-host
+      - id: micro-behaviors/communications/http/request/client::req-write
+    any:
+      - id: uncommon-http-port-8009
+      - id: micro-behaviors/communications/http/header/content-type::plain-text-body-header
+
+  - id: npm-flag-file-http-exfil
+    desc: npm sidecar steals local file via HTTP
+    crit: hostile
+    conf: 0.995
+    attack: T1041
+    mbc: E1041
+    all:
+      - id: local-file-fallback-targeting
+      - id: direct-ip-http-post
+    any:
+      - id: small-postinstall-sidecar
+      - id: metadata/file/metrics::javascript-small-file-5k
+
+  - id: npm-root-ctf-flag-webhook-exfil
+    desc: npm package exfiltrates CTF flag search
+    crit: hostile
+    conf: 0.995
+    attack: T1041
+    mbc: E1041
+    all:
+      - id: recursive-root-ctf-flag-grep
+      - id: micro-behaviors/process/fd/stdio::js-command-output-result-object
+      - id: req-write-postdata
+      - id: objectives/exfiltration/oob/endpoint::requestcatcher
+    any:
+      - id: micro-behaviors/process/create/shell/bridge::child-process-destructure-require
+      - id: metadata/import/builtin::require-child-process
+      - id: metadata/import/builtin::require-child-process
+
+  - id: npm-container-flag-exfil
+    desc: npm postinstall exfiltrates container flag
+    crit: hostile
+    conf: 0.995
+    attack: T1005
+    mbc: E1041
+    all:
+      - id: container-flag-path
+      - id: direct-ip-http-post
+    any:
+      - id: small-postinstall-sidecar
+      - id: metadata/package/files/included::postinstall-js-basename

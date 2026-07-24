@@ -1,0 +1,65 @@
+# Shell Self-Delete Detection
+# Detects shell scripts that delete themselves after execution
+# ATT&CK: T1070.004 (Indicator Removal: File Deletion)
+# MBC: F0007 (File Deletion)
+defaults:
+  platforms: [unix, android, ios]
+  crit: suspicious
+  attack: "T1070.004"
+  mbc: "F0007"
+  for: [shell]
+traits:
+  # Self-deletion using $0
+  - id: rm-self-dollar-zero
+    desc: Self-deletes using rm $0
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      # `$0` is the current script only when the command is a shell command
+      # line. Inside a quoted `sh -c` helper it is that helper's argv[0].
+      regex: '(?m)^\s*rm\s+(-[rf]+\s+)?(--)?\s*["\x27]?\$0["\x27]?'
+    unless:
+      - type: text
+        substr: "xargs -0 -r sh -c 'rm -f -- \"$0\" \"$@\" </dev/tty'"
+      - type: text
+        substr: "xargs -0 -r sh -c 'rm -i -- \"$0\" \"$@\" </dev/tty'"
+      - id: metadata/package/testing/presence/harness::c-source-test-directory
+      - id: metadata/package/testing/compiled/
+      - type: text
+        substr: "Update process completed successfully"
+      - id: well-known/app/
+      - id: metadata/package/files/system-package::container-entrypoint-script
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+  # Self-deletion using script name variable
+  - id: rm-self-script-var
+    desc: Self-deletes using script variable
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'rm\s+(-[rf]+\s+)?"\$\{?BASH_SOURCE(\[0\])?\}?"'
+  # Self-deletion using basename
+  - id: rm-self-basename
+    desc: Self-deletes using basename
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: text
+      regex: 'rm\s+(-[rf]+\s+)?\$\(basename\s+\$0\)'
+
+composite_rules:
+  - id: self-deleting-external-ip-loop-dropper
+    desc: Self-deleting external-IP loop dropper
+    crit: hostile
+    conf: 0.99
+    attack: "T1105, T1059.004, T1070.004, T1222.002"
+    mbc: "B0024, F0007"
+    all:
+      - id: rm-self-dollar-zero
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
+      - id: micro-behaviors/communications/http/download/shell::wget-loop-variable-download
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-exec-var-target
+      - id: micro-behaviors/process/create/local-exec::chmod-exec-var-local

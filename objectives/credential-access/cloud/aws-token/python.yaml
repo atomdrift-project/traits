@@ -1,0 +1,143 @@
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1552.005
+traits:
+- id: aws-secret-inventory-api--rx-4
+  desc: AWS Secrets Manager ListSecrets action
+  crit: component
+  conf: 0.95
+  if:
+    type: string_literal
+    exact: ListSecrets
+  count_max: 1011105
+- id: aws-secret-inventory-api--rx-5
+  desc: AWS Secrets Manager GetSecretValue action
+  crit: component
+  conf: 0.95
+  if:
+    type: string_literal
+    exact: GetSecretValue
+  count_max: 1011106
+- id: aws-secret-inventory-api--rx-6
+  desc: AWS SSM DescribeParameters action
+  crit: component
+  conf: 0.95
+  if:
+    type: string_literal
+    exact: DescribeParameters
+  count_max: 1011107
+# Building block: the SigV4 header constants appear in every legitimate AWS
+# SDK (botocore/boto3), presigned-URL generator, and request-signing helper.
+# Only meaningful as a leg of the hostile IMDS+secret-inventory composite
+# below, so it stays component and never surfaces standalone.
+- id: aws-sigv4-manual-signing
+  desc: Manual AWS SigV4 signing
+  crit: component
+  conf: 0.9
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  if:
+    type: text
+    regex: AWS4-HMAC-SHA256|X-Amz-Target|X-Amz-Security-Token
+- id: aws-sigv4-helper-symbol
+  desc: AWS SigV4 helper call
+  crit: suspicious
+  conf: 0.9
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  if:
+    type: symbol
+    exact: generate_aws_headers
+- id: aws-shared-access-key-field
+  desc: AWS shared credentials access key field
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    word: aws_access_key_id
+- id: aws-shared-secret-key-field
+  desc: AWS shared credentials secret key field
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    word: aws_secret_access_key
+- id: aws-configure-helper-symbol
+  desc: AWS configure helper symbol
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'aws_configure_(get|set)'
+- id: aws-shared-credentials-file-env
+  desc: AWS shared credentials file env
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    word: AWS_SHARED_CREDENTIALS_FILE
+- id: aws-shared-credentials-doc-write
+  desc: AWS shared credentials doc write
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'writes?\s+directly\s+to\s+``~/.aws/credentials``'
+- id: aws-config-resolver-helper
+  desc: AWS config resolver helper
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'AwsConfigResolver|Read AWS CLI config'
+composite_rules:
+- id: aws-shared-credentials-config-helper
+  desc: AWS shared credentials config helper
+  crit: baseline
+  conf: 0.9
+  any:
+  - id: aws-configure-helper-symbol
+  - id: aws-shared-credentials-file-env
+  - id: aws-shared-credentials-doc-write
+  - id: aws-config-resolver-helper
+- id: python-aws-shared-credentials-file-access
+  desc: Python reads AWS shared credentials
+  crit: notable
+  conf: 0.97
+  all:
+  - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+  - id: aws-shared-access-key-field
+  - id: aws-shared-secret-key-field
+  unless:
+  - id: objectives/credential-access/cloud/token-context::boto3-profile-credential-chain-marker
+  - id: objectives/credential-access/cloud/aws-token/
+  downgrade:
+    any:
+      - id: objectives/evasion/security-bypass/llm/target::llm-agent-target
+- id: python-aws-imds-secret-inventory
+  desc: Python AWS credential inventory theft
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: metadata/file/string/cloud::aws-imds-v2-token-endpoint
+  - id: aws-secret-inventory-api
+  any:
+  - id: aws-sigv4-manual-signing
+  - id: aws-sigv4-helper-symbol
+- id: aws-secret-inventory-api
+  desc: Cloud secrets-manager inventory API verbs
+  crit: suspicious
+  conf: 0.95
+  needs: 2
+  any:
+  - id: aws-secret-inventory-api--rx-4
+  - id: aws-secret-inventory-api--rx-5
+  - id: aws-secret-inventory-api--rx-6
+  # GetSecretValue/ListSecrets are generic secrets-manager verbs that every
+  # vendor SDK (AWS, Tencent SSM, …) defines — suppress on auto-generated SDKs.
+  unless:
+  - id: well-known/tool/detection/security-scanner::cloud-sdk-api-model
+  - id: well-known/tool/sysadmin/tccli::tccli-generated-service-client

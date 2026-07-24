@@ -1,0 +1,144 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for: [python, javascript, php, pe, elf]
+traits:
+  - id: dnssd-udp-service-probe
+    desc: DNS-SD UDP service discovery tuple
+    crit: notable
+    conf: 0.84
+    attack: T1046
+    if:
+      type: text
+      regex: _dns-sd.{0,12}_udp.{0,12}local
+  - id: dnssd-hex-encoded-payload
+    desc: DNS-SD query payload in hex escapes
+    crit: suspicious
+    conf: 0.85
+    attack: T1046
+    for: [python, javascript, php]
+    if:
+      type: text
+      regex: \\x5F\\x64\\x6E\\x73.{0,30}\\x5F\\x75\\x64\\x70
+  - id: amplification-payload-common
+    desc: 'Common amplification attack payloads'
+    crit: suspicious
+    if:
+      type: text
+      regex: (?x)(\xFF){4}(getstatus|rules|TSource\sEngine\sQuery|\x55)
+    unless:
+      - id: metadata/library/structure::vscode-extension-generated-asset
+      - id: metadata/library/structure::js-emscripten-generated-bundle
+  - id: amplification-payload-common-chr
+    desc: 'amplification payload common chr'
+    crit: suspicious
+    if:
+      type: text
+      regex: chr\(255\)(\s*\.\s*chr\(255\)){3}\s*\.\s*
+  - id: amplification-payload-common-chr-suffix
+    desc: "Amplification chr() payload suffix"
+    crit: component
+    if:
+      type: text
+      regex: ("getstatus"|"rules"|"TSource\sEngine\sQuery"|chr\(85\))
+  - id: gamespy-payloads
+    desc: GameSpy amplification payloads
+    crit: suspicious
+    if:
+      type: text
+      regex: (?x)\\\\status\\\\
+  - id: gamespy-status-chr-payload
+    desc: GameSpy status payload built via chr()
+    crit: suspicious
+    if:
+      type: text
+      regex: chr\(115\)\s*\.\s*chr\(116\)\s*\.\s*chr\(97\)\s*\.\s*chr\(116\)
+  - id: gamespy-cory-hex-payload
+    desc: GameSpy CORY magic payload in hex
+    crit: suspicious
+    if:
+      type: text
+      substr: \xFE\xFD\x00CORY
+  - id: gamespy-cory-chr-payload
+    desc: GameSpy CORY magic payload built via chr()
+    crit: suspicious
+    if:
+      type: text
+      regex: chr\(254\)\s*\.\s*chr\(253\)\s*\.\s*chr\(0\)\s*\.\s*chr\(67\)
+composite_rules:
+  - id: ssdp-service-discovery
+    desc: SSDP paired with service discovery markers
+    crit: suspicious
+    conf: 0.88
+    any:
+      - id: dnssd-udp-service-probe
+      - id: micro-behaviors/communications/http/request/ssdp::upnp-dial-service-urn
+  - id: ssdp-reflection-probe
+    desc: SSDP reflection/amplification probe
+    crit: suspicious
+    conf: 0.94
+    attack: T1498
+    all:
+      - id: micro-behaviors/communications/http/request/ssdp::m-search
+      - id: micro-behaviors/communications/http/request/ssdp::discover-header
+      - id: micro-behaviors/communications/http/request/ssdp::broadcast-host
+  - id: service-discovery-reflection
+    desc: Service discovery probe for reflection
+    crit: suspicious
+    conf: 0.9
+    attack: T1498
+    all:
+      - id: ssdp-reflection-probe
+      - id: ssdp-service-discovery
+  - id: ssdp-amplification-bot
+    desc: SSDP amplification bot behavior
+    crit: hostile
+    conf: 0.96
+    attack: T1498.002
+    for: [elf]
+    all:
+      - id: service-discovery-reflection
+      - id: objectives/command-and-control/channel/covert::covert-protocol-markers
+    any:
+      - id: micro-behaviors/fs/path/binary::bin-busybox-path
+      - id: micro-behaviors/os/sysinfo/platform/string::multi-arch-runtime-wordlist
+      - type: trait
+        id: objectives/lateral-movement/brute-force/ssh::native-ssh-client-banner
+      # A browser-masqueraded SSDP probe is an independent botnet-compatible
+      # reflection signal when the covert protocol channel is also present.
+      - id: micro-behaviors/communications/http/request/ssdp::spoofed-browser-ssdp
+  - id: ssdp-daemonized-browser-spoof-bot
+    desc: Daemonized SSDP reflection bot with browser spoofing
+    crit: hostile
+    conf: 0.99
+    attack: T1498.002
+    for: [elf]
+    all:
+      - id: service-discovery-reflection
+      - id: micro-behaviors/communications/http/request/ssdp::spoofed-browser-ssdp
+      - id: micro-behaviors/communications/socket/send::sendto-symbol
+      - id: micro-behaviors/process/daemonize/detach::fork-new-session
+  - id: amplification-payload-chr-full
+    desc: Amplification payload constructed with chr() prefix and command suffix
+    crit: suspicious
+    all:
+      - id: amplification-payload-common-chr
+      - id: amplification-payload-common-chr-suffix
+  - id: amplification-payload-common-any
+    desc: 'Common amplification attack payloads'
+    crit: suspicious
+    any:
+      - id: amplification-payload-common
+      - id: amplification-payload-chr-full
+    unless:
+      - id: metadata/library/structure::vscode-extension-generated-asset
+      - id: metadata/library/structure::js-emscripten-generated-bundle
+  - id: gamespy-payloads-any
+    desc: GameSpy amplification payloads
+    crit: suspicious
+    any:
+      - id: gamespy-payloads
+      - id: gamespy-status-chr-payload
+      - id: gamespy-cory-hex-payload
+      - id: gamespy-cory-chr-payload

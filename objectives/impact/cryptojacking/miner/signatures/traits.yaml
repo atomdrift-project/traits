@@ -1,0 +1,332 @@
+defaults:
+  platforms:
+  - linux
+  - macos
+  - windows
+  for: [scripts, pe, elf, macho]
+traits:
+- id: wallet-ref
+  desc: wallet keyword
+  crit: component
+  conf: 0.4
+  for: [scripts]
+  count_min: 2
+  unless:
+  - id: metadata/file/catalog/identity/
+  if:
+    id: objectives/credential-access/wallet/keywords::wallet-token
+- id: coinhive-runtime-api
+  desc: CoinHive miner API constructor
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: symbol
+    kind: call
+    regex: '(?i)(^|\.)CoinHive\.(Anonymous|User)$'
+  unless:
+  - type: basename
+    regex: '\.d\.(ts|cts|mts)$'
+  - id: metadata/package/testing/harness/runtime::test-basename-suffix
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: well-known/tool/detection/security-scanner/
+  - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
+- id: monero-lower
+  desc: monero cryptocurrency reference
+  crit: component
+  conf: 0.5
+  if:
+    type: text
+    exact: monero
+- id: jsonrpc-mining-login
+  desc: JSON-RPC mining login request
+  crit: suspicious
+  conf: 0.95
+  for: [elf, pe, macho]
+  if:
+    type: text
+    substr: '"jsonrpc":"2.0","method":"login","params":{"login":'
+- id: jsonrpc-mining-submit
+  desc: JSON-RPC mining share submission request
+  crit: suspicious
+  conf: 0.95
+  for: [elf, pe, macho]
+  if:
+    type: text
+    regex: '"jsonrpc"\s*:\s*"2\.0"\s*,\s*"method"\s*:\s*"submit"\s*,\s*"params"\s*:\s*\{'
+- id: monero-wallet-4
+  desc: Monero wallet value with marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?i)(wallet|xmr|monero|address)[\s:=\"']{0,16}4[1-9A-HJ-NP-Za-km-z]{94}\b
+- id: monero-wallet-8
+  desc: Monero subaddress value with marker
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    regex: (?i)(wallet|xmr|monero|address)[\s:=\"']{0,16}8[1-9A-HJ-NP-Za-km-z]{94}\b
+- id: miner-wallet-config-assignment
+  desc: Miner wallet configuration assignment
+  crit: suspicious
+  conf: 0.9
+  for: [shell]
+  if:
+    type: text
+    regex: (?i)\b(export\s+)?[A-Z0-9_]*WALLET\s*=\s*["'][A-Za-z0-9]{32,}["']
+- id: miner-pool-config-assignment
+  desc: Cryptocurrency miner pool endpoint assignment
+  crit: suspicious
+  conf: 0.9
+  for: [shell]
+  if:
+    type: text
+    regex: (?i)\b(export\s+)?[A-Z0-9_]*POOL\s*=\s*["'][A-Za-z0-9.-]+:\d{2,6}["']
+composite_rules:
+- id: wallet-pool-local-exec
+  desc: Wallet and pool configuration before local execution
+  crit: suspicious
+  conf: 0.96
+  attack: T1496
+  for: [shell]
+  all:
+  - id: miner-wallet-config-assignment
+  - id: miner-pool-config-assignment
+  - id: micro-behaviors/fs/chmod/executable/mode::chmod-exec-local-file
+  - id: micro-behaviors/process/create/local-exec::local-execution
+- id: configured-wallet-pool-local-miner
+  desc: Configured wallet and pool miner launcher
+  crit: hostile
+  conf: 0.98
+  attack: T1496
+  mbc: B0018
+  for: [whl]
+  scope: package
+  all:
+  - id: wallet-pool-local-exec
+  - id: metadata/package/scripts::wheel-console-entrypoint
+- id: monero-wallets-comp
+  desc: Monero wallet address patterns
+  any:
+  - id: monero-wallet-4
+  - id: monero-wallet-8
+- id: mining-marker
+  desc: Mining-specific marker strings
+  any:
+  - id: micro-behaviors/communications/socket/tcp::stratum-keyword
+  - id: micro-behaviors/crypto/hash/mining::miner-keyword
+  - id: micro-behaviors/communications/socket/tcp::stratum-subscribe-method
+  - id: micro-behaviors/crypto/hash/mining::randomx
+  - id: micro-behaviors/crypto/hash/mining::cn-variants
+- id: jsonrpc-known-pool-miner
+  desc: JSON-RPC miner login and share submission to a known mining pool
+  crit: hostile
+  conf: 0.995
+  attack: T1496
+  mbc: B0018
+  for: [elf, pe, macho]
+  all:
+  - id: jsonrpc-mining-login
+  - id: jsonrpc-mining-submit
+  - id: objectives/impact/cryptojacking/miner/pool::known-pool-domains
+- id: jsonrpc-failover-pool-miner
+  desc: JSON-RPC miner with multiple known pool endpoints
+  crit: hostile
+  conf: 0.99
+  attack: T1496
+  mbc: B0018
+  for: [elf, pe, macho]
+  all:
+  - id: jsonrpc-mining-login
+  - id: jsonrpc-mining-submit
+  - id: objectives/impact/cryptojacking/miner/pool::supportxmr-failover-endpoints
+- id: randomx-stratum
+  desc: RandomX with Stratum pool
+  all:
+  - id: micro-behaviors/crypto/hash/mining::randomx
+  - id: micro-behaviors/communications/socket/tcp::stratum-tcp-url
+- id: cn-variant-stratum
+  desc: CryptoNight variant Stratum pool
+  all:
+  - id: micro-behaviors/crypto/hash/mining::cn-variant
+  - id: micro-behaviors/communications/socket/tcp::stratum-tcp-url
+- id: algorithm-stratum-miner
+  desc: RandomX or CryptoNight Stratum miner markers
+  crit: notable
+  conf: 0.9
+  attack: T1496
+  any:
+  - id: randomx-stratum
+  - id: cn-variant-stratum
+  unless:
+  - id: metadata/package/quality/recognized-contexts::package-context
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+- id: monero-wallet
+  desc: Monero wallet mining marker
+  crit: suspicious
+  conf: 0.9
+  attack: T1496
+  all:
+  - id: monero-wallets-comp
+  - id: mining-marker
+  unless:
+  - id: objectives/impact/cryptojacking/miner/runtime/
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+  - id: well-known/app/homebrew::source-tree
+- id: monero-wallet-pool-miner
+  desc: Hardcoded Monero wallet with mining pool
+  crit: hostile
+  conf: 0.98
+  attack: T1496
+  mbc: B0018
+  all:
+  - id: monero-wallets-comp
+  - id: mining-marker
+  - id: objectives/impact/cryptojacking/miner/pool::known-pool-domains
+  unless:
+  - id: well-known/tool/detection/security-scanner
+  - id: well-known/tool/detection/clawmetry/
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+- id: algorithm-stratum-known-pool-miner
+  desc: Mining algorithm with known pool
+  crit: suspicious
+  conf: 0.9
+  attack: T1496
+  all:
+  - id: algorithm-stratum-miner
+  - id: objectives/impact/cryptojacking/miner/pool::known-pool-domains
+  unless:
+  - id: well-known/tool/detection/security-scanner
+  - id: well-known/tool/detection/clawmetry/
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+- id: stratum-known-pool-miner
+  desc: Stratum miner with known pool
+  crit: suspicious
+  conf: 0.9
+  attack: T1496
+  all:
+  - id: micro-behaviors/communications/socket/tcp::stratum-mining-protocol
+  - id: objectives/impact/cryptojacking/miner/pool::known-pool-domains
+  unless:
+  - id: well-known/tool/detection/security-scanner
+  - id: well-known/tool/detection/clawmetry/
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+- id: browser-worker-monero-miner
+  desc: Browser Monero miner with worker runtime and pool
+  crit: hostile
+  conf: 0.99
+  attack: T1496
+  mbc: B0018
+  all:
+  - id: monero-wallet-pool-miner
+  any:
+  - id: micro-behaviors/process/create/workers::worker-pool
+  - id: micro-behaviors/communications/http/services/analytics::browser-send-beacon
+  - id: micro-behaviors/communications/http/request/client::xmlhttprequest-new
+- id: miner-type
+  desc: Cryptocurrency miner type
+  any:
+  - id: algorithm-stratum-miner
+  - id: micro-behaviors/communications/socket/tcp::stratum-mining-protocol
+- id: active-miner
+  desc: Active cryptocurrency miner
+  crit: suspicious
+  conf: 0.95
+  mbc: B0014
+  attack: T1496
+  all:
+  - id: miner-type
+  - id: objectives/impact/cryptojacking/miner/pool::known-pool-domains
+  unless:
+  # Security/observability scanners (e.g. ClawMetry's threat-heuristics module
+  # and its test suite) carry miner-type names + pool domains as signatures.
+  - id: well-known/tool/detection/clawmetry/
+  - id: metadata/package/quality/recognized-contexts::explicit-miner-context
+  - id: metadata/package/quality/recognized-contexts::package-context
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+  - id: metadata/package/quality/recognized-contexts::package-name
+  - id: metadata/package/quality/recognized-contexts::package-repository
+  - id: metadata/package/quality/recognized-contexts::package-source-path
+  - id: metadata/package/quality/recognized-contexts::source-member-marker
+- id: configured-stratum-miner
+  desc: Stratum miner with wallet and pool configuration
+  crit: suspicious
+  conf: 0.96
+  attack: T1496
+  for: [whl]
+  scope: package
+  all:
+  - id: miner-wallet-config-assignment
+  - id: miner-pool-config-assignment
+  - id: micro-behaviors/communications/socket/tcp::stratum-mining-protocol
+  - id: micro-behaviors/crypto/hash/mining::miner-keyword
+- id: configured-miner-stages-and-runs
+  desc: Configured miner stages and runs native file
+  crit: hostile
+  conf: 0.98
+  attack: T1496,T1036.004
+  for: [shell]
+  all:
+  - id: miner-wallet-config-assignment
+  - id: miner-pool-config-assignment
+  - id: micro-behaviors/crypto/hash/mining::miner-keyword
+  - id: micro-behaviors/fs/file/move::mv-before-local-exec
+  - id: micro-behaviors/fs/chmod/executable/mode::chmod-exec-local-file
+- id: packaged-python-stratum-miner
+  desc: Python console package launches a Stratum miner
+  crit: hostile
+  conf: 0.99
+  attack: T1496,T1195.002
+  mbc: B0018
+  for: [whl]
+  scope: package
+  all:
+  - id: configured-stratum-miner
+  - id: metadata/package/scripts::wheel-console-entrypoint
+  - id: micro-behaviors/process/create/subprocess::python-bash-script-launch
+- id: packaged-cli-wallet-miner
+  desc: Python package launches a configured pool CLI
+  crit: hostile
+  conf: 0.98
+  attack: T1496,T1195.002
+  mbc: B0018
+  for: [whl]
+  scope: package
+  all:
+  - id: micro-behaviors/process/create/local-exec::local-executable-host-argument
+  - id: micro-behaviors/process/create/local-exec::local-executable-user-argument
+  - id: micro-behaviors/fs/chmod/executable/mode::chmod-exec-local-file
+  - id: metadata/package/scripts::wheel-console-entrypoint
+  - id: micro-behaviors/process/create/subprocess::python-bash-script-launch
+- id: miner
+  desc: Cryptocurrency mining-related patterns
+  crit: notable
+  conf: 0.66
+  mbc: B0041
+  attack: T1496
+  size_max: 500000
+  needs: 2
+  any:
+  - id: micro-behaviors/communications/socket/tcp::stratum-tcp-url
+  - id: micro-behaviors/communications/socket/tcp::stratum-ssl-url
+  - id: micro-behaviors/communications/http/url/domain::pool-named-subdomain
+  - id: micro-behaviors/communications/http/url/domain::pool-named-url-host
+  - id: micro-behaviors/communications/http/url/domain::pool-host-with-port
+  - id: micro-behaviors/crypto/hash/mining::miner-keyword
+  - id: monero-lower
+  - id: micro-behaviors/os/sysinfo/performance/metrics::hashrate-reference
+  - id: wallet-ref
+  - id: coinhive-runtime-api
+  - id: micro-behaviors/crypto/hash/mining::cryptonight-str
+  unless:
+  - id: well-known/tool/detection/security-scanner
+  - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
+  - id: metadata/package/quality/recognized-contexts::explicit-miner-context
+  - id: metadata/package/quality/recognized-contexts::package-context
+  - id: metadata/package/quality/recognized-contexts::source-member-context
+  - id: metadata/package/quality/recognized-contexts::package-name
+  - id: metadata/package/quality/recognized-contexts::package-repository
+  - id: metadata/package/quality/recognized-contexts::package-source-path
+  - id: metadata/package/quality/recognized-contexts::source-member-marker

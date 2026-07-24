@@ -1,0 +1,538 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for: [python, javascript, powershell, rust, pe, elf]
+  mbc: C0002
+  attack: T1071.001
+traits:
+  - id: python-request-add-header
+    desc: Python HTTP request adds header
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: symbol
+      kind: call
+      exact: req.add_header
+
+  - id: request-spec-headers-lookup
+    desc: Reads headers from HTTP request specification
+    crit: notable
+    conf: 0.84
+    for: [python]
+    if:
+      type: text
+      substr: 'spec.get("headers"'
+  - id: python-x-session-token-header-access
+    desc: Reads X-Session-Token request header
+    crit: notable
+    conf: 0.92
+    for: [python]
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)headers\.get$'
+      arg:
+        kind: string
+        exact: X-Session-Token
+  - id: python-request-header-map-copy
+    desc: Copies complete Python request headers
+    crit: notable
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: 'dict\s*\(\s*request\.headers\s*\)'
+  - id: csp-response-header-read
+    desc: Reads Content-Security-Policy response header
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      kind: call
+      substr: headers.get
+      arg:
+        kind: string
+        exact: content-security-policy
+  # Co-occurrence of Content-Length and chunked Transfer-Encoding headers. Present
+  # in any HTTP stack that handles both (node, proxies); the request-smuggling
+  # (CL.TE desync) intent is supplied by composites that add an exploit target.
+  - id: http-content-length-te-chunked
+    desc: Content-Length + chunked Transfer-Encoding
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      regex: 'Content-Length:[\s\S]{0,120}Transfer-Encoding: chunked'
+  - id: ua-mozilla-old
+    desc: Old Mozilla 4.0 User-Agent
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      substr: Mozilla/4.0
+  - id: ua-curl
+    desc: curl User-Agent
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      regex: \bcurl/
+  - id: ua-wget
+    desc: wget User-Agent
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      regex: \bWget/
+  - id: json-content-type-charset
+    desc: JSON content type charset
+    crit: baseline
+    conf: 0.75
+    if:
+      type: string_literal
+      regex: application/json.{0,50}charset=utf-8
+  - id: ua-python-urllib
+    desc: Python urllib User-Agent
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      substr: Python-urllib
+  - id: auth-header
+    desc: Authorization header
+    crit: notable
+    conf: 0.5
+    # JavaScript/TypeScript use the structured Authorization bind/map traits
+    # below so commented examples are not reported as live request headers.
+    for: [python, powershell, rust, pe, elf]
+    unless:
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/package/testing/presence/fixture/
+      - id: metadata/package/testing/presence/harness/
+    if:
+      type: text
+      regex: '\bAuthorization:'
+  - id: authorization-header-map-entry
+    desc: Defines an HTTP Authorization header mapping
+    crit: notable
+    conf: 0.88
+    ref: sha256:fab39b4045be97c3d98a8425a3486b5561cca80ba0f61721a2070935eeba7846
+    if:
+      type: text
+      regex: '["'']Authorization["'']\s*:'
+  - id: authorization-header-index-assignment
+    desc: Authorization header property assignment
+    crit: notable
+    conf: 0.88
+    for: [javascript, typescript, python, powershell, rust]
+    if:
+      type: symbol
+      kind: bind
+      regex: '(^|\.)Authorization$'
+  - id: x-api-key-header-map-entry
+    desc: Configures an X-API-Key request header
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '["'']x-api-key["'']\s*:'
+      case_insensitive: true
+  - id: x-session-id-header-map-entry
+    desc: Configures an X-Session-ID request header
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript, python, powershell, rust]
+    if:
+      type: text
+      regex: '["'']x-session-id["'']\s*:'
+      case_insensitive: true
+
+  - id: x-api-key-header
+    desc: X-API-Key HTTP request header
+    crit: notable
+    conf: 0.9
+    for: [shell, batch, powershell, ruby]
+    if:
+      type: text
+      regex: '(?i)\bX-API-Key\s*:'
+  - id: token-auth-header
+    desc: Token Authorization header
+    crit: notable
+    conf: 0.92
+    ref: sha256:09053f004eadcee4af595d8cba0d1f82e9de546e9a244420cfe43154a2acf2d6
+    if:
+      type: text
+      regex: 'Authorization\s*[:=].{0,80}\bToken\b'
+  - id: bearer-token
+    desc: Bearer token authentication
+    crit: notable
+    conf: 0.5
+    unless:
+      - id: metadata/package/testing/presence/fixture/
+      - id: metadata/package/testing/presence/harness/
+    if:
+      type: text
+      regex: '(Authorization|Authenticate)[^\r\n]{0,24}Bearer\s+[A-Za-z0-9._~+\-/=]{8,}'
+  - id: bearer-header-from-token
+    desc: Bearer header from token
+    crit: component
+    conf: 0.93
+    if:
+      type: text
+      regex: 'Authorization.{0,40}Bearer.{0,40}\b(token|jwt|access_token|session)\b'
+    not:
+      - substr: "Bearer mytoken"
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/presence/harness::unittest-module
+  - id: basic-auth
+    desc: Basic authentication
+    crit: notable
+    conf: 0.5
+    unless:
+      - type: text
+        substr: Basic Zm9vOmJhcg==
+      - type: text
+        substr: Basic dXNlcjpwYXNz
+    if:
+      type: text
+      regex: (Authorization|Authenticate).{0,20}Basic\s+[A-Za-z0-9+/_=-]{4,}
+    not:
+      - substr: libcurl/
+      - substr: '["Authorization"] == "Basic'
+      - substr: 'Authorization"] == "Basic'
+  - id: auth-like-constant-assignment
+    desc: Auth-like constant assignment
+    crit: component
+    conf: 0.8
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: '\b[A-Za-z_$][\w$]*(AUTHORIZATION|AUTH|TOKEN)[A-Za-z0-9_$]*\s*='
+  - id: basic-auth-credential-literal
+    desc: Basic auth credential literal
+    crit: component
+    conf: 0.86
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: '(?i)(Authorization|Authenticate)[^\r\n]{0,40}Basic\s+[A-Za-z0-9+/]{12,}={0,2}'
+    not:
+      - substr: Basic dXNlcjpwYXNz
+      - substr: Basic Zm9vOmJhcg==
+
+    unless:
+      # Canonical test:test credentials are placeholders, not a secret.
+      - type: encoded
+        encoding: base64
+        substr: test:test
+
+  - id: dense-request-header-set
+    desc: Dense HTTP request headers in small binary
+    crit: notable
+    conf: 0.88
+    for: [pe, elf, macho]
+    size_max: 100000
+    count_min: 2
+    per_kb_min: 0.3
+    unless:
+      - type: text
+        substr: "->read_response_header"
+      - type: text
+        substr: "Django's URL keyword arguments to determine the version."
+      - id: metadata/library/oauth::oauthlib-rfc6749-source
+      - id: metadata/package/testing/presence/harness::python-test-file
+      - id: metadata/package/testing/presence/harness::test-spec-path-benign-context
+    if:
+      type: text
+      regex: '(?i)(User-Agent:\s|Host:\s)'
+  - id: headers-encoding
+    desc: Accept-Encoding header
+    crit: baseline
+    conf: 0.66
+    if:
+      type: text
+      substr: Accept-Encoding
+  - id: host-header-override
+    desc: Explicit HTTP Host header override
+    crit: notable
+    conf: 0.85
+    for: [scripts, source]
+    if:
+      type: text
+      regex: '["'']Host["'']\s*:'
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: referer-header
+    desc: HTTP Referer header
+    crit: component
+    conf: 0.6
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: '(?i)\bReferer\s*:'
+  - id: sec-fetch-request-header
+    desc: Sec-Fetch request header literal
+    crit: notable
+    conf: 0.8
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: '"Sec-Fetch-(Dest|Mode|Site)"'
+  - id: utf16-referer-header-pe
+    desc: UTF-16 Referer header in PE
+    crit: component
+    conf: 0.85
+    for: [pe, dll]
+    if:
+      type: hex
+      section: .rdata
+      pattern: 52 00 65 00 66 00 65 00 72 00 65 00 72 00 3A 00
+  - id: google-homepage-url
+    desc: Google homepage URL
+    crit: component
+    conf: 0.78
+    for: [scripts, binaries]
+    if:
+      type: text
+      exact: https://www.google.com/
+  - id: header-user
+    desc: HTTP header user/userid
+    crit: notable
+    conf: 0.5
+    for: [shell]
+    if:
+      type: text
+      regex: '-H\s+["'']?(user|userid):'
+  - id: header-client
+    desc: HTTP header client
+    crit: notable
+    conf: 0.5
+    for: [shell]
+    if:
+      type: text
+      regex: '-H\s+["'']?client:'
+  - id: header-bot
+    desc: HTTP header bot
+    crit: notable
+    conf: 0.6
+    for: [shell]
+    if:
+      type: text
+      regex: '-H\s+["'']?bot:'
+  - id: header-build
+    desc: HTTP header build
+    crit: notable
+    conf: 0.5
+    for: [shell]
+    if:
+      type: text
+      regex: '-H\s+["'']?build:'
+  - id: header-hwid
+    desc: HTTP header hwid
+    crit: notable
+    conf: 0.6
+    for: [shell]
+    if:
+      type: text
+      regex: '-H\s+["'']?hwid:'
+  - id: header-machine
+    desc: HTTP header machine
+    crit: notable
+    conf: 0.5
+    for: [shell]
+    if:
+      type: text
+      regex: '-H\s+["'']?machine:'
+  - id: x-header-user
+    desc: X-User header
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      regex: '(?i)\bX-User\s*:'
+  - id: x-header-client
+    desc: X-Client header
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      regex: '(?i)\bX-Client\s*:'
+  - id: x-header-bot
+    desc: X-Bot header
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      substr: X-Bot
+  - id: x-header-build
+    desc: X-Build header
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      substr: X-Build
+  - id: x-header-hwid
+    desc: X-HWID header
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      substr: X-HWID
+  - id: x-forwarded-for
+    desc: X-Forwarded-For proxy header
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      substr: "X-Forwarded-For"
+  - id: php-server-x-forwarded-for
+    desc: PHP reads X-Forwarded-For server header
+    crit: notable
+    conf: 0.8
+    for: [php]
+    if:
+      type: string_literal
+      substr: HTTP_X_FORWARDED_FOR
+  - id: php-server-http-client-ip
+    desc: PHP reads HTTP client IP server header
+    crit: notable
+    conf: 0.8
+    for: [php]
+    if:
+      type: string_literal
+      substr: HTTP_CLIENT_IP
+  - id: x-real-ip
+    desc: X-Real-IP proxy header
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      substr: "X-Real-IP"
+  - id: x-header-data-hex
+    desc: X- header with hex-encoded data
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '["'']X-[A-Za-z0-9-]+["'']\s*:\s*["''][a-fA-C0-9]{16,}["'']'
+  - id: x-header-single-letter
+    desc: Single-letter X- header name
+    crit: baseline
+    conf: 0.85
+    if:
+      type: text
+      regex: '["'']X-[A-Z]["'']\s*:'
+  - id: boundary-param
+    desc: Contains an HTTP multipart boundary parameter
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      substr: boundary=
+  - id: content-length-template
+    desc: Content-Length printf template
+    crit: baseline
+    conf: 0.55
+    if:
+      type: text
+      exact: 'Content-Length: %d'
+  - id: content-disposition-filename
+    desc: File-download response (Content-Disposition)
+    crit: baseline
+    conf: 0.5
+    for: [python, javascript, powershell, rust, php, pe, elf]
+    if:
+      type: text
+      regex: Content-Disposition.{0,30}filename
+  - id: form-data-header
+    desc: HTTP multipart form-data header
+    crit: notable
+    conf: 0.5
+    if:
+      type: text
+      substr: 'Content-Disposition: form-data'
+composite_rules:
+  - id: headers-auth
+    desc: HTTP Authorization header
+    crit: notable
+    conf: 0.66
+    any:
+      - id: auth-header
+      - id: bearer-token
+      - id: bearer-header-from-token
+      - id: basic-auth
+      - id: hardcoded-basic-auth-credential
+  - id: hardcoded-basic-auth-credential
+    desc: Hardcoded HTTP Basic auth credential
+    crit: suspicious
+    conf: 0.86
+    all:
+      - id: auth-like-constant-assignment
+      - id: basic-auth-credential-literal
+    near_bytes: 256
+    unless:
+      - id: well-known/app/browser-extension-known/
+      - id: well-known/app/tabby/
+      - id: well-known/app/orientdb::studio-bundled-web-asset
+  - id: headers-useragent-fake
+    desc: Fake or suspicious User-Agent
+    crit: notable
+    conf: 0.66
+    any:
+      - id: ua-mozilla-old
+      - id: ua-curl
+      - id: ua-wget
+      - id: ua-python-urllib
+  - id: google-homepage-referer
+    desc: Google homepage Referer header
+    crit: notable
+    conf: 0.82
+    all:
+      - id: google-homepage-url
+    any:
+      - id: referer-header
+      - id: utf16-referer-header-pe
+  - id: bot-headers
+    desc: Bot identification HTTP headers
+    crit: notable
+    conf: 0.7
+    any:
+      - id: header-user
+      - id: header-client
+      - id: header-bot
+      - id: header-build
+      - id: header-hwid
+      - id: header-machine
+      - id: x-header-user
+      - id: x-header-client
+      - id: x-header-bot
+      - id: x-header-build
+      - id: x-header-hwid
+      - id: x-header-single-letter
+  - id: multipart-upload
+    desc: Multipart form data upload
+    crit: notable
+    conf: 0.6
+    any:
+      - id: micro-behaviors/communications/http/post::multipart-form
+      - id: boundary-param
+      - id: content-disposition-filename
+      - id: form-data-header
+  - id: file-upload-headers
+    desc: HTTP file upload header stack
+    crit: notable
+    conf: 0.78
+    all:
+      - id: multipart-upload
+    any:
+      - id: content-length-template
+      - id: micro-behaviors/communications/email/mime::mime-octet-stream
+      - id: micro-behaviors/communications/http/client/xmlhttp::winhttp-request-com
+      - id: micro-behaviors/communications/http/post::url-encoded-content-type
+    needs: 2

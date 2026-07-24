@@ -1,0 +1,217 @@
+# Python Remote Code Execution Dropper Patterns
+# Detects fetch-and-exec patterns where code is downloaded and executed
+# ATT&CK: T1105 (Ingress Tool Transfer), T1059.006 (Python)
+# MBC: B0024 (Download), E1059 (Command and Scripting Interpreter)
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+traits:
+  # exec() with .get().text - fetches URL and executes response body
+  # Pattern: exec(requests.get(...).text) or exec(x.get(...).text)
+  # Uses bounded gaps to allow nested parens inside .get()
+  - id: exec-get-text
+    desc: exec() on HTTP response .text
+    crit: suspicious
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "exec\\s*\\(.{0,50}\\.get\\s*\\(.{0,50}\\)\\.text\\s*\\)"
+  # exec() with .get().content - binary response
+  - id: exec-get-content
+    desc: exec() on HTTP response .content
+    crit: suspicious
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "exec\\s*\\(.{0,50}\\.get\\s*\\(.{0,50}\\)\\.content\\s*\\)"
+  # eval() with .get().text
+  - id: eval-get-text
+    desc: eval() on HTTP response .text
+    crit: suspicious
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "eval\\s*\\(.{0,50}\\.get\\s*\\(.{0,50}\\)\\.text\\s*\\)"
+  # exec() with urlopen().read()
+  - id: exec-urlopen-read
+    desc: exec() on urlopen response
+    crit: suspicious
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1059"
+    if:
+      type: text
+      regex: "exec\\s*\\(.{0,50}urlopen\\s*\\(.{0,50}\\)\\.read\\s*\\(\\s*\\)"
+  - id: urllib-module-code-read
+    desc: urllib response assigned module code
+    crit: component
+    conf: 0.92
+    size_max: 120000
+    if:
+      type: text
+      regex: '\bmodule_code\s*=\s*[A-Za-z_][A-Za-z0-9_]*\.read\(\)\.decode\('
+  - id: exec-module-code
+    desc: exec called on module code
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      regex: '\bexec\s*\(\s*module_code\s*,'
+  - id: remote-module-py-url-path
+    desc: Remote Python module URL path
+    crit: component
+    conf: 0.9
+    if:
+      type: literal
+      regex: '/[A-Za-z0-9_.~/-]{0,80}module\.py$'
+  # Numeric array with chr() - URL obfuscation pattern
+  # Pattern: [123, 456, ...] with chr() conversion
+  - id: numeric-chr-array
+    desc: Numeric array with chr() conversion
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: text
+      # Require the actual `chr` identifier. A loose substring match also
+      # treated doctest calls such as `.strchr()` as obfuscated decoding.
+      regex: "\\[\\s*\\d{2,4}\\s*,\\s*\\d{2,4}\\s*,\\s*\\d{2,4}[^\\]]{0,50}\\][^c]{0,50}\\bchr\\s*\\("
+    unless:
+      - id: metadata/package/testing/
+  # Inline integer-array reconstruction via join(chr(...)) - common URL/payload deobfuscation
+  - id: join-chr-comprehension
+    desc: join(chr()) integer-array reconstruction
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: text
+      # Require a payload-sized array; three-byte reconstructions like
+      # join(chr(x) for x in [46,112,121]) (".py") are ordinary.
+      regex: "join\\(.{0,40}chr\\(.{0,20}\\)\\s+for\\s+\\w+\\s+in\\s*\\[\\s*(\\d+\\s*,\\s*){5,}\\d+"
+  # Bitshift operations on numeric arrays - obfuscation
+  - id: bitshift-array
+    desc: Bitshift operations on array elements
+    crit: suspicious
+    conf: 0.75
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: text
+      regex: "\\[\\s*\\w+\\s*(<<|>>)\\s*\\d+\\s+for\\s+\\w+\\s+in"
+    unless:
+      - id: metadata/library/python-stdlib::python-stdlib-test-file
+      - id: metadata/package/testing/
+      - id: metadata/package/testing/presence/harness::python-info-test-path
+composite_rules:
+  - id: remote-transform-service-code-execution
+    desc: Executes code obtained from a remote encode or decode service
+    crit: hostile
+    conf: 0.99
+    attack: "T1105,T1059.006,T1027"
+    mbc: "B0024,B0032"
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/communications/http/url/domain::workers-dev-domain
+      - id: micro-behaviors/communications/http/url/path::code-transform-endpoint-path
+      - id: micro-behaviors/communications/http/lib/requests::response-json-code-field
+      - id: micro-behaviors/process/interpreter/python::exec-variable
+  # Remote exec with HTTP fetch - the core dropper pattern
+  # Complexity: file_types(+1) + any(+1) + all(+2) = 4
+  - id: remote-exec-text
+    desc: Executes code fetched from remote URL
+    crit: hostile
+    conf: 0.98
+    attack: "T1105"
+    mbc: "B0024"
+    any:
+      - id: exec-get-text
+      - id: exec-get-content
+      - id: eval-get-text
+      - id: exec-urlopen-read
+    all:
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+      - id: micro-behaviors/communications/http/request/client::request-python
+  - id: urllib-module-code-exec
+    desc: urllib-fetched Python module execution
+    crit: hostile
+    conf: 0.98
+    attack: "T1105, T1059.006"
+    mbc: "B0024, B0032"
+    all:
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
+      - id: urllib-module-code-read
+      - id: exec-module-code
+      - id: remote-module-py-url-path
+    any:
+      - id: micro-behaviors/communications/socket/ssl::tls-validation-fully-disabled
+      - id: micro-behaviors/data/serialize/json::json-loads-call
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+  # Obfuscated remote exec - exec on .get().text with chr/join obfuscation
+  # Complexity: file_types(+1) + any(+1) + all(+2) = 4
+  - id: obfuscated-remote-exec
+    desc: Executes code from obfuscated URL
+    crit: hostile
+    conf: 0.99
+    attack: "T1105"
+    mbc: "B0024"
+    any:
+      - id: exec-get-text
+      - id: exec-get-content
+      - id: eval-get-text
+    all:
+      - id: micro-behaviors/process/interpreter/python::exec-builtin
+      - id: join-chr-comprehension
+  # Obfuscated URL with bitshift arithmetic
+  # Complexity: file_types(+1) + any(+1) + all(+2) = 4
+  - id: bitshift-obfuscated-exec
+    desc: Executes code with bitshift-obfuscated URL
+    crit: hostile
+    conf: 0.98
+    attack: "T1105"
+    mbc: "B0024"
+    any:
+      - id: exec-get-text
+      - id: exec-get-content
+      - id: eval-get-text
+    all:
+      - id: bitshift-array
+      - id: join-chr-comprehension
+  # Remote YAML deserialization
+  # Complexity: 2.0 (traits) + 0.3 (file_types) + 1.0 (all) + 1.0 (any) = ~4.3
+  - id: remote-yaml-deserialization
+    desc: "Deserializes YAML data from remote source (RCE risk)"
+    crit: hostile
+    conf: 0.95
+    attack: "T1203" # Exploitation for Client Execution
+    mbc: "B0024"
+    all:
+      - id: micro-behaviors/communications/http/request/client::request-python
+    any:
+      - id: micro-behaviors/data/serialize/yaml::yaml-loader-unsafe
+      - id: micro-behaviors/data/serialize/yaml::yaml-unsafe-load
+
+  # The combination is a loader, not merely an obfuscated expression: it
+  # executes a response fetched over urllib and stages it through pythonw.
+  - id: urllib-encoded-pythonw-remote-loader
+    desc: urllib remote code execution staged through an encoded pythonw loader
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1105,T1059.006
+    mbc: B0032,B0024
+    all:
+      - id: exec-urlopen-read
+      - id: objectives/anti-static/obfuscation/encoding/content::encoded-python-exec
+      - id: objectives/anti-static/obfuscation/eval/scripting::pythonw-exe-replace-trick
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/package/testing/

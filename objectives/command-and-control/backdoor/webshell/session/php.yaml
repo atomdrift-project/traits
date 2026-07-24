@@ -1,0 +1,63 @@
+defaults:
+  platforms:
+  - windows
+  - unix
+  for:
+  - php
+traits:
+- id: temp-host-log-path
+  desc: Writes host-derived PHP log path under /tmp
+  crit: suspicious
+  conf: 0.82
+  if:
+    type: text
+    regex: '/tmp/.{0,120}HTTP_HOST.{0,120}(log|error)'
+- id: referer-accept-lang-c2-pair
+  desc: "Referer+Accept-Language covert C2 pair"
+  crit: suspicious
+  conf: 0.9
+  attack: T1071.001
+  mbc: C0002
+  if:
+    type: string_literal
+    regex: REFER.{1,100}LANG
+- id: gz-base64-encode-response
+  desc: 'gz b64 encode response'
+  crit: suspicious
+  conf: 0.88
+  attack: T1573.001
+  if:
+    type: string_literal
+    regex: gz\w*compress.{0,60}base64_\w*encode
+composite_rules:
+- id: host-scoped-background-session-log
+  desc: PHP background session writes host-scoped temp log
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: micro-behaviors/process/control/signal::ignore-user-abort-true-call
+  - id: temp-host-log-path
+  - id: micro-behaviors/communications/http/request/
+- id: background-php-webshell-runner
+  desc: Background PHP webshell runner setup
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: micro-behaviors/process/control/signal::ignore-user-abort-true-call
+  - id: micro-behaviors/process/control/signal::set-time-limit
+  - id: temp-host-log-path
+  # A detached runner is hostile here because it combines lifecycle control with a
+  # host-derived /tmp log path (the classic session-webshell command-output sink).
+  # ignore_user_abort + set_time_limit + ob_end_flush WITHOUT that log is just the
+  # legitimate "flush the HTTP response, keep processing" idiom (WordPress/PHP async
+  # jobs, fastcgi_finish_request fallback) and must not identify a webshell.
+  unless:
+  - id: well-known/app/pressbooks
+  - id: well-known/app/wordpress-plugins::wordpress-maintenance-plugin
+- id: detached-temp-php-webshell-session
+  desc: Detached PHP webshell session writes host-scoped temp log
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: micro-behaviors/process/control/signal::ignore-user-abort-true-call
+  - id: temp-host-log-path

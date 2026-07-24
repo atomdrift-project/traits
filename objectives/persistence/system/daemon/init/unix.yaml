@@ -1,0 +1,136 @@
+defaults:
+  platforms:
+    - linux
+    - macos
+traits:
+  # daemon-umask moved to micro-behaviors/fs/chmod/modify::umask
+  - id: sigchild-underscore
+    desc: _sigchild child-reaper symbol
+    crit: notable
+    conf: 0.5
+    for:
+      - elf
+      - macho
+    if:
+      type: text
+      substr: _sigchild
+  - id: sigchld-handler-string
+    desc: sigchld_handler symbol text
+    crit: component
+    conf: 0.5
+    for:
+      - elf
+      - macho
+    if:
+      type: text
+      substr: sigchld_handler
+    unless:
+      - id: micro-behaviors/communications/ssh/connect::openssh
+      - id: metadata/file/string/identity::system-shell-basename
+  - id: handle-sigchld-string
+    desc: bare handle_sigchld symbol text
+    crit: suspicious
+    conf: 0.5
+    for:
+      - elf
+      - macho
+    if:
+      # Whole-token match: a bare `handle_sigchld` child-reaper function name.
+      # `\b` excludes legit decorated helpers like sudo's `handle_sigchld_pty`,
+      # `handle_sigchld_nopty`, and `mon_handle_sigchld` (the `_` adjacent to the
+      # token is a word char, so no boundary exists there).
+      type: text
+      word: handle_sigchld
+    unless:
+      - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+      - id: well-known/tool/reverse-engineering/radare2/
+composite_rules:
+  - id: sigchld-handler
+    desc: Custom SIGCHLD child-reaper handler
+    crit: suspicious
+    conf: 0.6
+    attack: T1543
+    for:
+      - elf
+      - macho
+    any:
+      - id: sigchild-underscore
+      - id: sigchld-handler-string
+      - id: handle-sigchld-string
+  - id: fork-random-exec-daemon
+    desc: Forked daemon with randomized command execution
+    crit: suspicious
+    conf: 0.85
+    attack: T1543
+    for: [scripts, binaries]
+    all:
+      - id: micro-behaviors/process/fork/clone::fork
+      - id: micro-behaviors/process/create/shell/spawn::sleep-format-exec
+      - id: micro-behaviors/os/random/crypto::seeded-random
+  - id: macos-double-fork-daemon
+    desc: macOS double-fork daemon syscall pattern
+    crit: suspicious
+    conf: 0.85
+    attack: T1543
+    mbc: F0006
+    for:
+      - macho
+    platforms:
+      - macos
+    all:
+      - id: micro-behaviors/process/fork/clone::fork
+      - id: micro-behaviors/process/daemonize/detach::setsid-import
+    any:
+      - id: micro-behaviors/fs/chmod/modify::umask
+      - id: micro-behaviors/fs/directory/mkdir::chdir-symbol
+    unless:
+      - id: metadata/lang/compiler/systems::go-binary-macho
+      - id: well-known/lib/sogen/
+      - id: well-known/tool/reverse-engineering/frida::frida-server-native
+      - id: well-known/tool/reverse-engineering/frida::frida-portal-macho
+    downgrade:
+      any:
+        - id: metadata/binary/vendor/
+        - id: metadata/signed/platform::apple
+        - id: metadata/binary/metrics/structural::many-imports
+        - id: metadata/lang/compiler/systems/
+  - id: macos-daemon-setup
+    desc: macOS daemon setup sequence
+    crit: suspicious
+    conf: 0.88
+    attack: T1543
+    mbc: F0006
+    for:
+      - macho
+    platforms:
+      - macos
+    all:
+      - id: micro-behaviors/process/daemonize/detach::setsid-import
+      - id: micro-behaviors/fs/chmod/modify::umask
+      - id: micro-behaviors/fs/directory/mkdir::chdir-symbol
+    any:
+      - id: micro-behaviors/process/create/direct::execve-with-fd-redirect-macos
+      - id: micro-behaviors/process/create/direct::execve-import
+    unless:
+      - id: metadata/lang/compiler/systems::go-version-string
+    downgrade:
+      any:
+        - id: metadata/signed/anchor-apple
+        - id: metadata/binary/vendor/
+        - id: metadata/signed/platform::apple
+        - id: metadata/binary/metrics/structural::many-imports
+        - id: metadata/lang/compiler/systems/
+  - id: recognized-fork-setsid-marker
+    desc: Recognized runtime ships fork+setsid
+    crit: notable
+    for:
+      - elf
+      - macho
+    any:
+      # Go runtime / Rust std ship fork+setsid symbols in every binary.
+      - id: metadata/lang/compiler/systems::go-binary-macho
+      - id: metadata/lang/compiler/systems::rust-binary
+      # SigmaShake governance tool forks/setsid's to run its eval daemon.
+      - id: well-known/tool/detection/sigmashake::sigmashake-governance-marker
+      - id: well-known/tool/reverse-engineering/frida::frida-server-macho
+      - id: well-known/tool/reverse-engineering/rizin::rz-test-usage

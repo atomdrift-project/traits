@@ -1,0 +1,233 @@
+defaults:
+  platforms: [windows, unix]
+traits:
+  - id: proxy-execution-pattern
+    desc: System binary proxy execution reference
+    for: [scripts, binaries]
+    crit: suspicious
+    conf: 0.92
+    attack: T1218
+    if:
+      id: objectives/execution/lolbin/os::windows-lolbin
+  - id: js-library-write
+    desc: JavaScript writes DLL or SO file
+    for:
+      - javascript
+      - typescript
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '\.(writeFile|writeFileSync|createWriteStream)\s*\([^)\n]{0,200}\.(dll|so)\b'
+  - id: python-library-write
+    desc: Python writes DLL, SO or dylib
+    for:
+      - python
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(open|Path)\s*\([^)\n]{0,240}\.(dll|so|dylib)\b[^)\n]{0,80}["'']w[b]?["'']'
+  - id: python-side-load-subprocess
+    desc: Python subprocess references EXE and DLL
+    for:
+      - python
+    crit: suspicious
+    conf: 0.92
+    size_max: 20000
+    if:
+      type: text
+      regex: 'subprocess\.(run|Popen|call)\(.{0,240}\.exe\b.{0,240}\.(dll|so)\b'
+    unless:
+      - id: metadata/package/testing/
+      - type: text
+        regex: '(?i)(readelf\.exe|--debug-dump=|/cygdrive/|debug-dump)'
+  - id: python-side-load-os-system
+    desc: Python os.system references EXE and DLL
+    for:
+      - python
+    crit: suspicious
+    conf: 0.92
+    size_max: 20000
+    if:
+      type: text
+      regex: 'os\.system\(.{0,240}\.exe\b.{0,240}\.(dll|so)\b'
+  - id: wine-drive-path
+    desc: Wine drive_c path reference
+    crit: notable
+    for: [python, javascript, typescript]
+    if:
+      type: string_literal
+      regex: \.wine/drive_c
+  - id: js-extension-classifier-dll
+    desc: 'JS file-extension classifier for DLL labels'
+    for:
+      - javascript
+      - typescript
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      substr: 'if (/\\.dll$/i.test(filename))'
+  - id: js-windows-processor-feature-present
+    desc: IsProcessorFeaturePresent marker
+    crit: notable
+    conf: 0.96
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      substr: IsProcessorFeaturePresent
+composite_rules:
+  - id: js-dll-injection
+    desc: DLL injection via native APIs (JS)
+    for:
+      - javascript
+      - typescript
+    crit: suspicious
+    conf: 0.95
+    attack: T1055.001
+    mbc: F0003
+    any:
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+  - id: python-dll-injection
+    desc: DLL injection via process manipulation (Python)
+    for:
+      - python
+    crit: suspicious
+    conf: 0.95
+    attack: T1055.001
+    mbc: F0003
+    any:
+      - id: objectives/evasion/process/injection/dll::dll-injection
+      - id: objectives/evasion/process/injection/dll::obfuscated-injection
+  - id: js-dll-side-loading
+    desc: DLL side-loading pattern (JS)
+    crit: suspicious
+    conf: 0.95
+    attack: T1574.002
+    mbc: F0015
+    for:
+      - javascript
+      - typescript
+    size_max: 10000
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/fs/path/extension::exe-dup
+      - id: micro-behaviors/dylib/load/runtime::load-library
+    any:
+      - id: micro-behaviors/fs/path/extension::dll-dup
+      - id: micro-behaviors/dylib/load/binding::koffi-native-library-load
+    unless:
+      - id: metadata/package/files/included/
+      - id: metadata/package/testing/presence/harness/
+  - id: js-windows-processor-feature-probe
+    desc: Windows processor feature probe
+    crit: notable
+    conf: 0.96
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: micro-behaviors/process/create/shell/lang::powershell-keyword
+      - id: js-windows-processor-feature-present
+      - id: micro-behaviors/dylib/load/ffi::dotnet-kernel32-pinvoke
+  - id: js-ld-preload-hijacking
+    desc: LD_PRELOAD dynamic linker hijacking (JS)
+    crit: hostile
+    conf: 0.95
+    attack: T1574.006
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: objectives/evasion/hijack-execution-flow/preload::ld-preload-env
+    downgrade:
+      any:
+        - id: metadata/package/testing/
+  - id: js-phantom-dll
+    desc: Write DLL/SO then execute binary (JS)
+    crit: hostile
+    conf: 0.95
+    attack: T1574.002
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: js-library-write
+      - id: micro-behaviors/process/create/shell/bridge::child-process-exec
+    downgrade:
+      any:
+        - id: metadata/package/testing/
+        - id: metadata/signed/platform/
+  - id: js-dll-hijacking
+    desc: Comprehensive DLL hijacking (JS)
+    crit: hostile
+    conf: 0.95
+    for:
+      - javascript
+      - typescript
+    any:
+      - id: js-dll-side-loading
+      - id: js-ld-preload-hijacking
+      - id: proxy-execution-pattern
+      - id: js-dll-injection
+      - id: js-phantom-dll
+  - id: python-dll-side-loading
+    desc: DLL side-loading pattern (Python)
+    crit: hostile
+    conf: 0.95
+    attack: T1574.002
+    mbc: F0015
+    for:
+      - python
+    any:
+      - id: python-side-load-subprocess
+      - id: python-side-load-os-system
+    unless:
+      - id: wine-drive-path
+    downgrade:
+      any:
+        - id: metadata/package/testing/
+        - id: metadata/signed/platform/
+  - id: python-ld-preload-hijacking
+    desc: LD_PRELOAD dynamic linker hijacking (Python)
+    crit: hostile
+    conf: 0.95
+    attack: T1574.006
+    for:
+      - python
+    all:
+      - id: objectives/evasion/hijack-execution-flow/preload::ld-preload-env
+    downgrade:
+      any:
+        - id: metadata/package/testing/
+  - id: python-phantom-dll
+    desc: Write DLL/SO then execute binary (Python)
+    crit: hostile
+    conf: 0.95
+    attack: T1574.002
+    for:
+      - python
+    all:
+      - id: python-library-write
+      - id: micro-behaviors/process/create/subprocess::process-execution
+    downgrade:
+      any:
+        - id: metadata/package/testing/
+        - id: metadata/signed/platform/
+  - id: python-dll-hijacking
+    desc: Comprehensive DLL hijacking (Python)
+    crit: hostile
+    conf: 0.95
+    for:
+      - python
+    any:
+      - id: python-dll-side-loading
+      - id: python-ld-preload-hijacking
+      - id: proxy-execution-pattern
+      - id: python-dll-injection
+      - id: python-phantom-dll

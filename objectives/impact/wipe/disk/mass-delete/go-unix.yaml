@@ -1,0 +1,90 @@
+defaults:
+  platforms: [unix]
+  for: [go, macho]
+  attack: T1485
+
+traits:
+  - id: go-home-media-wipe-list
+    desc: Home media directory name sequence
+    # Directory names alone do not establish deletion.  Keep this as an
+    # attack-context fragment for the wipe composite rather than surfacing it
+    # as suspicious behavior; file dialogs and backup tools commonly enumerate
+    # the same user directories.
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      regex: 'Documents[\s\S]{0,120}Desktop[\s\S]{0,120}Downloads'
+
+  - id: go-keychain-delete-cmd
+    desc: Go keychain delete command
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      substr: delete-keychain
+
+  - id: go-macho-user-wipe-strings
+    desc: Go Mach-O user wipe strings
+    crit: suspicious
+    conf: 0.94
+    for: [macho]
+    if:
+      type: text
+      substr: DocumentsDownloads.cache_
+
+  - id: go-macho-removeall-symbol
+    desc: Go Mach-O RemoveAll symbol
+    crit: component
+    conf: 0.9
+    for: [macho]
+    if:
+      type: text
+      substr: RemoveAll
+
+composite_rules:
+  - id: go-macos-user-data-wipe
+    desc: Go macOS user data wipe
+    crit: hostile
+    conf: 0.98
+    for: [go]
+    all:
+      - id: go-home-media-wipe-list
+    any:
+      - id: micro-behaviors/fs/file/delete::os-Remove
+      - id: micro-behaviors/fs/file/delete::os-RemoveAll
+    needs: 1
+
+  - id: go-macho-user-data-wipe
+    desc: Go Mach-O user data wipe
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: go-keychain-delete-cmd
+    any:
+      - id: go-macho-user-wipe-strings
+      - id: go-macho-removeall-symbol
+    needs: 1
+
+  - id: go-shell-root-filesystem-wipe
+    desc: Go executes root filesystem wipe command
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: objectives/impact/destroy/keywords::rm-rf-root-command
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: objectives/impact/destroy/file-deletion::unix-root-rm-no-preserve-command
+    unless:
+      - id: metadata/package/testing/
+      - id: micro-behaviors/process/create/shell/guard/
+
+  - id: root-filesystem-wipe-go-exec
+    desc: Root filesystem wipe via Go exec
+    crit: hostile
+    conf: 0.99
+    for: [elf, macho]
+    all:
+      - id: objectives/impact/destroy/file-deletion::unix-root-rm-no-preserve-command
+      - id: micro-behaviors/process/create/system::go-os-exec-pclntab
+    unless:
+      - id: well-known/tool/detection/

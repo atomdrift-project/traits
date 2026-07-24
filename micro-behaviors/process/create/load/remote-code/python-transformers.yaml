@@ -1,0 +1,76 @@
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+
+traits:
+  # A plain `.from_pretrained(...)` loads a pinned model and does NOT execute
+  # remote code — it is the safe default. On its own this is just a model-load
+  # capability (building block), not a remote-code-execution signal.
+  - id: from-pretrained-call
+    desc: "Transformers/diffusers from_pretrained load"
+    crit: component
+    conf: 0.9
+    if:
+      # Cached call fact (no per-member cursor walk): matches `X.from_pretrained(`.
+      type: symbol
+      kind: call
+      regex: '\.from_pretrained$'
+
+  # `trust_remote_code=True` (or a constant carrying that value) is the flag
+  # that opts a Transformers/diffusers loader into executing model-repository
+  # Python. The loader composites below provide the surrounding context.
+  - id: trust-remote-code-enabled
+    desc: Sets the Transformers remote-code option
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'trust_remote_code\s*=\s*(True|TRUST_REMOTE_CODE_VALUE)\b'
+
+  # Keep the import and call as separate atoms: a generic application
+  # function named `pipeline` is not enough to identify Transformers.
+  - id: transformers-pipeline-import
+    desc: Imports the Transformers pipeline API
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      substr: 'from transformers import pipeline'
+
+  - id: transformers-pipeline-call
+    desc: Calls a Python pipeline factory
+    crit: component
+    conf: 0.8
+    if:
+      type: symbol
+      kind: call
+      exact: pipeline
+
+composite_rules:
+  - id: transformers-pipeline-model-load
+    desc: Loads a model through Transformers pipeline
+    crit: notable
+    conf: 0.92
+    all:
+      - id: transformers-pipeline-import
+      - id: transformers-pipeline-call
+
+  # A from_pretrained load that opts into remote code.
+  - id: transformers-trust-remote-code
+    desc: Transformers model loader enables remote code
+    crit: notable
+    conf: 0.9
+    all:
+      - id: trust-remote-code-enabled
+      - id: from-pretrained-call
+  # `transformers.pipeline(...)` is an alternate model loader to
+  # `.from_pretrained(...)` and can also execute model-supplied code when the
+  # opt-in is enabled.
+  - id: transformers-pipeline-trust-remote-code
+    desc: Transformers pipeline executes model-supplied remote code
+    crit: notable
+    conf: 0.92
+    all:
+      - id: transformers-pipeline-import
+      - id: transformers-pipeline-call
+      - id: trust-remote-code-enabled

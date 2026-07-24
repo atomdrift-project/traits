@@ -1,0 +1,138 @@
+defaults:
+  platforms:
+  - macos
+  for:
+  - macho
+  attack: T1497.001
+traits:
+- id: applescript-system-profiler-memory
+  desc: AppleScript checks memory profile
+  crit: suspicious
+  conf: 0.9
+  for: [applescript]
+  if:
+    type: text
+    substr: system_profiler SPMemoryDataType
+- id: applescript-system-profiler-hardware
+  desc: AppleScript checks hardware profile
+  crit: suspicious
+  conf: 0.9
+  for: [applescript]
+  if:
+    type: text
+    substr: system_profiler SPHardwareDataType
+- id: applescript-vm-vendor-list
+  desc: AppleScript checks VM vendor strings
+  crit: suspicious
+  conf: 0.9
+  for: [applescript]
+  count_min: 3
+  if:
+    type: text
+    regex: 'QEMU|VMware|KVM|Virtual Machine'
+- id: applescript-vm-exit-code
+  desc: AppleScript exits on VM detection
+  crit: suspicious
+  conf: 0.9
+  for: [applescript]
+  if:
+    type: text
+    substr: 'do shell script "exit 100"'
+# Reading hw.model is dual-use: legitimate hardware/sysinfo collection AND one
+# leg of VM fingerprinting. On its own it has no VM-detection signal — the intent
+# is the macos-vm-hardware-check composite (hw.model + boot-args + ioreg vendor)
+# and macos-evasive-hardware-fingerprint (that + cpuid/rdtsc). Component, so a
+# bare hw.model read (sysinfo crates, telemetry, licensing) is not flagged.
+- id: sysctl-hw-model
+  desc: Checks hardware model via sysctl (hw.model)
+  crit: component
+  conf: 0.8
+  if:
+    type: text
+    substr: hw.model
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+  unless:
+    - id: well-known/lib/posthog::posthog-telemetry-client
+    - id: metadata/signed/id::com.posthog.PostHog
+- id: sysctl-boot-args
+  desc: Checks boot arguments (kern.bootargs)
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: text
+    substr: kern.bootargs
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+    - id: well-known/tool/development/mozilla::crash-helper-server
+    - id: well-known/app/mos::mos-app-context
+  unless:
+    - id: well-known/tool/reverse-engineering/frida/
+    - id: well-known/tool/reverse-engineering/frida::frida-agent-macho
+    - id: metadata/signed/id::frida-gadget-macos-universal
+    - id: objectives/supply-chain/trojanized/app/debug-probe/
+    - id: well-known/app/vscode-lua-debug::extension-member
+    - id: metadata/package/files/dependency::vsix-bundled-native-tool-path
+composite_rules:
+- id: applescript-vm-sandbox-evasion
+  desc: AppleScript VM sandbox evasion
+  crit: hostile
+  conf: 0.97
+  for: [applescript]
+  all:
+  - id: applescript-vm-vendor-list
+  - id: applescript-vm-exit-code
+  any:
+  - id: applescript-system-profiler-memory
+  - id: applescript-system-profiler-hardware
+- id: macos-vm-hardware-check
+  desc: macOS hardware profiling (potential VM detection)
+  crit: notable
+  conf: 0.85
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+    - id: well-known/tool/development/mozilla::crash-helper-server
+  unless:
+    - id: well-known/tool/reverse-engineering/frida::frida-agent-macho
+    - id: metadata/signed/id::frida-gadget-macos-universal
+    - id: metadata/signed/developer::753PE4AG6F
+    - id: well-known/app/macos-benign/
+    - id: well-known/lib/posthog::posthog-telemetry-client
+    - id: metadata/signed/id::com.posthog.PostHog
+    - id: metadata/package/quality/false-positives-runtime::dotnet-runtime-pack-context
+  all:
+  - id: micro-behaviors/os/sysinfo/config::sysctlbyname
+  any:
+  - id: sysctl-hw-model
+  - id: sysctl-boot-args
+  - id: micro-behaviors/hardware/iokit/registry::ioreg-vendor-query
+- id: macos-evasive-hardware-fingerprint
+  desc: Evasive macOS hardware fingerprinting (CPUID + RDTSC + sysctl)
+  crit: suspicious
+  conf: 0.95
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+  all:
+  - id: macos-vm-hardware-check
+  needs: 2
+  any:
+  - id: metadata/binary/instruction::cpuid-instr
+  - id: objectives/anti-analysis/timing/evasion::rdtsc
+  - id: metadata/binary/instruction::xgetbv-instr
+- id: macos-ioreg-vm-vendor-check
+  desc: macOS ioreg VM vendor probing
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: micro-behaviors/hardware/iokit/registry::ioreg-vendor-query
+  any:
+  - id: objectives/anti-analysis/vm-detect/vendor::vendor-virtualbox
+  - id: objectives/anti-analysis/vm-detect/vendor::vendor-vmware
+  - id: objectives/anti-analysis/vm-detect/vendor::vendor-parallels
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple

@@ -1,0 +1,160 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  for: [python, pyc]
+  mbc: B0032
+  attack: T1027
+traits:
+  - id: python-octal
+    desc: Detects octal-encoded string patterns (\NNN
+    crit: component
+    conf: 0.7
+    for:
+      - python
+    if:
+      type: string_literal
+      regex: (\\[0-7]{3}){4,}
+  - id: python-chr
+    desc: Character code manipulation (chr/ord)
+    crit: suspicious
+    conf: 0.6
+    if:
+      type: text
+      regex: \\b(chr|ord)\(
+  # `exec|eval|…("str" + "str")` — an execution sink called with a string-literal
+  # concatenation as its argument. Split into two ≤4-alternative source-text
+  # atoms to stay under the alt-chain limit; each fires standalone like the
+  # single tree-sitter trait it replaced.
+  - id: concatenated-execution--g1
+    desc: String-concat arg to exec/eval/compile
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: tree-sitter
+      kind: call
+      # Building an import statement for a dynamically selected module is normal
+      # runtime loading, not obfuscation. Exclude the canonical
+      # exec("from module import ...") construction pattern directly from the
+      # call matcher so other concatenated source execution remains visible.
+      regex: '(^|[^.\w])(exec|eval|compile)\s*\(\s*[''"](?!from [\w.]+ import)[^''"]{0,80}[''"]\s*\+\s*[''"]'
+    unless:
+      - id: well-known/lib/wine::wine-source-tree
+      - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+      - id: metadata/library/python-stdlib::python-stdlib-test-file
+  - id: concatenated-execution--g2
+    desc: String-concat arg to b64decode
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: tree-sitter
+      kind: call
+      regex: '\bb64decode\s*\(\s*[''"][^''"]{0,80}[''"]\s*\+\s*[''"]'
+    unless:
+      - id: metadata/library/python-stdlib::python-stdlib-test-file
+  - id: bytes-fromhex-call
+    desc: bytes.fromhex function
+    crit: component
+    conf: 0.5
+    if:
+      type: text
+      substr: bytes.fromhex
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/presence/harness/
+  - id: python-dense-chr-calls
+    desc: Dense chr() calls (string building)
+    crit: suspicious
+    conf: 0.9
+    count_min: 15
+    per_kb_min: 3.0
+    if:
+      type: raw
+      regex: chr\s*\(\s*\d{1,3}\b
+    unless:
+      - type: basename
+        regex: (?i)^(test_.*|.*_test)\.py$
+  - id: dense-octal-escapes
+    desc: Dense octal escape sequences
+    crit: suspicious
+    conf: 0.88
+    for:
+      - pyc
+    count_min: 10
+    per_kb_min: 2.0
+    if:
+      type: text
+      regex: (\\[0-7]{3}){4,}
+    unless:
+      - type: basename
+        regex: (?i)^(test_.*|.*_test)\.py$
+  - id: dense-ord-calls
+    desc: Dense ord() arithmetic calls
+    crit: suspicious
+    conf: 0.85
+    for:
+      - python
+    size_min: 5000
+    count_min: 8
+    per_kb_min: 1.0
+    if:
+      type: text
+      regex: '\bord\s*\([^\)\n]{0,120}\)\s*(\^|<<|>>|[+\-*/%])'
+    unless:
+      - type: basename
+        regex: (?i)^(test_.*|.*_test)\.py$
+      - id: metadata/library/python-tooling::cpython-marshal-reader-source
+      - id: metadata/lang/source::codegen-source-path
+  - id: reverse-bytes
+    desc: Reverses byte order of encoded data
+    crit: suspicious
+    conf: 0.9
+    for:
+      - python
+    if:
+      type: text
+      regex: (fromhex|b64decode|unhexlify)\s*\(\s*['\"][A-Za-z0-9+/=\\x]{32,}['\"]\s*\).{0,60}\[::-1\]
+    unless:
+      - type: text
+        substr: audio_url = compat_b64decode(data_fd[::-1]).decode('utf-8')
+composite_rules:
+  - id: python-decode-functions
+    desc: Decoding functions for encoded payloads
+    # A bare decode/decompress call is a neutral capability, not suspicious on its
+    # own. It rises to a threat only via execute-decoded-content, which gates it
+    # behind python-eval + python-chr.
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/data/decode/base64::b64decode-string
+      - id: micro-behaviors/data/decode/hex::python-fromhex
+      - id: bytes-fromhex-call
+      - id: micro-behaviors/data/compress/library::bz2-decompress-call
+      - id: micro-behaviors/data/compress/library::zlib-decompress-symbol
+      - id: micro-behaviors/data/serialize/unsafe::marshal-loads-symbol
+    unless:
+      - id: micro-behaviors/crypto/library/blockchain/
+  - id: execute-decoded-content
+    desc: Direct execution of decoded content
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::python-eval
+      - id: python-decode-functions
+      - id: python-chr
+  - id: python-encoded-pattern
+    desc: Detects encoded string patterns (hex
+    crit: component
+    any:
+      - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
+      - id: python-octal
+  - id: obfuscated-execution
+    desc: Direct execution of encoded string
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::python-eval
+      - id: python-encoded-pattern
+      - id: python-chr

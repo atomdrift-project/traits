@@ -1,0 +1,183 @@
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1195.002
+  mbc: B0024
+
+traits:
+- id: import-thread-daemon-start
+  desc: Python daemon thread start marker
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: 'threading\.Thread\(.{0,160}daemon\s*=\s*True.{0,80}\)\.start\(\)'
+  unless:
+  - id: metadata/package/testing/
+- id: import-runtime-startpy-path
+  desc: Package runtime start.py sidecar
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: '("_runtime"|''_runtime'').{0,160}("start\.py"|''start\.py'')'
+- id: python-popen-devnull-runtime--rx-1
+  desc: subprocess.DEVNULL suppression marker
+  crit: component
+  conf: 0.94
+  if:
+    type: text
+    substr: subprocess.DEVNULL
+  unless:
+  - id: micro-behaviors/os/service/legitimate/
+- id: python-popen-devnull-inline
+  desc: Python Popen redirects output to DEVNULL
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: 'subprocess\.Popen\([\s\S]{0,320}(stdout|stderr)\s*=\s*subprocess\.DEVNULL'
+  unless:
+  - id: micro-behaviors/os/service/legitimate/
+- id: python-opaque-sidecar-extension-a
+  desc: Python references opaque sidecar extension
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'os\.path\.join\([\s\S]{0,160}["''][A-Za-z0-9._-]{1,80}\.(bin|dat|blob)["'']'
+- id: python-opaque-sidecar-extension-b
+  desc: Python references opaque sidecar extension
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'os\.path\.join\([\s\S]{0,160}["''][A-Za-z0-9._-]{1,80}\.(cache|payload|pack)["'']'
+- id: python-popen-nul-redirect
+  desc: Python Popen redirects through nul
+  crit: component
+  conf: 0.92
+  if:
+    type: text
+    regex: 'subprocess\.Popen\([\s\S]{0,360}stdout\s*=\s*nul[\s\S]{0,120}stderr\s*=\s*nul'
+- id: python-bun-router-sidecar
+  desc: Python runs JS via Bun
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: 'subprocess\.(run|Popen|call)\([\s\S]{0,240}(bun|bun\.exe)[\s\S]{0,160}router_runtime\.js'
+- id: python-runtime-js-sidecar-name
+  desc: Python references router JS sidecar
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    substr: router_runtime.js
+- id: requests-wrapper-execute-side-effect
+  desc: Requests wrapper invokes side-effect
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: 'execute\(\)\s*\n\s*return\s+requests\.request\s*\('
+- id: bun-hidden-github-token-field
+  desc: Hidden Bun GitHub token field
+  crit: component
+  conf: 0.94
+  for: [data]
+  if:
+    type: text
+    substr: ghtoken
+- id: bun-hidden-github-old-secret-field
+  desc: Hidden Bun old GitHub secret field
+  crit: component
+  conf: 0.94
+  for: [data]
+  if:
+    type: text
+    substr: ghs_old
+- id: bun-hidden-github-jwt-secret-field
+  desc: Hidden Bun GitHub JWT field
+  crit: component
+  conf: 0.94
+  for: [data]
+  if:
+    type: text
+    substr: ghs_jwt
+- id: bun-data-child-process-reference
+  desc: Bun data payload references child_process
+  crit: component
+  conf: 0.9
+  for: [data]
+  if:
+    type: text
+    substr: child_process
+
+composite_rules:
+- id: import-time-hidden-runtime-launch
+  desc: Import silently launches runtime sidecar
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: import-thread-daemon-start
+  - id: import-runtime-startpy-path
+  - id: python-popen-devnull-runtime
+  unless:
+  - id: metadata/package/testing/
+- id: python-bun-js-sidecar-loader
+  desc: Python downloads Bun for JS sidecar
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: micro-behaviors/communications/http/download/github::bun-release-archive-url
+  - id: python-bun-router-sidecar
+  any:
+  - id: python-runtime-js-sidecar-name
+  - id: objectives/command-and-control/dropper/execution/payload::devnull-redirect
+- id: python-bun-opaque-sidecar-loader
+  desc: Python downloads Bun for opaque sidecar
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: micro-behaviors/communications/http/download/github::bun-release-archive-url
+  - id: python-opaque-sidecar-extension
+  - id: micro-behaviors/process/create/subprocess::popen-content
+  any:
+  - id: python-popen-devnull-runtime
+  - id: python-popen-nul-redirect
+- id: bun-data-github-token-stealer
+  desc: Hidden Bun payload targets GitHub tokens
+  crit: hostile
+  conf: 0.98
+  for: [data]
+  all:
+  - id: bun-hidden-github-token-field
+  - id: bun-hidden-github-old-secret-field
+  - id: bun-hidden-github-jwt-secret-field
+  - id: bun-data-child-process-reference
+  - id: objectives/anti-static/obfuscation/payload/data-file::single-line-encoded-data-blob
+- id: request-wrapper-dropper-side-effect
+  desc: Request wrapper runs dropper
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: requests-wrapper-execute-side-effect
+  - id: objectives/command-and-control/dropper/node-bootstrap::fetch-write-execute
+  - id: objectives/command-and-control/dropper/delivery/download-execute::download-and-chmod
+- id: python-popen-devnull-runtime
+  desc: Python silently launches runtime sidecar
+  crit: component
+  conf: 0.94
+  all:
+  - id: python-popen-devnull-runtime--rx-1
+  - id: python-popen-devnull-inline
+  unless:
+  - id: metadata/library/python-stdlib
+- id: python-opaque-sidecar-extension
+  desc: Python references opaque sidecar
+  crit: component
+  conf: 0.9
+  any:
+  - id: python-opaque-sidecar-extension-a
+  - id: python-opaque-sidecar-extension-b

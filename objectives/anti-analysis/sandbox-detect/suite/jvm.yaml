@@ -1,0 +1,127 @@
+defaults:
+  platforms: [unix, appliance, routeros]
+  for: [java, kotlin, class, jar]
+  attack: T1497
+
+traits:
+  - id: jvm-analysis-env-vars
+    desc: Checks FRIDA/QEMU analysis env vars
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'FRIDA_SERVER[\s\S]{0,180}QEMU_LOG'
+
+  - id: jvm-selenium-env-var
+    desc: Checks for Selenium automation env
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: SELENIUM_BROWSER
+
+  - id: jvm-analysis-tool-which
+    desc: Runs 'which' to find analysis tools
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: 'ProcessBuilder\("which"[\s\S]{0,180}(frida|gdb|strace|tcpdump)'
+
+  - id: jvm-analysis-tool-bytecode
+    desc: tcpdump string in bytecode (sniffer)
+    crit: suspicious
+    conf: 0.92
+    for: [class]
+    if:
+      type: hex
+      pattern: 74 63 70 64 75 6D 70
+    unless:
+      - type: hex
+        pattern: 74 63 70 64 75 6D 70 20 6F 75 74 70 75 74
+
+composite_rules:
+  - id: jvm-vm-artifact-path-set
+    desc: JVM VM artifact path set
+    crit: suspicious
+    conf: 0.93
+    needs: 2
+    any:
+      - id: micro-behaviors/fs/path/proc::cpuinfo-string
+      - id: micro-behaviors/fs/path/proc::version-string
+      - id: micro-behaviors/fs/path/dmi::product-name-string
+      - id: micro-behaviors/fs/path/dmi::vendor-path-string
+
+  - id: jvm-vm-artifact-path-bytecode
+    desc: JVM VM artifact path bytecode
+    crit: suspicious
+    conf: 0.93
+    for: [class, jar]
+    needs: 2
+    any:
+      - id: micro-behaviors/fs/path/proc::cpuinfo-bytecode
+      - id: micro-behaviors/fs/path/proc::version-bytecode
+      - id: micro-behaviors/fs/path/dmi::product-name-bytecode
+    unless:
+      - id: well-known/tool/reverse-engineering/frida/
+      - id: well-known/app/tiktok::package-member
+      - id: micro-behaviors/fs/path/dmi::system-vendor-bytecode
+      - id: metadata/package/files/system-package::container-image-tar-name
+      # Archive containers aggregate raw member bytes. Do not treat source
+      # text inside a tar/zip container as JVM class-file bytecode evidence.
+      - id: metadata/package/files/included::archive-container-path
+    scope: leaf
+
+  - id: jvm-sandbox-detect-suite
+    desc: JVM sandbox detect suite
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/ui/window/display::java-awt-headless-property
+      - id: micro-behaviors/process/attach/jvm::jvm-profiler-attach
+      - id: jvm-vm-artifact-path-set
+
+  - id: jvm-sandbox-detect-bytecode
+    desc: JVM sandbox detect bytecode
+    crit: hostile
+    conf: 0.98
+    for: [class, jar]
+    all:
+      - id: micro-behaviors/ui/window/display::java-awt-headless-property-bytecode
+      - id: micro-behaviors/process/attach/jvm::jvm-dynamic-attach-api-bytecode
+      - id: jvm-vm-artifact-path-bytecode
+    scope: leaf
+
+  - id: jvm-linux-analysis-suite
+    desc: JVM Linux analysis suite
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: jvm-vm-artifact-path-set
+      - id: jvm-analysis-env-vars
+    any:
+      - id: objectives/anti-analysis/browser-detect::java-puppeteer-browser-env
+      - id: jvm-selenium-env-var
+      - id: jvm-analysis-tool-which
+
+  - id: jvm-source-analysis-suite
+    desc: JVM source analysis suite
+    crit: hostile
+    conf: 0.98
+    for: [java, kotlin]
+    all:
+      - id: micro-behaviors/fs/path/dmi::vendor-path-string
+      - id: jvm-analysis-env-vars
+    any:
+      - id: jvm-selenium-env-var
+      - id: jvm-analysis-tool-which
+
+  - id: jvm-analysis-tool-bytecode-suite
+    desc: JVM analysis tool bytecode
+    crit: hostile
+    conf: 0.98
+    for: [class, java_class, jar]
+    all:
+      - id: jvm-vm-artifact-path-bytecode
+      - id: jvm-analysis-tool-bytecode
+      - id: objectives/command-and-control/dropper/execution/http::jvm-fileoutput-process-hex

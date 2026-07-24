@@ -1,0 +1,93 @@
+# Windows PE binaries built with MinGW / GCC instead of Microsoft's
+# linker. The MinGW linker (binutils ld 2.x) writes PE characteristics
+# that differ from MSVC: linker version field is 2.x rather than 14.x,
+# and certain section names (`.xdata`, `.CRT`, `.tls`) appear in a
+# specific shape. MinGW-built Windows binaries are common in
+# cross-compiled offensive tooling because they let an attacker build
+# Windows malware from a Linux/macOS host with `x86_64-w64-mingw32-gcc`.
+# Not malicious by itself; valuable as context for combined detections.
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+traits:
+  - id: linker-binutils-2x
+    desc: PE linked with binutils 2.x (MinGW/GCC)
+    crit: notable
+    conf: 0.85
+    if:
+      type: metrics
+      field: pe.linker_major_version
+      min: 2
+      max: 2
+  - id: mingw-tls-callback-prefix
+    desc: __mingw_TLScallback symbol
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      substr: __mingw_TLScallback
+      section: .rdata
+  - id: mingw-runtime-marker
+    desc: libgcc / libstdc++ runtime marker
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '\bGCC: \(GNU\)|libgcc_s_seh|__mingw_init|__cxa_atexit'
+      section: .rdata
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: mingw-gthread-atom-assertion
+    desc: MinGW gthread atom assertion
+    crit: baseline
+    conf: 0.95
+    if:
+      type: text
+      exact: GetAtomNameA (atom, s, sizeof(s)) != 0
+      section: .rdata
+  - id: mingw-sjlj-gthread-runtime
+    desc: MinGW SJLJ gthread runtime
+    crit: baseline
+    conf: 0.95
+    if:
+      type: text
+      exact: -LIBGCCW32-EH-3-SJLJ-GTHR-MINGW32
+      section: .rdata
+  - id: mingw-pseudo-reloc-protocol-message
+    desc: MinGW pseudo-relocation protocol diagnostic
+    crit: baseline
+    conf: 0.95
+    # Verbatim diagnostic strings from mingw-w64 pseudo-reloc.c. This runtime
+    # walks its own module's IMAGE_DOS/NT headers (inline MZ/PE checks) and
+    # calls VirtualProtect to apply pseudo-relocations -- a benign pattern that
+    # otherwise mimics an inline PE loader. Present even when GCC/libgcc markers
+    # are stripped.
+    if:
+      type: text
+      regex: 'pseudo relocation (protocol version|bit size|at)'
+      section: .rdata
+  - id: mingw-pseudo-reloc-error-message
+    desc: MinGW pseudo-relocation error diagnostic
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      regex: 'Unknown pseudo relocation|VirtualProtect failed with code'
+      section: .rdata
+composite_rules:
+  - id: mingw-pseudo-reloc-runtime
+    desc: MinGW pseudo-relocation runtime
+    crit: baseline
+    conf: 0.95
+    any:
+      - id: mingw-pseudo-reloc-protocol-message
+      - id: mingw-pseudo-reloc-error-message
+  - id: mingw-built-pe
+    desc: PE binary built with MinGW/GCC
+    crit: notable
+    conf: 0.92
+    any:
+      - id: linker-binutils-2x
+      - id: mingw-tls-callback-prefix
+      - id: mingw-runtime-marker
+      - id: mingw-pseudo-reloc-runtime

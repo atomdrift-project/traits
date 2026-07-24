@@ -1,0 +1,34 @@
+# Manual socket replacement on an HTTPSConnection. Pattern:
+#   raw = socket.create_connection((target, 443), timeout=...)
+#   wrapped = ctx.wrap_socket(raw, server_hostname=hostname)
+#   conn = http.client.HTTPSConnection(hostname, 443, context=ctx)
+#   conn.sock = wrapped
+#
+# Decouples the SNI / TLS handshake hostname from the actual destination
+# address. Used to make TLS connections look like they go to the cover
+# hostname while actually connecting to a hardcoded IP. Legitimate code
+# uses requests/httpx which handle this correctly via DNS.
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  attack: T1071.001
+  mbc: B0030
+composite_rules:
+  - id: python-tls-sni-host-decouple
+    desc: TLS SNI decoupled from destination via manual wrap
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/socket/ssl::python-httpsconnection-sock-replacement
+      - id: micro-behaviors/communications/socket/ssl::python-wrap-socket-server-hostname
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-script
+    downgrade:
+      any:
+        - id: metadata/package/testing/presence/harness::python-test-file
+        - id: metadata/package/testing/presence/harness/
+    unless:
+      - id: well-known/lib/pysocks/
+      # Resolver-validated IP pinning is a legitimate SSRF defense; the
+      # anti-AV pattern is the hardcoded-destination variant.
+      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
+      - id: metadata/package/quality/recognized-contexts::ena-web-context

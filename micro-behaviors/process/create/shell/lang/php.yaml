@@ -1,0 +1,204 @@
+# PHP Command Execution Traits
+# MBC: E1059 (Command and Scripting Interpreter)
+# ATT&CK: T1059.004 (Unix Shell)
+defaults:
+  platforms: [unix, windows]
+  for: [php]
+  crit: notable
+  mbc: "E1059"
+  attack: "T1059.004"
+traits:
+- id: popen
+  desc: Process open via popen()
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: "popen"
+
+- id: proc-open
+  desc: Process execution via proc_open()
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: "proc_open"
+
+- id: pcntl-exec
+  desc: Direct process execution via pcntl_exec()
+  conf: 0.95
+  attack: "T1059"
+  if:
+    type: symbol
+    kind: call
+    exact: "pcntl_exec"
+
+- id: backtick
+  desc: Shell command execution via backticks
+  conf: 0.9
+  size_max: 500000
+  if:
+    type: tree-sitter
+    node: shell_command_expression
+    regex: ".{1,120}"
+  unless:
+  - type: text
+    regex: '`\(doom/[A-Za-z0-9_-]+\)`'
+
+- id: exec-variable-argument-exec
+  desc: exec() receives variable argument
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: exec
+    arg:
+      kind: identifier
+- id: exec-variable-argument-system
+  desc: system() receives variable argument
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: system
+    arg:
+      kind: identifier
+- id: exec-variable-argument-shell
+  desc: shell_exec() receives variable argument
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: shell_exec
+    arg:
+      kind: identifier
+- id: exec-variable-argument-passthru
+  desc: passthru() receives variable argument
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: passthru
+    arg:
+      kind: identifier
+- id: exec-variable-argument-popen
+  desc: popen() receives variable argument
+  conf: 0.9
+  if:
+    type: symbol
+    kind: call
+    exact: popen
+    arg:
+      kind: identifier
+# An exec-family call whose arguments reference a request superglobal. PHP
+# subscripts/interpolations don't fold to arg facts, so these match the call
+# form plus the superglobal as source text — the function list and the `(`
+# keep them FP-safe. The function list is split into two atoms per superglobal
+# to stay under the alt-chain limit (≤4 alternatives), mirroring the existing
+# `exec-user-input-get-text--rx-*` decomposition. `$_GET` is already covered by
+# the `exec-user-input-get-text` composite below.
+- id: exec-user-input-post--g1
+  desc: $_POST reaches exec/system/shell_exec
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: tree-sitter
+    kind: call
+    # Stay inside the command call. Crossing a semicolon invents taint flow
+    # between an unrelated shell_exec($cmd) and a later validated POST read.
+    regex: '\b(exec|system|shell_exec)\s*\([^;]{0,200}\$_POST'
+- id: exec-user-input-post--g2
+  desc: $_POST reaches passthru/popen/proc_open
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '\b(passthru|popen|proc_open)\s*\([^;]{0,200}\$_POST'
+- id: exec-user-input-request--g1
+  desc: $_REQUEST reaches exec/system/shell_exec
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '\b(exec|system|shell_exec)\s*\([^;]{0,200}\$_REQUEST'
+- id: exec-user-input-request--g2
+  desc: $_REQUEST reaches passthru/popen/proc_open
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '\b(passthru|popen|proc_open)\s*\([^;]{0,200}\$_REQUEST'
+- id: exec-user-input-get-text--rx-1
+  desc: $_GET reaches exec/system
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '\b(exec|system)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]'
+  count_max: 1004423
+- id: exec-user-input-get-text--rx-2
+  desc: $_GET reaches shell_exec/passthru
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '\b(shell_exec|passthru)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]'
+  count_max: 1004424
+- id: exec-user-input-get-text--rx-3
+  desc: $_GET reaches popen/proc_open
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: tree-sitter
+    kind: call
+    regex: '\b(popen|proc_open)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]'
+  count_max: 1004425
+- id: shell-stderr-redirect
+  desc: Shell stderr redirected to stdout
+  conf: 0.85
+  if:
+    type: string_literal
+    exact: ' 2>&1'
+
+composite_rules:
+- id: exec-variable-argument
+  desc: Command function receives variable argument
+  conf: 0.9
+  any:
+  - id: exec-variable-argument-exec
+  - id: exec-variable-argument-system
+  - id: exec-variable-argument-shell
+  - id: exec-variable-argument-passthru
+  - id: exec-variable-argument-popen
+
+- id: exec-user-input
+  desc: Command execution with user input
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: exec-user-input-post--g1
+  - id: exec-user-input-post--g2
+  - id: exec-user-input-request--g1
+  - id: exec-user-input-request--g2
+  - id: exec-user-input-get-text
+  unless:
+  - id: well-known/tool/offensive/projectdiscovery::nuclei-cves-index-shape
+  - id: well-known/tool/sysadmin/nmap::nmap-source-tree
+  - id: metadata/lang/source::yara-rule-source
+  - id: well-known/tool/detection/security-scanner::anteumbra-package-tree-member
+- id: exec-user-input-get-text
+  desc: GET input reaches command execution
+  crit: suspicious
+  conf: 0.92
+  any:
+  - id: exec-user-input-get-text--rx-1
+  - id: exec-user-input-get-text--rx-2
+  - id: exec-user-input-get-text--rx-3
+  unless:
+  - id: metadata/package/quality/false-positives::php-empty-function-declarations
+  - id: metadata/package/manifest/compat::php-manual-empty-function-stubs

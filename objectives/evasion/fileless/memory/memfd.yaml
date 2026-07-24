@@ -1,0 +1,290 @@
+defaults:
+  platforms:
+    - unix
+    - windows
+  attack: T1620
+traits:
+  - id: sys-memfd-create
+    desc: SYS_memfd_create syscall constant
+    crit: suspicious
+    conf: 0.6
+    for: [scripts, pe, macho]
+    if:
+      type: string_literal
+      substr: SYS_memfd_create
+  - id: sys-memfd-create-source
+    desc: memfd_create syscall in source
+    crit: notable
+    conf: 0.86
+    for: [c, cpp, rust, go]
+    if:
+      type: text
+      substr: SYS_memfd_create
+    unless:
+      - id: well-known/lib/rust-system-bindings::rust-syscall-binding-crate
+      - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
+      - type: text
+        regex: 'Code generated for linux/[^ ]+ by .+--package-name=libc'
+  - id: syscall-319
+    desc: memfd_create syscall number 319
+    crit: suspicious
+    conf: 0.4
+    for: [scripts, binaries]
+    if:
+      type: text
+      regex: syscall\s*\(\s*319
+  - id: proc-self-fd-dup
+    desc: /proc/self/fd descriptor path
+    crit: component
+    conf: 0.5
+    for: [scripts, binaries]
+    if:
+      type: text
+      substr: /proc/self/fd
+    unless:
+      - id: metadata/file/string/identity::chrome-sandbox-basename
+      - id: well-known/app/tabby::tabby-basename
+      - type: text
+        substr: gnulib/import/chdir-long.c
+      - id: well-known/tool/reverse-engineering/windows-debugger/
+      - id: metadata/library/structure/
+      - id: well-known/app/calvyn-code
+      - id: metadata/library/python-stdlib
+  - id: proc-self-fd-dup-slash
+    desc: /proc/self/fd/ path fragment
+    crit: component
+    conf: 0.5
+    for: [scripts]
+    if:
+      type: string_literal
+      substr: /proc/self/fd/
+    unless:
+      # AI-agent observability tools reference /proc/self/fd for stdout/tty
+      # detection; security scanners list it as a signature.
+      - id: well-known/tool/detection/ai-guardrail/
+      - id: well-known/app/telegram::telegram-desktop-third-party-source
+      - id: well-known/app/calvyn-code
+      - id: metadata/library/python-stdlib::python-stdlib-test-support
+      - id: metadata/library/python-stdlib::python-stdlib-test-file
+      - id: well-known/tool/detection/cilium-tetragon::source-path
+      - id: well-known/app/omarchy::source-tree
+  - id: unlink-argv0-source
+    desc: Deletes argv0 executable path
+    crit: suspicious
+    conf: 0.86
+    for: [c, cpp, elf]
+    if:
+      type: text
+      regex: '\bunlink\s*\(\s*argv\s*\[\s*0\s*\]\s*\)'
+  - id: execveat-call
+    desc: execveat file descriptor execution
+    crit: notable
+    conf: 0.9
+    for: [c, cpp, rust, go, elf]
+    if:
+      type: text
+      regex: '\bexecveat\s*\(|\bsyscall\s*\(\s*(SYS_execveat|322)\b'
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: well-known/tool/detection/cilium-tetragon::source-path
+      - id: well-known/lib/glibc
+      - id: well-known/lib/rust-system-bindings::rust-syscall-binding-crate
+  - id: memfd-reexec-guard
+    desc: memfd re-execution guard variable
+    crit: suspicious
+    conf: 0.86
+    for: [c, cpp, rust, go, elf]
+    if:
+      type: text
+      # Short env-var style guard (2-8 uppercase chars). Excludes the
+      # common Linux kernel pattern `_MFD_<CHIPNAME>_<FILENAME>_H__`
+      # (include guards for Multi-Function Device drivers), which are
+      # long and always end in _H_ or _H__.
+      regex: '(^|[^A-Z0-9_])_(MFD|MEMFD)_[A-Z0-9]{2,8}([^A-Z0-9_]|$)'
+  - id: clears-memfd-cloexec
+    desc: Clears close-on-exec on memfd
+    crit: suspicious
+    conf: 0.86
+    for: [c, cpp, rust, go, elf]
+    if:
+      type: text
+      regex: 'F_SETFD[\\s\\S]{0,120}(0|FD_CLOEXEC)_MALICIOUS'
+  - id: subprocess-mod
+    desc: subprocess module
+    crit: component
+    conf: 0.3
+    for:
+      - python
+    if:
+      type: string_literal
+      substr: subprocess
+  - id: ctypes-mod
+    desc: ctypes module
+    crit: component
+    conf: 0.4
+    for:
+      - python
+    if:
+      type: string_literal
+      substr: ctypes
+  - id: ctypes-cdll-dup
+    desc: ctypes CDLL native library loader
+    crit: component
+    conf: 0.5
+    for:
+      - python
+    if:
+      type: string_literal
+      exact: CDLL
+  - id: urllib-mod
+    desc: urllib2 module
+    crit: component
+    conf: 0.3
+    for:
+      - python
+    if:
+      type: string_literal
+      word: urllib2
+  - id: http-client-dup
+    desc: http.client module
+    crit: component
+    conf: 0.3
+    for:
+      - python
+    if:
+      type: string_literal
+      substr: http.client
+  - id: dot-content
+    desc: .content response attribute
+    crit: component
+    conf: 0.3
+    for:
+      - python
+    if:
+      type: text
+      regex: \b(resp|response)\.content\b|requests\.(get|post).{0,30}\.content\b
+  - id: shm-open
+    desc: shm_open POSIX shared memory
+    crit: component
+    conf: 0.5
+    for: [scripts, binaries]
+    if:
+      type: string_literal
+      substr: shm_open
+composite_rules:
+  - id: exec-function-comp
+    desc: Execution function calls
+    crit: notable
+    conf: 0.5
+    for: [scripts, binaries]
+    any:
+      - id: micro-behaviors/process/create/subprocess::os-exec-family
+      - id: subprocess-mod
+  - id: http-download-python
+    desc: Python HTTP download libraries for
+    crit: component
+    conf: 0.8
+    attack: T1105
+    for:
+      - python
+    any:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: urllib-mod
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+      - id: objectives/evasion/fileless/memory::http-client-dup
+      - id: dot-content
+    unless:
+      - id: micro-behaviors/crypto/library/blockchain/
+  - id: proc-fd-path
+    desc: Proc descriptor path fragment
+    crit: component
+    conf: 0.5
+    for: [scripts, binaries, c, cpp, rust, go, elf]
+    any:
+      - id: objectives/evasion/fileless/memory::proc-self-fd-dup
+      - id: objectives/evasion/fileless/memory::proc-self-fd-dup-slash
+    unless:
+      - id: metadata/library/structure/
+      - id: well-known/lib/sql-js/
+      - id: well-known/tool/sysadmin/unix-benign::kernelsu-daemon
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-ansible-core-package
+      - id: well-known/tool/detection/cilium-tetragon::source-path
+      - id: well-known/app/telegram::telegram-desktop-third-party-source
+  - id: memfd-reexec-target
+    desc: Executes from memfd file descriptor
+    crit: suspicious
+    conf: 0.95
+    for: [scripts, binaries, c, cpp, rust, go, elf]
+    unless:
+      - id: well-known/app/telegram::telegram-desktop-third-party-source
+    any:
+      - id: execveat-call
+      - id: proc-fd-exec
+  - id: memfd-reexec-cleanup
+    desc: Removes artifacts before memfd execution
+    crit: suspicious
+    conf: 0.92
+    for: [c, cpp, rust, go, elf]
+    unless:
+      - id: well-known/app/kilocode::kilo-code-native-runtime
+      - id: well-known/tool/reverse-engineering/frida/
+    all:
+      - id: micro-behaviors/fs/file/delete::unlink
+    any:
+      - id: clears-memfd-cloexec
+      - id: memfd-reexec-guard
+  - id: proc-fd-exec
+    desc: Executes binary from /proc/self/fd
+    crit: suspicious
+    conf: 0.95
+    for: [scripts, binaries]
+    all:
+      - id: proc-fd-path
+      - id: exec-function
+  - id: memfd-self-reexec
+    desc: Re-executes itself from anonymous memory
+    crit: hostile
+    conf: 0.98
+    attack: "T1620, T1070.004"
+    for: [c, cpp, rust, go, elf]
+    all:
+      - id: micro-behaviors/mem/anonymous/create::memfd-create
+      - id: micro-behaviors/fs/proc/info/path::process-self-exe-path
+      - id: memfd-reexec-target
+      - id: memfd-reexec-cleanup
+  - id: ctypes-syscall
+    desc: Direct syscall invocation via ctypes
+    crit: suspicious
+    conf: 0.9
+    attack: T1106
+    for:
+      - python
+    all:
+      - id: ctypes-mod
+      - id: micro-behaviors/os/syscall/invoke::python-dot-syscall
+      - id: objectives/evasion/fileless/memory::ctypes-cdll-dup
+  - id: download-memfd-exec
+    desc: Downloads binary and executes via memfd
+    crit: suspicious
+    conf: 0.98
+    for: [scripts, binaries]
+    all:
+      - id: http-download-python
+      - id: memfd-create
+    any:
+      - id: exec-function
+      - id: micro-behaviors/fs/file/write/direct::python-os-write-fd
+  - id: shm-exec
+    desc: Uses shared memory for fileless
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, binaries]
+    all:
+      - id: shm-open
+    any:
+      - id: micro-behaviors/fs/path/device/special::dev-shm-bare
+      - id: micro-behaviors/mem/alloc/executable::mmap-symbol
+      - id: micro-behaviors/process/create/execv::execve-fn

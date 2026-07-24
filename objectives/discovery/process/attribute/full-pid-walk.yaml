@@ -1,0 +1,68 @@
+defaults:
+  platforms: [linux]
+  for: [elf]
+  attack: T1057
+  mbc: E1057
+# These atoms detect /proc/<pid>/<attr> path templates written with a *variable*
+# PID (%d/%s), i.e. iteration over arbitrary processes rather than /proc/self —
+# a reconnaissance-leaning read of another process's attribute surface. The
+# composites below infer the enumeration INTENT from the full-set combination;
+# the neutral own-process reads (/proc/self/*) live in micro-behaviors/fs/proc/.
+traits:
+  - id: pid-template-cmdline
+    desc: /proc/%s/cmdline path template
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: '/proc/%[sd]/cmdline'
+    unless:
+      - id: well-known/lib/apm-insight::apm-insight-native-crash-monitor
+  - id: pid-template-comm
+    desc: /proc/%s/comm path template
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: '/proc/%[sd]/comm'
+    unless:
+      - id: well-known/lib/apm-insight::apm-insight-native-crash-monitor
+  - id: pid-template-status
+    desc: /proc/%s/status path template
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: '/proc/%[sd]/status'
+    unless:
+      - id: metadata/binary/linking/runtime/
+      - id: well-known/lib/apm-insight::apm-insight-native-crash-monitor
+composite_rules:
+  - id: full-pid-attribute-walk
+    desc: Multi-attribute /proc PID enumeration walk
+    crit: hostile
+    conf: 0.94
+    # A binary that templates /proc/<pid>/{cmdline, comm, status, exe, fd}
+    # is enumerating every running process's full identity surface — the
+    # standard rival-process-killer / process-hider / lateral-recon shape.
+    # Sysadmin tools usually use one or two of these, not the full set.
+    needs: 4
+    any:
+      - id: objectives/discovery/process/attribute::pid-template-cmdline
+      - id: objectives/discovery/process/attribute::pid-template-comm
+      - id: micro-behaviors/fs/proc/info/path::process-pid-exe-template
+      - id: micro-behaviors/fs/proc/info/path::process-pid-fd-format
+      - id: objectives/discovery/process/attribute::pid-template-status
+    unless:
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/tool/sysadmin/container/
+      - id: micro-behaviors/dylib/library/family::debugger-tool-marker
+      - id: well-known/tool/development/valgrind::valgrind-tool
+      - id: well-known/lib/apm-insight::apm-insight-native-crash-monitor
+  - id: c2-proc-attribute-recon
+    desc: C2-backed process attribute reconnaissance
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/fs/proc/info/path::process-maps-cmdline-fragment-cluster
+      - id: objectives/command-and-control/channel/covert::covert-protocol-markers

@@ -1,0 +1,188 @@
+defaults:
+  for: [elf, macho, c]
+  platforms:
+    - linux
+    - macos
+  crit: notable
+  mbc: E1033
+  attack: T1033
+traits:
+  - id: pwd-command
+    desc: Queries the current working directory
+    crit: notable
+    conf: 0.8
+    for: [shell]
+    if:
+      type: text
+      regex: '(?m)(^|[;&|]\s*)pwd(\s|$)'
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: getlogin
+    desc: Get login name
+    conf: 0.5
+    if:
+      type: symbol
+      regex: getlogin
+  - id: getpwuid
+    desc: Get password file entry by UID
+    conf: 0.5
+    if:
+      type: symbol
+      regex: getpwuid
+    unless:
+      - id: metadata/file/string/identity::python3-interpreter-basename
+    downgrade:
+      # Go's os/user package statically imports getpwuid_r on Darwin/BSD to
+      # implement user.Current / user.Lookup.
+      any:
+        - id: metadata/lang/compiler/systems::go-binary-macho
+        - id: metadata/lang/compiled/
+        - id: metadata/file/string/identity::system-shell-basename
+  - id: getpwnam
+    desc: Resolve username to password entry
+    crit: baseline
+    conf: 0.4
+    for:
+      - elf
+      - macho
+    if:
+      type: symbol
+      exact: getpwnam
+  - id: hostname-pwd-whoami
+    desc: Chained recon commands hostname pwd whoami
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, c, elf, macho]
+    if:
+      type: text
+      regex: 'hostname\s*&&\s*pwd\s*&&\s*whoami'
+      case_insensitive: true
+  - id: whoami-hostname-pwd
+    desc: Chained recon commands whoami hostname pwd
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, c, elf, macho]
+    if:
+      type: text
+      regex: 'whoami\s*&&\s*hostname\s*&&\s*pwd'
+      case_insensitive: true
+  - id: hostname-whoami-pwd
+    desc: Chained recon commands hostname whoami pwd
+    crit: suspicious
+    conf: 0.9
+    for: [scripts, c, elf, macho]
+    if:
+      type: text
+      regex: 'hostname\s*&&\s*whoami\s*&&\s*pwd'
+      case_insensitive: true
+  - id: whoami-command-separator
+    desc: whoami command after shell separator
+    conf: 0.5
+    for: [scripts, c, elf, macho]
+    if:
+      type: text
+      regex: '(^|[;&|()]|\$\()\s*(/usr/bin/)?whoami(\s|[;&|)])'
+      case_insensitive: true
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: metadata/package/files/system-package::shell-completion-script
+      - id: metadata/library/syntaxhighlighter::prismjs-package-reference
+  - id: whoami-command-backtick
+    desc: whoami command in shell backticks
+    conf: 0.5
+    for: [shell, c, elf, macho]
+    if:
+      type: text
+      regex: '`\s*(/usr/bin/)?whoami\s*`'
+      case_insensitive: true
+  - id: whoami-command-quoted
+    desc: whoami command in quoted shell
+    conf: 0.55
+    for: [shell, c, elf, macho]
+    if:
+      type: text
+      regex: '["'']\s*(/usr/bin/)?whoami\s*["'']'
+    unless:
+      - id: metadata/package/files/system-package::shell-completion-script
+  - id: id-u-cmd
+    desc: id -u command
+    conf: 0.5
+    if:
+      type: text
+      substr: id -u
+  - id: shell-capture-numeric-uid
+    desc: Shell captures numeric user ID
+    crit: notable
+    conf: 0.95
+    for: [shell]
+    if:
+      type: text
+      substr: "uid=$(id -u)"
+    unless:
+      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: id-cmd
+    desc: id command (with path)
+    conf: 0.5
+    if:
+      type: text
+      substr: /bin/id
+  - id: id-cmd-shell
+    desc: Invokes bare `id` in shell scripts
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    if:
+      type: symbol
+      exact: id
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/file/format::sourcemap
+      - id: metadata/file/format::sourcemap-context
+  - id: id-and-ls-recon
+    desc: id and ls recon command chain
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '\bid\s*&&\s*ls\s'
+  - id: os-getlogin-python
+    desc: os.getlogin() Python username call
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: text
+      regex: os\.getlogin\s*\(
+composite_rules:
+  - id: host-user-pwd-chain
+    desc: Host user directory recon command chain
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: hostname-pwd-whoami
+      - id: whoami-hostname-pwd
+      - id: hostname-whoami-pwd
+  - id: whoami-cmd
+    desc: whoami command
+    crit: notable
+    conf: 0.55
+    any:
+      - id: whoami-command-separator
+      - id: whoami-command-backtick
+      - id: whoami-command-quoted
+    unless:
+      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context

@@ -1,0 +1,187 @@
+# Install Certificate - Privilege Escalation / Trust Subversion
+# MBC: F0016 (Install Certificate)
+# ATT&CK: T1553.004 (Subvert Trust Controls: Install Root Certificate)
+#
+# Installing a root CA certificate enables MITM interception of TLS traffic,
+# code signing trust bypass, or suppressing security warnings.
+# The atomic install operations are in micro-behaviors/crypto/certificate/install/.
+# These composites detect when installation is combined with indicators of abuse.
+defaults:
+  mbc: "F0016"
+  attack: "T1553.004"
+traits:
+  - id: go-ivanti-ca-subject
+    desc: Forged Ivanti CA certificate subject
+    crit: suspicious
+    conf: 0.92
+    platforms: [ivanti, unix]
+    for: [go, elf]
+    if:
+      type: text
+      substr: Ivanti Certificate Authority
+  - id: go-netbsd-ca-stores
+    desc: Writes to NetBSD CA store paths
+    crit: suspicious
+    conf: 0.94
+    platforms: [netbsd, unix]
+    for: [go, elf]
+    if:
+      type: text
+      regex: '/etc/ssl/cert\.pem[\s\S]{0,220}/usr/pkg/etc/ssl/cert\.pem'
+  - id: go-netbsd-root-ca-subject
+    desc: Forged NetBSD root CA subject
+    crit: suspicious
+    conf: 0.94
+    platforms: [netbsd, unix]
+    for: [go, elf]
+    if:
+      type: text
+      substr: NetBSD System Root CA
+  - id: ps-x509-root-store-add
+    desc: Adds cert to Root trust store
+    crit: suspicious
+    conf: 0.94
+    platforms: [netbsd, unix, windows]
+    for: [powershell]
+    if:
+      type: text
+      regex: 'X509Store[\s\S]{0,180}StoreName\]::Root'
+composite_rules:
+  # === Windows: root cert install to trusted store ===
+  - id: windows-root-cert-install
+    desc: Root certificate installation to trusted store
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [batch, powershell, pe]
+    all:
+      - id: micro-behaviors/crypto/certificate/install::cert-install-cmd
+    any:
+      - id: micro-behaviors/communications/http/request/client::http-client
+      - id: micro-behaviors/process/create/shell/spawn::cmd-exe
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - id: well-known/lib/wine/
+        - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
+  # === Windows: API-based cert install + network ===
+  - id: windows-cert-install-network
+    desc: Certificate install via API with network activity
+    crit: notable
+    conf: 0.88
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/crypto/certificate/install::cert-install-api
+      - id: micro-behaviors/communications/http/request/client::http-client
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+    unless:
+      - id: well-known/lib/electron/
+      - id: well-known/lib/electron::nodejs-webstorage-marker
+      - id: well-known/lib/ffmpeg/
+      - id: metadata/binary/installer/script/
+      - id: metadata/binary/installer/family/
+      - id: well-known/lib/wine/
+  # === macOS: trusted cert install ===
+  - id: macos-root-cert-install
+    desc: macOS trusted root certificate installation
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos]
+    for: [shell, python, ruby, macho]
+    any:
+      - id: micro-behaviors/crypto/certificate/install::security-add-trusted-cert
+      - id: micro-behaviors/crypto/certificate/install::sec-trust-settings-api
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+  # === macOS: cert install + proxy = MITM ===
+  - id: macos-cert-proxy-mitm
+    desc: Certificate install with proxy
+    crit: suspicious
+    conf: 0.95
+    platforms: [macos]
+    for: [shell, python, ruby]
+    all:
+      - id: macos-root-cert-install
+      - id: micro-behaviors/communications/proxy/library::macos-networksetup-set-web-proxy
+  # === Linux: CA cert install + download ===
+  - id: linux-ca-cert-install
+    desc: Linux CA certificate installation
+    # update-ca-certificates + an HTTP client is a common enterprise bootstrap
+    # pattern (airgap mirrors, private CAs). Elevate via forged-CA composites.
+    crit: notable
+    conf: 0.85
+    platforms: [linux, unix]
+    for: [shell, python, php, elf]
+    unless:
+      - id: well-known/tool/detection/proxy-sandbox
+      - id: well-known/tool/development/stoobly-agent/
+      - id: well-known/app/aui-agent-builder/
+      - id: well-known/tool/sysadmin/container::podman-distribution
+    all:
+      - id: micro-behaviors/crypto/certificate/install::update-ca-certificates
+    any:
+      - id: micro-behaviors/communications/http/request/client::http-client
+      - id: micro-behaviors/communications/http/download/curl::curl-cmd
+      - id: micro-behaviors/communications/http/download/curl::wget-cmd
+
+  - id: unix-local-root-ca-install
+    desc: Unix local root CA install
+    crit: hostile
+    conf: 0.95
+    platforms: [unix]
+    for: [c, cpp, elf, shell, php]
+    unless:
+      - id: well-known/app/aui-agent-builder/
+      - id: well-known/tool/development/keploy::keploy-source-tree-path
+    all:
+      - id: micro-behaviors/crypto/certificate/usage::self-signed-cert-generation
+      - id: micro-behaviors/crypto/certificate/usage::ssl-certs-path
+      - id: micro-behaviors/crypto/certificate/install::update-ca-certificates
+    any:
+      - id: micro-behaviors/crypto/certificate/install::openssl-rehash
+      - id: micro-behaviors/crypto/certificate/usage::ca-certificates
+      - id: objectives/persistence/system/network-appliance::openwrt-root-crontab-path
+    needs: 1
+  - id: go-forged-ca-install
+    desc: Go forged CA trust install
+    crit: hostile
+    conf: 0.97
+    platforms: [unix]
+    for: [go, elf]
+    unless:
+      - id: well-known/tool/development/keploy::keploy-source-tree-path
+    all:
+      - id: micro-behaviors/crypto/certificate/install::go-linux-ca-trust-paths
+      - id: micro-behaviors/crypto/certificate/install::go-ca-update-commands
+    any:
+      - id: go-ivanti-ca-subject
+      - id: micro-behaviors/crypto/certificate/usage::self-signed-cert-generation
+  - id: go-netbsd-root-ca-install
+    desc: Go NetBSD root CA install
+    crit: hostile
+    conf: 0.98
+    platforms: [netbsd, unix]
+    for: [go, elf]
+    all:
+      - id: go-netbsd-ca-stores
+      - id: go-netbsd-root-ca-subject
+    any:
+      - id: micro-behaviors/crypto/certificate/usage::self-signed-cert-generation
+      - id: micro-behaviors/crypto/certificate/usage::ca-certificates
+  - id: ps-root-ca-trust-install
+    desc: PS root CA trust install
+    crit: hostile
+    conf: 0.98
+    platforms: [netbsd, unix, windows]
+    for: [powershell]
+    all:
+      - id: ps-x509-root-store-add
+    any:
+      - id: micro-behaviors/crypto/certificate/usage::openssl-self-signed-cert
+      - id: micro-behaviors/crypto/certificate/usage::powershell-openssl-pkcs12-export
+      - id: micro-behaviors/crypto/certificate/usage::powershell-self-signed-cert
+    needs: 1

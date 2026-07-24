@@ -1,0 +1,158 @@
+# Supply Chain - Side-Effect Module Detection
+# Detects modules that auto-execute code on import but export nothing useful
+# Common in crypto drainers and data stealers distributed via npm
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1195.002
+  # NOTE: async-IIFE auto-execute moved to
+  # micro-behaviors/data/control-flow/module-exec/javascript::async-iife-invoke
+  # (a neutral capability — composites reference it for intent).
+traits:
+  - id: trigger-named-local-require
+    desc: Standalone local require of trigger-named module
+    crit: component
+    conf: 0.93
+    if:
+      type: text
+      regex: "(?mi)^[ \\t]*require\\s*\\(\\s*['\"][^'\"]{1,120}trigger[^'\"]{0,120}['\"]\\s*\\)\\s*;?[ \\t]*$"
+    unless:
+      - id: metadata/package/testing/presence/harness::spec-test-filename
+      - id: metadata/package/testing/presence/scripted::dot-spec-filename
+composite_rules:
+  - id: public-package-direct-url-side-effect
+    desc: Public package imports a direct-URL dependency
+    crit: hostile
+    conf: 0.97
+    scope: package
+    all:
+      - id: objectives/supply-chain/install-hook/package/direct-url::dep-https-url-kv
+      - id: metadata/package/manifest/publishing::npm-public-publish-access
+      - id: micro-behaviors/os/module/load::esm-side-effect-package-import
+    unless:
+      - id: well-known/tool/development/aube::aube-published-npm-package
+      - id: well-known/tool/development/aube::aube-package-test-fixture
+      - id: well-known/tool/development/aube::aube-lifecycle-scanner-source
+      - id: metadata/package/manifest/publishing::is-private
+      - id: metadata/package/testing/
+  # An import-time module that both hides its strings behind a repeating-key
+  # decoder and launches detached shell work is not ordinary module setup.
+  # Keep the hostile inference at archive scope: the decoder and process
+  # primitives are neutral atoms, while their combination is the attack
+  # signal.
+  - id: npm-obfuscated-detached-command-loader
+    desc: Obfuscated npm module launches detached shell commands
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.007
+    scope: archive
+    all:
+      - id: micro-behaviors/data/decode/xor::js-repeating-key-charcode-xor-decoder
+      - id: micro-behaviors/process/create/shell/bridge::js-execsync-destructure
+      - id: micro-behaviors/process/create/spawn-minified::detached-bang-true
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
+
+  - id: npm-obfuscated-import-time-command-module
+    desc: Obfuscated npm module auto-executes detached command logic on import
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.007,T1195.002
+    scope: archive
+    all:
+      - id: micro-behaviors/data/control-flow/module-exec::module-side-effect-empty-export
+      - id: npm-obfuscated-detached-command-loader
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
+
+  - id: npm-obfuscated-import-time-stealer
+    desc: NPM module imports obfuscated stealer
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/exfiltration/stealer/file::node-import-time-file-stealer
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::a0-string-decoder-entrypoint
+    any:
+      - id: micro-behaviors/process/create/load/local::cjs-side-effect-local-require
+      - id: metadata/package/manifest/entrypoint::has-index-entry
+  - id: npm-obfuscated-bundle-indirect-command
+    desc: Obfuscated npm bundle invokes indirect command
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::decoder-loop-keyword-triad
+      - id: objectives/anti-static/obfuscation/string/dynamic::arithmetic-decoder-wrapper-call
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run-indirect
+    any:
+      - id: micro-behaviors/data/source/string::computed-property-single-quote-concat
+      - id: objectives/anti-static/obfuscation/encoding/hex::hex-concatenation
+      - id: micro-behaviors/data/encode/base64::btoa-symbol
+    needs: 2
+
+  - id: npm-trigger-module-import
+    desc: NPM entrypoint imports trigger-named local side effect
+    crit: hostile
+    conf: 0.92
+    scope: archive
+    all:
+      - id: trigger-named-local-require
+      - id: micro-behaviors/process/create/load/local::cjs-side-effect-local-require
+    unless:
+      - id: metadata/package/quality/false-positives::projen-package-context
+      - id: well-known/lib/eui/
+      - id: metadata/package/testing/presence/harness::spec-test-filename
+      - id: metadata/package/testing/presence/scripted::dot-spec-filename
+
+  - id: npm-trigger-module-api-facade
+    desc: NPM trigger side effect hidden behind exported API
+    crit: hostile
+    conf: 0.9
+    scope: archive
+    all:
+      - id: npm-trigger-module-import
+      - id: metadata/lang/javascript-features::module-exports-object
+    unless:
+      - id: metadata/package/quality/false-positives::projen-package-context
+
+  - id: npm-empty-export-secret-host-beacon
+    desc: NPM empty-export module exfiltrates secrets and host data
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1552.001,T1041
+    mbc: E1552,E1041
+    scope: archive
+    all:
+      - id: metadata/lang/javascript-features::module-exports-object
+      - id: objectives/exfiltration/sensitive-data::js-filtered-env-http-exfil
+      - id: objectives/discovery/system/fingerprint/hardware::node-short-os-alias-host-user
+      - id: micro-behaviors/fs/proc/container::container-pid1-cgroup
+      - id: micro-behaviors/communications/http/request/client::silent-error-handler
+
+  - id: npm-entrypoint-remote-decrypt-command-loader
+    desc: NPM entrypoint decrypts fetched data for command execution
+    crit: hostile
+    conf: 0.995
+    attack: T1195.002,T1105,T1059.007,T1027.013
+    scope: package
+    all:
+      - id: objectives/command-and-control/dropper/delivery/fetch-eval::javascript-encoded-remote-command-loader
+      - id: metadata/package/manifest/entrypoint::pkg-main-field
+      - id: micro-behaviors/crypto/symmetric/aes/runtime-library::createDecipheriv
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
+
+  - id: npm-runner-side-effect-parser-facade
+    desc: NPM package combines runner side effect with parser facade
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1059.007
+    scope: archive
+    all:
+      - id: micro-behaviors/process/create/load/local::cjs-side-effect-execution-subpath
+      - id: micro-behaviors/process/create/load/local::cjs-parser-subpath-require
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/

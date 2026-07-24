@@ -1,0 +1,125 @@
+defaults:
+  for:
+  - scripts
+  - binaries
+  - source
+  - manifests
+  - dockerfile
+  platforms:
+  - linux
+  - macos
+traits:
+- id: tmp-path-content
+  desc: Contains a /tmp/ or /var/tmp/ path
+  if:
+    type: text
+    regex: '(^|[^A-Za-z0-9_./-])(/tmp/|/var/tmp/)[\w\.\-/]+'
+  not:
+  - /tmp/out.
+  - /tmp/out.zip
+  - /tmp/analysis
+  - /tmp/autosymbiontic
+  - /tmp/.X11-unix
+  - /var/tmp/.
+- id: hidden-tmp-path
+  desc: Hidden path prefix in /tmp
+  for: [scripts, binaries, source, manifests, -pyproject.toml, -composer.json, dockerfile]
+  platforms: [linux, macos, windows]
+  if:
+    type: text
+    # Require a real filename char after the dot so comment placeholders
+    # like `/tmp/...` are not treated as hidden staging paths.
+    regex: '(^|[^A-Za-z0-9_./-])/tmp/\.[A-Za-z0-9_]'
+  not:
+  - substr: /tmp/.X
+- id: native-hidden-numeric-file-template
+  desc: Native hidden numeric filename template
+  crit: notable
+  conf: 0.9
+  platforms: [linux, android]
+  for: [elf, c, cpp, objc, rust]
+  if:
+    type: text
+    regex: '^%s(/\.|\.)%d_%d$'
+- id: native-transient-staging-directory
+  desc: Native binary references transient staging path
+  crit: notable
+  conf: 0.8
+  platforms: [linux]
+  for: [elf]
+  if:
+    type: text
+    regex: '(^|[^A-Za-z0-9_])/(var/tmp|dev/shm)(/|$)'
+- id: var-tmp-hidden
+  desc: Hidden file in /var/tmp
+  crit: notable
+  conf: 0.7
+  # Capture the full hidden filename (not just the /var/tmp/. prefix) so the `not`
+  # exclusion can match the whole path — xfs_fsr's benign /var/tmp/.fsrlast_xfs
+  # state file was slipping through because the matched span was only the prefix.
+  if:
+    type: text
+    regex: '/var/tmp/\.[A-Za-z0-9_][A-Za-z0-9_.-]*'
+  not:
+  - substr: /var/tmp/.fsrlast_xfs
+- id: dev-shm-hidden--rx-1
+  desc: /dev/shm hidden path fragment
+  crit: component
+  conf: 0.7
+  platforms:
+  - linux
+  if:
+    type: text
+    regex: '/dev/shm/\.[A-Za-z0-9_][A-Za-z0-9_.-]*'
+  count_max: 1026199
+- id: dev-shm-hidden--rx-2
+  desc: /dev/shm rootf staging path
+  crit: component
+  conf: 0.7
+  platforms:
+  - linux
+  if:
+    type: text
+    regex: '/dev/shm/rootf\b'
+  count_max: 1026200
+composite_rules:
+- id: temp-tmp
+  desc: Reference to /tmp
+  crit: baseline
+  conf: 0.66
+  all:
+  - id: micro-behaviors/fs/path/temp::unix-temp
+  - id: tmp-path-content
+- id: temp-var-tmp
+  desc: Reference to /var/tmp
+  crit: baseline
+  conf: 0.66
+  all:
+  - id: micro-behaviors/fs/path/temp::unix-var-temp
+  - id: tmp-path-content
+- id: tmp-hidden-file
+  desc: Hidden file path in /tmp directory
+  crit: notable
+  conf: 0.75
+  attack: T1564.001
+  all:
+  - id: micro-behaviors/fs/path/temp::unix-temp
+  - id: hidden-tmp-path
+  unless:
+  - id: metadata/lang/source::linux-kernel-secondary-tree-path
+  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
+  - id: metadata/lang/source::linux-kernel-primary-tree-path
+  - id: metadata/file/extension/identity::squashfs-container-filename
+- id: dev-shm-hidden
+  desc: Hidden file in /dev/shm
+  crit: suspicious
+  conf: 0.7
+  platforms:
+  - linux
+  any:
+  - id: dev-shm-hidden--rx-1
+  - id: dev-shm-hidden--rx-2
+  unless:
+  - id: well-known/tool/reverse-engineering/frida/

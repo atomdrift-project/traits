@@ -1,0 +1,232 @@
+# XHR / fetch hooking — replacing XMLHttpRequest.prototype.{open,send} or
+# window.fetch with a wrapper. This is a *capability* (network self-
+# instrumentation): used by browser extensions for legitimate request
+# monitoring AND by malware/AitM webinjects for credential theft and
+# request tampering. Intent inference (e.g. wallet drainers, banking
+# trojans) lives in objectives/impact/ and objectives/collection/.
+defaults:
+  platforms: [windows, unix]
+  for:
+    - javascript
+  attack: T1557
+  crit: notable
+traits:
+  - id: xhr-prototype-access
+    desc: Assigns an XMLHttpRequest prototype method
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: XMLHttpRequest\.prototype\.[A-Za-z_$][A-Za-z0-9_$]{0,40}\s*=
+  - id: xhr-bracket-access
+    desc: XMLHttpRequest bracket notation access
+    crit: notable
+    conf: 0.6
+    if:
+      type: text
+      regex: XMLHttpRequest\[.{1,50}\]\[.{1,50}\]
+  - id: xhr-prototype-open-eq
+    desc: XMLHttpRequest.prototype.open assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: XMLHttpRequest\.prototype\.open\s*=
+  - id: xhr-bracket-open-eq
+    desc: XMLHttpRequest bracket open assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: XMLHttpRequest\[.{1,50}\]\[.{1,50}open.{0,20}\]\s*=
+  - id: xhr-prototype-send-eq
+    desc: XMLHttpRequest.prototype.send assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: XMLHttpRequest\.prototype\.send\s*=
+  - id: xhr-bracket-send-eq
+    desc: XMLHttpRequest bracket send assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: XMLHttpRequest\[.{1,50}\]\[.{1,50}send.{0,20}\]\s*=
+  - id: window-fetch-eq
+    desc: window.fetch assignment
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: window\.fetch\s*=
+    unless:
+    - id: metadata/package/testing/
+    # freeCodeCamp curriculum challenge files use YAML frontmatter
+    # with "challengeType:" — the JS snippets inside are demo code.
+    - type: text
+      substr: "challengeType:"
+  - id: fetch-wrapper-original
+    desc: Fetch wrapper preserves original implementation
+    crit: notable
+    conf: 0.93
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'window\.fetch\s*=\s*(async\s+)?function[\s\S]{0,360}originalFetch'
+    unless:
+      - id: well-known/tool/detection/redaction::sensitive-data-js-scanner
+  - id: globalthis-fetch-eq
+    desc: globalThis.fetch assignment
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      # A byte search also matches SDK diagnostics such as
+      # "globalThis.fetch = fetch".  Match the assignment expression so only
+      # code that actually replaces the browser fetch implementation fires.
+      type: tree-sitter
+      kind: assignment
+      regex: '\bglobalThis\.fetch\s*='
+    unless:
+    - id: micro-behaviors/process/interpreter/vm/
+    - id: metadata/library/runtime::acquire-vscode-api
+    - id: metadata/library/structure::js-vite-rollup-vendor-chunk
+    - id: metadata/package/testing/
+    - id: metadata/package/testing/presence/fixture::test-filename-pattern
+    - id: fetch-observability-instrumentation
+  - id: fetch-observability-instrumentation
+    desc: Fetch observability instrumentation
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: instrumentedFetch
+  - id: self-fetch-eq
+    desc: self.fetch assignment
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: self\.fetch\s*=
+
+  - id: globalthis-fetch-wrapper
+    desc: Replaces global fetch with a wrapper
+    crit: notable
+    conf: 0.92
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bglobalThis\.fetch\s*=\s*(\([^)]{1,120}\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>'
+
+  - id: globalthis-xhr-wrapper
+    desc: Replaces global XMLHttpRequest with a wrapper
+    crit: notable
+    conf: 0.92
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bglobalThis\.XMLHttpRequest\s*=\s*[A-Za-z_$][A-Za-z0-9_$]*\b'
+  - id: readystate-intercept
+    desc: XMLHttpRequest readystate interception
+    crit: notable
+    conf: 0.7
+    if:
+      type: text
+      regex: onreadystatechange\s*=.{0,30}function
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/library/jquery
+      - id: metadata/library/d3
+      - id: metadata/library/axios
+      - id: metadata/library/structure::js-webpack-bundle
+      - id: metadata/library/vscode::require-vscode
+  - id: xhr-response-json-intercept
+    desc: Reads JSON from hooked XHR response
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: 'XMLHttpRequest\.prototype\.send\s*=[\s\S]{0,700}\bresponseText\b'
+  - id: fetch-response-body-record
+    desc: Fetch wrapper records response bodies
+    crit: notable
+    conf: 0.94
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'window\.fetch\s*=\s*(async\s*)?[^=]{0,120}\bclone\s*\(\s*\)[\s\S]{0,350}\.(text|json)\s*\('
+composite_rules:
+  - id: prototype-access
+    desc: XMLHttpRequest prototype method assignment
+    conf: 0.8
+    any:
+      - id: xhr-prototype-access
+      - id: xhr-bracket-access
+  - id: open-hook
+    desc: XMLHttpRequest.open method hooking
+    conf: 0.85
+    crit: notable
+    any:
+      - id: xhr-prototype-open-eq
+      - id: xhr-bracket-open-eq
+    # Browser extensions legitimately hook XHR for self-instrumentation of
+    # their own content scripts; the malicious form (AitM webinject) is
+    # caught downstream by composites that combine hook+exfiltration.
+    downgrade:
+      any:
+        - id: metadata/permission/manifest::is-chrome-manifest
+        - id: metadata/permission/runtime::is-extension
+        - id: metadata/library/structure/
+  - id: send-hook
+    desc: XMLHttpRequest.send method hooking
+    conf: 0.85
+    crit: notable
+    any:
+      - id: xhr-prototype-send-eq
+      - id: xhr-bracket-send-eq
+    downgrade:
+      any:
+        - id: metadata/permission/manifest::is-chrome-manifest
+        - id: metadata/permission/runtime::is-extension
+        - id: metadata/library/structure/
+  - id: fetch-hook
+    desc: fetch API hooking
+    conf: 0.85
+    crit: notable
+    any:
+      - id: window-fetch-eq
+      - id: globalthis-fetch-eq
+      - id: self-fetch-eq
+    downgrade:
+      any:
+        - id: metadata/permission/manifest::is-chrome-manifest
+        - id: metadata/permission/runtime::is-extension
+  - id: request-interceptor
+    desc: XHR/Fetch request interceptor
+    crit: notable
+    conf: 0.95
+    any:
+      - id: open-hook
+      - id: send-hook
+      - id: fetch-hook
+    unless:
+      - id: well-known/lib/web-ui-vendors/
+    downgrade:
+      any:
+        - id: metadata/permission/manifest::is-chrome-manifest
+        - id: metadata/permission/runtime::is-extension
+
+  - id: extension-bearer-request-interceptor
+    desc: Browser extension intercepts bearer request headers
+    crit: notable
+    conf: 0.95
+    scope: archive
+    all:
+      - id: metadata/permission/runtime::is-extension
+      - id: request-interceptor
+      - id: micro-behaviors/communications/http/oauth::access-token
+      - id: micro-behaviors/communications/http/request/client::bearer-authorization-prefix

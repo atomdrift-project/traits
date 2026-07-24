@@ -1,0 +1,254 @@
+# Runtime self-decoding loader
+#
+# A module that, at load time, reconstructs an embedded blob through a decode
+# chain (base64 / cyclic-XOR) and executes the result via a Function constructor
+# reached indirectly through a literal's prototype chain
+# (`[].constructor.constructor`, `"".constructor.constructor`) and immediately
+# invoked. The indirection exists only to keep the literal `Function`/`eval`
+# token out of the source so static scanners miss the execution sink; decoding
+# an embedded blob straight into that sink at import has no benign use.
+#
+# Observed in the avatar-forge -> dom-weave -> sync-logger npm decoy chain
+# (2026-06): the carrier package (avatar-forge) is a clean avatar generator, its
+# dependency (dom-weave) fire-and-forget loads an optional dependency
+# (sync-logger), and sync-logger ships this loader, which decrypts a
+# dead-drop-resolved endpoint and spawns a hidden powershell/node stager on
+# Windows. See objectives/supply-chain/hidden-payload/staging::optional-dep-fire-forget-loader.
+#
+# ATT&CK: T1027 (Obfuscated Files or Information), T1059.007 (JavaScript)
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1027
+  mbc: B0032
+traits:
+  # Standalone suspicious: an indirectly-obtained Function constructor whose
+  # argument is a base64 decode expression, immediately invoked.
+  # `[].constructor.constructor(Buffer.from(blob,"base64")...)()` — there is no
+  # legitimate reason to route a decode through the prototype-chain Function
+  # constructor and run it inline. Atomic traits cap at suspicious; the hostile
+  # verdict comes from the corroborated composites below.
+  - id: indirect-ctor-decode-iife
+    desc: Indirect constructor runs decoded blob inline
+    crit: suspicious
+    conf: 0.9
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\.constructor\.constructor\(\s*(Buffer\.from|atob)[\s\S]{0,160}\)\(\)'
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/app/bitwarden::bitwarden-app
+      - id: well-known/app/bitwarden::bitwarden-text-marker
+      - id: well-known/app/vscode-marketplace::wakatime-bundled-js
+      - id: well-known/app/vscode-marketplace::wakatime-bundled-js
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/package/files/dependency::vendored-source-path
+      - id: well-known/tool/detection/security-scanner/
+      - id: well-known/tool/detection/llm-scanner/
+  # Building block: indirect Function constructor immediately invoking any
+  # transform call (decoder, deobfuscator). Looser than the decode-specific
+  # trait above; only meaningful paired with decode infrastructure in a
+  # composite, so it is component-level on its own.
+  - id: indirect-ctor-transform-iife
+    desc: "Indirect ctor immediately invokes transform"
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\.constructor\.constructor\(\s*\w[\w$.]{0,40}\([\s\S]{0,160}\)\(\)'
+  - id: charat-array-fill
+    desc: charAt result fills array
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '\[\w+\]\s*=\s*\w+\.charAt\(\w+\)'
+  - id: temp-var-array-swap
+    desc: Temp variable array swap
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '\bvar\s+\w+\s*=\s*\w+\[\w+\]\s*;\s*\w+\[\w+\]\s*='
+  - id: return-empty-join
+    desc: Empty-join return value
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: 'return\s+\w+\.join\([''"][''"]\)'
+  - id: permutation-substr-key
+    desc: Permuted substring key derivation
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\b(var|let|const)\s+\w+\s*=\s*\w+\[\w+\]\.substr\(0,'
+  - id: decoded-property-constructor
+    desc: Dynamic property reaches Function constructor
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\b\w+\[\w+\]\.constructor\.constructor\s*\('
+  # Some loaders resolve Function through a shuffled string-table property,
+  # then call the resulting alias with a nested decoder expression. Keep the
+  # atom narrow: the indexed alias and nested call must occur together.
+  - id: indexed-decoder-stage-call
+    desc: Indexed alias calls nested decoder stage
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'var\s+\w+\s*=\s*\w+\[\w+\];\s*var\s+\w+\s*='
+  - id: nested-decoder-call
+    desc: Nested decoder call feeds stage builder
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: '\b\w+\(\w*\s*,\s*\w+\(\w+\)\)'
+composite_rules:
+  - id: js-large-offset-charcode-eval-loader
+    desc: Packed JavaScript decoder feeds variable eval
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007,T1140
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/decode/custom::fromcharcode-large-offset-expression
+      - id: metadata/file/metrics::js-dense-subtraction-arithmetic
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+    unless:
+      - id: metadata/package/testing/
+
+  - id: char-permutation-reassembler
+    desc: Character permutation reassembler
+    crit: notable
+    conf: 0.9
+    near_bytes: 2048
+    all:
+      - id: charat-array-fill
+      - id: temp-var-array-swap
+      - id: return-empty-join
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/app/litellm::litellm-package-path
+      - id: well-known/lib/swagger-ui::swagger-ui-bundle-marker
+      - id: well-known/lib/node-forge::node-forge-crypto-library
+      - id: well-known/lib/pdfjs::pdfjs-bundle
+  - id: permutation-derived-constructor
+    desc: Permutation-derived Function constructor
+    crit: suspicious
+    conf: 0.92
+    attack: T1059.007
+    near_bytes: 512
+    all:
+      - id: permutation-substr-key
+      - id: decoded-property-constructor
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/lib/
+      - id: metadata/library/structure::vscode-extension-generated-asset
+      - id: metadata/package/files/system-package::app-vendored-web-asset
+      - id: metadata/library/structure::js-webpack-bundle
+      - id: metadata/library/structure::js-webpack-chunk-global
+      - id: metadata/library/structure::js-large-minified-bundle
+  # The transform fed to the indirect constructor need not be a bare
+  # Buffer.from/atob call (it may be a custom decoder), as long as decode
+  # infrastructure is present in the same file. Pairs the immediate-invoke
+  # indirect sink with a base64/cyclic-XOR decode primitive.
+  - id: self-decoding-runtime-loader
+    desc: Module decodes an embedded blob into an indirect eval sink
+    crit: hostile
+    conf: 0.95
+    attack: T1059.007
+    all:
+      - id: indirect-ctor-transform-iife
+    any:
+      - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+      - id: micro-behaviors/data/decode/base64::buffer-from-base64
+      - id: micro-behaviors/data/decode/base64::buffer-from-base64-to-utf8
+      - id: micro-behaviors/data/decode/base64::atob-decode
+    # No bundle-output unless: a sourcemap reference / minified shape does NOT
+    # excuse `[].constructor.constructor(decode(...))()` — tsup/rollup-built
+    # malware ships sourcemaps too (the sync-logger payload did). The indirect
+    # constructor + immediate invoke + in-file decode primitive is specific
+    # enough that legitimate bundler output does not reach it.
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/security-scanner/
+      - id: well-known/tool/detection/llm-scanner/
+  # Variant keyed on the embedded payload rather than the decode primitive: a
+  # large base64 blob literal in a file that also immediately invokes an
+  # indirect Function constructor. Covers custom decoders that don't surface a
+  # bare Buffer.from/atob/XOR call. The indirect-invoke leg is the
+  # discriminator — large base64 literals are common (inline sourcemaps, icons,
+  # wasm), but pairing one with a prototype-chain eval sink is not.
+  - id: blob-fed-indirect-eval
+    desc: Embedded base64 blob executed via indirect eval sink
+    crit: hostile
+    conf: 0.94
+    attack: T1059.007
+    all:
+      - id: indirect-ctor-transform-iife
+      - id: micro-behaviors/data/encode/payload::large-base64-string-literals
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/security-scanner/
+      - id: well-known/tool/detection/llm-scanner/
+  - id: numeric-source-self-decoding-eval
+    desc: Large numeric JavaScript source feeds eval
+    crit: hostile
+    conf: 0.96
+    attack: T1059.007
+    all:
+      - id: objectives/supply-chain/hidden-payload/eval::huge-numeric-source-blob
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+    unless:
+      - id: objectives/anti-static/obfuscation/payload/container::source-map-extension
+      - id: metadata/file/format::sourcemap-sources-content
+      - id: metadata/package/testing/
+  - id: large-encoded-string-indirect-eval-loader
+    desc: JavaScript carries many encoded strings and executes an indirect eval
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.007
+    all:
+      - id: metadata/file/metrics::multiple-lines-over-1000-chars
+      - id: metadata/file/metrics::js-many-very-long-strings
+      - id: metadata/file/metrics::js-high-encoded-string-ratio
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
+      - id: micro-behaviors/process/interpreter/eval::js-indirect-eval-variable
+    unless:
+      - id: metadata/package/testing/
+  - id: permutation-fed-indirect-eval
+    desc: Permutation-reassembled stage executed indirectly
+    crit: hostile
+    conf: 0.96
+    attack: T1059.007
+    all:
+      - id: char-permutation-reassembler
+      - id: permutation-derived-constructor
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/lib/swagger-ui/
+      - id: well-known/app/dbcode::extension-context
+  - id: indexed-decoder-stage-loader
+    desc: Indexed decoder builds and runs hidden stage
+    crit: hostile
+    conf: 0.96
+    attack: T1027,T1059.007
+    near_bytes: 2048
+    all:
+      - id: indexed-decoder-stage-call
+      - id: nested-decoder-call
+      - id: objectives/supply-chain/hidden-payload/trojan::numeric-stage-function-run
+    any:
+      - id: char-permutation-reassembler
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
+    unless:
+      - id: metadata/package/testing/
+      - id: metadata/library/structure::js-large-module-bundle

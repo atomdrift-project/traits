@@ -1,0 +1,57 @@
+# Browser extensions that replace a live web application's session token and
+# navigate the page into the supplied account. This is distinct from merely
+# reading a token: it changes the browser's authenticated session.
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript, xpi, crx, zip]
+  attack: T1539
+
+traits:
+  - id: jwt-shaped-value-validator
+    desc: JavaScript recognizes compact JWT-shaped values
+    crit: component
+    conf: 0.97
+    if:
+      type: string_literal
+      # JWT segments are substantially longer than ordinary dotted member
+      # chains such as req.method.toUpperCase().
+      # Compact JWT/JWS headers commonly begin with the base64url prefix eyJ.
+      regex: '^eyJ[A-Za-z0-9_-]{8,256}\.[A-Za-z0-9_-]{8,256}\.[A-Za-z0-9_-]{8,256}$'
+
+composite_rules:
+  - id: jwt-clipboard-capture-flow
+    desc: JWT clipboard capture with page forwarding
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: jwt-shaped-value-validator
+      - id: micro-behaviors/os/clipboard/access::browser-clipboarddata-get
+      - id: micro-behaviors/communications/ipc/message::postmessage-call
+    # Minified bundles are often one physical line; line proximity would
+    # correlate unrelated UI operations across the entire application.
+    near_bytes: 1024
+
+  - id: browser-jwt-clipboard-interception
+    desc: Extension forwards intercepted JWT clipboard values
+    crit: hostile
+    conf: 0.99
+    attack: T1539,T1115
+    scope: archive
+    for: [crx, xpi, zip, archives]
+    all:
+      - id: jwt-clipboard-capture-flow
+      - id: micro-behaviors/process/inject/webextension::webextension-scripting-execute
+
+  - id: discord-browser-session-token-injection
+    desc: Extension replaces Discord session and opens the account
+    crit: hostile
+    conf: 0.99
+    mbc: B0030
+    for: [xpi, crx, zip]
+    scope: archive
+    all:
+      - id: micro-behaviors/data/db/web-storage::browser-storage-token-key-write
+      - id: micro-behaviors/ui/window/manage/navigation::discord-authenticated-route-navigation
+      - id: micro-behaviors/process/inject/webextension::chrome-scripting-main-world
+      - id: micro-behaviors/communications/http/headers::authorization-header-map-entry
+      - id: objectives/credential-access/discord/token::discord-token-getter

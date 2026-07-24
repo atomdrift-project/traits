@@ -1,0 +1,158 @@
+# ARM Direct Network Syscalls
+# Detects hand-written ARM assembly making direct network syscalls
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+defaults:
+  platforms: [linux]
+  for: [elf]
+  arch: [arm]
+  crit: notable
+traits:
+  - id: svc-socket
+    desc: "ARM direct socket(2) syscall setup"
+    crit: notable
+    if:
+      type: hex
+      section: ".text"
+      # mov r7, 0x100; add r7, r7, 0x19 (25) -> r7 = 281 (socket)
+      pattern: "01 7c a0 e3 19 70 87 e2"
+  - id: svc-connect
+    desc: "ARM direct connect(2) syscall setup"
+    crit: notable
+    if:
+      type: hex
+      section: ".text"
+      # mov r7, 0x100; add r7, r7, 0x1b (27) -> r7 = 283 (connect)
+      pattern: "01 7c a0 e3 1b 70 87 e2"
+  - id: arm-eabi-socket
+    desc: ARM EABI direct socket(2) wrapper
+    crit: notable
+    conf: 0.99
+    if:
+      type: hex
+      section: ".text"
+      # movw r7, 0x119; svc 0 (Linux ARM EABI socket)
+      pattern: "19 71 00 e3 00 00 00 ef"
+  - id: arm-eabi-bind
+    desc: ARM EABI direct bind(2) wrapper
+    crit: notable
+    conf: 0.99
+    if:
+      type: hex
+      section: ".text"
+      # movw r7, 0x11a; svc 0 (Linux ARM EABI bind)
+      pattern: "1a 71 00 e3 00 00 00 ef"
+  - id: arm-eabi-listen
+    desc: ARM EABI direct listen(2) wrapper
+    crit: notable
+    conf: 0.99
+    if:
+      type: hex
+      section: ".text"
+      # mov r7, 0x11c; svc 0 (Linux ARM EABI listen)
+      pattern: "47 7f a0 e3 00 00 00 ef"
+  - id: arm-eabi-accept
+    desc: ARM EABI direct accept(2) wrapper
+    crit: notable
+    conf: 0.99
+    if:
+      type: hex
+      section: ".text"
+      # movw r7, 0x11d; svc 0 (Linux ARM EABI accept)
+      pattern: "1d 71 00 e3 00 00 00 ef"
+  - id: arm-oabi-socketcall-socket
+    desc: ARM OABI socketcall socket wrapper
+    crit: notable
+    conf: 0.98
+    if:
+      type: hex
+      section: ".text"
+      # OABI socketcall(2), operation 1 (socket), with the syscall number
+      # loaded as 0x900066 and dispatched through an indirect branch.
+      pattern: "04 E0 2D E5 0C D0 4D E2 07 00 8D E8 01 10 A0 E3 0D 20 A0 E1 08 00 9F E5 ?? ?? ?? EB 0C D0 8D E2 00 80 BD E8 66 00 90 00"
+  - id: arm-oabi-socketcall-connect
+    desc: ARM OABI socketcall connect wrapper
+    crit: notable
+    conf: 0.98
+    if:
+      type: hex
+      section: ".text"
+      # OABI socketcall(2), operation 3 (connect), with the syscall number
+      # loaded as 0x900066 and dispatched through an indirect branch.
+      pattern: "04 E0 2D E5 0C D0 4D E2 07 00 8D E8 03 10 A0 E3 0D 20 A0 E1 08 00 9F E5 ?? ?? ?? EB 0C D0 8D E2 00 80 BD E8 66 00 90 00"
+  - id: arm-socket-syscall-number
+    desc: ARM literal pool contains socket syscall number
+    crit: component
+    conf: 0.75
+    if:
+      type: hex
+      section: ".text"
+      # Little-endian literal-pool encoding of Linux ARM SYS_socket (281).
+      pattern: "19 01 00 00"
+  - id: arm-connect-syscall-number
+    desc: ARM literal pool contains connect syscall number
+    crit: component
+    conf: 0.75
+    if:
+      type: hex
+      section: ".text"
+      # Little-endian literal-pool encoding of Linux ARM SYS_connect (283).
+      pattern: "1B 01 00 00"
+  - id: arm-svc-syscall-instruction
+    desc: ARM supervisor-call syscall instruction
+    crit: component
+    conf: 0.75
+    if:
+      type: hex
+      section: ".text"
+      # ARM encoding of svc 0.
+      pattern: "00 00 00 EF"
+composite_rules:
+  - id: arm-eabi-listening-server
+    desc: ARM EABI TCP listening server
+    crit: notable
+    conf: 0.99
+    arch: [arm]
+    all:
+      - id: arm-eabi-socket
+      - id: arm-eabi-bind
+      - id: arm-eabi-listen
+      - id: arm-eabi-accept
+  - id: arm-direct-network-syscalls
+    desc: ARM direct socket and connect syscalls
+    crit: suspicious
+    conf: 0.98
+    arch: [arm]
+    all:
+      # Require the complete register setup for both operations.  A bare
+      # SVC opcode or syscall-number constant is common in Thumb code and
+      # binary data and is not evidence of a direct network syscall.
+      - id: svc-socket
+      - id: svc-connect
+    unless:
+      # JNA's native dispatch library embeds platform-specific syscall data
+      # and can contain these ARM byte sequences in non-ARM slices.
+      - id: well-known/lib/jna::native-dispatch-library
+  - id: arm-oabi-direct-network-syscalls
+    desc: ARM OABI socket and connect syscalls
+    crit: suspicious
+    conf: 0.98
+    arch: [arm]
+    all:
+      - id: arm-oabi-socketcall-socket
+      - id: arm-oabi-socketcall-connect
+  # Literal-pool encoding: a hand-written loader that keeps the SYS_socket (281)
+  # and SYS_connect (283) numbers in its literal pool and dispatches via `svc 0`,
+  # rather than materializing them with immediate movs (svc-socket/svc-connect).
+  # The three legs are individually ambiguous (bare integers / a ubiquitous svc
+  # opcode), so require all three within one code window to mean a socket+connect
+  # syscall loader — the documented purpose of these component legs.
+  - id: arm-literal-pool-network-syscalls
+    desc: ARM literal-pool socket/connect syscall loader
+    crit: suspicious
+    conf: 0.9
+    arch: [arm]
+    near_bytes: 1024
+    all:
+      - id: arm-socket-syscall-number
+      - id: arm-connect-syscall-number
+      - id: arm-svc-syscall-instruction

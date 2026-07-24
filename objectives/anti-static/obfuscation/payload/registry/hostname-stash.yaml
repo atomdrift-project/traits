@@ -1,0 +1,62 @@
+# Payload stashed in HKCU\Software\<COMPUTERNAME> registry value.
+# SHADOW-EARTH-053's TosBtKbd.dll loader calls GetComputerNameA to derive
+# a per-host registry path then reads a binary value (e.g., "scode") from
+# HKCU\Software\<COMPUTERNAME>. Hostname-keyed payload storage hides the
+# implant from generic IoC sweeps that target known registry paths.
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1112
+  mbc: B0032
+traits:
+  - id: reg-open-key
+    desc: RegOpenKeyEx API
+    crit: component
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '^RegOpenKeyEx[AW]$'
+  - id: reg-query-value
+    desc: RegQueryValueEx API
+    crit: component
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '^RegQueryValueEx[AW]$'
+  - id: scode-value-name
+    desc: Registry value named "scode"
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      word: scode
+  - id: hkcu-software-text
+    desc: HKCU\Software path string
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: '(?i)(HKCU|HKEY_CURRENT_USER)\\\\Software\\\\'
+composite_rules:
+  - id: hostname-keyed-registry-payload
+    desc: Payload stored in HKCU\Software\<ComputerName>
+    crit: suspicious
+    conf: 0.92
+    near_lines: 80
+    all:
+      - id: micro-behaviors/os/sysinfo/hostname::get-computer-name
+      - id: reg-open-key
+      - id: reg-query-value
+    any:
+      - id: scode-value-name
+      - id: hkcu-software-text
+    unless:
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: well-known/app/sordum/
+      - id: metadata/binary/vendor::windows-system-implementer-dll
+      - id: well-known/lib/wine/
+      - id: well-known/app/delinea::centrify-management-services-benign-context
+      # AutoIt runtimes always expose ComputerName + registry helpers in the
+      # interpreter API table; that is not hostname-keyed payload stashing.
+      - id: metadata/lang/compiled::autoit-compiled-script
+      - id: metadata/binary/vendor::glarysoft-ltd

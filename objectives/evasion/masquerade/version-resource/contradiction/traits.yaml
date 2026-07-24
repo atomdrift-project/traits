@@ -1,0 +1,280 @@
+defaults:
+  for:
+  - pe
+  - dll
+  platforms:
+  - windows
+  attack: T1036.005
+traits:
+- id: cisco-copyright
+  desc: Cisco Systems copyright string
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    substr: Cisco Systems
+    section: .rsrc
+- id: adobe-copyright
+  desc: Adobe copyright string
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: Adobe (Systems|Inc)
+    section: .rsrc
+- id: adobe-font-encoding
+  desc: Adobe font encoding reference
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    substr: adobe-standard-encoding
+- id: adobe-pdb-path
+  desc: Adobe product in PDB debug path
+  crit: component
+  conf: 0.88
+  if:
+    type: text
+    regex: Adobe(ARM|Acrobat|Reader).{0,50}\.pdb
+- id: adobe-bootstrapper-versioninfo
+  desc: Adobe bootstrapper version identity
+  crit: component
+  conf: 0.95
+  if:
+    type: value
+    path: pe.version
+    regex: 'Adobe Systems Incorporated|Adobe Bootstrapper for Single Installation|Bootstrapper Small'
+- id: microsoft-firewall-versioninfo
+  desc: Microsoft Firewall version identity
+  crit: component
+  conf: 0.95
+  if:
+    type: value
+    path: pe.version
+    regex: 'Microsoft Firewall|Firewall\.exe'
+- id: microsoft-firewall-resource-claim
+  desc: PE resource claims Microsoft Firewall
+  crit: component
+  conf: 0.95
+  if:
+    type: text
+    regex: '(?i)Microsoft Firewall|Firewall\.exe'
+    section: .rsrc
+- id: microsoft-company-versioninfo-kv
+  desc: Microsoft company version identity
+  crit: component
+  conf: 0.95
+  if:
+    type: value
+    path: pe.version.company
+    regex: 'Microsoft Corp(oration)?\.?'
+- id: xiang-company-versioninfo
+  desc: Xiang company version identity
+  crit: component
+  conf: 0.95
+  if:
+    type: value
+    path: pe.version.company
+    exact: Xiang Corporation
+- id: xiang-company-resource-claim
+  desc: PE resource names Xiang company
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)\bXiang Corporation\b'
+    section: .rsrc
+- id: sandsprite-versioninfo
+  desc: Sandsprite version identity
+  crit: component
+  conf: 0.93
+  if:
+    type: value
+    path: pe.version
+    exact: sandsprite
+- id: project1-versioninfo
+  desc: Project1 version identity
+  crit: component
+  conf: 0.9
+  if:
+    type: value
+    path: pe.version
+    exact: Project1
+- id: as3-webinstall-versioninfo
+  desc: AS3 web install version identity
+  crit: component
+  conf: 0.9
+  if:
+    type: value
+    path: pe.version
+    exact: AS3_webInstall
+- id: softwareok-product-versioninfo
+  desc: SoftwareOK product identity in VERSIONINFO
+  crit: component
+  conf: 0.97
+  if:
+    type: value
+    path: pe.version.product_name
+    regex: '(?i)SoftwareOK\.com'
+- id: free-manga-downloader-manifest
+  desc: Free Manga Downloader assembly identity
+  crit: component
+  conf: 0.99
+  if:
+    type: value
+    path: pe.manifest.assembly_identity.name
+    exact: Free Manga Downloader
+composite_rules:
+  - id: softwareok-free-manga-identity-contradiction
+    desc: SoftwareOK VERSIONINFO contradicts Free Manga Downloader manifest
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: softwareok-product-versioninfo
+      - id: free-manga-downloader-manifest
+  - id: masqueraded-self-extracting-pe
+    desc: PE disguises a self-extracting payload behind contradictory identities
+    crit: hostile
+    conf: 0.99
+    attack: T1036.005,T1027.009,T1105
+    all:
+      - id: softwareok-free-manga-identity-contradiction
+      - id: objectives/evasion/anti-av/code-padding::dominant-high-entropy-overlay-before-7z-payload
+      - id: objectives/anti-static/obfuscation/payload/self-read::self-read-file-chain
+    unless:
+      - id: metadata/binary/installer/family::known-benign-installer
+      - id: metadata/signed/platform/
+  - id: sandsprite-project-versioninfo
+    desc: Sandsprite Project1 version identity
+    crit: component
+    conf: 0.95
+    any:
+      - id: sandsprite-versioninfo
+      - id: project1-versioninfo
+      - id: as3-webinstall-versioninfo
+
+  - id: microsoft-versioninfo-identity
+    desc: Microsoft version identity
+    crit: component
+    conf: 0.95
+    any:
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+      - id: microsoft-company-versioninfo-kv
+  - id: microsoft-firewall-identity
+    desc: Microsoft Firewall identity claim
+    crit: notable
+    conf: 0.96
+    any:
+      - id: microsoft-firewall-versioninfo
+      - id: microsoft-firewall-resource-claim
+  - id: xiang-company-identity
+    desc: Xiang company identity claim
+    crit: notable
+    conf: 0.95
+    any:
+      - id: xiang-company-versioninfo
+      - id: xiang-company-resource-claim
+  - id: microsoft-cisco-contradiction
+    desc: Claims Microsoft company with Cisco copyright
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+      - id: cisco-copyright
+    downgrade:
+      any:
+        - id: metadata/binary/resource/
+        - id: metadata/package/quality/false-positives::high-string-count-pe-no-exceptions
+  - id: microsoft-adobe-contradiction
+    desc: Claims Microsoft company with Adobe copyright
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+      - id: adobe-copyright
+    downgrade:
+      any:
+        - id: metadata/binary/resource/
+        - id: metadata/binary/resource::pe-adobe-postscript-marker
+        - id: metadata/binary/resource::pe-adobe-font-registry-marker
+        - id: adobe-font-encoding
+  - id: unsigned-adobe-masquerade
+    desc: Unsigned binary masquerading as Adobe product
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: adobe-copyright
+    any:
+      - id: adobe-pdb-path
+    unless:
+      - id: well-known/app/exr-io/
+      - id: metadata/binary/debug::pdb-nonstandard-drive
+      - id: metadata/signed/platform/
+  - id: adobe-admin-pak-loader-masquerade
+    desc: Adobe admin PAK loader masquerade
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: adobe-bootstrapper-versioninfo
+      - id: metadata/build/manifest::pe-requires-admin
+      - id: objectives/anti-static/pack/section-anomaly::pak-triplet-loader-layout
+    any:
+      - id: objectives/anti-static/pack/section-anomaly::pak-triplet-embedded-stager
+      - id: objectives/command-and-control/dropper/execution/windows-loader::ini-driven-file-stager
+      - id: micro-behaviors/process/info/thread::resume-thread-dup
+      - id: micro-behaviors/os/privilege/token::shutdown-privilege-name
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - id: metadata/signed/platform/
+  - id: microsoft-firewall-xiang-masquerade
+    desc: Microsoft Firewall claimed by Xiang
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: microsoft-firewall-identity
+      - id: xiang-company-identity
+      - id: metadata/binary/layout::many-pe-embedded
+    any:
+      - id: metadata/binary/metrics/structural::malformed-pe-structure
+      - id: metadata/binary/section/metrics::random-rwx-cavity-section
+      - id: objectives/anti-static/obfuscation/binary-metrics/shape::zero-entropy-executable-section
+      - id: objectives/anti-static/obfuscation/payload/import::minimal-pe-dynamic-load
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/
+  - id: oracle-java-sandsprite-masquerade
+    desc: Oracle Java manifest contradicts Project1
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/build/manifest::pe-oracle-java-manifest-identity
+      - id: sandsprite-project-versioninfo
+      - id: metadata/binary/layout::pe-embedded
+    any:
+      - id: metadata/binary/metrics/structural::malformed-pe-structure
+      - id: objectives/anti-static/obfuscation/imports::pe-walk-hash-resolver-x64
+      - id: micro-behaviors/process/create/shell/lang::vb6-shell-execution
+      - id: metadata/build/artifact::manifest-version-mismatch
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/signed/developer::oracle-america
+        - id: metadata/signed/platform/
+  - id: microsoft-rundll32-resource-stager
+    desc: Microsoft masquerade rundll32 resource stager
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: microsoft-versioninfo-identity
+      - id: objectives/anti-static/obfuscation/payload/encrypted::high-entropy-rsrc
+      - id: micro-behaviors/process/create/shell/script-host::rundll32-exec
+    any:
+      - id: micro-behaviors/process/create/shell/script-host::cmd-exe-c-command
+      - id: micro-behaviors/process/create/exec::winexec
+      - id: objectives/anti-static/obfuscation/imports::pe-api-hashing-indicator-single
+      - id: micro-behaviors/dylib/load/runtime::load-library-a-string-no-import
+    needs: 2
+    unless:
+      - id: metadata/signed/platform/

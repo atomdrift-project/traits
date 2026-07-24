@@ -1,0 +1,179 @@
+defaults:
+  for:
+    - macho
+    - python
+    - shell
+    # AppleScript stealers (AMOS/Poseidon family) drive app replacement via
+    # `do shell script` — the curl/pkill/rm/unzip patterns appear in-script.
+    - applescript
+  attack: T1574.001
+  platforms:
+    - macos
+  crit: suspicious
+traits:
+  - id: app-contents-path
+    desc: .app/Contents/ bundle path access
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      substr: .app/Contents/
+  - id: ledger-app-path
+    desc: Ledger Live application path reference
+    conf: 0.85
+    if:
+      type: text
+      substr: /Applications/Ledger Live.app
+  - id: wallet-app-path
+    desc: Cryptocurrency wallet application path
+    conf: 0.85
+    if:
+      type: text
+      regex: /Applications/(Ledger (Live|Wallet)|Trezor Suite|Exodus)\.app
+  - id: pkill-ledger-live
+    desc: Kills Ledger Live before swapping it
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: pkill.{0,30}Ledger Live
+  - id: killall-ledger
+    desc: Kills Ledger desktop wallet app
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: killall.{0,30}Ledger
+  - id: unzip-to-applications
+    desc: Unpacks an app into /Applications
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: unzip.{0,50}/Applications
+  - id: unzip-d-applications
+    desc: unzip -d extracts into /Applications
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: unzip.{0,30}-d.{0,30}/Applications
+  - id: curl-app-zip
+    desc: Downloads trojanized .app.zip via curl
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: curl.{0,50}\.app\.zip
+  - id: curl-app-archive
+    desc: Downloads replacement app.zip via curl
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: curl.{0,50}app\.zip
+  - id: wget-app-zip
+    desc: Downloads trojanized .app.zip via wget
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: wget.{0,50}\.app\.zip
+  - id: rm-app-unzip
+    desc: Replaces app via rm then unzip
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: rm.{0,50}\.app.{0,30}&&.{0,30}unzip
+  - id: rm-app-cp
+    desc: Replaces app via rm then cp
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: text
+      regex: rm.{0,50}\.app.{0,30}&&.{0,30}cp
+composite_rules:
+  - id: pkill-ledger
+    desc: Kill Ledger Live process
+    conf: 0.9
+    any:
+      - id: pkill-ledger-live
+      - id: killall-ledger
+  - id: unzip-applications
+    desc: Unzip to /Applications directory
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: unzip-to-applications
+      - id: unzip-d-applications
+  - id: download-app-zip
+    desc: Download application archive
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: curl-app-zip
+      - id: curl-app-archive
+      - id: wget-app-zip
+  - id: app-replacement
+    desc: Application replacement pattern
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: rm-app-unzip
+      - id: rm-app-cp
+  - id: app-replace-action
+    desc: App replacement action
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: unzip-applications
+      - id: download-app-zip
+  - id: ledger-trojanize
+    desc: Ledger Live application replacement attack
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: ledger-app-path
+      - id: pkill-ledger
+      - id: app-replace-action
+  - id: wallet-app-trojanize
+    desc: Cryptocurrency wallet application replacement
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: wallet-app-path
+      - id: micro-behaviors/fs/shell-ops::remove-application-from-applications
+      - id: download-app-zip
+    any:
+      - id: unzip-applications
+      - id: app-replacement
+  - id: app-bundle-hijack
+    desc: macOS app bundle executable hijacking
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/fs/config/bundle::cfbundle-executable-key-reference
+      - id: app-contents-path
+      - id: app-replace-action
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+    unless:
+      - id: well-known/tool/development/pymobiledevice3
+  - id: watchdog-relaunch
+    desc: Process watchdog with app relaunch
+    crit: hostile
+    conf: 0.9
+    attack: T1547.001
+    all:
+      - id: micro-behaviors/process/info/query::get-process-for-pid
+      - id: micro-behaviors/process/create/launch::nsworkspace-app-launch
+      - id: micro-behaviors/time/query::sleep
+  - id: app-trojanize
+    desc: macOS application replacement attack
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/fs/shell-ops::remove-application-from-applications
+      - id: unzip-applications

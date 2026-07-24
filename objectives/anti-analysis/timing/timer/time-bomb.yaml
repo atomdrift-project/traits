@@ -1,0 +1,636 @@
+# Time-Bomb / Dormant Code Detection
+# ATT&CK: T1497.003 (Time Based Evasion)
+# Detects code that activates after a specific date or condition
+defaults:
+  platforms: [windows, unix]
+  crit: suspicious
+  attack: "T1497.003"
+traits:
+  # ============================================================
+  # PYTHON: Time-based triggers
+  # ============================================================
+- id: py-time-epoch-compare
+  desc: Python compares time to epoch timestamp
+  crit: suspicious
+  conf: 0.8
+  for: [python]
+  if:
+    type: text
+    regex: 'time\.time\s*\(\s*\)\s*[<>]=?\s*1[5-9][0-9]{8}'
+- id: py-datetime-compare--rx-1
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  for: [python]
+  if:
+    type: text
+    regex: 'datetime\.(datetime\.)?(now|today)\s*\(\s*\)\s*(<=|>=)\s*[^>\n]{1,120}'
+  count_max: 1015806
+- id: py-datetime-compare--rx-2
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  for: [python]
+  if:
+    type: text
+    regex: 'datetime\.(datetime\.)?(now|today)\s*\(\s*\)\s*(==|!=)\s*[^>\n]{1,120}'
+  count_max: 1015807
+- id: py-datetime-compare--rx-3
+  desc: Regex component marker
+  crit: component
+  conf: 0.75
+  for: [python]
+  if:
+    type: text
+    regex: 'datetime\.(datetime\.)?(now|today)\s*\(\s*\)\s*(<|>)\s*[^>\n]{1,120}'
+  count_max: 1015808
+- id: py-long-sleep
+  desc: Python long sleep call
+  crit: component
+  conf: 0.8
+  for: [python]
+  if:
+    type: text
+    regex: 'time\.sleep\s*\(\s*[0-9]{4,}\s*\)'
+  # ============================================================
+  # JAVASCRIPT: Time-based triggers
+  # ============================================================
+- id: js-date-now-compare
+  desc: JavaScript Date.now() comparison
+  crit: suspicious
+  conf: 0.8
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'Date\.now\s*\(\s*\)\s*[<>]\s*1[5-9][0-9]{11}'
+- id: js-new-date-compare
+  desc: JavaScript new Date() comparison
+  crit: suspicious
+  conf: 0.75
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'new Date\s*\(\s*["'']?[12][0-9]{3}[-/,][^)]{0,24}\)\s*[<>!=]=?'
+  unless:
+  - id: well-known/app/pinokio::app-bundle
+  - id: well-known/app/rancher-desktop::app-bundle
+  - id: well-known/lib/node-abi::source-target-lookup
+  - id: well-known/lib/node-abi::lts-status-window
+  - id: well-known/lib/node-abi::package-name
+  # Atomic: JavaScript time check followed by dangerous functions
+- id: js-datenow-then-eval
+  desc: JavaScript Date.now() followed by eval
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  size_max: 102400
+  if:
+    type: text
+    regex: 'Date\.now\(\)[^\n]{0,80}[<>!=]=?[^\n]{0,120}eval\s*\('
+- id: js-datenow-then-function
+  desc: 'JS Date.now() followed by func constructor'
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: 'Date\.now\(\)[^\n]{0,80}[<>!=]=?[^\n]{0,80}(new\s+)?\bFunction\s*\('
+  unless:
+  - id: metadata/library/structure/
+- id: js-newdate-then-function
+  desc: 'JS new Date() followed by func constructor'
+  crit: suspicious
+  conf: 0.9
+  for: [javascript, typescript]
+  size_max: 300000
+  if:
+    type: text
+    regex: 'new Date[^\n]{0,80}[<>!=]=?[^\n]{0,80}(new\s+)?\bFunction\s*\('
+  unless:
+    - id: metadata/library/semantic-ui/
+    - id: well-known/lib/web-ui-vendors/
+    - id: well-known/app/matomo/
+  # ============================================================
+  # GO: Time-based triggers
+  # ============================================================
+- id: go-time-unix-compare
+  desc: Go Unix timestamp comparison
+  crit: suspicious
+  conf: 0.8
+  for: [go]
+  if:
+    type: text
+    regex: 'time\.Now\(\)\.Unix\(\)\s*[<>]\s*1[5-9][0-9]{8}'
+  # ============================================================
+  # SHELL: Time-based triggers
+  # ============================================================
+- id: shell-date-compare
+  desc: Shell date comparison
+  crit: suspicious
+  conf: 0.75
+  for: [shell]
+  if:
+    type: text
+    regex: '\$\(date\s+\+%s\)\s*-[gl]t\s*1[5-9][0-9]{8}'
+- id: shell-sleep-exec
+  desc: Shell long sleep before command
+  crit: suspicious
+  conf: 0.8
+  for: [shell]
+  if:
+    type: text
+    regex: 'sleep\s+[0-9]{4,}\s*[;&]\s*(curl|wget|sh|shell)'
+  # Atomic: CI environment detection
+- id: ci-env-github-actions
+    # ============================================================
+    # ENVIRONMENT-BASED TRIGGERS
+    # ============================================================
+
+  desc: GitHub Actions environment check
+  crit: component
+  conf: 0.85
+  for: [python, javascript, shell, go, ruby]
+  if:
+    type: text
+    regex: 'GITHUB_ACTIONS\s*[=!]'
+- id: ci-env-travis-jenkins
+  desc: Travis or Jenkins environment check
+  crit: component
+  conf: 0.85
+  for: [python, javascript, shell, ruby]
+  if:
+    type: text
+    regex: '(TRAVIS|JENKINS)\s*([=!]=|-n|-z)'
+- id: ci-env-gitlab
+  desc: GitLab CI environment check
+  crit: component
+  conf: 0.85
+  for: [python, javascript, shell, go, ruby]
+  if:
+    type: text
+    regex: 'GITLAB_CI\s*[=!]'
+  # Atomic: CI environment followed by exfil methods (decomposed by CI type)
+- id: ci-var-then-curl
+  desc: CI variable followed by curl
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: '(\$CI\b|\bCI\s*[=!]=)[^\r\n]{0,200}\bcurl\b'
+- id: ci-var-then-wget
+  desc: CI variable followed by wget
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: '(\$CI\b|\bCI\s*[=!]=)[^\r\n]{0,200}\bwget\b'
+- id: github-actions-then-curl
+  desc: GITHUB_ACTIONS followed by curl
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: 'GITHUB_ACTIONS[^\r\n]{0,200}\bcurl\b'
+  not:
+  - substr: codecov.io/env
+  - regex: '--preserve-env=[A-Z0-9_,]*GITHUB_ACTIONS'
+  unless:
+  - id: well-known/tool/development/codecov::official-env-helper
+  downgrade:
+    any:
+    - type: text
+      regex: '/\.github/'
+    - type: text
+      regex: '(curl_version|curl --version|curl -V)\b'
+- id: github-actions-then-wget
+  desc: GITHUB_ACTIONS followed by wget
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: 'GITHUB_ACTIONS[^\r\n]{0,200}\bwget\b'
+  unless:
+  - type: text
+    substr: github.com/google/protobuf/releases/download/
+  downgrade:
+    any:
+    - type: text
+      regex: '/\.github/'
+
+- id: travis-then-curl
+  desc: Travis CI followed by curl upload
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: 'TRAVIS[\s\S]{0,200}\bcurl\b[^\n]{0,200}\s(-[dFT]|--(data|form|upload-file))'
+  unless:
+  - type: text
+    regex: 'TRAVIS_GO_VERSION[\s\S]{0,200}curl'
+  - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
+  - type: text
+    substr: github.com/premake/premake-core/releases/download
+- id: ci-exfil-requests
+  desc: CI check followed by requests
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: '(\$CI\b|\bCI\s*[=!]=)[\s\S]{0,200}requests'
+- id: github-actions-then-requests
+  desc: GITHUB_ACTIONS followed by requests
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  unless:
+  - id: well-known/tool/detection/
+  - id: metadata/package/testing/
+  - type: basename
+    exact: Update_Remote_Settings.py
+  if:
+    type: text
+    regex: 'GITHUB_ACTIONS[\s\S]{0,200}requests'
+- id: travis-then-requests
+  desc: Travis followed by requests API call
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: 'TRAVIS[\s\S]{0,200}\brequests\.[a-z_]+\s*\('
+- id: ci-var-then-fetch
+  desc: CI variable followed by fetch
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript, shell]
+  if:
+    type: text
+    regex: '(\$CI\b|\bCI\s*[=!]=)[\s\S]{0,200}fetch'
+- id: ci-var-then-http
+  desc: CI variable followed by http
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript]
+  if:
+    type: text
+    regex: '(\$CI\b|\bCI\s*[=!]=)[\s\S]{0,200}(https?://|https?\.(get|request))'
+  unless:
+  - id: well-known/lib/nextjs/
+  - id: well-known/lib/nextjs::package-member-context
+  - id: metadata/file/format::sourcemap-sources-content
+  - type: path
+    regex: '(?i)(^|[\\/])(tests?|testmode|fixtures?)([\\/]|$)'
+  - type: path
+    basename: true
+    regex: '(?i)\\.map$'
+- id: github-actions-then-http
+  desc: GitHub Actions env check then HTTP
+  crit: suspicious
+  conf: 0.95
+  for: [python, javascript]
+  if:
+    type: text
+    regex: 'process\.env\.GITHUB_ACTIONS[\s\S]{0,200}https?://'
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/library/github-actions/
+  - id: metadata/package/testing/presence/scripted::dot-spec-filename
+  - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+  - type: text
+    substr: GitHub Actions always skips this regardless of USE_PROXY.
+  - id: slsa-provenance-ci-metadata-marker
+  not:
+  - substr: "@see https://github.com/watson/ci-info"
+- id: slsa-provenance-string
+  desc: SLSA provenance string
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: SLSA provenance
+- id: ci-environment-class
+  desc: CIEnvironment class reference
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: CIEnvironment
+- id: ci-invocation-url-field
+  desc: CI invocation URL field
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    substr: invocation_url
+- id: travis-then-fetch
+  desc: Travis CI followed by JavaScript fetch call
+  crit: suspicious
+  conf: 0.95
+  # A shell `git fetch` in a CI validation helper is ordinary source
+  # synchronization, not conditional exfiltration.
+  for: [javascript]
+  if:
+    type: text
+    regex: '\bTRAVIS(_|$|\b)[\s\S]{0,200}\bfetch\s*\('
+  unless:
+  - id: metadata/package/files/system-package::debian-missing-sources-vendored-crate
+- id: travis-then-http
+  desc: Travis CI guarded Python HTTP request
+  crit: suspicious
+  conf: 0.95
+  for: [python]
+  if:
+    type: text
+    regex: 'TRAVIS_[A-Z0-9_]+[\s\S]{0,200}requests\.(get|post|request)\(["'']https?://'
+  not:
+  - substr: "registry:"
+  - substr: "{npm-version}"
+  - regex: '#\s*(?:See|Consume)[^\n]*https?://'
+  - regex: 'docs\.travis-ci\.com|www\.appveyor\.com/docs/environment-variables|docs\.github\.com/en/actions'
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+  - id: well-known/app/aws-sam-cli/
+  - type: text
+    substr: "api.github.com"
+- id: travis-then-http-lib
+  desc: Travis CI guarded Node HTTPS request
+  crit: suspicious
+  conf: 0.95
+  for: [javascript]
+  if:
+    type: text
+    regex: 'process\.env\.TRAVIS_[A-Z0-9_]+[\s\S]{0,200}https\.(get|request)\('
+  not:
+  - substr: "registry:"
+  - substr: "{npm-version}"
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+  - type: text
+    substr: "api.github.com"
+composite_rules:
+- id: slsa-provenance-ci-metadata-marker
+  desc: SLSA provenance CI metadata marker
+  crit: notable
+  conf: 0.9
+  for: [python]
+  all:
+  - id: slsa-provenance-string
+  - id: ci-environment-class
+  - id: ci-invocation-url-field
+- id: py-time-then-exec
+  desc: Python time gate near exec
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  near_lines: 10
+  all:
+  - id: micro-behaviors/time/query::py-time-call
+  - id: py-time-epoch-compare
+  - id: micro-behaviors/process/interpreter/python::exec-builtin
+- id: py-time-then-eval
+  desc: Python time gate near eval
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  near_lines: 10
+  all:
+  - id: micro-behaviors/time/query::py-time-call
+  - id: py-time-epoch-compare
+  - id: micro-behaviors/process/interpreter/python::eval-builtin
+- id: py-time-then-os-system
+  desc: Python time gate near os.system
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  near_lines: 10
+  all:
+  - id: micro-behaviors/time/query::py-time-call
+  - id: py-time-epoch-compare
+  - id: micro-behaviors/process/create/system::python-os-system
+- id: py-time-then-subprocess
+  desc: Python time gate near subprocess
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  near_lines: 10
+  all:
+  - id: micro-behaviors/time/query::py-time-call
+  - id: py-time-epoch-compare
+  - id: micro-behaviors/process/create/subprocess::process-execution
+- id: py-datetime-then-exec
+  desc: Python datetime gate near eval
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  near_lines: 10
+  all:
+  - id: micro-behaviors/time/query::py-datetime-now-call
+  - id: py-datetime-compare
+  any:
+  - id: micro-behaviors/process/interpreter/python::exec-builtin
+  - id: micro-behaviors/process/interpreter/python::eval-builtin
+- id: py-datetime-then-subprocess
+  desc: Python datetime gate near subprocess
+  crit: suspicious
+  conf: 0.9
+  for: [python]
+  near_lines: 10
+  all:
+  - id: micro-behaviors/time/query::py-datetime-now-call
+  - id: py-datetime-compare
+  - id: micro-behaviors/process/create/subprocess::process-execution
+  unless:
+  - id: metadata/package/testing/presence/harness::curl-http-testenv-path
+- id: py-sleep-then-exec
+  desc: Python long sleep near execution
+  crit: suspicious
+  conf: 0.85
+  for: [python]
+  near_lines: 10
+  all:
+  - id: py-long-sleep
+  any:
+  # Use structured call facts here. The broad process-execution composite also
+  # has text fallbacks, which can see illustrative subprocess calls inside a
+  # documentation string (for example, an SSH example with a one-hour sleep).
+  - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: micro-behaviors/process/create/subprocess::run-ast
+  - id: micro-behaviors/process/create/subprocess::call-ast
+  - id: micro-behaviors/process/create/system::python-os-system
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/harness/
+  # === Python Date Conditional Exec (decomposed) ===
+- id: py-date-conditional-exec
+  desc: Python exec/eval after date check
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: py-time-then-exec
+  - id: py-time-then-eval
+  - id: py-time-then-os-system
+  - id: py-time-then-subprocess
+  - id: py-datetime-then-exec
+  - id: py-datetime-then-subprocess
+  # === CI Environment Trigger (decomposed) ===
+- id: ci-env-trigger
+  desc: Checks CI runner environment variables
+  crit: suspicious
+  conf: 0.85
+  any:
+  - id: ci-env-github-actions
+  - id: ci-env-travis-jenkins
+  - id: ci-env-gitlab
+  unless:
+  - id: metadata/package/testing/presence/harness/
+  - id: slsa-provenance-ci-metadata-marker
+  - id: metadata/package/testing/presence/harness::package-tests-with-site-packages-marker
+  - id: well-known/lib/conda-package/
+  # === CI Conditional Exfil (decomposed) ===
+- id: ci-conditional-exfil
+  desc: Exfiltration in CI environment only
+  crit: suspicious
+  conf: 0.95
+  any:
+  - id: ci-var-then-curl
+  - id: ci-var-then-wget
+  - id: github-actions-then-curl
+  - id: github-actions-then-wget
+  - id: travis-then-curl
+  - id: ci-exfil-requests
+  - id: github-actions-then-requests
+  - id: travis-then-requests
+  - id: ci-var-then-fetch
+  - id: ci-var-then-http
+  - id: micro-behaviors/os/env/vars/cicd::github-actions-gated-fetch
+  - id: github-actions-then-http
+  - id: travis-then-fetch
+  - id: travis-then-http
+  unless:
+  - id: metadata/package/testing/presence/harness/
+  - id: slsa-provenance-ci-metadata-marker
+  - id: metadata/package/testing/presence/harness::package-tests-with-site-packages-marker
+  - id: well-known/lib/conda-package/
+  - id: well-known/tool/development/codecov::official-env-helper
+  # === Python Time Bomb ===
+- id: python-time-bomb
+  desc: Python time-based dormant code
+  crit: hostile
+  conf: 0.9
+  any:
+  - id: py-date-conditional-exec
+  - id: py-sleep-then-exec
+  all:
+  - id: py-time-epoch-compare
+  # === JavaScript Time Conditional Eval (decomposed) ===
+- id: js-time-conditional-eval
+  desc: JavaScript eval/Function after time check
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: js-datenow-then-eval
+  - id: js-datenow-then-function
+  - id: js-newdate-then-function
+  # === JavaScript install-delay dormancy ===
+  # Kept suspicious, not hostile: a benign trial/license timer can also add a
+  # multi-day offset to a captured start time. The dormancy is a real evasion
+  # signal but needs a malicious activation payload nearby to be an attack.
+- id: js-long-duration-threshold-check
+  desc: JavaScript long-duration time threshold check
+  crit: suspicious
+  conf: 0.85
+  for: [javascript, typescript]
+  near_lines: 40
+  all:
+  - id: micro-behaviors/time/timing/check::js-multi-hour-ms-duration
+  - id: micro-behaviors/time/timing/check::js-date-now-relative-threshold
+  unless:
+  - id: metadata/library/structure/
+  - id: micro-behaviors/time/timing/check::js-session-state-reference
+  # === JavaScript Time Bomb ===
+- id: javascript-time-bomb
+  desc: JavaScript time-based dormant code
+  crit: hostile
+  conf: 0.9
+  any:
+  - id: js-time-conditional-eval
+  unless:
+  - id: metadata/library/structure::js-large-module-bundle
+  - id: javascript-time-bomb-recognized-bundle-marker
+  - id: well-known/lib/ace-editor
+  - id: well-known/lib/web-ui-vendors/
+  - id: metadata/library/web-frameworks/
+  - id: well-known/lib/partytown/
+  # Recognized bundle contexts suppress the time-bomb host rule but are not
+  # themselves positive evidence.
+- id: javascript-time-bomb-recognized-bundle-marker
+  desc: Recognized JavaScript bundle context for time-bomb suppression
+  crit: exception
+  conf: 0.9
+  any:
+  - id: well-known/app/browser-extension::localcdn-angular-ui-library
+  - id: well-known/lib/firebug-lite::firebug-lite-debug-bundle
+  - id: well-known/app/tencent-codebuddy::tencent-codebuddy-sdk-bundle
+  - id: well-known/lib/jquery-timepicker::jquery-timepicker-basename
+  - id: well-known/app/matomo::matomo-tagmanager-basename
+  # === Go Time Conditional Exec ===
+- id: go-time-after-check
+  desc: Go time-gated command execution
+  crit: suspicious
+  conf: 0.75
+  near_bytes: 1200
+  all:
+  - id: go-time-unix-compare
+  - id: micro-behaviors/process/create/direct::exec-command
+  unless:
+  - id: metadata/package/testing/harness/unit/
+  - id: metadata/package/testing/presence/harness::go-test-file
+  - id: metadata/lang/source::go-authors-bsd-header
+  - id: well-known/lib/golang-x-tools/
+  # === CI-Triggered Malware ===
+- id: ci-triggered-malware
+  desc: Code activates only in CI environment
+  crit: hostile
+  conf: 0.95
+  mbc: "B0007"
+  all:
+  - id: ci-env-trigger
+  - id: ci-conditional-exfil
+  unless:
+  - id: metadata/package/testing/presence/harness/
+  - id: slsa-provenance-ci-metadata-marker
+  - id: well-known/lib/conda-package/
+  downgrade:
+    any:
+    - id: metadata/file/string/cicd::github-workflows-path-string
+- id: time-bomb-detected
+  desc: Time-based dormant code detected
+  crit: hostile
+  conf: 0.9
+  any:
+  - id: python-time-bomb
+  - id: javascript-time-bomb
+  - id: go-time-unix-compare
+  - id: shell-sleep-exec
+- id: py-datetime-compare
+  desc: Python datetime comparison to future date
+  crit: suspicious
+  conf: 0.75
+  for: [python]
+  any:
+  - id: py-datetime-compare--rx-1
+  - id: py-datetime-compare--rx-2
+  - id: py-datetime-compare--rx-3
+  unless:
+  - id: metadata/package/testing/presence/harness::curl-http-testenv-path

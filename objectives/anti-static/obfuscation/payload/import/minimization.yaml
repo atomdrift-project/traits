@@ -1,0 +1,403 @@
+# Import table minimization patterns - indicators of string/import obfuscation.
+# Malware often uses minimal imports + dynamic loading to evade static analysis.
+# Per-API atomics live in their canonical micro-behaviors/ homes (dylib/load,
+# mem/protect, crypto/library, process/create/exec, fs/file/open, etc.).
+defaults:
+  platforms: [linux, macos, windows]
+  mbc: "B0032"
+  attack: "T1027"
+traits:
+  - id: imports-at-most-50-macho
+    desc: Mach-O has 50 or fewer imported symbols
+    crit: component
+    conf: 0.8
+    for: [macho]
+    if:
+      type: metrics
+      field: imports.count
+      max: 50
+composite_rules:
+  - id: minimal-imports
+    desc: Mach-O command runner with sparse imports
+    crit: suspicious
+    conf: 0.8
+    for: [macho]
+    all:
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: imports-at-most-50-macho
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-50
+
+  # === Helpers ===
+  - id: pe-dynamic-resolution
+    desc: PE dynamic API resolution primitive
+    crit: component
+    for: [pe]
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      # Source-language GetProcAddress references (non-PE).
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+
+  - id: pe-exec-primitive
+    desc: PE process-execution primitive
+    crit: component
+    for: [pe]
+    any:
+      - id: micro-behaviors/process/create/exec::shell-execute
+      - id: micro-behaviors/process/create/exec::winexec
+      - id: micro-behaviors/process/create/spawn::create-process-a
+      - id: micro-behaviors/process/create/spawn::create-process-w
+
+  - id: pe-memory-allocation-primitive
+    desc: PE memory allocation primitive
+    crit: component
+    for: [pe]
+    any:
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/mem/alloc/heap::heap-alloc
+      - id: micro-behaviors/mem/alloc/heap::heap-free
+
+  - id: elf-dynamic-resolution
+    desc: ELF dynamic API resolution primitive
+    crit: component
+    for: [elf]
+    any:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+      - id: objectives/anti-static/obfuscation/reflection/class::dlopen
+
+  - id: minimal-pe-dynamic-load-recognized-marker
+    desc: Recognized packed or signed minimal-import PE marker
+    crit: component
+    for: [pe]
+    any:
+      - id: micro-behaviors/data/encode/pecompact
+      - id: metadata/binary/section/names::upx-section
+      - id: metadata/binary/section/names::pdi-section
+      - id: metadata/signed/certificate/identity::pe-signature-verified
+      - id: well-known/app/dell-display-manager::dell-display-manager-packed-binary
+      - id: well-known/app/protected-benign-pe/
+      - id: objectives/anti-static/pack/asprotect::asprotect-protector-application
+      - id: objectives/anti-static/pack/uharc::uharc-version-string
+
+  # Minimal-import PE contexts that are known-benign rather than concealed:
+  # SVKP-packed binaries and Wine/ReactOS builtins (thin forwarder stubs that
+  # implement the Windows API surface instead of importing it).
+  - id: minimal-import-recognized-pe
+    desc: Known-recognized minimal-import PE marker
+    crit: component
+    conf: 0.9
+    for: [pe]
+    any:
+      - id: metadata/binary/layout::svk-packed-section
+      - id: metadata/binary/vendor::windows-system-implementer-dll
+
+  # === Windows PE Import Patterns ===
+  - id: minimal-pe-dynamic-load
+    desc: Minimal PE imports with dynamic loading
+    crit: suspicious
+    conf: 0.75
+    for: [pe]
+    size_min: 8192
+    all:
+      - id: pe-dynamic-resolution
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-30
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/symbols/exports/
+      - id: metadata/binary/layout::svk-packed-section
+      # Vendor string hits (e.g. "Microsoft Corporation" in leftover EULA
+      # bytes) must not wipe minimal-import crypt stubs — only real
+      # Microsoft identity claims.
+      - id: metadata/binary/vendor::is-microsoft-named
+      - id: metadata/binary/vendor::microsoft-corp-versioninfo
+      - id: metadata/binary/vendor::windows-system-implementer-dll
+      # MinGW's pseudo-relocation runtime resolves imported symbols and
+      # temporarily makes image pages writable as part of normal startup.
+      - id: metadata/lang/compiler/native::mingw-pseudo-reloc-runtime
+    downgrade:
+      any:
+        - id: objectives/anti-static/obfuscation/payload/import/
+
+  - id: crypto-minimal-pe
+    desc: Crypto API with minimal imports
+    crit: suspicious
+    conf: 0.8
+    for: [pe]
+    all:
+      - id: micro-behaviors/crypto/library/provider::capi-key-material-setup
+    any:
+      - id: pe-dynamic-resolution
+      - id: pe-exec-primitive
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-30
+      - id: metadata/package/quality/
+      - id: metadata/binary/section/names::upx-section
+  - id: shell-exec-minimal-imports
+    desc: Execution capability with minimal imports
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    all:
+      - id: pe-exec-primitive
+    any:
+      - id: pe-dynamic-resolution
+      - id: pe-memory-allocation-primitive
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-40
+      - id: metadata/binary/symbols/exports/
+      - id: objectives/anti-static/obfuscation/payload/import/
+      - id: micro-behaviors/data/encode/pecompact
+    downgrade:
+      any:
+        - id: metadata/binary/section/names::upx-section
+        - id: micro-behaviors/data/encode/pecompact::pecompact-signature
+        - id: metadata/lang/compiler/managed/
+  - id: extreme-minimal-imports
+    desc: Extremely minimal import table
+    crit: notable
+    conf: 0.8
+    for: [pe, elf]
+    size_min: 32768
+    any:
+      - id: pe-dynamic-resolution
+      - id: pe-memory-allocation-primitive
+      - id: pe-exec-primitive
+      - id: micro-behaviors/crypto/library/provider::capi-key-material-setup
+      - id: elf-dynamic-resolution
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-20
+      - id: metadata/package/versioning/
+      - id: objectives/anti-static/obfuscation/payload/import/
+      - id: well-known/app/drivers/
+    downgrade:
+      any:
+        - id: metadata/binary/section/names::upx-section
+        - id: micro-behaviors/data/encode/pecompact::pecompact-signature
+        - id: objectives/anti-static/pack/detect::enigma-protector
+
+  - id: suspicious-ratio-imports
+    desc: High ratio of suspicious to total imports
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    any:
+      - id: pe-dynamic-resolution
+      - id: pe-memory-allocation-primitive
+      - id: pe-exec-primitive
+      - id: micro-behaviors/crypto/library/provider::capi-key-material-setup
+      - id: micro-behaviors/fs/file/open::file-create-win
+      - id: micro-behaviors/fs/file/delete::deletefile-a
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+      - id: micro-behaviors/process/terminate/kill::terminate-process
+      - id: micro-behaviors/os/registry/access::reg-create-key-ex-w
+      - id: micro-behaviors/os/registry/access::reg-set-value-ex-w
+      - id: micro-behaviors/communications/socket/init::wsa-startup
+      - id: micro-behaviors/communications/socket/init::socket-api
+      - id: micro-behaviors/communications/socket/init::connect-api
+    needs: 7
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-25
+    downgrade:
+      any:
+        - id: metadata/binary/section/names::upx-section
+
+  - id: getprocaddress-large-pe-few-imports
+    desc: Large PE with sparse imports
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    size_min: 4194304
+    all:
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-100
+      - id: metadata/binary/installer/family/
+      - id: metadata/signed/platform/
+      - id: micro-behaviors/fs/temp/pyinstaller/
+
+  # === ELF Import Patterns ===
+  - id: minimal-elf-dynamic-load
+    desc: Minimal ELF imports with dynamic loading
+    crit: notable
+    conf: 0.75
+    for: [elf]
+    all:
+      - id: elf-dynamic-resolution
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-30
+      - id: metadata/binary/provenance/
+      - id: objectives/evasion/hijack-execution-flow/linker/
+      - id: well-known/lib/modernc-libc::libc-xdlsym-runtime
+      - id: objectives/anti-static/obfuscation/payload/import/
+      - id: well-known/lib/android-renderscript
+      - id: well-known/lib/jruby/
+
+  - id: minimal-elf-execution-resolution
+    desc: Minimal-import ELF with dynamic resolution or shell execution
+    crit: suspicious
+    conf: 0.8
+    for: [elf]
+    any:
+      - id: elf-dynamic-resolution
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+    needs: 2
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-30
+      - id: micro-behaviors/dylib/library/family/
+      - id: well-known/app/drivers/
+      - id: well-known/tool/sysadmin/unix-benign/
+      - id: well-known/lib/modernc-libc::libc-xdlsym-runtime
+      - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
+
+  # === Mach-O Import Patterns ===
+  - id: macho-max-35-imports
+    desc: Mach-O with 35 or fewer imports
+    crit: suspicious
+    conf: 0.5
+    for: [macho]
+    size_min: 524288
+    all:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+    unless:
+      - id: metadata/binary/metrics/threshold::many-imports-40
+      - id: well-known/lib/jvm
+      - id: well-known/lib/skiko
+      - id: metadata/binary/framework/
+      # Statically-linked Rust/Go (and other massive runtimes) ship few dynamic
+      # imports by design + a runtime dlsym — that is not obfuscation. Mirrors
+      # benign-elf-runtime-dynamic-resolution for the ELF siblings above.
+      - id: metadata/lang/compiler/systems/
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/binary/metrics/size::massive-executable
+
+  - id: macho-stealth-resolution
+    desc: Mach-O stealth resolution
+    crit: suspicious
+    conf: 0.8
+    for: [macho]
+    any:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+      - id: micro-behaviors/os/syscall/invoke::darwin-arm64-direct-syscall
+
+  - id: macho-concealed-capability
+    desc: Mach-O concealing capabilities
+    crit: suspicious
+    conf: 0.85
+    for: [macho]
+    all:
+      - id: macho-max-35-imports
+      - id: macho-stealth-resolution
+    any:
+      - id: objectives/anti-static/obfuscation/payload/encrypted::math-cipher-imports
+      - id: micro-behaviors/process/create/shell/spawn::system-fn
+
+  # === PE Ransomware/Dropper Patterns ===
+  - id: pe-dropper-minimal-imports
+    desc: PE dropper with minimal imports
+    crit: hostile
+    conf: 0.9
+    for: [pe]
+    all:
+      - id: minimal-pe-dynamic-load
+    needs: 2
+    any:
+      - id: crypto-minimal-pe
+      - id: shell-exec-minimal-imports
+      - id: extreme-minimal-imports
+    unless:
+      - id: metadata/binary/section/names::upx-section
+      - id: micro-behaviors/data/encode/pecompact::pecompact-signature
+      - id: metadata/lang/compiler/managed/
+      - id: metadata/binary/layout::svk-packed-section
+      - id: objectives/anti-static/pack/detect::enigma-protector
+      - id: metadata/binary/symbols/exports/
+
+  - id: masqueraded-aspack-dynamic-loader
+    desc: Masqueraded ASPack PE with dynamic loader
+    crit: hostile
+    conf: 0.98
+    for: [pe]
+    attack: T1027.002,T1036.005,T1620
+    all:
+      - id: objectives/evasion/masquerade/version-resource/contradiction::microsoft-firewall-xiang-masquerade
+      - id: metadata/binary/section/names::aspack-section
+      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: pe-concealed-capability
+    desc: PE concealing capabilities
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    needs: 2
+    any:
+      - id: crypto-minimal-pe
+      - id: shell-exec-minimal-imports
+      - id: suspicious-ratio-imports
+      - id: extreme-minimal-imports
+    unless:
+      - id: metadata/binary/symbols/exports/
+      - id: metadata/binary/layout::svk-packed-section
+      - id: micro-behaviors/data/encode/pecompact
+    downgrade:
+      any:
+        - id: metadata/binary/section/names::upx-section
+        - id: micro-behaviors/data/encode/pecompact::pecompact-signature
+        - id: metadata/lang/compiler/managed/
+        - id: objectives/anti-static/pack/detect::enigma-protector
+  - id: elf-concealed-capability
+    desc: ELF concealing capabilities
+    crit: notable
+    conf: 0.85
+    for: [elf]
+    all:
+      - id: minimal-elf-dynamic-load
+    any:
+      - id: minimal-elf-execution-resolution
+      - id: extreme-minimal-imports
+    unless:
+      - id: metadata/binary/provenance/
+      - id: objectives/evasion/hijack-execution-flow/linker/
+      - id: well-known/lib/modernc-libc::libc-xdlsym-runtime
+      - id: objectives/anti-static/obfuscation/payload/import/
+      - id: well-known/lib/android-renderscript
+      - id: micro-behaviors/dylib/library/family/
+
+  - id: recognized-elf-runtime-dynamic-resolution
+    desc: Recognized large runtime dynamic resolution marker
+    crit: component
+    for: [elf]
+    any:
+      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: metadata/binary/metrics/size::massive-executable
+      - id: micro-behaviors/dylib/library/family::system-lib-marker
+      - id: micro-behaviors/dylib/library/libc::glibc-versioned-libdl
+      - id: metadata/lang/compiler/systems::rust-binary
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: metadata/lang/compiler/systems::go-binary-comp
+      - id: well-known/app/drivers::nvidia-linux-driver-component
+
+  - id: packed-pe-concealed-network-process-capabilities
+    desc: Packed PE hides network and process APIs behind dynamic resolution
+    crit: hostile
+    conf: 0.97
+    attack: T1027.002,T1620
+    for: [pe]
+    all:
+      - id: pe-dynamic-resolution
+      - id: metadata/binary/layout::overlay-dominates-80pct
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
+      - id: micro-behaviors/communications/socket/init::recv-api
+      - id: micro-behaviors/process/create/launch::create-process-api-name
+    any:
+      - id: micro-behaviors/dylib/load/runtime::load-library-a
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/framework/

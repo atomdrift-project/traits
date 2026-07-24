@@ -1,0 +1,187 @@
+# x86-64 Linux Raw Syscall Patterns
+# Detects direct syscall invocation via push/pop sequences
+# Common in shellcode and position-independent code
+defaults:
+  for: [elf]
+  platforms: [linux]
+  crit: notable
+  conf: 0.85
+traits:
+  # Syscall 9 = mmap on Linux x86-64
+  # Hex: 6a 09 58 ... 0f 05 (push 9; pop rax; syscall)
+  - id: x64-mmap-syscall
+    desc: x86-64 mmap syscall via push/pop
+    if:
+      type: hex
+      section: ".text"
+      pattern: "6a 09 58 [0-20] 0f 05"
+  # Sectionless ELF files have no `.text` metadata, so retain a raw form for
+  # the same operation. The short push/pop idiom is uncommon outside of
+  # hand-written loaders and shellcode.
+  - id: x64-mmap-syscall-sectionless
+    desc: x86-64 mmap syscall in sectionless code
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\x6a\x09\x58.{0,20}\x0f\x05'
+  - id: x64-mprotect-syscall-sectionless
+    desc: x86-64 mprotect syscall in sectionless code
+    crit: notable
+    conf: 0.92
+    if:
+      type: raw
+      regex: '\x6a\x0a\x58.{0,20}\x0f\x05'
+  # Syscall 41 = socket
+  - id: x64-socket-syscall
+    desc: x86-64 socket syscall via push/pop
+    if:
+      type: hex
+      section: ".text"
+      pattern: "6a 29 58 [0-20] 0f 05"
+  # Syscall 42 = connect
+  - id: x64-connect-syscall
+    desc: x86-64 connect syscall via push/pop
+    if:
+      type: hex
+      section: ".text"
+      pattern: "6a 2a 58 [0-20] 0f 05"
+  # Syscall 35 = nanosleep
+  - id: x64-nanosleep-syscall
+    desc: x86-64 nanosleep syscall via push/pop
+    if:
+      type: hex
+      section: ".text"
+      pattern: "6a 23 58 [0-20] 0f 05"
+  # Syscall 60 = exit
+  - id: x64-exit-syscall
+    desc: x86-64 exit syscall via push/pop
+    crit: baseline
+    if:
+      type: hex
+      section: ".text"
+      pattern: "6a 3c 58 [0-20] 0f 05"
+  # Syscall 0 = read
+  - id: x64-read-syscall
+    desc: x86-64 read syscall via push/pop
+    crit: baseline
+    if:
+      type: hex
+      section: ".text"
+      pattern: "6a 00 58 [0-20] 0f 05"
+  - id: x64-mmap-rwx-syscall-early
+    desc: Early RWX mmap syscall
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      offset_range: [64, 4096]
+      pattern: "6a 09 58 ?? b6 10 48 89 d6 4d 31 c9 6a 22 41 5a b2 07 0f 05"
+  - id: x64-socket-inline-connect-early
+    desc: Early socket with inline connect
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      offset_range: [64, 4096]
+      pattern: "6a 29 58 99 6a 02 5f 6a 01 5e 0f 05 [0-32] 48 b9 02 00 ?? ?? ?? ?? ?? ?? [0-32] 6a 2a 58 0f 05"
+  - id: x64-read-stage-jump-rsi
+    desc: Read network stage then jump
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      offset_range: [64, 4096]
+      pattern: "6a 7e 5a 0f 05 48 85 c0 78 ?? ff e6"
+  - id: x64-raw-syscall-wrapper
+    desc: x86-64 raw syscall wrapper
+    crit: notable
+    conf: 0.9
+    arch: [x86-64]
+    if:
+      type: hex
+      section: ".text"
+      pattern: "48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 c3"
+
+  # ---- mov-immediate syscall idiom (`mov eax, N; ...; syscall`) ----
+  #
+  # The push/pop atoms above are shellcode-specific: a compiler never emits
+  # `push 9; pop rax`, so they stay notable standalone. The `mov eax, imm; syscall`
+  # idiom below is NOT shellcode-specific -- it is exactly what a libc syscall
+  # wrapper compiles to, so on a static-libc binary it appears hundreds of times.
+  # These atoms are therefore `component`: a single site means little on its own;
+  # the analyst-facing signal is a mov-immediate site in a *nolibc* binary with a
+  # handful of functions (a hand-written syscall program -- see the composites,
+  # and the benign archetype samples/benign/handwritten-asm/pong.elf), which the
+  # `elf-needed-libs-zero` + low `functions.count` gate expresses.
+  #
+  # Not section-scoped: the binaries that hand-roll syscalls are frequently
+  # section-header-less, so `section: ".text"` would make these blind exactly where
+  # they matter. `offset_range` bounds the scan to the code region instead.
+  # `b8 XX 00 00 00` = `mov eax, 0xXX`; the high three bytes pin the syscall number
+  # to <= 255, which covers every syscall these composites target.
+  - id: x64-mov-syscall-dispatch
+    desc: Direct syscall dispatch via mov-immediate
+    crit: component
+    conf: 0.8
+    if:
+      type: hex
+      offset_range: [64, 262144]
+      pattern: "b8 ?? 00 00 00 [0-32] 0f 05"
+  - id: x64-mov-execve-syscall
+    desc: execve(2) via mov-immediate syscall
+    crit: component
+    conf: 0.85
+    if:
+      type: hex
+      offset_range: [64, 262144]
+      pattern: "b8 3b 00 00 00 [0-24] 0f 05"
+  - id: x64-mov-socket-syscall
+    desc: socket(2) via mov-immediate syscall
+    crit: component
+    conf: 0.85
+    if:
+      type: hex
+      offset_range: [64, 262144]
+      pattern: "b8 29 00 00 00 [0-24] 0f 05"
+  - id: x64-mov-connect-syscall
+    desc: connect(2) via mov-immediate syscall
+    crit: component
+    conf: 0.85
+    if:
+      type: hex
+      offset_range: [64, 262144]
+      pattern: "b8 2a 00 00 00 [0-24] 0f 05"
+  - id: x64-mov-ptrace-syscall
+    desc: ptrace(2) via mov-immediate syscall
+    crit: component
+    conf: 0.85
+    if:
+      type: hex
+      offset_range: [64, 262144]
+      pattern: "b8 65 00 00 00 [0-24] 0f 05"
+
+composite_rules:
+  - id: raw-network-syscalls
+    desc: Raw socket+connect syscalls
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: x64-socket-syscall
+      - id: x64-connect-syscall
+
+  # The generalized identity of samples/benign/handwritten-asm/pong.elf: a program
+  # that issues raw syscalls with no libc behind it. Neutral and often benign (a
+  # nolibc TUI, an init stub, a demoscene binary) -- but rare and worth surfacing
+  # in a diff, because the same shape is what a stager adopts to present no
+  # imported symbols to static analysis. The low `functions.count` separates a
+  # hand-written program (pong: 1) from a statically-linked libc program (which is
+  # also needed-libs-zero but carries hundreds to thousands of functions).
+  - id: nolibc-direct-syscall-binary
+    desc: Hand-rolled nolibc binary issuing raw syscalls
+    crit: notable
+    conf: 0.9
+    all:
+      - id: x64-mov-syscall-dispatch
+      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: metadata/binary/metrics/threshold::functions-at-most-32

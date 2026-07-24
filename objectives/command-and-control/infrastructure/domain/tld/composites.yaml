@@ -1,0 +1,172 @@
+defaults:
+  platforms: [windows, unix]
+  for: [scripts, binaries, documents]
+  attack: T1071
+
+traits:
+  - id: ruby-sdk-default-api-xyz
+    desc: Ruby SDK default .xyz API endpoint
+    crit: notable
+    conf: 0.9
+    for: [ruby]
+    if:
+      type: text
+      regex: 'DEFAULT_BASE_URL\s*=\s*["'']https://api\.[A-Za-z0-9.-]{1,80}\.xyz\b'
+composite_rules:
+  - id: public-suffix-list-marker
+    desc: Public suffix list data marker
+    crit: notable
+    conf: 0.9
+    any:
+      - id: metadata/library/data::public-suffix-list
+      - id: metadata/library/data::mozilla-public-suffix-list-path
+      - id: metadata/library/data::publicsuffix-org-list-header
+  - id: ruby-sdk-owned-api-endpoint
+    desc: Ruby SDK default API endpoint
+    crit: notable
+    conf: 0.9
+    all:
+      - id: ruby-sdk-default-api-xyz
+      - id: micro-behaviors/communications/http/lib/netlib::net-http-start
+  - id: free-tld
+    desc: Free/abused top-level domain
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: tld-tk
+      - id: free-tld-script-endpoint
+      - id: tld-ml
+      - id: tld-ml-source-call
+      - id: tld-ga
+      - id: tld-cf
+      - id: tld-gq
+    # Blocklists intentionally contain abused/free TLDs as data. Keep this
+    # exclusion scoped to identified filter resources, not arbitrary scripts.
+    unless:
+      - id: well-known/app/browser-extension::adblock-filter-resource
+  - id: tld-ml-source-call
+    desc: .ml URL passed to Python HTTP client
+    crit: notable
+    conf: 0.8
+    for: [python]
+    any:
+      - id: tld-ml-source-get
+      - id: tld-ml-source-request
+  - id: free-tld-script-endpoint
+    desc: Script network endpoint uses free .tk domain
+    crit: suspicious
+    conf: 0.82
+    for: [scripts]
+    all:
+      - id: micro-behaviors/communications/http/url/tld::script-tld-tk-url
+      - id: micro-behaviors/communications/http/client/
+    near_bytes: 1024
+  - id: suspicious-tld
+    desc: Suspicious top-level domain
+    crit: notable
+    conf: 0.75
+    any:
+      - id: free-tld
+      - id: tld-zip
+      - id: micro-behaviors/communications/http/url/tld::tld-su
+      - id: tld-zone
+      - id: objectives/command-and-control/infrastructure/domain/abused-tlds
+    unless:
+      - id: eu-org-free-dns
+      - id: micro-behaviors/crypto/library/blockchain/
+      - id: well-known/app/blockstream::native-extension-init
+      - id: metadata/build/package::ruby-package-reference-context
+      - id: metadata/lang/source::openapi-generator-source-banner
+      - id: metadata/package/documentation::package-doc-reference-basename
+      - id: well-known/tool/dual-use/aitun/
+      # phpseclib includes an OpenBSD source citation in SFTP.php; this is
+      # library documentation, not an operator-controlled domain.
+      - id: well-known/lib/phpseclib/
+      - id: well-known/app/browser-extension::adblock-filter-resource
+  - id: oob-service
+    desc: Out-of-band interaction service reference
+    crit: notable
+    conf: 0.85
+    attack: T1567
+    any:
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: objectives/exfiltration/oob/interactsh::suspicious-interactsh-usage
+    unless:
+      - id: micro-behaviors/crypto/library/blockchain/
+      - id: well-known/lib/pyaigis/
+      - id: well-known/app/eeg-security/
+      - id: well-known/lib/huggingface::hub-package-file
+  - id: suspicious-php-endpoint
+    desc: PHP endpoint on suspicious top-level domain
+    crit: suspicious
+    conf: 0.95
+    near_bytes: 500
+    all:
+      - id: micro-behaviors/communications/http/url/php-endpoint::url-php-endpoint-script
+    any:
+      - id: free-tld
+      - id: tld-zip
+      - id: micro-behaviors/communications/http/url/tld::tld-su
+      - id: tld-zone
+      - id: objectives/command-and-control/infrastructure/domain/abused-tlds
+    unless:
+      - id: metadata/package/documentation::documentation-dir-path
+      - id: well-known/lib/youtube-dl/
+      - id: well-known/tool/development/batch-scripts::windows11-scripts-admx-name-comment
+      - id: well-known/app/browser-extension/
+      - id: metadata/package/quality/false-positives::media-stream-resolver-context
+  - id: tokenized-hls-playlist-resolution
+    desc: Resolves HLS playlists through tokenized PHP endpoints
+    crit: suspicious
+    conf: 0.93
+    for: [python]
+    all:
+      - id: micro-behaviors/communications/http/url/php-endpoint::url-php-endpoint-script
+      - id: micro-behaviors/communications/http/media::m3u8-playlist-url-extraction
+      - id: micro-behaviors/communications/http/media::stream-token-placeholder-replacement
+  # The `micro-behaviors/communications/url/shortener/` directory was a leg here
+  # and has been removed. A bare shortener reference is not a suspicious URL:
+  # bit.ly/tinyurl links are ordinary in help text, READMEs and comments — this
+  # fired on Freemius, the WordPress licensing SDK bundled in thousands of
+  # plugins, for `'//bit.ly/wp-' . $module_type . '-upload'`, the "How to upload
+  # and activate?" help-video link in its upgrade UI.
+  #
+  # Shorteners stay notable in their own directory, and the composites that pair
+  # them with actual risk still fire: dropper/download::python-download-execute
+  # (shortener feeding download-and-execute) and the package-manifest rule for a
+  # shortened repository URL. Obscuring a destination only matters once
+  # something fetches or runs it.
+  - id: shady-url
+    desc: URL on tunnel, OOB, tracking or odd TLD
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: suspicious-tld
+      - id: objectives/command-and-control/infrastructure/domain/malicious::tunnel-service
+      - id: micro-behaviors/communications/http/services/file-hosting::transfer-sh
+      - id: oob-service
+      - id: objectives/command-and-control/infrastructure/domain/tracking::tracking-services-domain
+      - id: micro-behaviors/communications/ip/literal::http-ip-url
+    unless:
+      - id: micro-behaviors/crypto/library/blockchain/
+      - id: micro-behaviors/browser-extension/
+
+  - id: screenconnect-rmm-on-su-infrastructure
+    desc: ScreenConnect binary references .su infrastructure
+    crit: hostile
+    conf: 0.96
+    attack: T1219
+    all:
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-family
+      - id: micro-behaviors/communications/http/url/tld::tld-su
+  - id: screenconnect-rmm-on-external-ip-infrastructure
+    desc: ScreenConnect launcher references external IPv4 infrastructure
+    crit: hostile
+    conf: 0.96
+    attack: T1219
+    all:
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-family
+      - id: micro-behaviors/communications/http/url/external-ip::url-external-ip-query-port-binary
+      - id: objectives/command-and-control/backdoor/control/rmm::screenconnect-clickonce-session-url
+    unless:
+      - id: well-known/tool/dual-use/screenconnect::screenconnect-signed-launcher-context

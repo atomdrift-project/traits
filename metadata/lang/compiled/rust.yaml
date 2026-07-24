@@ -1,0 +1,112 @@
+defaults:
+  platforms: [windows, linux, macos]
+  for: [elf, macho, pe]
+traits:
+  - id: rustc-compiler
+    desc: rustc Rust compiler reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: text
+      word: rustc
+      section: .text
+  - id: static-pie
+    desc: Rust static-pie build type
+    crit: baseline
+    conf: 0.7
+    if:
+      type: text
+      substr: static-pie
+      section: .text
+  - id: gimli-crate
+    desc: Rust gimli crate (DWARF parsing)
+    crit: baseline
+    conf: 0.9
+    # Match the versioned crate directory. The Windows toolchain emits
+    # `\rust\deps\gimli-0.32.3\...` (backslash, in .rdata), so the old
+    # `substr: gimli` + `section: .text` form silently missed PE builds.
+    if:
+      type: text
+      regex: '[/\\]gimli-\d+\.\d+\.\d+[/\\]'
+      section: rdata
+  - id: object-crate
+    desc: Rust object crate (binary format parsing)
+    crit: baseline
+    conf: 0.9
+    # Same Windows fix: the object crate's PE/COFF parser emits the
+    # `MZ`/`PE\0\0` header-check code that trips custom-pe-loader, so this
+    # marker must fire on PE builds (backslash separators, .rdata) too.
+    if:
+      type: text
+      regex: '[/\\]object-\d+\.\d+\.\d+[/\\]'
+      section: rdata
+  - id: addr2line-crate
+    desc: Rust addr2line backtrace symbolizer crate
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      regex: '[/\\]addr2line-\d+\.\d+\.\d+[/\\]'
+      section: rdata
+  - id: symbolic-debuginfo-crate
+    desc: Rust symbolic debuginfo crate
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: symbolic-debuginfo
+      section: .text
+  - id: rust-zip-parser-errors
+    desc: Rust ZIP parser error catalog
+    crit: baseline
+    conf: 0.86
+    if:
+      type: text
+      substr: invalid Zip archive
+      section: .text
+  - id: rust-zstd-library-marker
+    desc: Rust zstd library marker
+    crit: baseline
+    conf: 0.86
+    if:
+      type: text
+      substr: zstd-safe
+      section: .text
+  - id: rust-utils-source-path
+    desc: Rust src/utils.rs panic/source path
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      substr: src/utils.rs
+      section: .text
+composite_rules:
+  - id: rust-debug-symbol-parser-library
+    desc: Rust debug symbol parser library
+    crit: baseline
+    conf: 0.92
+    all:
+      - id: gimli-crate
+      - id: object-crate
+    any:
+      - id: symbolic-debuginfo-crate
+      - id: rust-zip-parser-errors
+      - id: rust-zstd-library-marker
+  - id: rust-backtrace-symbolizer
+    # Benign-context marker. Stock Rust binaries statically link the
+    # object/gimli/addr2line stack for `std::backtrace` symbolization, which
+    # parses the binary's OWN PE/ELF headers. That header-walk is what trips the
+    # generic reflective-loader matchers (custom-pe-loader), so referencing this
+    # in their `unless:` distinguishes a normal Rust program from a real loader.
+    desc: Rust std backtrace symbolizer stack
+    crit: baseline
+    conf: 0.95
+    # Two or more of the object/gimli/addr2line trio = the std backtrace
+    # symbolizer (object parses the container, gimli the DWARF, addr2line maps
+    # addresses). They are pulled in together, so 2-of-3 is robust while object
+    # alone — the crate that emits the MZ/PE header walk — stays ambiguous.
+    any:
+      - id: object-crate
+      - id: gimli-crate
+      - id: addr2line-crate
+    needs: 2

@@ -1,0 +1,136 @@
+# Kernel Modules and Extensions - Privilege Escalation
+# MBC: F0010 (Kernel Modules and Extensions)
+# ATT&CK: T1547.006 (Kernel Modules and Extensions)
+#
+# Malicious kernel module loading for privilege escalation.
+# Legitimate kernel modules are loaded by package managers, DKMS, or
+# hardware drivers - typically signed and from known paths.
+# Suspicious patterns: loading from /tmp, combining with cred manipulation,
+# or loading modules that hook the syscall table.
+defaults:
+  mbc: "F0010"
+  attack: "T1547.006"
+  platforms: [linux]
+traits:
+  - id: kmod-from-temp
+    desc: Kernel module loaded from temporary path
+    crit: suspicious
+    conf: 0.9
+    for: [shell, python, elf]
+    if:
+      type: text
+      regex: '\b(insmod|modprobe)\b.{0,80}(/tmp|/var/tmp|/dev/shm)/'
+  - id: become-root-module-obj
+    desc: Build includes become_root module
+    crit: component
+    conf: 0.98
+    for: [c, cpp, shell, makefile]
+    if:
+      type: text
+      substr: modules/become_root.o
+  - id: php-insmod-module-load
+    desc: PHP attempts insmod module load
+    crit: suspicious
+    conf: 0.94
+    for: [php]
+    if:
+      type: text
+      substr: insmod %s
+  - id: php-modprobe-module-load
+    desc: PHP attempts modprobe load
+    crit: suspicious
+    conf: 0.94
+    for: [php]
+    if:
+      type: text
+      substr: modprobe -d %s
+  - id: php-proc-sys-kernel-write
+    desc: PHP writes kernel sysctl knobs
+    crit: suspicious
+    conf: 0.94
+    for: [php]
+    if:
+      type: text
+      regex: "/proc/sys/kernel/(kptr_restrict|dmesg_restrict|modules_disabled)"
+    count_min: 2
+  - id: php-kernel-module-stub
+    desc: PHP crafts kernel module stub
+    crit: component
+    conf: 0.92
+    for: [php]
+    if:
+      type: text
+      substr: backdoor.ko
+  - id: c-trigger-kernel-device
+    desc: C trigger kernel device
+    crit: suspicious
+    conf: 0.94
+    for: [c]
+    if:
+      type: text
+      substr: /dev/pwn
+composite_rules:
+  # Kernel module load + credential manipulation = kernel LPE
+  - id: kmod-cred-escalation
+    desc: Kernel module with credential manipulation
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/os/kernel/module::kernel-module-load
+    any:
+      - id: objectives/privilege-escalation/exploit/kernel::commit-creds
+      - id: objectives/privilege-escalation/exploit/kernel::prepare-creds
+  # Kernel module load + syscall table hook = rootkit-style privesc
+  - id: kmod-syscall-hook
+    desc: Kernel module with syscall table hook
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/os/kernel/module::kernel-module-load
+      - id: objectives/evasion/kernel-hide/hook::syscall-table-ref
+  # User-space tool loading kernel module + shell execution
+  - id: insmod-shell-exec
+    desc: Kernel module load tool with shell execution
+    crit: notable
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/kernel/module::linux-kmod-load
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh
+    downgrade:
+      any:
+        - id: metadata/signed/platform/
+        - id: micro-behaviors/os/service/control/
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+  - id: kbuild-become-root-rootkit
+    desc: Kernel module build with root helper
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: micro-behaviors/os/kernel/module::linux-kbuild-module-build
+      - id: become-root-module-obj
+    any:
+      - id: objectives/evasion/kernel-hide/lkm/rootkit::hidden-pids-module-obj
+      - id: objectives/evasion/kernel-hide/lkm/rootkit::hide-module-obj
+      - id: objectives/evasion/kernel-hide/lkm/rootkit::clear-taint-dmesg-module-obj
+  - id: php-kernel-module-lpe
+    desc: PHP kernel module LPE
+    crit: hostile
+    conf: 0.98
+    for: [php]
+    all:
+      - id: php-insmod-module-load
+      - id: php-modprobe-module-load
+      - id: php-proc-sys-kernel-write
+    any:
+      - id: php-kernel-module-stub
+      - id: micro-behaviors/process/create/shell/spawn::php-exec
+  - id: c-kernel-syscall-hook-module
+    desc: C kernel syscall hook module
+    crit: hostile
+    conf: 0.98
+    for: [c]
+    all:
+      - id: objectives/evasion/kernel-hide/lkm/internals::syscall-table-decl
+      - id: micro-behaviors/os/kernel/module::linux-module-init-macro
+      - id: c-trigger-kernel-device

@@ -1,0 +1,222 @@
+defaults:
+  platforms: [windows, unix]
+  crit: component
+  conf: 0.6
+  for: [binaries, scripts, source]
+traits:
+  - id: show-sessions
+    desc: Show sessions command
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: string_literal
+      regex: (?i)show sessions
+  - id: interact-session
+    desc: Interact with session command
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: string_literal
+      # Require the command phrase itself.  A bare "interact" prefix also
+      # matches ordinary CLI safety text such as "non-interactive session".
+      regex: (?i)\binteract\s+with\s+(a\s+)?(session|victim|agent)\b
+  - id: session-id-column
+    desc: Session ID column header
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: string_literal
+      regex: (?i)session id
+  - id: victim-ref
+    desc: Victim reference near command or session term
+    conf: 0.7
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: string_literal
+      regex: (?i)\bvictim\b.{0,48}\b(cmd|shell|session)\b
+  - id: sleep-interval-cmd
+    desc: Sleep interval configuration command
+    conf: 0.65
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: text
+      regex: (?i)\bsleep\b.{0,20}\b(min|max|interval|seconds)\b
+  - id: cmd-in-victim
+    desc: Open cmd/shell in victim reference
+    conf: 0.7
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: string_literal
+      regex: (?i)(cmd|shell).{0,20}victim
+  - id: check-connection-cmd
+    desc: Check session/agent connection command
+    conf: 0.6
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+    if:
+      type: string_literal
+      regex: (?i)check.{0,15}(session|agent|client).{0,15}connection
+  - id: greeting-buf-const
+    desc: Greeting buffer constant
+    conf: 0.7
+    for:
+      - python
+      - ruby
+      - perl
+      - go
+      - c
+      - cpp
+    if:
+      type: text
+      regex: (?i)greeting.{0,10}(buf|buffer|bytes)\s*=
+  - id: webhook-url-variable
+    desc: Webhook URL variable/column
+    crit: component
+    conf: 0.6
+    if:
+      type: text
+      regex: (?i)webhook[_\s]?url
+  - id: telegram-token-variable
+    desc: Telegram bot token variable/column
+    crit: component
+    conf: 0.6
+    unless:
+      - id: well-known/app/opencode-router
+    if:
+      type: text
+      regex: (?i)telegram[_\s]?bot[_\s]?token
+  - id: client-access-rules
+    desc: Client access rules definition
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      regex: (?i)client[_\s]?access[_\s]?rule
+
+  - id: auto-banner-import
+    desc: Terminal auto-banner import
+    crit: component
+    conf: 0.8
+    for:
+      - go
+    if:
+      type: text
+      substr: github.com/dimiro1/banner/autoload
+
+  - id: parallel-api-server
+    desc: Background API server routine
+    crit: component
+    conf: 0.7
+    for:
+      - go
+    if:
+      type: text
+      regex: go\s+[A-Za-z0-9_.]*APIServer\(
+
+  - id: foreground-interactive-shell
+    desc: Foreground interactive shell invocation
+    crit: component
+    conf: 0.7
+    for:
+      - go
+    if:
+      type: text
+      regex: \b[A-Za-z0-9_.]*Shell\(\)
+
+composite_rules:
+  # A session table, an "interact" action, or a sleep interval also occurs in
+  # legitimate job/agent dashboards. Keep those as context, but require two
+  # target/command-specific markers before treating the UI as C2-oriented.
+  - id: operator-ui-targeting-markers
+    desc: C2 operator targeting and command markers
+    crit: component
+    conf: 0.85
+    needs: 2
+    any:
+      - id: show-sessions
+      - id: victim-ref
+      - id: cmd-in-victim
+      - id: check-connection-cmd
+      - id: greeting-buf-const
+  - id: operator-ui-session-markers
+    desc: C2 operator session markers
+    crit: component
+    conf: 0.8
+    any:
+      - id: interact-session
+      - id: session-id-column
+      - id: sleep-interval-cmd
+
+  - id: cli-operator-console
+    desc: Interactive CLI operator console with background API
+    crit: suspicious
+    conf: 0.85
+    attack: T1071
+    needs: 3
+    any:
+      - id: auto-banner-import
+      - id: parallel-api-server
+      - id: foreground-interactive-shell
+      - id: show-sessions
+  - id: operator-session-marker
+    desc: Operator session control marker
+    crit: component
+    conf: 0.85
+    any:
+      - id: show-sessions
+      - id: interact-session
+      # session-id-column dropped: a bare "Session ID" matches ubiquitous API
+      # response fields and is not operator-console-specific on its own.
+      - id: victim-ref
+      - id: cmd-in-victim
+      - id: check-connection-cmd
+
+  - id: c2-operator-notifications
+    desc: C2 operator notification configuration
+    crit: suspicious
+    conf: 0.85
+    attack: T1041
+    all:
+      - id: operator-session-marker
+    any:
+      - id: webhook-url-variable
+      - id: telegram-token-variable
+      - id: client-access-rules
+    unless:
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+      - id: metadata/package/quality/false-positives::benign-app-fp-context
+      - id: well-known/tool/detection/security-scanner/
+  - id: c2-operator-ui
+    desc: C2 operator interface vocabulary
+    crit: suspicious
+    conf: 0.9
+    attack: T1071
+    all:
+      - id: operator-ui-targeting-markers
+      - id: operator-ui-session-markers
+    unless:
+      - id: well-known/tool/detection/security-scanner/

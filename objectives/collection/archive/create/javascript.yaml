@@ -1,0 +1,91 @@
+# JavaScript source code archiving and exfiltration
+# Detects npm packages that archive project files and upload them
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+traits:
+  - id: archiver-require
+    desc: Requires archiver module for zip creation
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      regex: require\(['"]archiver['"]\)
+  # Globbing all files into an archive is a real, describable behavior, so it
+  # surfaces at notable (not suspicious) on its own — ordinary build/packaging
+  # tooling does it (e.g. bundling a plugin into a .zip). The malicious verdict
+  # comes from the js-source-archive-upload composite (archiver + https-request
+  # + glob), where this is a leg.
+  - id: archive-glob-all
+    desc: Archives all files via glob pattern
+    crit: notable
+    conf: 0.85
+    attack: T1560.001
+    if:
+      type: text
+      substr: "archive.glob("
+  - id: archive-pipe
+    desc: Pipes archive to output stream
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      substr: archive.pipe(
+  - id: archive-finalize
+    desc: Finalizes archive for writing
+    crit: component
+    conf: 0.7
+    if:
+      type: text
+      substr: archive.finalize()
+  - id: tar-excludes-pseudo-filesystems
+    desc: Tar archive excludes pseudo-filesystem roots
+    crit: suspicious
+    conf: 0.98
+    attack: T1560.001
+    platforms: [unix]
+    if:
+      type: literal
+      kind: string
+      substr: '--exclude=/proc --exclude=/sys --exclude=/dev'
+composite_rules:
+  - id: js-source-archive-upload
+    desc: Archives and uploads source code
+    crit: hostile
+    conf: 0.95
+    attack: T1048.003
+    all:
+      - id: archiver-require
+      - id: micro-behaviors/communications/http/request/client::https-request
+    any:
+      - id: archive-glob-all
+      - id: archive-pipe
+  - id: js-archive-creation
+    desc: Creates archive of project files
+    crit: notable
+    conf: 0.85
+    attack: T1560.001
+    all:
+      - id: archiver-require
+    any:
+      - id: archive-glob-all
+      - id: archive-finalize
+  - id: broad-filesystem-tar-collection
+    desc: Collects broad filesystem tree into tar archive
+    crit: suspicious
+    conf: 0.99
+    attack: T1560.001
+    platforms: [unix]
+    all:
+      - id: micro-behaviors/data/archive/create/tar::tar-create-bundled-options
+      - id: tar-excludes-pseudo-filesystems
+
+  - id: ai-agent-home-tar-collection
+    desc: Archives an AI agent configuration home
+    crit: suspicious
+    conf: 0.98
+    attack: T1560.001
+    platforms: [unix]
+    all:
+      - id: micro-behaviors/data/archive/create/tar::tar-create-bundled-options
+      - id: micro-behaviors/fs/path/application/config::codex-absolute-config-directory

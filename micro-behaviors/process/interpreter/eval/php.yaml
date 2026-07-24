@@ -1,0 +1,174 @@
+defaults:
+  platforms: [windows, unix]
+  for: [php]
+  attack: "T1059.006"
+  mbc: "E1059"
+traits:
+  # A bare eval() token is a code-execution capability (notable), not proof of
+  # intent: legitimate libraries evaluate code (dompdf's PhpEvaluator, Carbon's
+  # anonymous-class Mixin). The suspicious/hostile shapes — eval of user input,
+  # eval(gzinflate(base64_decode(...))), fragmented tokens — are caught by the
+  # composites and dedicated atoms below.
+  - id: eval-symbol
+    desc: PHP eval() token present
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      kind: call
+      exact: eval
+    unless:
+      - id: well-known/lib/phpseclib
+      - id: metadata/library/runtime::htmlpurifier-library
+      - id: metadata/library/runtime::pope-framework-library
+      - id: metadata/package/testing/harness/unit/
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  - id: error-suppressed-eval
+    desc: PHP error-suppressed eval call
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '@eval\s*\('
+    unless:
+      - id: well-known/app/egroupware/
+      - id: metadata/package/testing/harness/unit/
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+      - id: well-known/app/wordpress-plugins/
+  - id: mixedcase-base64-decode-fragments
+    desc: Mixed-case base64 decode fragments
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: BaSe64.{0,32}_deCOde
+  - id: fragmented-eval-token
+    desc: Fragmented eval token assembly
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      regex: "'e'\\s*\\.\\s*'va'\\s*\\.\\s*'l'"
+  - id: fragmented-gzinflate-token
+    desc: Fragmented gzinflate assembly
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      regex: "'g'\\s*\\.\\s*'zi'\\s*\\.\\s*'nf'\\s*\\.\\s*'l'\\s*\\.\\s*'at'\\s*\\.\\s*'e'"
+  - id: create-function-reference
+    desc: PHP create_function string reference
+    crit: component
+    conf: 0.98
+    if:
+      type: text
+      substr: create_fun
+    unless:
+      - id: metadata/package/manifest/compat::php-manual-empty-function-stubs
+      - id: well-known/lib/phpseclib
+  - id: fragmented-create-function-token
+    desc: Fragmented create_function assembly
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      regex: "'create_fun'\\s*\\.\\s*'ct'\\s*\\.\\s*'io'\\s*\\.\\s*'n'"
+  - id: eval-gzinflate-base64
+    desc: eval gzinflate base64 chain
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: encoded
+      regex: 'eval\s*\(\s*gzinflate\s*\(\s*base64_decode\s*\('
+  - id: eval-gzuncompress-base64
+    desc: eval gzuncompress base64 chain
+    crit: suspicious
+    conf: 0.99
+    if:
+      type: encoded
+      regex: 'eval\s*\(\s*gzuncompress\s*\(\s*base64_decode\s*\('
+  - id: create-function-eval-loader
+    desc: create_function staged eval loader
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: encoded
+      regex: 'create_function\s*\([^)]{0,120}eval\s*\(\s*gzinflate\s*\(\s*base64_decode\s*\('
+  - id: create-function-gzuncompress-loader
+    desc: create_function gzuncompress stage
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: encoded
+      regex: 'create_function.{0,80}gzuncompress.{0,40}base64_decode'
+      case_insensitive: true
+  - id: eval-user-input
+    desc: eval() call with direct user input
+    crit: suspicious
+    conf: 0.98
+    # `eval(... $_GET|$_POST|$_REQUEST ...)` — a request superglobal reaching an
+    # eval() argument. The `eval(` prefix plus the superglobal keeps it FP-safe.
+    if:
+      type: text
+      regex: '\beval\s*\([^)]{0,200}\$_(GET|POST|REQUEST)'
+    unless:
+      - type: path
+        regex: '(?i)\.yar(a)?$'
+      - id: well-known/app/wordpress-plugins::bitfire-plugin-path
+
+  # Neutral PHP dynamic dispatch capabilities. `$var()` and `$obj->$method()`
+  # are how PHP frameworks invoke handlers/getters/setters — a capability, not
+  # obfuscation. Obfuscation/webshell/dropper composites reference these and add
+  # the intent-specific evidence (string arrays, remote loaders, user hiding).
+  - id: dynamic-function-execution
+    desc: PHP variable function invocation pattern
+    crit: notable
+    if:
+      type: tree-sitter
+      # The #not-match predicate skips common framework callable variable names.
+      query: |
+        (function_call_expression
+          function: (variable_name (name) @var)
+          (#not-match? @var "^(handler|handlers|errorHandler|exceptionHandler|logger|callback|closure|next|middleware|listener|fn|callable|resolver|factory|visitor|walker|childMapper|mapper|mutator|canonicalize|decodeT|append|pass|fail|warn|check|checkNode|extractText|shouldStop|stripPunct|stripCoordPunct|securitySource|on[A-Z][A-Za-z0-9_]*)$"))
+    unless:
+      - type: text
+        regex: "@package WordPress|ABSPATH\\s*\\.\\s*(WPINC|['\"]wp-admin/)"
+      - type: text
+        regex: "WP_UnitTestCase|@group\\s+[A-Za-z0-9_-]+"
+      - type: text
+        regex: "\\bClosure\\s+\\$next\\b"
+      - type: text
+        regex: 'namespace\s+Composer\\Autoload;[\s\S]{0,1200}class\s+ClassLoader'
+      - type: text
+        substr: '@generated by Composer'
+      - id: metadata/library/web-frameworks/
+      - id: metadata/library/web-frameworks/
+      - id: metadata/package/testing/harness/unit/
+  - id: member-lookup-execution
+    desc: PHP dynamic member call ($this->var($args))
+    crit: baseline
+    # `$obj->$name(...)` — a method call whose name is a variable (dynamic
+    # dispatch). Common, neutral capability in legit OOP PHP (WooCommerce/WP
+    # magic getters/setters), so baseline (always in ML, not surfaced
+    # standalone); webshell/dropper composites combine it with intent evidence.
+    if:
+      type: text
+      regex: '\$\w+\s*->\s*\$\w+\s*\('
+
+composite_rules:
+  - id: staged-eval-loader
+    desc: Staged PHP eval loader
+    crit: suspicious
+    conf: 0.99
+    any:
+      - id: eval-user-input
+      - id: fragmented-eval-token
+      - id: mixedcase-base64-decode-fragments
+      - id: eval-gzinflate-base64
+      - id: eval-gzuncompress-base64
+      - id: fragmented-create-function-token
+      - id: create-function-eval-loader
+      - id: create-function-gzuncompress-loader
+    unless:
+      - id: well-known/app/wordpress-plugins::bitfire-plugin-path

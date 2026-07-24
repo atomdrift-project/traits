@@ -1,0 +1,85 @@
+# Process Hiding - Windows (Python)
+# Detects subprocess creation with hidden window flags
+# ATT&CK: T1564.003 (Hide Artifacts: Hidden Window)
+defaults:
+  for: [python]
+  mbc: "F0005"
+  attack: "T1564.003"
+  crit: notable
+  platforms: [windows]
+traits:
+  # CREATE_NEW_PROCESS_GROUP - detaches from parent
+  - id: create-new-process-group
+    desc: "Process creation detached from parent"
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "CREATE_NEW_PROCESS_GROUP"
+    downgrade:
+      any:
+        - id: metadata/package/testing/scripted::pytest-word
+  # creationflags parameter in subprocess
+  - id: creationflags
+    desc: Creates a hidden Windows process
+    conf: 0.75
+    crit: notable
+    if:
+      type: text
+      regex: "creationflags\\s*=\\s*(0x08000000|subprocess\\.CREATE_NO_WINDOW)"
+    unless:
+      - id: metadata/lang/source/
+      - id: windows-deferred-uninstall-helper
+    downgrade:
+      any:
+        - id: well-known/tool/development/debugpy
+  - id: python-create-no-window-hex
+    desc: Uses Python's CREATE_NO_WINDOW process flag
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: "creationflags\\s*=\\s*0x[0O]8000000\\b"
+  - id: windows-deferred-uninstall-helper
+    desc: Windows deferred uninstall helper
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      regex: 'deferred uninstall|uv tool uninstall|CREATE_NO_WINDOW gives the cmd'
+  # Combined creation flags with bitwise OR
+  - id: combined-creationflags
+    desc: "Multiple process creation flags combined"
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      # Matches: creationflags=FLAG1 | FLAG2
+      regex: "creationflags\\s*=\\s*[^,)]{1,120}\\|"
+    unless:
+      - id: metadata/lang/source/
+      - id: windows-deferred-uninstall-helper
+    downgrade:
+      any:
+        - id: well-known/tool/development/debugpy
+composite_rules:
+  # hidden window flag composite
+  - id: hidden-window-flag
+    desc: "Hidden or detached process window"
+    conf: 0.85
+    crit: notable
+    any:
+      - id: micro-behaviors/process/create/flags::create-no-window
+      - id: micro-behaviors/process/create/flags::detached-process
+      - id: micro-behaviors/process/create/flags::sw-hide
+  # Combined: CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP
+  - id: stealth-subprocess
+    desc: "Stealthy subprocess creation (hidden +"
+    conf: 0.95
+    crit: notable
+    unless:
+      - id: metadata/build/pip::python-packaging-vendored-source
+      - id: metadata/build/pip::python-packaging-tool-tests
+      - id: metadata/build/pip::virtualenv-periodic-update-source
+    all:
+      - id: micro-behaviors/process/create/subprocess/
+      - id: hidden-window-flag

@@ -1,0 +1,141 @@
+defaults:
+  platforms: [unix]
+  for: [java, class]
+  attack: T1059
+  mbc: B0022
+
+traits:
+  - id: java-c2-command-path
+    desc: Java command-endpoint path fragment
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      substr: /command
+    unless:
+      - id: well-known/lib/eclipse-lemminx/
+      - type: text
+        substr: org/eclipse/core/commands/
+      - type: text
+        substr: org/eclipse/debug/internal/core/commands/
+      - type: text
+        substr: net/sourceforge/plantuml/command/
+      - id: well-known/game/mindustry::mindustry-source-tree
+      - id: well-known/game/mindustry::mindustry-source-identity
+
+  - id: java-sh-c-remote-command
+    desc: Java sh -c remote command
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'new ProcessBuilder\("sh", "-c", command\)'
+
+  - id: java-c2-command-output
+    desc: Java prints C2 output
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      substr: "[C2] "
+  - id: java-cmd-response-token
+    desc: Java CMD response token
+    crit: suspicious
+    conf: 0.94
+    for: [shell, java, class]
+    if:
+      type: text
+      regex: 'decoded\.contains\("CMD="\)[\s\S]{0,500}Runtime\.getRuntime\(\)\.exec'
+  - id: java-result-post-call
+    desc: Java result POST call
+    crit: suspicious
+    conf: 0.94
+    for: [shell, java, class]
+    if:
+      type: text
+      substr: post("/result"
+  - id: jvm-result-cmd-token
+    desc: JVM class contains CMD result sequence
+    crit: component
+    conf: 0.94
+    for: [class]
+    unless:
+      - id: metadata/file/extension/identity::python-wheel-basename
+      - type: basename
+        regex: '\.tgz$'
+    if:
+      type: raw
+      regex: 'CMD=[\s\S]{0,999}/result'
+  - id: jvm-c2-command-path
+    desc: JVM C2 command path
+    crit: component
+    conf: 0.94
+    # Match the class constant pool, not raw compressed archive bytes where
+    # the short "/command" sequence can occur by chance.
+    for: [class]
+    unless:
+      - id: well-known/lib/eclipse-lemminx/
+      - type: text
+        substr: org/eclipse/core/commands/
+      - type: text
+        substr: org/eclipse/debug/internal/core/commands/
+      - type: text
+        substr: net/sourceforge/plantuml/command/
+      - type: text
+        substr: .claude/commands/
+      - type: text
+        substr: .atomcode/commands/
+      - type: text
+        substr: slash commands
+    if:
+      type: hex
+      pattern: "2F 63 6F 6D 6D 61 6E 64"
+
+  - id: jvm-c2-output-marker
+    desc: JVM C2 output marker
+    crit: component
+    conf: 0.92
+    for: [class]
+    if:
+      type: hex
+      pattern: "5B 43 32 5D 20"
+
+composite_rules:
+  - id: java-http-remote-command
+    desc: Java HTTP remote command
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: java-c2-command-path
+      - id: java-sh-c-remote-command
+    any:
+      - id: java-c2-command-output
+      - id: micro-behaviors/communications/http/lib/urlconnection::request-java
+  - id: java-http-cmd-response-tasking
+    desc: Java HTTP CMD response tasking
+    crit: hostile
+    conf: 0.98
+    for: [shell, java, class]
+    all:
+      - id: java-cmd-response-token
+      - id: java-result-post-call
+      - id: micro-behaviors/communications/http/post::jvm-urlconnection-post-source
+  - id: jvm-http-cmd-token-tasking
+    desc: JVM HTTP CMD token tasking
+    crit: hostile
+    conf: 0.98
+    for: [class, jar]
+    all:
+      - id: jvm-result-cmd-token
+      - id: micro-behaviors/process/create/spawn::java-runtime-exec-bytecode-symbol
+
+  - id: jvm-http-remote-command
+    desc: JVM HTTP remote command
+    crit: hostile
+    conf: 0.97
+    for: [class, jar, zip]
+    all:
+      - id: jvm-c2-command-path
+      - id: micro-behaviors/process/create/spawn::java-processbuilder-start-bytecode
+      - id: jvm-c2-output-marker
+      - id: micro-behaviors/communications/http/lib/httpclient::java-url-constructor-bytecode

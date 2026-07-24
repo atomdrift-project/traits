@@ -1,0 +1,101 @@
+defaults:
+  platforms:
+  - windows
+  - unix
+  for:
+  - php
+  mbc: B0030
+  attack: T1105
+traits:
+- id: file-put-target-php-ext
+  desc: file_put_contents targets PHP extension
+  crit: component
+  if:
+    type: tree-sitter
+    kind: call
+    regex: 'file_put_contents\s*\([^,)]{0,64}\.p(hp|html|har|hp[0-9])\s*,'
+- id: fwrite-target-php-ext
+  desc: fwrite targets PHP extension
+  crit: component
+  if:
+    type: tree-sitter
+    kind: call
+    regex: 'fwrite\s*\(\s*\$[^,)]{0,64}\.p(hp|html|har|hp[0-9])\s*,'
+- id: fputs-target-php-ext
+  desc: fputs targets PHP extension
+  crit: component
+  if:
+    type: tree-sitter
+    kind: call
+    regex: 'fputs\s*\(\s*\$[^,)]{0,64}\.p(hp|html|har|hp[0-9])\s*,'
+- id: copy-target-php-ext
+  desc: copy targets PHP extension
+  crit: component
+  if:
+    type: tree-sitter
+    kind: call
+    regex: 'copy\s*\([^,)]{0,64}\.p(hp|html|har|hp[0-9])\s*,'
+- id: rename-target-php-ext
+  desc: rename targets PHP extension
+  crit: component
+  if:
+    type: tree-sitter
+    kind: call
+    regex: 'rename\s*\([^,)]{0,64}\.p(hp|html|har|hp[0-9])\s*,'
+
+composite_rules:
+- id: write-executable-target-ext
+  desc: Write targets PHP extension
+  crit: component
+  any:
+  - id: file-put-target-php-ext
+  - id: fwrite-target-php-ext
+  - id: fputs-target-php-ext
+  - id: copy-target-php-ext
+  - id: rename-target-php-ext
+# Keep payload-obfuscation evidence explicit: broad anti-static directory
+# references also contain benign source fragments such as PLATFORM and TARGET.
+- id: php-payload-obfuscation
+  desc: PHP encoded or obfuscated payload present
+  crit: component
+  any:
+  - id: micro-behaviors/data/decode/base64::php-base64-decode-call
+  - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-encoded-strings
+  - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-obfuscated-vars
+  - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-high-non-ascii-ratio
+  - id: micro-behaviors/data/decode/hex::chr-hexdec-call
+- id: php-dropper
+  desc: 'PHP dropper: obfuscation and HTTP input write an executable target'
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: php-payload-obfuscation
+  - id: micro-behaviors/fs/write/
+  - id: micro-behaviors/communications/http/request/
+  - id: write-executable-target
+  any:
+  - id: micro-behaviors/communications/http/request/form-input::php-input
+  - id: objectives/command-and-control/backdoor/webshell/session/
+  unless:
+  - id: well-known/app/wordpress-plugins::known-wordpress-plugin
+# Writing to a PHP/executable extension is the webshell-distinguishing signal:
+# legitimate upload handlers ($_FILES + fwrite) save user content to media/data
+# paths, not to a server-executable .php/.phtml/.phar destination.
+- id: write-executable-target
+  desc: Write targets a server-executable PHP extension
+  crit: component
+  conf: 0.8
+  all:
+  - id: micro-behaviors/fs/write/file/direct/
+  - id: write-executable-target-ext
+  near_lines: 10
+- id: php-uploader
+  desc: PHP webshell uploads to executable target
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: write-executable-target
+  any:
+  - id: micro-behaviors/communications/http/request/params::files
+  - id: micro-behaviors/communications/http/curl::file-upload
+  - id: micro-behaviors/communications/http/request/form-input::php-input

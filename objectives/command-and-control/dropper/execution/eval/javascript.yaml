@@ -1,0 +1,178 @@
+# JavaScript/WSH remote-eval dropper patterns
+# Focused on ActiveX XMLHTTP response execution in-memory.
+defaults:
+  attack: T1105
+  mbc: B0024
+  for: [javascript]
+  platforms: [windows]
+
+composite_rules:
+  - id: wsh-rat-http-stream-stage
+    desc: WSH downloads binary stream and executes it
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1105
+    all:
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-progid
+      - id: micro-behaviors/fs/write/stream::adodb-save-to-file
+      - id: micro-behaviors/fs/write/stream::adodb-type-binary-assignment
+      - id: micro-behaviors/fs/write/stream::stream-write-response-body
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run
+
+  - id: packed-custom-decoder-eval-dropper
+    desc: Large JavaScript custom decoder feeds an indirect eval sink
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1059.007
+    mbc: B0032
+    # The fixed-step table decoder is the stage-local anchor.  It is stronger
+    # than a file-wide co-occurrence of a generic eval and a minified bundle,
+    # while allowing the decoder's large encoded string to sit between its
+    # loop and the eval sink.
+    scope: file
+    all:
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: micro-behaviors/data/decode/custom::js-indexof-charat-lookup
+      - id: micro-behaviors/data/control-flow/loop::js-two-step-loop
+      - id: micro-behaviors/process/interpreter/eval::js-indirect-eval-variable
+    unless:
+      - id: metadata/library/mermaid::mermaid-bundle-marker
+
+  - id: encoded-string-eval-dropper
+    desc: JavaScript encoded-string loader executes a concealed payload
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.007
+    mbc: B0032
+    for: [javascript, typescript]
+    all:
+      - id: metadata/file/metrics::js-many-very-long-strings
+      - id: metadata/file/metrics::js-high-encoded-string-ratio
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
+      - id: micro-behaviors/process/interpreter/eval::js-indirect-eval-variable
+    unless:
+      - id: metadata/package/testing/
+
+  - id: encoded-url-eval-process-loader
+    desc: Obfuscated URL payload evaluated and executed
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1105,T1059.007
+    mbc: B0032
+    for: [pe, javascript]
+    all:
+      - id: objectives/anti-static/obfuscation/multi-layer::js-base64-shard-array
+      - id: micro-behaviors/communications/http/url/encoded::base64-decoded-http-url
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+      - id: micro-behaviors/process/create/shell/bridge::child-process-exec
+    scope: outer
+
+  - id: encoded-delete-command-loader
+    desc: Encoded delete command evaluated and executed
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1070.004,T1059.007
+    mbc: B0032
+    for: [pe, javascript]
+    all:
+      - id: objectives/anti-static/obfuscation/multi-layer::js-base64-shard-array
+      - id: objectives/anti-static/obfuscation/payload/encoded::decoded-windows-del-command
+      - id: micro-behaviors/process/interpreter/eval::js-eval-variable-argument
+      - id: micro-behaviors/process/create/shell/bridge::child-process-exec
+    scope: outer
+
+  - id: custom-decoder-charcode-eval-dropper
+    desc: JavaScript custom decoder executes an encoded stage through an indirect property
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    scope: file
+    all:
+      - id: micro-behaviors/data/decode/custom::js-alphabet-coded-decoder-source
+      - id: micro-behaviors/process/interpreter/eval::js-charcode-constructor-stage
+    unless:
+      - id: metadata/library/mermaid::mermaid-bundle-marker
+      - id: well-known/app/wordpress-plugins::known-wordpress-plugin
+      - id: well-known/lib/freemius::freemius-js-ref
+
+  - id: custom-decoder-aliased-eval-dropper
+    desc: Large JavaScript decoder feeds an aliased eval sink
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    scope: file
+    all:
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: micro-behaviors/data/decode/custom::js-alphabet-coded-decoder-source
+      - id: micro-behaviors/data/decode/custom::js-charcode-byte-mask
+      - id: micro-behaviors/process/interpreter/eval::js-eval-alias-assignment
+    unless:
+      - id: metadata/package/testing/
+
+  - id: custom-decoder-function-constructor-dropper
+    desc: Large JavaScript decoder feeds Function constructor
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    all:
+      - id: metadata/file/metrics::js-many-very-long-strings
+      - id: micro-behaviors/data/decode/custom::js-indexof-charat-lookup
+      - id: micro-behaviors/data/control-flow/loop::js-two-step-loop
+      - id: micro-behaviors/process/interpreter/eval::js-new-function-variable-argument
+    unless:
+      - id: metadata/library/mermaid::mermaid-bundle-marker
+      - id: well-known/app/wordpress-plugins::known-wordpress-plugin
+      - id: well-known/lib/freemius::freemius-js-ref
+
+  - id: custom-alphabet-decoder-function-dropper
+    desc: Alphabet and octal decoders execute Function
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1140,T1059.007
+    mbc: B0032
+    scope: file
+    all:
+      - id: micro-behaviors/data/decode/custom::js-indexof-charcode-shift-decoder
+      - id: micro-behaviors/data/decode/custom::js-octal-charcode-loop
+      - id: micro-behaviors/data/encode/string::decimal-string-blob
+      - id: micro-behaviors/process/interpreter/eval::js-new-function-variable-argument
+    unless:
+      - id: metadata/library/mermaid::mermaid-bundle-marker
+      - id: metadata/package/testing/
+  - id: activex-xmlhttp-remote-eval
+    desc: ActiveX XMLHTTP remote response eval
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/process/interpreter/jscript::activex-object
+      - id: micro-behaviors/os/com/object::clsid-xmlhttp-generic
+      - id: micro-behaviors/communications/http/client/response-body::response-text
+      - id: micro-behaviors/process/interpreter/eval::js-eval-response-text
+    any:
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-open
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-open-obfuscated-method
+      - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-send
+
+  - id: activex-xmlhttp-marker-remote-eval
+    desc: ActiveX XMLHTTP marker-rewritten remote eval
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: activex-xmlhttp-remote-eval
+      - id: objectives/anti-static/obfuscation/string/conceal::js-response-split-join-marker
+      - id: objectives/anti-static/obfuscation/string/conceal::js-join-substring-char
+  - id: wscript-xmlhttp-download-eval
+    desc: WScript XMLHTTP download and eval execution
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/execution/interpreter/script/wsh::wscript-createobject
+      - id: micro-behaviors/communications/http/client/response-body::response-text
+    any:
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    unless:
+      - id: metadata/library/jquery::domain

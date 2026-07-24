@@ -1,0 +1,198 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - php
+  mbc: B0032
+  attack: T1027
+traits:
+  - id: urlencoded-payload-parameter
+    desc: URL-encoded payload parameter blob
+    crit: suspicious
+    conf: 0.9
+    size_max: 4096
+    if:
+      type: string_literal
+      regex: '^[A-Za-z_][A-Za-z0-9_]{0,15}===?[A-Za-z0-9+/]{120,}$'
+  - id: reversed-base64-padding-parameter
+    desc: "Reversed b64 blob starts with JSON terminator"
+    crit: suspicious
+    conf: 0.97
+    size_max: 4096
+    if:
+      type: string_literal
+      regex: '^[A-Za-z_][A-Za-z0-9_]{0,15}===QX[A-Za-z0-9+/]{80,}$'
+  - id: encoded-json-callback-array
+    desc: Reversed base64 callback array marker
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: string_literal
+      substr: bvlGdj5Wdm9VZ0FWZyNmIsIyYuVnZfJXZzV3XsxWYjJyW
+  - id: encoded-eval-file-get-contents-http
+    desc: Reversed base64 eval fetch marker
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: string_literal
+      substr: L1QTMuUDNv8iOwRHdodCKzRnblRnbvN2X0V2ZfVGbpZGK
+  - id: strings-chr-concat
+    desc: String obfuscation via chr() concatenation
+    crit: notable
+    conf: 0.66
+    # A lone chr(N).chr(N) adjacency occurs in legitimate binary/crypto code
+    # (e.g. Apache APR1 password hashing). Genuine string obfuscation chains
+    # many, so require several concatenations before flagging.
+    count_min: 10
+    if:
+      type: text
+      regex: chr\(\d+\)\s*\.\s*chr\(\d+\)
+    unless:
+      - id: well-known/lib/tcpdf::tcpdf-library-source
+  - id: php-dense-chr-calls
+    desc: Dense chr() calls (string building)
+    crit: notable
+    conf: 0.9
+    count_min: 10
+    per_kb_min: 2.0
+    if:
+      type: text
+      regex: chr\s*\(\s*\d
+    unless:
+      - id: well-known/lib/tcpdf::tcpdf-library-source
+  - id: dense-pack-calls
+    desc: Dense PHP pack() hex-format calls
+    crit: suspicious
+    conf: 0.88
+    count_min: 3
+    per_kb_min: 0.5
+    if:
+      type: symbol
+      kind: call
+      exact: pack
+      arg:
+        kind: string
+        substr: H
+    unless:
+      - type: text
+        regex: "unpack\\s*\\(\\s*['\"]H\\*['\"].{0,80}pack\\s*\\(\\s*['\"]v\\*?['\"]"
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+      - id: well-known/lib/web-token-jwt::web-token-jwt-core-library
+      - id: well-known/lib/php-cs-fixer::php-cs-fixer-source-tree
+  - id: dense-base64-decode
+    desc: Dense base64_decode calls
+    crit: notable
+    conf: 0.9
+    count_min: 3
+    per_kb_min: 0.5
+    if:
+      id: micro-behaviors/data/decode/base64::php-base64-decode-call
+  - id: compressed-base64-payload
+    desc: PHP decompresses base64-decoded data
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(gzinflate|gzuncompress|gzdecode)\s*\(\s*@?\s*base64_decode\s*\('
+    unless:
+      - id: metadata/package/testing/
+      - type: path
+        regex: '(?i)\.yar(a)?$'
+      - id: well-known/app/durable-workflow/
+      - id: well-known/lib/benign-runtime-bundles/
+      - id: well-known/app/wordpress-plugins/
+      - id: well-known/app/wordpress-plugins::wordpress-plugin-path-coresocial
+      - id: well-known/lib/thecodingmachine-safe/
+      - id: well-known/tool/detection/security-scanner::anteumbra-package-tree-member
+      # Generated lookup tables legitimately decode a compressed data blob.
+      - type: text
+        regex: '(?is)auto-generated.{0,120}(calendar|table)'
+  - id: dense-rot13
+    desc: Dense str_rot13 calls
+    crit: suspicious
+    conf: 0.85
+    count_min: 2
+    per_kb_min: 0.3
+    if:
+      type: symbol
+      exact: str_rot13
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+  - id: dense-variable-variables
+    desc: Dense PHP variable-variable statements
+    crit: suspicious
+    conf: 0.85
+    count_min: 5
+    per_kb_min: 1.0
+    if:
+      type: text
+      regex: '^\s*\$\$[a-z_][A-Za-z0-9_]*\b'
+    unless:
+      - type: text
+        regex: namespace\s+Nettes?(?:[\\;]|$)
+      - id: well-known/app/civicrm/
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+      - id: well-known/lib/nette::nette-framework-source
+  - id: dense-eval-calls
+    desc: Dense eval/create_function variable calls
+    crit: suspicious
+    conf: 0.92
+    count_min: 3
+    per_kb_min: 0.5
+    if:
+      type: text
+      regex: (^|[^@A-Za-z0-9_])(eval|create_function)\s*\(\s*\$
+    unless:
+      - id: metadata/file/extension/identity::yara-extension
+  - id: preg-replace-eval
+    desc: preg_replace with /e modifier (code execution)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      # Keep the first quoted pattern bounded to that string.  The previous
+      # matcher could skip into a replacement URL such as https://schema.org
+      # and mistake a later slash plus an `e` in the URL path for the /e
+      # modifier.
+      regex: preg_replace\s*\(\s*["\x27][^"\x27]{1,120}/[A-Za-z]*e[A-Za-z]*["\x27]
+    unless:
+      - id: well-known/lib/benign-runtime-bundles::php-source-tree
+      - id: well-known/app/wordpress-plugins/
+      - id: metadata/package/quality/false-positives::rector-preg-replace-migration-rule
+      - type: path
+        regex: '(?i)\.yar(a)?$'
+      - id: well-known/tool/detection/security-scanner::anteumbra-package-tree-member
+  - id: preg-replace-eval-hash
+    desc: preg_replace with #...#e modifier
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: preg_replace\s*\(\s*["\x27]#.{1,120}#[A-Za-z]*e[A-Za-z]*["\x27]
+  - id: preg-replace-eval-tilde
+    desc: preg_replace with ~...~e modifier
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: preg_replace\s*\(\s*["\x27]~.{1,120}~[A-Za-z]*e[A-Za-z]*["\x27]
+composite_rules:
+  - id: php-reversed-urlencode-base64-stager
+    desc: Reversed URL-encoded base64 PHP stager
+    crit: suspicious
+    conf: 0.99
+    all:
+      - id: urlencoded-payload-parameter
+      - id: reversed-base64-padding-parameter
+    any:
+      - id: encoded-json-callback-array
+      - id: encoded-eval-file-get-contents-http
+  - id: php-multi-layer-obfuscation
+    desc: Multi-layer PHP obfuscation
+    crit: suspicious
+    conf: 0.95
+    needs: 2
+    any:
+      - id: dense-base64-decode
+      - id: compressed-base64-payload
+      - id: dense-rot13
+      - id: dense-eval-calls

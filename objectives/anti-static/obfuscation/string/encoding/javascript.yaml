@@ -1,0 +1,867 @@
+defaults:
+  platforms: [windows, unix]
+traits:
+  - id: js-unicode-escape
+    desc: Unicode escape sequences in string
+    crit: notable
+    conf: 0.85
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    count_min: 3
+    if:
+      type: string_literal
+      regex: (\\u[0-9a-fA-F]{4}){4,}
+    not:
+      - regex: \\u(1680|180[eE]|200[0-9a-aA-A]|202[fF]|205[fF]|3000)
+    unless:
+      - id: objectives/anti-static/obfuscation/string/encoding/
+    downgrade:
+      any:
+        - id: metadata/library/structure/
+  - id: js-interspersed-hex-escapes
+    desc: Interspersed hex escape sequences
+    crit: notable
+    conf: 0.8
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    if:
+      type: string_literal
+      regex: (\\x[0-9a-fA-F]{2}.{0,3}){4,}
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/app/open-webui-computer/
+      - id: metadata/library/structure/
+  - id: js-hex-encoded-require
+    desc: Hex-encoded require statement
+    crit: suspicious
+    conf: 0.92
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+    if:
+      type: text
+      regex: require\s*\(\s*Buffer\.from\([^)]{0,120}hex[^)]{0,120}\)\.toString\(\)
+  - id: js-b64-encoded-require
+    desc: Base64-encoded require statement
+    crit: suspicious
+    conf: 0.92
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+    if:
+      type: text
+      regex: require\(Buffer\.from\([^)]{0,60}base64
+  - id: js-base64-xor-decode-chain
+    desc: Base64 decoded through XOR loop
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      # The XOR must apply directly to the decoded byte (charCodeAt(...) ^ key);
+      # requiring the ^ right after the closing paren avoids matching an
+      # unrelated regex-literal anchor (/^) that follows a plain base64→byte
+      # decoder (e.g. atob(e)...charCodeAt(s);return...else if(/^...).
+      regex: "(atob|Buffer\\.from).{0,80}charCodeAt\\s*\\([^)]{0,25}\\)\\s*\\^"
+    not:
+      - substr: atob(f.printable)
+    unless:
+      - id: metadata/library/structure::vscode-extension-generated-asset
+      - id: well-known/app/docpro::mdland-api-xor-helper
+  - id: js-window-write-exec
+    desc: window assignment to exec primitive
+    crit: component
+    conf: 0.7
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      # Parse assignments so commented examples do not count as executable
+      # global mutation.
+      type: tree-sitter
+      kind: assignment
+      language: javascript
+      # Browser event-handler wiring is ordinary UI code, not a concealed
+      # global dispatch table; custom window properties remain in scope.
+      regex: \bwindow\.(?!on)\w+\s*=\s*(new\s+Function|Function|eval)\b
+  - id: js-window-write-decode
+    desc: window assignment to decode primitive
+    crit: component
+    conf: 0.65
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: tree-sitter
+      kind: assignment
+      language: javascript
+      regex: \bwindow\.\w+\s*=\s*(atob|btoa|Buffer)\b
+  - id: js-window-write-network
+    desc: window assignment to network primitive
+    crit: component
+    conf: 0.65
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: tree-sitter
+      kind: assignment
+      language: javascript
+      regex: \bwindow\.\w+\s*=\s*(fetch|XMLHttpRequest|WebSocket)\b
+  - id: js-globalthis-write-exec
+    desc: globalThis assignment to exec primitive
+    crit: component
+    conf: 0.7
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: tree-sitter
+      kind: assignment
+      language: javascript
+      regex: \bglobalThis\.\w+\s*=\s*(new\s+Function|Function|eval)\b
+  - id: js-globalthis-write-decode
+    desc: globalThis assignment to decode primitive
+    crit: component
+    conf: 0.65
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: tree-sitter
+      kind: assignment
+      language: javascript
+      regex: \bglobalThis\.\w+\s*=\s*(atob|btoa|Buffer)\b
+  - id: js-globalthis-write-network
+    desc: globalThis assignment to network primitive
+    crit: component
+    conf: 0.65
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: tree-sitter
+      kind: assignment
+      language: javascript
+      regex: \bglobalThis\.\w+\s*=\s*(fetch|XMLHttpRequest|WebSocket)\b
+  - id: js-global-self-bracket-assignment
+    desc: Dynamic self bracket property assignment
+    crit: suspicious
+    conf: 0.6
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: text
+      regex: \bself\[[^\]]{1,120}\]\s*=\s*(eval|Function|atob)\b
+  - id: js-require-alias
+    desc: Require function aliasing
+    crit: suspicious
+    conf: 0.9
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    if:
+      type: text
+      regex: =\\s*require\\s*;
+  - id: markdown-it-bundle
+    desc: markdown-it bundled library marker
+    crit: baseline
+    conf: 0.99
+    for:
+      - javascript
+    if:
+      type: text
+      substr: "/*! markdown-it 14.1.0 https://github.com/markdown-it/markdown-it"
+  - id: js-define-locale-call
+    desc: Moment locale bundle marker
+    crit: baseline
+    conf: 0.99
+    for:
+      - javascript
+    if:
+      type: symbol
+      exact: defineLocale
+  - id: js-string-split
+    desc: Split to empty-delimiter char array
+    crit: component
+    conf: 0.6
+    for:
+      - javascript
+    if:
+      type: text
+      regex: (\.split|\[\s*["'']split["'']\s*\])\s*\(\s*(""|'')\s*\)
+  - id: js-array-join-symbol
+    desc: Join using empty string delimiter
+    crit: component
+    conf: 0.5
+    for:
+      - javascript
+    if:
+      type: text
+      regex: (\.join|\[\s*["'']join["'']\s*\])\s*\(\s*(""|'')\s*\)
+  - id: js-array-reverse
+    desc: Array reverse method
+    crit: baseline
+    conf: 0.5
+    for:
+      - javascript
+    count_min: 4
+    if:
+      type: text
+      regex: (\.reverse|\[\s*["'']reverse["'']\s*\])\s*\(\s*\)
+    unless:
+      - id: well-known/lib/zxcvbn::zxcvbn-ranked-dictionaries
+      - type: symbol
+        exact: matching
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+  - id: js-split-join-cleanup
+    desc: String cleanup using split(key).join("")
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+    count_min: 2
+    if:
+      type: text
+      regex: \.split\(\s*".{1,30}"\s*\)\.join\(\s*""\s*\)
+    downgrade:
+      any:
+        - id: metadata/library/structure::google-tag-manager-bundle
+        - id: metadata/library/structure/
+    unless:
+      - id: metadata/library/runtime::core-js-runtime-bundle
+      - id: metadata/library/structure/
+  - id: js-long-marker-split-join-cleanup
+    desc: Long marker stripped via split join
+    crit: suspicious
+    conf: 0.9
+    for:
+      - javascript
+    count_min: 2
+    if:
+      type: text
+      regex: \.split\(\s*["'][A-Za-z0-9]{10,30}["']\s*\)\.join\(
+    unless:
+      - id: mathjax-or-jquery
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+  - id: js-long-delimiter-split-join-cleanup
+    desc: Long delimiter stripped via repeated split join
+    crit: suspicious
+    conf: 0.94
+    attack: T1027.002
+    mbc: B0032
+    for: [javascript]
+    count_min: 2
+    if:
+      type: text
+      regex: '\.split\(\s*".{10,100}"\s*\)\.join\(\s*""\s*\)'
+    unless:
+      - id: metadata/build/bundler::babel-transpiled
+      - id: metadata/library/structure::js-large-minified-bundle
+  - id: js-repeated-marker-token
+    desc: Dense repeated string marker token
+    crit: component
+    conf: 0.93
+    for:
+      - javascript
+    size_min: 20000
+    count_min: 40
+    if:
+      type: text
+      substr: sijRysBVHh
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+  - id: js-marker-split-join-cleanup-call
+    desc: Marker stripped via split join
+    crit: component
+    conf: 0.93
+    for:
+      - javascript
+    if:
+      type: text
+      substr: '.split("sijRysBVHh").join("")'
+  - id: js-afcrk-repeated-marker-token
+    desc: Dense AFcrk marker padding
+    crit: suspicious
+    conf: 0.96
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    size_min: 20000
+    count_min: 40
+    if:
+      type: text
+      substr: AFcrkFAbmFdInk
+  - id: js-gcfombg-repeated-marker-token
+    desc: Dense gcFombg marker padding
+    crit: suspicious
+    conf: 0.97
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    size_min: 20000
+    count_min: 40
+    if:
+      type: text
+      substr: gcFombgkSgmerA
+  # Deep chained split/join (4+ levels) - string permutation obfuscation
+  - id: js-deep-split-join-chain
+    desc: Repeated split/join string rewrite chain
+    crit: notable
+    conf: 0.92
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    count_min: 2
+    if:
+      type: symbol
+      regex: "(\\.split\\.join|\\.join\\.split){3,}"
+    unless:
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/library/structure/
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - id: metadata/package/quality/false-positives::benign-build-tooling-context
+      - type: string_literal
+        substr: "\\0SLASH"
+  - id: dense-fromcharcode
+    desc: Dense fromCharCode calls (string obfuscation)
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    count_min: 5
+    per_kb_min: 1.0
+    if:
+      type: string_literal
+      regex: fromCharCode\s*\(\s*\d
+  - id: fromcodepoint-with-base-decode
+    desc: 'fromcodepoint with base decode'
+    crit: notable
+    conf: 0.9
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    count_min: 2
+    if:
+      type: text
+      regex: from(CodePoint|CharCode).{0,40}(atob|Buffer\.from)
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/lib/pdfjs::pdfjs-bundle
+      - id: well-known/app/browser-extension::adblock-filter-resource
+  - id: dense-unicode-escapes
+    desc: Dense Unicode escape sequences
+    crit: notable
+    conf: 0.88
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    count_min: 4
+    per_kb_min: 0.8
+    if:
+      type: string_literal
+      regex: (\\u[0-9a-fA-F]{4}){3,}
+    unless:
+      - id: objectives/anti-static/obfuscation/string/encoding/
+      # Production bundles routinely embed Unicode-range regex tables from
+      # React, HTML parsers, date/locale libraries, and CSS runtimes.  A large
+      # minified bundle is independently identified as generated output; its
+      # escape density alone is not evidence of concealment.  Keep the other
+      # decoder/eval/import indicators active for bundled malware.
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/library/upload/
+      - type: text
+        substr: angular.module("ngLocale")
+      - type: basename
+        regex: '^angular-locale_'
+  - id: js-lzstring-table-split-call
+    desc: Splits LZString UTF-16 output
+    crit: component
+    conf: 0.9
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: 'decompressFromUTF16\s*\([^)]{0,80}\)\s*\.\s*split\s*\('
+
+  - id: dense-bracket-notation
+    desc: Obfuscated property calls via brackets
+    crit: suspicious
+    conf: 0.85
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    count_min: 3
+    if:
+      type: text
+      regex: \[\s*['"](eval|Function|atob)['"]\s*\]\s*\(
+    unless:
+      # biome/eslint noGlobalEval-style rule fixtures ship global["eval"](...)
+      # examples in tests/specs and .snap snapshots — not real obfuscation.
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: metadata/package/testing/presence/fixture::snapshot-file
+  - id: js-alternating-char-obfuscation
+    desc: 'Strings with alternating junk characters'
+    crit: notable
+    conf: 0.8
+    for:
+      - javascript
+    size_max: 100000
+    count_min: 5
+    if:
+      type: text
+      regex: '["''][a-zA-Z0-9_]([^a-zA-Z0-9\s"''\\&=%:]{1,3}[a-zA-Z0-9_]){5,}["'']'
+    unless:
+      - id: metadata/package/quality/false-positives::benign-trojanized-fp-context
+      - id: well-known/app/atlascode/
+  - id: mathjax-or-jquery
+    desc: Known JavaScript library source
+    crit: component
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'MathJax|jquery|jquery-ui|goog\.provide\('
+  - id: js-function-return-import
+    desc: Function constructor dynamic import idiom
+    crit: component
+    conf: 0.86
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: 'Function\(["'']return import["'']\)\(\)'
+  - id: js-unicode-escape-ui-text
+    desc: Unicode escaped UI text assignment
+    crit: component
+    conf: 0.88
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: '\b(textContent|placeholder)\s*=\s*["''](\\u[0-9a-fA-F]{4}){2,}'
+  - id: ts-proto-generated-file
+    desc: ts-proto generated file
+    crit: component
+    conf: 0.98
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      word: tsProtoGlobalThis
+composite_rules:
+  - id: js-array-swap-pattern
+    desc: Temporary-variable array swap pattern
+    crit: component
+    conf: 0.75
+    mbc: B0032
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/source/syntax/array::temporary-array-element-read
+      - id: micro-behaviors/data/source/syntax/array::indexed-array-element-copy
+    near_bytes: 300
+  - id: js-reverse-string-recognized-marker
+    desc: Recognized reverse-string bundle marker
+    crit: component
+    conf: 0.9
+    any:
+      - id: metadata/library/structure::js-any-bundle-output
+      - id: metadata/library/structure::js-known-bundler-output
+      - id: metadata/library/structure::js-large-minified-bundle
+      - id: metadata/library/structure::js-mermaid-bundle
+      - id: metadata/library/runtime::vscode-webview-bundle
+      - id: metadata/library/vscode::vscode-extension-marker
+      - id: metadata/library/runtime::acquire-vscode-api
+      - id: well-known/lib/json-ts::converter-bundle
+
+  - id: js-unicode-escape-recognized-marker
+    desc: Unicode escape recognized marker
+    crit: component
+    conf: 0.95
+    for:
+      - javascript
+      - typescript
+    any:
+      - id: metadata/package/testing/harness/runtime::v8-js-fuzzer-unicode-fixture-name
+      - id: metadata/file/profile/locale::i18n-locale-file
+      - id: metadata/file/profile/locale::angular-locale-bundle-path
+      - id: metadata/library/runtime::moment-locale
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/structure::js-esbuild-bundle
+      - id: metadata/library/structure::js-any-bundle-output
+      - id: metadata/build/bundler::webpack-bundled
+      - id: metadata/build/bundler::esbuild-bundled
+      - id: metadata/build/bundler::rollup-bundled
+      - id: js-unicode-escape-ui-text
+
+  - id: js-lzstring-utf16-table-split
+    desc: LZString decoded string table split
+    crit: suspicious
+    conf: 0.94
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: micro-behaviors/data/compress/library::lzstring-utf16-decompress
+      - id: js-lzstring-table-split-call
+    near_bytes: 512
+  - id: js-global-property-write
+    desc: Global object property assignment
+    crit: suspicious
+    conf: 0.8
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    size_max: 500000
+    all:
+      - id: js-global-property-write-assignment
+    any:
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: micro-behaviors/process/interpreter/eval::js-function-constructor
+      - id: micro-behaviors/data/decode/base64::atob-decode
+      - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
+    unless:
+      - id: metadata/library/structure/
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/prototype::copyright
+      - id: metadata/library/runtime::shutter-reloaded-lightbox
+  - id: js-window-property-write-assignment
+    desc: window high-risk property assignment
+    crit: component
+    conf: 0.7
+    any:
+      - id: js-window-write-exec
+      - id: js-window-write-decode
+      - id: js-window-write-network
+  - id: js-globalthis-property-write-assignment
+    desc: globalThis high-risk property assignment
+    crit: component
+    conf: 0.7
+    any:
+      - id: js-globalthis-write-exec
+      - id: js-globalthis-write-decode
+      - id: js-globalthis-write-network
+  - id: js-global-property-write-assignment
+    desc: Global object property assignment
+    crit: suspicious
+    conf: 0.6
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    any:
+      - id: js-window-property-write-assignment
+      - id: js-globalthis-property-write-assignment
+    unless:
+      - id: metadata/library/runtime::umd-window-assignment
+      - id: metadata/library/structure/
+  - id: js-string-deobfuscation-recognized-marker
+    desc: Recognized marker for JavaScript string deobfuscation indicators
+    crit: component
+    conf: 0.95
+    any:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::header-prefix
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: metadata/library/structure::js-known-bundler-output
+      - id: metadata/library/structure::js-any-bundle-output
+      - id: metadata/library/runtime::core-js-runtime-bundle
+      - id: metadata/library/runtime::google-web-runtime-bundle
+      - id: metadata/library/upload::tus-js-client-bundle
+      - id: metadata/library/ai::mediapipe-selfie-distribution-js
+      - id: well-known/tool/development/pymobiledevice3
+  - id: js-string-deobfuscation
+    desc: String deobfuscation routine
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    size_max: 300000
+    all:
+      - id: js-array-join-symbol
+    needs: 3
+    any:
+      - id: js-string-split
+      - id: js-array-swap-pattern
+      - id: micro-behaviors/data/string/access::js-charat-lookup
+      - id: dense-fromcharcode
+      - id: dense-unicode-escapes
+      - id: js-lzstring-utf16-table-split
+      - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
+      - id: js-split-join-cleanup
+    downgrade:
+      any:
+        - id: metadata/build/bundler::babel-transpiled
+        - id: metadata/library/structure/
+    unless:
+      - id: objectives/anti-static/obfuscation/string/encoding/
+  - id: js-reverse-string-obfuscation
+    desc: String reversal obfuscation pattern
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    size_max: 300000
+    all:
+      - id: js-array-join-symbol
+      - id: js-string-split
+      - id: js-array-reverse
+    unless:
+      - id: objectives/anti-static/obfuscation/string/encoding/
+
+  - id: js-global-manipulation
+    desc: Global object manipulation pattern
+    crit: suspicious
+    conf: 0.85
+    attack: T1027.002
+    for:
+      - javascript
+    needs: 2
+    any:
+      - id: js-global-property-write
+      - id: js-require-alias
+      - id: metadata/file/profile/identity::js-compact-hyphenated-identifier
+      - id: micro-behaviors/data/source/property/computed::js-global-require-alias
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::global-bracket-module-alias
+  - id: js-dict-string-reconstruction
+    desc: JavaScript string reconstructed from dictionary lookup and array iteration
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    all:
+      - id: micro-behaviors/data/encode/map::js-string-dict-map
+    any:
+      - id: objectives/anti-static/obfuscation/string/reconstruct::js-string-key-array
+      - id: objectives/anti-static/obfuscation/string/reconstruct::js-string-key-array-literal
+      - id: objectives/anti-static/obfuscation/string/reconstruct::js-extreme-short-token-density
+  - id: js-dict-reconstruction-eval
+    desc: Dictionary-rebuilt payload executed with eval
+    crit: suspicious
+    conf: 0.95
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    all:
+      - id: objectives/execution/interpreter/eval/dynamic/
+      - id: js-dict-string-reconstruction
+  - id: js-local-fileserver-test-marker
+    desc: Local Express static test server marker
+    crit: component
+    conf: 0.95
+    for:
+      - javascript
+    all:
+      - id: metadata/import/package::express
+      - id: metadata/import/package::serve-index
+      - id: metadata/import/package::multer
+      - id: metadata/import/package::resources
+      - id: metadata/import/package::httpserver
+  - id: electron-ml-parity-runner
+    desc: Electron ML parity test runner
+    crit: component
+    conf: 0.95
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: well-known/app/electron-auth::electron-ml-parity-token
+      - id: well-known/app/electron-auth::electron-ml-parity-host-response-prefix
+      - id: objectives/execution/interpreter/eval/dynamic::readline-rl-on-line
+  - id: js-obfuscated-eval-recognized-marker
+    desc: Recognized marker for JavaScript obfuscated-eval indicators
+    crit: component
+    conf: 0.95
+    any:
+      - id: objectives/anti-static/obfuscation/payload/encoded::electron-ml-parity-harness
+      - id: electron-ml-parity-runner
+      - id: well-known/app/electron-auth::electron-safe-storage-base64
+      - id: well-known/app/electron-auth::srp-auth-crypto-context
+      - id: js-define-locale-call
+      - id: mathjax-or-jquery
+      - id: metadata/package/testing/harness/runtime::node-common-require
+      - id: metadata/package/testing/harness/runtime::is-test
+      - id: ts-proto-generated-file
+      - id: metadata/package/testing/harness/runtime::v8-mjsunit-assert-pair
+      - id: metadata/library/runtime::core-js-runtime-bundle
+      - id: metadata/library/structure::js-any-bundle-output
+      - id: markdown-it-bundle
+      - id: js-local-fileserver-test-marker
+      - id: metadata/library/runtime::google-web-runtime-bundle
+      - id: metadata/library/upload::tus-js-client-bundle
+      - id: metadata/library/ai::mediapipe-selfie-segmentation-bundle
+      - id: metadata/library/ai::mediapipe-selfie-distribution-js
+      - id: js-function-return-import
+      - id: well-known/lib/google-diff-match-patch::diff-match-patch-library
+      - id: well-known/lib/nextjs::next-node-modules-runtime
+      - id: well-known/lib/es-module-lexer::dist-lexer-cjs
+  - id: js-obfuscated-eval
+    desc: Obfuscated dynamic code execution
+    crit: suspicious
+    conf: 0.98
+    attack: T1027.002
+    mbc: B0032
+    for:
+      - javascript
+    size_max: 500000
+    all:
+      - id: objectives/execution/interpreter/eval/dynamic/
+    any:
+      - id: js-string-deobfuscation
+      - id: dense-fromcharcode
+      - id: js-unicode-escape
+      - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
+      - id: micro-behaviors/data/decode/base64::buffer-from-base64
+      - id: micro-behaviors/data/decode/hex::buffer-from-hex-dup
+      - id: js-dict-string-reconstruction
+      - id: objectives/anti-static/obfuscation/string/reconstruct::js-extreme-short-token-density
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::char-permutation-deobfuscator
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::permutation-obfuscation
+    unless:
+      - id: objectives/anti-static/obfuscation/string/encoding/
+      - id: micro-behaviors/communications/http/oauth/
+      - id: well-known/tool/detection/security-scanner/
+      - id: micro-behaviors/crypto/library/provider::node-crypto-verify
+    downgrade:
+      any:
+        - id: metadata/build/bundler::babel-transpiled
+        - id: metadata/library/structure/
+  - id: js-obfuscated-requires
+    desc: Obfuscated module imports via hex encoding
+    crit: hostile
+    conf: 0.95
+    attack: T1195.002
+    mbc: B0032
+    for:
+      - javascript
+    all:
+      - id: js-hex-encoded-require
+      - id: micro-behaviors/data/decode/hex::buffer-from-hex-dup
+  - id: js-obfuscated-requires-b64
+    desc: Obfuscated module imports via base64 encoding
+    crit: hostile
+    conf: 0.95
+    attack: T1195.002
+    mbc: B0032
+    for:
+      - javascript
+    all:
+      - id: js-b64-encoded-require
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
+  - id: js-strong-obfuscation
+    desc: Strong obfuscation indicators
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+    any:
+      - id: dense-fromcharcode
+      - id: dense-unicode-escapes
+      - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
+      - id: js-hex-encoded-require
+      - id: js-b64-encoded-require
+      - id: js-string-deobfuscation
+      - id: js-dict-string-reconstruction
+    unless:
+      - id: js-define-locale-call
+    downgrade:
+      any:
+        - id: metadata/build/bundler::babel-transpiled
+  - id: js-repeated-marker-split-join-cleanup
+    desc: Repeated marker stripped via split join
+    crit: suspicious
+    conf: 0.95
+    mbc: B0032
+    attack: T1027.002
+    for:
+      - javascript
+    all:
+      - id: js-repeated-marker-token
+      - id: js-marker-split-join-cleanup-call
+  - id: unicode-marker-hidden-wmi-payload
+    desc: Unicode-marker obfuscates hidden WMI payload
+    # This is an obfuscation/launch-shape summary.  The execution-specific
+    # WMI composites carry the hostile verdict; keep this overlapping view
+    # suspicious so one payload does not produce duplicate hostile findings.
+    crit: suspicious
+    conf: 0.99
+    attack: "T1027,T1027.002,T1047,T1059.007,T1564.003"
+    mbc: "B0032,E1043"
+    for: [javascript]
+    all:
+      - id: js-long-delimiter-split-join-cleanup
+      - id: objectives/execution/wmi::js-hidden-process-create-sequence
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: micro-behaviors/data/decode/base64::decoded-text-carrier
+  - id: js-xor-numeric-array-string-reconstruction
+    desc: JavaScript string rebuilt from numeric array with XOR
+    crit: suspicious
+    conf: 0.97
+    attack: T1027
+    for: [javascript]
+    near_bytes: 2048
+    all:
+      - id: micro-behaviors/data/encode/char-code::long-numeric-array-literal
+      - id: micro-behaviors/data/encode/char-code::fromcharcode-xor-rebuild
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/library/structure::js-emscripten-preamble-marker
+      - id: well-known/lib/jspdf/
+      - id: well-known/lib/pdfjs/
+      - id: metadata/lang/compiled/
+      - id: metadata/lang/compiler/systems::go-binary
+      - id: well-known/lib/jspdf::jspdf-pdf-encryption-routine

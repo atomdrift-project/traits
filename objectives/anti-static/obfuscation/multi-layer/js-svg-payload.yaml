@@ -1,0 +1,136 @@
+# Multi-layer JavaScript payload obfuscation seen in SVG/HTML smuggling
+# carriers. The real payload is split into a base64 shard array, reassembled
+# via a permutation index array (t[idx[i]] = shard[i]), then XOR-decrypted
+# with a repeating key before use. Each layer is independently a strong
+# obfuscation tell; legitimate code rarely shuffle-reassembles or repeating-key
+# XOR-decrypts a base64 string array. Fires on JS embedded in SVG/HTML too.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, svg, html]
+  attack: T1027
+  mbc: B0032
+traits:
+  - id: js-base64-shard-array
+    desc: Array of base64 payload shards
+    crit: notable
+    conf: 0.8
+    # Require long base64-looking shards with '+' or '=' markers. A slash-only
+    # alphabet also matches ordinary path arrays such as Assets/Scripts.
+    if:
+      type: text
+      regex: '([''"][A-Za-z0-9+/]{12,}[+=][A-Za-z0-9+/=]{4,}[''"]\s*,\s*){4,}'
+  - id: js-cyclic-xor-key-decrypt
+    desc: XOR decrypt with repeating key
+    # A bare `^ x.charCodeAt(i % key.length)` expression is the neutral
+    # repeating-key XOR primitive (also lives as a capability under
+    # micro-behaviors/data/decode/xor); on its own it does not establish
+    # obfuscation intent, and it fires on legitimately minified/obfuscated
+    # commercial bundles. The complete-decoder signal
+    # (micro-behaviors/data/decode/xor::js-repeating-key-charcode-xor-decoder) carries
+    # the standalone suspicion; here it is a fragment feeding the multi-layer
+    # sharded-payload composites below.
+    crit: component
+    conf: 0.85
+    attack: T1140
+    unless:
+      - id: well-known/tool/development/guangnao-agent::cli-banner
+      - id: well-known/tool/development/guangnao-agent::package-name
+      - id: well-known/app/docpro::mdland-api-xor-helper
+    if:
+      type: text
+      regex: '\^\s*[\w$]+\.charCodeAt\s*\(\s*[\w$]+\s*%\s*[\w$]+\.length'
+  - id: js-bracket-fromc-harcode-xor
+    desc: Bracketed fromCharCode XOR decode call
+    crit: component
+    conf: 0.9
+    attack: T1140
+    if:
+      type: text
+      regex: 'String\["fromC"\+"harCode"\]\([^)]{0,220}\^'
+  - id: js-bracket-from-charcode-xor
+    desc: Bracketed fromCharCode XOR decode call
+    crit: component
+    conf: 0.9
+    attack: T1140
+    if:
+      type: text
+      regex: 'String\["from"\+"CharCode"\]\([^)]{0,220}\^'
+  - id: js-bracket-fr-omcharcode-xor
+    desc: Bracketed fromCharCode XOR decode call
+    crit: component
+    conf: 0.9
+    attack: T1140
+    if:
+      type: text
+      regex: 'String\["fr"\+"omCharCode"\]\([^)]{0,220}\^'
+  - id: dotnet-runtime-js-path
+    desc: .NET runtime JavaScript path
+    crit: baseline
+    conf: 0.98
+    for: [javascript]
+    if:
+      type: path
+      basename: true
+      exact: dotnet.runtime.js
+composite_rules:
+  - id: svg-encoded-script-loader
+    desc: SVG indirect constructor injects external script
+    crit: hostile
+    conf: 0.96
+    attack: T1027, T1059.007, T1105
+    all:
+      - id: micro-behaviors/data/format/html::inline-svg-script-body
+      - id: objectives/execution/interpreter/eval/dynamic::svg-constructor-property-chain
+      - id: micro-behaviors/data/encode/hex::svg-long-hex-string-literal
+      - id: objectives/execution/interpreter/eval/dynamic::svg-base64-literal
+  - id: js-xor-encrypted-base64-payload
+    desc: XOR-decrypts a base64 payload array
+    crit: hostile
+    conf: 0.93
+    attack: T1027, T1140
+    all:
+      - id: js-base64-shard-array
+      - id: js-cyclic-xor-key-decrypt
+  - id: js-bracket-fromcharcode-xor-decode
+    desc: Bracketed fromCharCode XOR string decoder
+    crit: suspicious
+    conf: 0.9
+    attack: T1140
+    any:
+      - id: js-bracket-fromc-harcode-xor
+      - id: js-bracket-from-charcode-xor
+      - id: js-bracket-fr-omcharcode-xor
+  - id: js-sharded-bracket-xor-loader
+    desc: Sharded JavaScript payload with bracketed XOR decoder
+    crit: hostile
+    conf: 0.94
+    attack: T1027, T1140
+    all:
+      - id: js-base64-shard-array
+      - id: js-bracket-fromcharcode-xor-decode
+    any:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
+      - id: objectives/anti-static/obfuscation/syntax::js-wscript-dynamic-property-ast
+      - id: micro-behaviors/process/interpreter/jscript::activex-object
+    needs: 2
+    unless:
+      - id: dotnet-runtime-js-path
+      - id: well-known/lib/
+      - id: metadata/package/testing/harness/runtime/
+  - id: js-scrambled-shard-reassembly
+    desc: Reassembles scrambled base64 payload shards
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: micro-behaviors/data/encode/permutation/nested::js-nested-index-array-write
+      - id: js-base64-shard-array
+    unless:
+      - id: well-known/lib/google-closure-library::closure-library-runtime
+      - id: well-known/tool/sysadmin/alpine-packages::alpine-apicurio-registry-ui-package
+      - id: metadata/library/structure::js-large-module-bundle
+      - id: dotnet-runtime-js-path
+      - id: well-known/app/avast::avast-antitrack-extension
+      - id: well-known/tool/development/autorest/
+      - id: well-known/app/dbcode::extension-context
+      - id: well-known/tool/development/socket-cli::socket-dev-cli-bundle
+      - id: well-known/tool/development/socket-cli::socket-dev-cli-vendored-path

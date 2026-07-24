@@ -1,0 +1,202 @@
+# Python Startup Persistence Hooks
+# Detects abuse of Python's automatic startup mechanisms for persistence:
+# sitecustomize.py, usercustomize.py, .pth files, PYTHONSTARTUP env var.
+# ATT&CK: T1546 (Event Triggered Execution)
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  size_max: 131072
+  attack: T1546
+
+traits:
+  # --- sitecustomize / usercustomize ---
+- id: sitecustomize-path
+  desc: Python sitecustomize startup path
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: '(?i)(\\|/)Lib(\\|/)sitecustomize\.py\b'
+
+- id: is-sitecustomize-file
+  desc: File is named sitecustomize.py
+  crit: suspicious
+  conf: 0.95
+  downgrade:
+    any:
+    - id: well-known/tool/development/debugpy
+  if:
+    type: path
+    basename: true
+    exact: sitecustomize.pyc_malicious
+
+- id: usercustomize-path
+  desc: Python usercustomize startup path
+  crit: suspicious
+  conf: 0.94
+  if:
+    type: text
+    regex: '(?i)(\\|/)usercustomize\.py\b'
+
+- id: is-usercustomize-file
+  desc: File is named usercustomize.py
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: path
+    basename: true
+    exact: usercustomize.py
+
+  # --- .pth file abuse ---
+- id: pth-import-exec
+  desc: Python .pth startup file
+  crit: notable
+  conf: 0.95
+  for: [python, shell]
+  unless:
+  - type: text
+    substr: 'import _bazel_site_init'
+  if:
+    type: path
+    basename: true
+    regex: '\.pth$'
+
+- id: telemetry-initializer-import
+  desc: Telemetry, analytics, or metrics module import
+  crit: component
+  conf: 0.86
+  for: [python, shell]
+  if:
+    type: text
+    regex: '(?mi)^\s*import\s+_?(telemetry|analytics|metrics)[A-Za-z0-9_]*\b'
+
+- id: pth-exec-open-read-line
+  desc: .pth executes Python file content
+  crit: component
+  conf: 0.96
+  for: [python, shell]
+  if:
+    type: text
+    regex: 'exec\s*\(\s*open\s*\([^)]{0,160}\)\.read\s*\(\s*\)\s*\)'
+  unless:
+  - type: path
+    basename: true
+    regex: '\.py[co]?$'
+
+  # --- CPython internals abuse ---
+- id: py-getargcargv
+  desc: CPython argv inspection API
+  crit: suspicious
+  conf: 0.92
+  if:
+    type: symbol
+    exact: ctypes.pythonapi.Py_GetArgcArgv
+
+  # --- DLL masquerade for Python payload ---
+- id: dll-extension-string
+  desc: DLL filename referenced in Python script
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '\w{4,}\.dll\b'
+
+  # --- PYTHONSTARTUP env var ---
+- id: pythonstartup-env
+  desc: PYTHONSTARTUP environment variable reference
+  crit: notable
+  conf: 0.92
+  unless:
+  - id: metadata/package/testing/presence/harness::python-test-file
+  - id: metadata/package/testing/presence/harness/
+  - type: basename
+    exact: site.py
+  - type: text
+    substr: "cpython.run_startup"
+  if:
+    type: text
+    regex: '(os\.getenv|os\.environ(\.get|\[))[^\n]{0,80}PYTHONSTARTUP'
+
+composite_rules:
+- id: pth-telemetry-initializer-import
+  desc: Python .pth startup file imports telemetry code
+  crit: suspicious
+  conf: 0.96
+  for: [python, shell]
+  all:
+  - id: pth-import-exec
+  - id: telemetry-initializer-import
+- id: sitecustomize-startup-hijack
+  desc: Python sitecustomize startup hijack
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: sitecustomize-path
+  - id: py-getargcargv
+  - id: micro-behaviors/process/interpreter/python::runpy-run-path
+  any:
+  - id: micro-behaviors/process/interpreter/python::pythonw-launch
+  - id: objectives/anti-static/obfuscation/eval/scripting::pythonw-exe-replace-trick
+- id: sitecustomize-argv-loader
+  desc: sitecustomize.py with argv-gated loader
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: py-getargcargv
+  - id: micro-behaviors/process/interpreter/python::runpy-run-path
+  any:
+  - id: is-sitecustomize-file
+  - id: dll-extension-string
+  - id: sitecustomize-path
+
+- id: startup-hook-file
+  desc: Python startup hook file with exec
+  crit: suspicious
+  conf: 0.93
+  all:
+  - id: micro-behaviors/process/interpreter/python::exec-builtin
+  any:
+  - id: is-sitecustomize-file
+  - id: is-usercustomize-file
+
+- id: pth-open-read-startup-exec
+  desc: .pth startup executes file content
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: pth-import-exec
+  - id: pth-exec-open-read-line
+
+- id: encoded-sitecustomize-loader
+  desc: Encoded Python startup hook loader
+  crit: hostile
+  conf: 0.96
+  all:
+  - id: is-sitecustomize-file
+  - id: objectives/anti-static/obfuscation/encoding/content::encoded-python-import-dunder
+  - id: micro-behaviors/data/encode/payload::large-base64-string-literals
+  any:
+  - id: micro-behaviors/data/decode/base64::b64decode-string
+  - id: micro-behaviors/data/decode/base64::dunder-import-base64
+  - id: objectives/anti-static/obfuscation/payload/encoded::python-packed-payload
+
+- id: encoded-startup-decompress-exec
+  desc: Python startup hook decompress exec
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: objectives/anti-static/obfuscation/payload/encoded::exec-long-base64-dunder-import
+  any:
+  - id: is-sitecustomize-file
+  - id: is-usercustomize-file
+
+- id: usercustomize-loader
+  desc: usercustomize.py with dynamic code loading
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: is-usercustomize-file
+  any:
+  - id: micro-behaviors/process/interpreter/python::runpy-run-path
+  - id: micro-behaviors/process/interpreter/python::runpy-run-module
+  - id: micro-behaviors/process/interpreter/python::exec-builtin

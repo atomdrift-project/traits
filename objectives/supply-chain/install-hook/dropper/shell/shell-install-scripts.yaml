@@ -1,0 +1,389 @@
+# Supply Chain - Install-time Code Execution (Shell/Package Scripts)
+# Detects malicious code in package manager scripts (postinst, preinst, etc.)
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+defaults:
+  platforms: [unix]
+  for: [shell]
+  mbc: "B0030"
+  attack: "T1195.002"
+traits:
+  # === Base64 binary embedding atomic indicators ===
+  - id: base64-decode-redirect
+    desc: base64 decode to file
+    crit: component
+    if:
+      type: text
+      regex: "base64\\s+(-d|--decode)\\s*>\\s*\\$?[A-Za-z_]"
+  - id: base64-decode-stderr
+    desc: base64 decode with stderr redirect
+    crit: component
+    if:
+      type: text
+      regex: "base64\\s+(-d|--decode)\\s*2>/dev/null\\s*>\\s*"
+  - id: heredoc-botfile
+    desc: BOTFILEHERE heredoc
+    crit: suspicious
+    if:
+      type: text
+      substr: "<<BOTFILEHERE"
+      case_insensitive: true
+  - id: heredoc-eof-bin
+    desc: EOF_BIN heredoc
+    crit: component
+    if:
+      type: text
+      substr: "<<EOF_BIN"
+      case_insensitive: true
+  - id: heredoc-bin
+    desc: BIN heredoc
+    crit: component
+    if:
+      type: text
+      substr: "<<'BIN'"
+      case_insensitive: true
+  - id: heredoc-payload
+    desc: PAYLOAD heredoc
+    crit: suspicious
+    if:
+      type: text
+      substr: "<<PAYLOAD"
+      case_insensitive: true
+  - id: elf-magic-b64
+    desc: ELF magic in base64 (f0VMRg)
+    crit: suspicious
+    if:
+      type: text
+      substr: "f0VMRg"
+    unless:
+      - id: well-known/tool/development/uv::astral-uv-installer
+      - id: well-known/tool/development/rustup::rustup-installer
+  # === Bot directory selection atomic indicators ===
+  - id: botdir-word
+    desc: botdir word
+    crit: component
+    if:
+      type: text
+      word: "botdir"
+      case_insensitive: true
+  - id: installdir-word
+    desc: installdir word
+    crit: component
+    if:
+      type: text
+      word: "installdir"
+      case_insensitive: true
+  - id: workdir-word
+    desc: workdir word
+    crit: component
+    if:
+      type: text
+      word: "workdir"
+      case_insensitive: true
+  - id: lost-found-path
+    desc: /lost+found path
+    crit: component
+    if:
+      type: text
+      substr: "/lost+found"
+  - id: etc-openal-path
+    desc: /etc/openal path
+    crit: component
+    if:
+      type: text
+      substr: "/etc/openal"
+  - id: etc-thermald-path
+    desc: /etc/thermald path
+    crit: component
+    if:
+      type: text
+      substr: "/etc/thermald"
+  - id: lib64-path
+    desc: /lib64 path
+    crit: component
+    if:
+      type: text
+      substr: "/lib64"
+  # Use the neutral /dev/shm path capability for path-context composites.
+  # Removed run-path duplicate - use micro-behaviors/fs/path/system::system-run
+  # Cron persistence via echo redirect
+  # === Cron persistence atomic indicators ===
+  - id: echo-cron-pattern
+    desc: Echo with cron schedule pattern
+    crit: component
+    if:
+      type: text
+      regex: "echo\\s+['\"][*/0-9]+\\s+[*/0-9]+\\s+[*/0-9]+\\s+[*/0-9]+\\s+[*/0-9]+\\s+"
+  # Writability test atomic traits
+  - id: shell-test-w
+    # Use shared crontab path atom
+    # Removed spool-cron-path duplicate - use the neutral filesystem-path atom.
+
+    desc: Shell test writable command
+    crit: component
+    if:
+      type: text
+      substr: "test -w"
+  - id: shell-test-d
+    desc: Shell test directory command
+    crit: component
+    if:
+      type: text
+      substr: "test -d"
+  - id: shell-chmod-0755
+    desc: Shell chmod 0755 command
+    crit: component
+    if:
+      type: text
+      substr: "chmod 0755"
+  # Removed shell-rm-f duplicate - use micro-behaviors/fs/directory/delete::rm-f
+  # Mtime preservation atomic traits (for timestomping)
+  - id: stat-mtime
+    desc: mtime string reference
+    crit: component
+    if:
+      type: text
+      word: "mtime"
+  - id: touch-t
+    desc: touch -t command (set timestamp)
+    crit: component
+    if:
+      type: text
+      substr: "touch -t"
+  - id: touch-r
+    desc: touch -r command (copy timestamp)
+    crit: component
+    if:
+      type: text
+      substr: "touch -r"
+  - id: stat-modify-pipe
+    desc: stat piped to Modify filter
+    crit: component
+    if:
+      type: text
+      regex: "stat\\s+[\"'].{1,50}[\"']\\s*\\|.{0,30}Modify"
+  # Node.js install hook sidecar launch indicators
+  - id: node-shell-sidecar-launch
+    desc: Node launches shell sidecar script
+    crit: component
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '/bin/shell\s+[^"''\n]{1,120}\.(sh|shell)\b'
+  - id: node-cmd-sidecar-launch
+    desc: Node spawn cmd slash-c sidecar
+    crit: component
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'spawn\([^\n]{0,32}cmd\.exe[^\n]{0,32}/c[^\n]{0,120}\.(bat|cmd)'
+  - id: install-sidecar-script-name
+    desc: Pre or postinstall sidecar script name
+    crit: component
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(pre|post)install\.(sh|bat|cmd)\b'
+  - id: cloudwatch-metrics-cron-marker
+    desc: CloudWatch metrics cron config marker
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: CloudWatchMetrics
+composite_rules:
+  # === Base64 binary embedding composites ===
+  - id: base64-decode-cmds
+    desc: Base64 decode commands
+    crit: component
+    any:
+      - id: base64-decode-redirect
+      - id: base64-decode-stderr
+  - id: heredoc-patterns
+    desc: Binary heredoc patterns
+    crit: component
+    any:
+      - id: heredoc-botfile
+      - id: heredoc-eof-bin
+      - id: heredoc-bin
+      - id: heredoc-payload
+  - id: heredoc-or-elf
+    desc: Heredoc or ELF base64 magic
+    crit: component
+    any:
+      - id: heredoc-patterns
+      - id: elf-magic-b64
+  - id: decode-with-payload
+    desc: Base64 decode with payload indicator
+    crit: component
+    all:
+      - id: base64-decode-cmds
+      - id: heredoc-or-elf
+  - id: base64-binary-embed
+    desc: Base64-encoded binary embedded in shell
+    crit: suspicious
+    conf: 0.9
+    size_max: 102400
+    any:
+      - id: decode-with-payload
+      - id: elf-magic-b64
+    unless:
+      - id: well-known/tool/development/uv::astral-uv-installer
+      - id: well-known/tool/development/rustup::rustup-installer
+  # === Cron persistence composites ===
+  - id: cron-paths
+    desc: Cron configuration paths
+    crit: component
+    any:
+      - id: micro-behaviors/fs/path/config/system::config-crontab
+      - id: micro-behaviors/fs/path/config/system::var-spool-cron-path
+      - id: objectives/persistence/system/cron/job::cron-d-path-reference
+  - id: echo-cron
+    desc: Cron persistence via echo redirect
+    crit: suspicious
+    conf: 0.9
+    size_max: 204800
+    any:
+      - id: echo-cron-pattern
+      - id: cron-paths
+    unless:
+      - id: metadata/lang/source/
+      - id: cloudwatch-metrics-cron-marker
+      - id: metadata/package/quality/false-positives::opg-hardening-script-path
+      - id: metadata/build/package::pacman-post-remove-cron-cleanup
+      - id: metadata/build/package::debian-postrm-cron-cleanup
+  # === Bot directory selection composites ===
+  - id: dir-function-names
+    desc: Bot directory function names
+    crit: component
+    any:
+      - id: botdir-word
+      - id: installdir-word
+      - id: workdir-word
+  - id: unusual-dirs
+    desc: Unusual installation directories
+    crit: component
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: lib64-path
+  - id: hidden-system-paths
+    desc: Hidden system paths
+    crit: component
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: micro-behaviors/fs/path/device/special::dev-shm-bare
+      - id: micro-behaviors/fs/path/system::system-run
+  - id: dir-func-with-unusual
+    desc: Dir function with 2+ unusual dirs
+    crit: component
+    all:
+      - id: dir-function-names
+    needs: 2
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: lib64-path
+  - id: three-hidden-paths
+    desc: 3+ hidden system paths
+    crit: component
+    needs: 3
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: micro-behaviors/fs/path/device/special::dev-shm-bare
+      - id: micro-behaviors/fs/path/system::system-run
+  - id: botdir-selection
+    desc: Bot directory selection with multiple paths
+    crit: suspicious
+    conf: 0.85
+    size_max: 204800
+    any:
+      - id: dir-func-with-unusual
+      - id: three-hidden-paths
+  # Writability test composites
+  - id: shell-test-dir-and-write
+    desc: Tests both directory existence and writability
+    crit: component
+    all:
+      - id: shell-test-w
+      - id: shell-test-d
+  - id: shell-chmod-any
+    desc: Any chmod executable command
+    crit: component
+    any:
+      - id: micro-behaviors/fs/chmod/executable/mode::shell-plus-x
+      - id: shell-chmod-0755
+  - id: writability-test
+    desc: Directory writability test with chmod cleanup
+    crit: suspicious
+    conf: 0.8
+    size_max: 204800
+    all:
+      - id: shell-test-dir-and-write
+      - id: shell-chmod-any
+      - id: micro-behaviors/fs/directory/delete::rm-f
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/quality/false-positives::bind9-idn-ltconfig-path
+      # Autoconf/configure scripts always test dirs, chmod, and rm -f
+      - id: metadata/build/autotools::autoconf-generated-script
+      - id: metadata/build/autotools::libtool-generated-script
+      - id: metadata/build/autotools::autotools-config-basename
+  # Mtime preservation composites
+  - id: stat-any
+    desc: Any stat command reference
+    crit: component
+    any:
+      - id: stat-modify-pipe
+      - id: stat-mtime
+  - id: touch-any
+    desc: Any touch timestamp command
+    crit: component
+    any:
+      - id: touch-t
+      - id: touch-r
+  - id: stat-touch-combo
+    desc: stat + touch combination
+    crit: component
+    all:
+      - id: stat-any
+      - id: touch-any
+  - id: touch-mtime-combo
+    desc: touch -t + mtime combination
+    crit: component
+    all:
+      - id: touch-t
+      - id: stat-mtime
+  - id: mtime-preservation
+    desc: Preserves directory timestamps to hide
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: stat-touch-combo
+      - id: touch-mtime-combo
+  - id: node-sidecar-launch-command
+    desc: Node launches OS specific sidecar
+    crit: component
+    for: [javascript, typescript]
+    any:
+      - id: node-shell-sidecar-launch
+      - id: node-cmd-sidecar-launch
+  - id: npm-install-sidecar-dropper
+    desc: OS gated npm sidecar dropper behavior
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    size_max: 51200
+    all:
+      - id: micro-behaviors/os/sysinfo/platform/runtime::process-platform-content
+      - id: install-sidecar-script-name
+      - id: node-sidecar-launch-command
+      - id: metadata/import/builtin::require-child-process
+      - id: micro-behaviors/process/create/shell/bridge::js-exec
+
+# Full supply chain dropper in shell
