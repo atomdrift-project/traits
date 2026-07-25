@@ -1,10 +1,12 @@
 defaults:
   platforms: [windows]
+  # Junk-padded .hta often classifies as unknown (analyzer skipped — cannot
+  # target unknown in for:). Raw fallbacks cover the same dropper when typed
+  # as html/text/data (clean HTA, .txt/.dat carriers). Raw filetype cap is 3.
   for: [html, text, data]
 
-# HTA is not a recognized file type. These bounded raw fallbacks cover HTA
-# content when an analyzer cannot classify it, while remaining limited to
-# opaque data is the analyzer fallback for HTA, which has no native type.
+# Bounded raw fallbacks catch WMI/WSH staging when junk padding empties
+# text extraction (customs-document HTA droppers).
 traits:
 - id: hta-raw-hidden-wmi-process-stage
   desc: Raw HTA creates hidden WMI process
@@ -43,6 +45,16 @@ traits:
     - id: metadata/package/quality/source::openjfx-source-tree
     - id: metadata/package/quality/source::openjfx-tooling-tree
 
+  # PowerShell Unicode.GetString(FromBase64String(...)) of "https://"
+- id: utf16le-b64-https-prefix
+  desc: UTF-16LE Base64 encodes an https URL
+  crit: notable
+  conf: 0.95
+  attack: T1105,T1140
+  if:
+    type: raw
+    regex: 'aAB0AHQAcABzADoALwAv[A-Za-z0-9+/]{24,}'
+
 - id: hta-raw-offscreen-marker
   desc: Raw HTA hides its window
   crit: suspicious
@@ -51,15 +63,48 @@ traits:
     type: raw
     regex: '(?is)window\.(resizeTo|moveTo)\s*\(.{0,120}(-\d+|0\s*,\s*0)'
 
+# Non-ASCII pad after HTA applicationname — bounded class + literal prefix
+# (re-nested / re-perf). Tag identity stays on metadata text trait (dedup).
+- id: hta-raw-nonascii-run
+  desc: Non-ASCII run near HTA applicationname
+  crit: component
+  conf: 0.9
+  if:
+    type: raw
+    regex: '(?is)applicationname.{0,800}[^\x00-\x7f]{8,64}'
+
+- id: hta-raw-split-join-cleanup
+  desc: Raw HTA strips marker via split-join
+  crit: suspicious
+  conf: 0.95
+  attack: T1027.002
+  if:
+    type: raw
+    regex: '(?is)\.split\s*\(\s*["''][^"'']{4,80}["'']\s*\)\s*\.join\s*\(\s*["'']{2}\s*\)'
+
+# Text Item() writes miss when junk padding empties string extraction.
+- id: hta-raw-environment-item-write
+  desc: Raw HTA writes a WSH environment item
+  crit: suspicious
+  conf: 0.97
+  if:
+    type: raw
+    regex: '(?is)\.Item\s*\(\s*["''][A-Za-z_][A-Za-z0-9_]{2,32}["'']\s*\)\s*='
+
+composite_rules:
+# Non-ASCII pad near HTA markup. Same id as the former raw regex so
+# unicode-padded WMI hostiles keep wiring.
 - id: hta-raw-nonascii-padding
   desc: Non-ASCII HTA padding
   crit: suspicious
   conf: 0.96
-  if:
-    type: text
-    regex: '(?is)<hta:application\b.{0,900}[^\x00-\x7f]{8,}'
+  all:
+  - id: metadata/file/format::hta-application-element
+  - id: hta-raw-nonascii-run
 
-composite_rules:
+# Hidden WMI stage plus an encoded https carrier (UTF-16LE Base64 prefix or
+# decoded URL). Catches the next customs-doc HTA that stages a remote PS
+# download without hardcoding hostnames.
 - id: hta-raw-hidden-encoded-wmi-loader
   desc: HTA hides WMI behind encoded stage
   crit: hostile
@@ -69,7 +114,9 @@ composite_rules:
   - id: hta-raw-wscript-shell
   - id: hta-raw-hidden-wmi-process-stage
   - id: hta-raw-user-environment
+  any:
   - id: encoded-remote-url-fragment
+  - id: utf16le-b64-https-prefix
 
 - id: hta-raw-wsh-user-environment
   desc: HTA stages through WSH user environment
@@ -79,13 +126,20 @@ composite_rules:
   - id: hta-raw-wscript-shell
   - id: hta-raw-user-environment
 
-- id: hta-raw-offscreen-encoded-wmi-loader
-  desc: Off-screen HTA launches encoded WMI stage
-  crit: hostile
-  conf: 0.99
-  attack: T1027,T1047,T1105,T1564.003
+# Off-screen window + env Item + split-join cleanup around hidden WMI —
+# durable shape for pad-junked HTA→PS stagers; kept suspicious so it does
+# not stack with the existing for:* unicode-padded hostile on data/text.
+- id: hta-raw-offscreen-env-wmi-loader
+  desc: Off-screen HTA stages env then hidden WMI
+  crit: suspicious
+  conf: 0.98
+  attack: T1027.002,T1047,T1059.001,T1564.003
   all:
   - id: hta-raw-wscript-shell
   - id: hta-raw-hidden-wmi-process-stage
   - id: hta-raw-offscreen-marker
-  - id: encoded-remote-url-fragment
+  - id: hta-raw-user-environment
+  - id: hta-raw-split-join-cleanup
+  any:
+  - id: hta-environment-item-write
+  - id: hta-raw-environment-item-write
