@@ -137,20 +137,20 @@ traits:
     conf: 0.7
     attack: T1490
     platforms: [windows]
-    for: [batch, powershell, pe]
+    for: [batch, powershell, python, javascript, c, cpp, pe, dll]
     if:
       type: text
-      regex: vssadmin\s+delete\s+shadows
+      regex: '(?i)\bvssadmin(\.exe)?\s+delete\s+shadows\b'
   - id: wmic-shadowcopy
     desc: wmic shadowcopy delete
     crit: suspicious
     conf: 0.7
     attack: T1490
     platforms: [windows]
-    for: [batch, powershell, pe]
+    for: [batch, powershell, python, javascript, c, cpp, pe, dll]
     if:
       type: text
-      regex: wmic\s+shadowcopy\s+delete
+      regex: '(?i)\bwmic(\.exe)?\s+shadowcopy\s+delete\b'
     unless:
       - id: well-known/app/peazip::peazip-zpaq-helper
   - id: bcdedit-recovery
@@ -159,20 +159,40 @@ traits:
     conf: 0.7
     attack: T1490
     platforms: [windows]
-    for: [batch, powershell, pe]
+    for: [batch, powershell, python, javascript, c, cpp, pe, dll]
     if:
       type: text
-      regex: bcdedit.{0,30}recoveryenabled.{0,30}no
+      regex: '(?i)\bbcdedit(\.exe)?[\s\S]{0,80}\brecoveryenabled[\s\S]{0,30}\bno\b'
+  - id: bcdedit-ignore-failures
+    desc: Disables Windows boot failure recovery
+    crit: suspicious
+    conf: 0.92
+    attack: T1490
+    platforms: [windows]
+    for: [batch, powershell, python, javascript, c, cpp, pe, dll]
+    if:
+      type: text
+      regex: '(?i)\bbcdedit(\.exe)?[\s\S]{0,80}\bbootstatuspolicy[\s:=/-]{0,12}ignoreallfailures\b'
   - id: wbadmin-delete-systemstate
     desc: wbadmin deletes system backups
     crit: suspicious
     conf: 0.8
     attack: T1490
     platforms: [windows]
-    for: [batch, powershell, pe]
+    for: [batch, powershell, python, javascript, c, cpp, pe, dll]
     if:
       type: text
-      regex: (?i)wbadmin\s+delete\s+systemstatebackup
+      regex: '(?i)\bwbadmin(\.exe)?\s+delete\s+systemstatebackup\b'
+  - id: wbadmin-delete-catalog
+    desc: Deletes Windows backup catalog
+    crit: suspicious
+    conf: 0.92
+    attack: T1490
+    platforms: [windows]
+    for: [batch, powershell, python, javascript, c, cpp, pe, dll]
+    if:
+      type: text
+      regex: '(?i)\bwbadmin(\.exe)?\s+delete\s+catalog\b'
   - id: python-open-rplusb
     desc: Python read-write binary file open
     # open(..., "r+b") is ordinary in-place binary I/O (resumable downloads,
@@ -369,7 +389,9 @@ composite_rules:
       - id: vssadmin-delete
       - id: wmic-shadowcopy
       - id: bcdedit-recovery
+      - id: bcdedit-ignore-failures
       - id: wbadmin-delete-systemstate
+      - id: wbadmin-delete-catalog
   - id: recovery-inhibition-with-log-clear
     desc: Recovery inhibition with log clearing
     crit: suspicious
@@ -391,6 +413,57 @@ composite_rules:
       - id: objectives/impact/services/stop::net-stop
       - id: objectives/impact/degrade/firewall::netsh-firewall-off
       - id: objectives/impact/ransom/encrypt/threat-text::encrypt-comp
+
+  - id: windows-ransomware-process-preparation
+    desc: Windows ransomware recovery destruction and process preparation
+    crit: hostile
+    conf: 0.98
+    attack: T1486,T1490
+    platforms: [windows]
+    for: [source, scripts, binaries]
+    all:
+      - id: shadow-delete
+      - id: micro-behaviors/process/terminate/command::taskkill-sensitive-target-cluster
+      - id: objectives/impact/ransom/encrypt/config::ransom-note-text
+
+  - id: windows-ransomware-cleanup-shutdown
+    desc: Windows ransomware cleanup and forced shutdown
+    crit: hostile
+    conf: 0.98
+    attack: T1486,T1070.004,T1529
+    platforms: [windows]
+    for: [source, binaries]
+    all:
+      - id: windows-ransomware-process-preparation
+      - id: micro-behaviors/os/event/shutdown::shutdown-command-source
+      - id: micro-behaviors/fs/file/delete::deletefile-a
+
+  - id: windows-ransomware-configured-locker
+    desc: Windows XML-configured ransomware locker
+    crit: hostile
+    conf: 0.98
+    attack: T1486,T1490
+    platforms: [windows]
+    for: [source, scripts, binaries]
+    all:
+      - id: shadow-delete
+      - id: objectives/impact/ransom/encrypt/config::xml-locker-settings-schema
+    any:
+      - id: objectives/impact/ransom/encrypt/config::ransom-note-text
+      - id: objectives/impact/ransom/encrypt/config::encoded-ransom-note-content
+
+  - id: windows-ransomware-admin-preflight
+    desc: Windows ransomware administrator preflight
+    crit: suspicious
+    conf: 0.96
+    attack: T1033
+    platforms: [windows]
+    for: [source, binaries]
+    all:
+      - id: micro-behaviors/os/privilege/check::admin-sid-check
+      - id: micro-behaviors/fs/file/write/redirect::disable-wow64-filesystem-redirection
+      - id: objectives/impact/ransom/encrypt/config::xml-locker-settings-schema
+
   - id: lua-dfcrypt-ransomware
     desc: Lua dfcrypt ransomware workflow
     crit: hostile
