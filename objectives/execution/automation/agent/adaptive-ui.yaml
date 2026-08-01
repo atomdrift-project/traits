@@ -1,0 +1,285 @@
+# AI-assisted malware can replace brittle, device-specific UI coordinates with
+# a loop that submits a live UI snapshot to a model, parses the model's action
+# JSON, and injects the returned gesture.  The atoms are source-language
+# neutral; the hostile conclusions require the complete feedback loop.
+defaults:
+  platforms: [unix, windows, android]
+  for: [java, kotlin]
+  attack: T1516
+
+traits:
+  - id: ui-context-sent-to-model
+    desc: Sends UI hierarchy context to a model
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?is)\bUI\s*XML\b[\s\S]{0,220}\b(prompt|model|LLM)\b'
+
+  - id: ui-model-request-marker
+    desc: UI automation model request context
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(inference|completion|generate|chat/completions)\b'
+
+  - id: model-generation-request
+    desc: Generative model endpoint request
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(chat/completions|generateContent|/responses|/messages)\b'
+
+  - id: model-json-parser-call
+    desc: Parses model JSON response
+    crit: component
+    conf: 0.95
+    if:
+      type: symbol
+      exact: parseJson
+
+  - id: model-json-parser-alternative
+    desc: Parses model JSON response
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)\b(JSON\.parse|JSONObject|ObjectMapper|Gson)\b'
+
+  - id: model-ui-action-field
+    desc: Reads a model UI action field
+    crit: component
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)\b(action_type|gesture|tap|swipe)\b'
+
+  - id: model-completion-state-marker
+    desc: Model UI completion state marker
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(COMPLETED|IN_PROGRESS|status)\b'
+
+  - id: model-feedback-keepalive-call
+    desc: Keeps model UI loop alive
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: symbol
+      exact: keepAlive
+
+  - id: model-feedback-maintain-call
+    desc: Maintains model UI loop
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: symbol
+      exact: maintain
+
+  - id: model-feedback-retry-call
+    desc: Retries model UI loop
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: symbol
+      exact: retry
+
+  - id: model-feedback-repeat-call
+    desc: Repeats model UI loop
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: symbol
+      exact: repeat
+
+  - id: foreground-lock-intent
+    desc: Model-directed foreground lock intent
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)\b(lock|pin|pinned|locked)\b'
+
+  - id: foreground-recents-surface
+    desc: Android recent-apps surface reference
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(recent apps|recents|overview|task switcher)\b'
+
+  - id: removal-overlay-shape
+    desc: Creates an invisible removal overlay
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\b(invisible|transparent)\w{0,30}(rectangle|overlay)\b'
+
+  - id: removal-overlay-intercept-word
+    desc: Intercepts a removal control
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)\bintercept\w*\b'
+
+  - id: removal-overlay-add-view
+    desc: Adds an Android overlay view
+    crit: component
+    conf: 0.94
+    if:
+      type: text
+      substr: addView
+
+  - id: removal-accessibility-overlay-type
+    desc: Uses Android accessibility overlay window type
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)\bTYPE_ACCESSIBILITY_OVERLAY\b'
+
+  - id: removal-stop-label
+    desc: Overlay targets a stop control
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: '"Stop"'
+
+  - id: removal-clear-label
+    desc: Overlay targets a clear control
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: '"Clear"'
+
+  - id: removal-uninstall-label
+    desc: Overlay targets an uninstall control
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: '"Uninstall"'
+
+composite_rules:
+  - id: model-feedback-call
+    desc: Repeats model-guided UI action
+    crit: suspicious
+    conf: 0.93
+    any:
+      - id: model-feedback-keepalive-call
+      - id: model-feedback-maintain-call
+      - id: model-feedback-retry-call
+      - id: model-feedback-repeat-call
+
+  - id: adaptive-ui-model-input
+    desc: Sends Android UI tree to a model
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: micro-behaviors/hardware/input/accessibility::android-accessibility-ui-tree-source
+    any:
+      - id: ui-model-request-marker
+      - id: ui-context-sent-to-model
+
+  - id: model-ui-action-parser
+    desc: Parses model output into UI actions
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: adaptive-ui-model-input
+      - id: model-ui-action-field
+    any:
+      - id: model-json-parser-call
+      - id: model-json-parser-alternative
+
+  - id: model-ui-feedback-loop
+    desc: Repeats UI actions until completion
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: model-completion-state-marker
+      - id: model-feedback-call
+    near_lines: 12
+
+  - id: adaptive-foreground-persistence-goal
+    desc: Model-directed app-lock persistence goal
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: foreground-lock-intent
+      - id: foreground-recents-surface
+    near_lines: 8
+
+  - id: removal-control-label-set
+    desc: Overlay targets removal controls
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: removal-stop-label
+      - id: removal-clear-label
+      - id: removal-uninstall-label
+
+  - id: removal-control-overlay
+    desc: Invisible overlay intercepts removal controls
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: removal-overlay-shape
+    any:
+      - id: removal-overlay-intercept-word
+      - id: removal-overlay-add-view
+      - id: removal-accessibility-overlay-type
+    near_lines: 8
+
+  - id: ai-directed-ui-automation
+    desc: Model-directed adaptive UI automation
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: adaptive-ui-model-input
+      - id: model-ui-action-parser
+      - id: micro-behaviors/hardware/input/accessibility::android-accessibility-gesture-source
+    any:
+      - id: micro-behaviors/communications/http/services/gemini::gemini-rest-generate-content
+      - id: model-generation-request
+    near_lines: 32
+
+  - id: ai-assisted-foreground-persistence
+    desc: Model-directed app-lock persistence
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: adaptive-ui-model-input
+      - id: model-ui-action-parser
+      - id: micro-behaviors/hardware/input/accessibility::android-accessibility-gesture-source
+      - id: adaptive-foreground-persistence-goal
+      - id: micro-behaviors/hardware/input/accessibility::android-accessibility-service-source
+    any:
+      - id: micro-behaviors/communications/http/services/gemini::gemini-rest-generate-content
+      - id: model-generation-request
+
+  - id: model-guided-ui-feedback-loop
+    desc: Repeated model-guided accessibility action loop
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: ai-directed-ui-automation
+      - id: model-ui-feedback-loop
+
+  - id: accessibility-removal-control-overlay
+    desc: Accessibility service blocks app removal
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/hardware/input/accessibility::android-accessibility-service-source
+      - id: removal-control-overlay
+      - id: removal-control-label-set
+    near_lines: 32

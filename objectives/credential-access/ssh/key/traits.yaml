@@ -49,7 +49,7 @@ traits:
   attack: T1552.004
   if:
     type: text
-    regex: '(\.ssh[/\\]|[/\\])id_rsa(\.pub)?$|^id_rsa(\.pub)?$'
+    regex: '(\.ssh[/\\]|[/\\])id_rsa$|^id_rsa$'
   downgrade:
     any:
     - id: micro-behaviors/communications/ssh/connect::openssh
@@ -66,7 +66,7 @@ traits:
   attack: T1552.004
   if:
     type: text
-    regex: (\.ssh[/\\]|[/\\])id_dsa(\.pub)?$|^id_dsa$
+    regex: (\.ssh[/\\]|[/\\])id_dsa$|^id_dsa$
   downgrade:
     any:
     - id: micro-behaviors/communications/ssh/connect::openssh
@@ -81,7 +81,7 @@ traits:
   attack: T1552.004
   if:
     type: text
-    regex: (\.ssh[/\\]|[/\\])id_ecdsa(\.pub)?$|^id_ecdsa$
+    regex: (\.ssh[/\\]|[/\\])id_ecdsa$|^id_ecdsa$
   downgrade:
     any:
     - id: micro-behaviors/communications/ssh/connect::openssh
@@ -96,7 +96,7 @@ traits:
   attack: T1552.004
   if:
     type: text
-    regex: (\.ssh[/\\]|[/\\])id_ed25519(\.pub)?$|^id_ed25519$
+    regex: (\.ssh[/\\]|[/\\])id_ed25519$|^id_ed25519$
   downgrade:
     any:
     - id: micro-behaviors/communications/ssh/connect::openssh
@@ -294,7 +294,126 @@ traits:
   if:
     type: text
     regex: \.ssh/id_ed25519([^A-Za-z0-9_.]|$)
+
+# Package payloads do not need to name id_rsa or another key file: walking the
+# user's .ssh directory and excluding known_hosts/authorized_keys is already a
+# precise credential-collection shape. Keep the syntax-specific atoms here so
+# exfiltration composites can reuse the technique across package ecosystems.
+- id: python-path-home-ssh-walk
+  desc: Python walks .ssh after Path.home()
+  crit: suspicious
+  conf: 0.95
+  for: [python]
+  attack: T1083,T1552.004
+  if:
+    type: text
+    regex: 'Path\.home\(\)[\s\S]{0,180}["'']\.ssh["''][\s\S]{0,100}(glob|iterdir)\s*\('
+
+- id: python-expanduser-ssh-walk
+  desc: Python walks an expanded .ssh path
+  crit: suspicious
+  conf: 0.94
+  for: [python]
+  attack: T1083,T1552.004
+  if:
+    type: text
+    regex: 'expanduser\s*\(\s*["'']~[/\\]\.ssh["'']\s*\)[\s\S]{0,70}(glob|iterdir)\s*\('
+
+- id: python-expanduser-ssh-list
+  desc: Python lists an expanded .ssh path
+  crit: suspicious
+  conf: 0.94
+  for: [python]
+  attack: T1083,T1552.004
+  if:
+    type: text
+    regex: 'expanduser\s*\(\s*["'']~[/\\]\.ssh["'']\s*\)[\s\S]{0,70}(listdir|scandir)\s*\('
+
+- id: python-os-ssh-list
+  desc: Python lists an OS .ssh path
+  crit: suspicious
+  conf: 0.94
+  for: [python]
+  attack: T1083,T1552.004
+  if:
+    type: text
+    regex: 'os\.(listdir|scandir)\s*\(.{0,80}[/\\]\.ssh'
+
+- id: python-expanduser-ssh-path
+  desc: Python expands a user's .ssh path
+  crit: component
+  conf: 0.9
+  for: [python]
+  attack: T1552.004
+  if:
+    type: text
+    regex: 'os\.path\.expanduser\s*\(\s*["'']~[/\\]\.ssh["'']\s*\)'
+
+- id: node-ssh-home-path
+  desc: Node constructs a home .ssh path
+  crit: suspicious
+  conf: 0.94
+  for: [javascript, typescript]
+  attack: T1083,T1552.004
+  if:
+    type: text
+    regex: 'homedir\s*\(\)[\s\S]{0,100}["'']\.ssh["'']'
+
+- id: node-ssh-home-env-path
+  desc: Node constructs .ssh path from HOME
+  crit: suspicious
+  conf: 0.94
+  for: [javascript, typescript]
+  attack: T1083,T1552.004
+  if:
+    type: text
+    regex: 'process\.env\.HOME[\s\S]{0,100}["'']\.ssh["'']'
+
+- id: node-ssh-key-read-loop
+  desc: Node reads selected SSH key files
+  crit: suspicious
+  conf: 0.94
+  for: [javascript, typescript]
+  attack: T1552.004
+  if:
+    type: text
+    regex: 'discoverSSHKeys[\s\S]{0,700}fs\.readFileSync\(keyPath'
+
 composite_rules:
+- id: python-ssh-directory-enumeration
+  desc: Python enumerates a user's SSH directory
+  crit: suspicious
+  conf: 0.95
+  for: [python]
+  attack: T1083,T1552.004
+  any:
+    - id: python-path-home-ssh-walk
+    - id: python-expanduser-ssh-walk
+    - id: python-expanduser-ssh-list
+    - id: python-os-ssh-list
+    - id: python-expanduser-ssh-directory-enumeration
+
+- id: python-expanduser-ssh-directory-enumeration
+  desc: Python enumerates an expanded .ssh directory
+  crit: suspicious
+  conf: 0.94
+  for: [python]
+  attack: T1083,T1552.004
+  near_bytes: 512
+  all:
+    - id: python-expanduser-ssh-path
+    - id: micro-behaviors/fs/enumerate/directory::python-directory-listing
+- id: node-dot-ssh-readdir
+  desc: Node enumerates a user's SSH directory
+  crit: suspicious
+  conf: 0.94
+  for: [javascript, typescript]
+  attack: T1083,T1552.004
+  all:
+    - id: micro-behaviors/fs/enumerate/directory::node-readdir-sync-call
+  any:
+    - id: node-ssh-home-path
+    - id: node-ssh-home-env-path
 - id: password-pattern
   desc: Password pattern reference
   crit: component
