@@ -1,0 +1,192 @@
+# Public-service dead-drop staging technique.
+# The service name is intentionally unconstrained: the durable technique is a
+# remote response body followed by packed decoding and dynamic execution.
+defaults:
+  platforms: [unix, windows]
+  for: [scripts]
+  attack: "T1102,T1105,T1140"
+  mbc: "B0030"
+
+traits:
+  - id: urlopen-response-body
+    desc: Python reads remote response body
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?is)\burlopen\b.{0,140}\.read\s*\('
+
+  - id: requests-response-body
+    desc: Python requests reads response body
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?is)\brequests\s*\.\s*(get|post)\b.{0,140}\.(content|text)\b'
+
+  - id: fetch-response-body
+    desc: JavaScript fetch reads response body
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?is)\bfetch\b.{0,140}\.(text|arrayBuffer)\s*\('
+
+  - id: http-get-response-body
+    desc: Go HTTP response body read
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?is)\bhttp\.Get\b.{0,140}(ReadAll|\.Body)'
+
+  - id: python-base64-decode
+    desc: Base64 decoding operation
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(base64\s*\.\s*b64decode|b64decode)\s*\('
+
+  - id: javascript-base64-decode
+    desc: JavaScript Base64 decoding operation
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\batob\s*\('
+
+  - id: go-base64-decode
+    desc: Go Base64 decoding operation
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\bStdEncoding\s*\.\s*DecodeString\s*\('
+
+  - id: gzip-decompression-call
+    desc: Gzip decompression call
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\bgzip\s*\.\s*(decompress|GzipFile)\s*\('
+
+  - id: zlib-decompression-call
+    desc: Zlib decompression call
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(zlib|bz2)\s*\.\s*decompress\s*\('
+
+  - id: generic-decompression-call
+    desc: Generic decompression call
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(decompress|gunzip)\s*(\(|\b)'
+
+  - id: python-dynamic-stage-sink
+    desc: Python dynamic stage sink
+    crit: notable
+    conf: 0.95
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)\b(exec|eval)\s*\('
+
+  - id: process-spawn-stage-sink
+    desc: Process spawn stage sink
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)\b(system|popen|spawn|subprocess)\s*\('
+
+  - id: run-secrets-path
+    desc: Container run-secrets path
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)/run/secrets/.{0,100}'
+
+composite_rules:
+  - id: base64-stage-marker
+    desc: Base64 decoding operation
+    crit: component
+    conf: 0.9
+    any:
+      - id: python-base64-decode
+      - id: javascript-base64-decode
+      - id: go-base64-decode
+
+  - id: compression-stage-marker
+    desc: Decompression operation
+    crit: component
+    conf: 0.9
+    any:
+      - id: gzip-decompression-call
+      - id: zlib-decompression-call
+      - id: generic-decompression-call
+
+  - id: packed-stage-transform
+    desc: Base64 and compression stage transform
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: base64-stage-marker
+      - id: compression-stage-marker
+    near_lines: 12
+
+  - id: remote-response-body
+    desc: Fetches remote response body
+    crit: component
+    conf: 0.92
+    any:
+      - id: urlopen-response-body
+      - id: requests-response-body
+      - id: fetch-response-body
+      - id: http-get-response-body
+
+  - id: dynamic-stage-sink
+    desc: Dynamic stage execution sink
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: python-dynamic-stage-sink
+      - id: process-spawn-stage-sink
+      - id: micro-behaviors/process/create/exec::js-child-process
+
+  - id: process-environment-read
+    desc: Reads process environment data
+    crit: suspicious
+    conf: 0.92
+    any:
+      - id: micro-behaviors/fs/proc/info/path::process-self-environ
+      - id: micro-behaviors/os/container/runtime::serviceaccount-files
+      - id: run-secrets-path
+
+  - id: public-service-packed-stage
+    desc: Remote packed stage executes dynamically
+    crit: hostile
+    conf: 0.995
+    attack: "T1102,T1105,T1140,T1059"
+    all:
+      - id: remote-response-body
+      - id: packed-stage-transform
+      - id: dynamic-stage-sink
+    near_lines: 20
+
+  - id: public-service-packed-environment-exfil
+    desc: Packed stage exfiltrates process environment
+    crit: hostile
+    conf: 0.99
+    attack: "T1102,T1041,T1552.007"
+    all:
+      - id: public-service-packed-stage
+      - id: process-environment-read
+      - id: micro-behaviors/communications/socket/send/
+    near_lines: 40

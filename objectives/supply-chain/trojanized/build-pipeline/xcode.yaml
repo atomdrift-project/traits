@@ -1,0 +1,69 @@
+# Xcode project build-phase poisoning.
+#
+# Xcode project files are data, but PBXShellScriptBuildPhase causes the stored
+# shellScript to run when a developer builds the project.  The hostile join
+# requires a remote fetch and layered decoding in that build-triggered surface,
+# which avoids flagging ordinary local code-generation phases.
+defaults:
+  platforms: [macos]
+  # `.pbxproj` files are data, but cleave's heuristic can classify an
+  # embedded `osascript` build phase as AppleScript.  Keep the broad script
+  # and binary coverage while admitting that project-file representation.
+  for: [scripts, binaries, applescript]
+  attack: T1195.002,T1059.004,T1105,T1140
+
+traits:
+  - id: xcode-build-phase-marker
+    desc: Xcode shell-script build phase marker
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      substr: PBXShellScriptBuildPhase
+
+  - id: xcode-shell-script-field
+    desc: Xcode project shellScript field
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '\bshellScript\s*='
+
+  # These are attack-context fragments: the hostile composite below supplies
+  # the Xcode build-phase context, while each matcher stays short and focused.
+  - id: xcode-build-phase-remote-fetch
+    desc: Xcode phase remote curl fetch fragment
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)shellScript\s*=[\s\S]{0,800}\b(curl|wget)\b[^\n]{0,120}https?://'
+
+  - id: xcode-build-phase-layered-decoder
+    desc: Xcode phase layered Base64 decoder fragment
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)shellScript\s*=[\s\S]{0,800}base64\s+--decode\s*\|\s*base64\s+--decode'
+
+  - id: xcode-build-phase-script-launch
+    desc: Xcode build phase interpreter launch fragment
+    crit: notable
+    conf: 0.86
+    if:
+      type: text
+      regex: '(?i)shellScript\s*=[\s\S]{0,800}(/usr/bin/)?osascript\b'
+
+composite_rules:
+  - id: xcode-build-phase-remote-stager
+    desc: Xcode build phase remote layered stager
+    crit: hostile
+    conf: 0.99
+    near_bytes: 2400
+    all:
+      - id: xcode-build-phase-marker
+      - id: xcode-shell-script-field
+      - id: xcode-build-phase-remote-fetch
+      - id: xcode-build-phase-layered-decoder
+      - id: xcode-build-phase-script-launch

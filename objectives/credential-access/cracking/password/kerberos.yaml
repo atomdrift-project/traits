@@ -1,0 +1,128 @@
+# Source-level indicators for Kerberoasting.  The article's network rule
+# correlates many unique non-system SPNs and successful TGS replies from one
+# client; source code can expose the same intent when it enumerates several
+# service principals, requests TGS tickets, exports their roastable form, and
+# invokes an offline password cracker.
+defaults:
+  platforms: [windows, unix]
+  for: [python, powershell, javascript, typescript, go, csharp, perl, ruby, php]
+  attack: T1558.003
+
+traits:
+  - id: kerberos-spn-enumeration
+    desc: Enumerates SPN service accounts
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\b(GetUserSPNs|servicePrincipalName|SERVICE_SPNS|enum_spns)\b'
+
+  - id: kerberos-spn-list
+    desc: Maintains a list of Kerberos SPN targets
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '(?i)\b(spns?|service[_ -]?principals?|service[_ -]?accounts?)\s*:?=\s*\['
+
+  - id: multiple-kerberos-spn-targets
+    desc: Multiple Kerberos SPN target string literals
+    crit: suspicious
+    conf: 0.94
+    count_min: 3
+    if:
+      type: string_literal
+      # Canonical service-class spelling plus a DNS suffix or port avoids
+      # treating prose, URL paths, and identifiers such as `mcp-app-host/`
+      # as SPNs.  A real SPN target is still a quoted source value here.
+      regex: '\b(MSSQLSvc|HTTP|CIFS|LDAP|WSMAN)/[A-Za-z0-9_-]{2,}[.:][A-Za-z0-9_.:-]{1,}'
+
+  - id: kerberos-tgs-hash-format
+    desc: Roastable Kerberos TGS hash format
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      substr: '$krb5tgs$'
+
+  - id: kerberos-ticket-hash-variable
+    desc: Kerberos ticket hash variable
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)\btgs[_ -]?hash\b'
+
+  - id: kerberos-ticket-export-call
+    desc: Kerberos ticket export operation
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      regex: '(?i)\bticket.{0,80}(write|dump|export|save)'
+
+  - id: hashcat-kerberos-mode
+    desc: Hashcat Kerberos cracking mode
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      regex: '(?i)\bhashcat\b.{0,120}\b13100\b'
+
+  - id: kerberos-hash-cracker
+    desc: Cracks Kerberos ticket hashes
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\b(krb5tgs|tgs[_ -]?hash)\b.{0,120}\b(hashcat|john)\b'
+
+composite_rules:
+  - id: kerberos-ticket-roast-format
+    desc: Exports a roastable TGS hash
+    crit: suspicious
+    conf: 0.97
+    any:
+      - id: kerberos-tgs-hash-format
+      - id: kerberos-ticket-hash-variable
+      - id: kerberos-ticket-export-call
+
+  - id: kerberos-offline-cracker
+    desc: Uses an offline Kerberos cracker
+    crit: suspicious
+    conf: 0.98
+    any:
+      - id: hashcat-kerberos-mode
+      - id: kerberos-hash-cracker
+
+  - id: kerberos-spn-tgs-harvest
+    desc: Harvests service tickets across SPNs
+    crit: hostile
+    conf: 0.98
+    near_lines: 100
+    all:
+      - id: multiple-kerberos-spn-targets
+      - id: micro-behaviors/os/security/auth/session::kerberos-tgs-request
+    any:
+      - id: kerberos-spn-enumeration
+      - id: kerberos-spn-list
+
+  - id: kerberos-weak-ticket-harvest
+    desc: Harvests SPN tickets marked with weak Kerberos encryption
+    crit: hostile
+    conf: 0.98
+    near_lines: 100
+    all:
+      - id: kerberos-spn-tgs-harvest
+      - id: micro-behaviors/os/security/auth/session::kerberos-weak-encryption
+
+  - id: kerberoasting-offline-crack
+    desc: Offline-cracks Kerberos ticket hashes
+    crit: hostile
+    conf: 0.99
+    attack: T1558.003,T1110.002
+    near_lines: 100
+    all:
+      - id: kerberos-spn-tgs-harvest
+      - id: kerberos-ticket-roast-format
+      - id: kerberos-offline-cracker
