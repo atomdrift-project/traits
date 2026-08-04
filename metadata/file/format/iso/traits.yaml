@@ -3,6 +3,25 @@ defaults:
   for: [all]
 
 traits:
+  # These are separate capability markers so ISO objective rules can require
+  # the complete loader shape. A lone method name is common in managed
+  # applications; the objective composites supply the PE and CLR context.
+  - id: iso-dotnet-hex-slice
+    desc: .NET slices text before byte conversion
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      exact: Substring
+
+  - id: iso-dotnet-hex-byte-conversion
+    desc: .NET converts text to a byte value
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      exact: ToByte
+
   - id: iso-wsh-com-stream-marker
     desc: WSH COM stream-staging marker
     crit: notable
@@ -100,41 +119,6 @@ traits:
       type: text
       regex: '(?i)(^|[,\s._-])PDF\.EXE\b'
 
-  - id: iso-setwindowshookexa
-    desc: SetWindowsHookExA API string
-    crit: notable
-    conf: 0.97
-    attack: T1056.001
-    if:
-      type: text
-      exact: SetWindowsHookExA
-
-  - id: iso-getkeyboardstate
-    desc: GetKeyboardState API string
-    crit: notable
-    conf: 0.97
-    attack: T1056.001
-    if:
-      type: text
-      exact: GetKeyboardState
-
-  - id: iso-getkeystate
-    desc: GetKeyState API string
-    crit: notable
-    conf: 0.97
-    attack: T1056.001
-    if:
-      type: text
-      exact: GetKeyState
-
-  - id: iso-createfilea
-    desc: CreateFileA API string
-    crit: notable
-    conf: 0.96
-    if:
-      type: text
-      exact: CreateFileA
-
   - id: iso-registerclipboardformata
     desc: RegisterClipboardFormatA API string
     crit: notable
@@ -197,7 +181,7 @@ traits:
     attack: T1036.007,T1204.002
     if:
       type: text
-      regex: '(?i)(invoice|receipt|statement)[^\x00]{0,64}\.exe\b'
+      regex: '(?i)(invoice|receipt|statement)[^\x00\n]{0,64}\.exe\b'
 
   - id: iso-document-exe-lure-letter
     desc: Letter or payment executable ISO member
@@ -206,7 +190,7 @@ traits:
     attack: T1036.007,T1204.002
     if:
       type: text
-      regex: '(?i)(letter|payment|balance)[^\x00]{0,64}\.exe\b'
+      regex: '(?i)(letter|payment|balance)[^\x00\n]{0,64}\.exe\b'
 
   - id: iso-document-exe-lure-payment
     desc: Multilingual payment executable ISO member
@@ -215,7 +199,7 @@ traits:
     attack: T1036.007,T1204.002
     if:
       type: text
-      regex: '(?i)(pago|saldo|proof[_ -]?of)[^\x00]{0,64}\.exe\b'
+      regex: '(?i)(pago|saldo|proof[_ -]?of)[^\x00\n]{0,64}\.exe\b'
 
   - id: iso-document-exe-lure-proforma
     desc: Proforma invoice executable ISO member
@@ -224,7 +208,7 @@ traits:
     attack: T1036.007,T1204.002
     if:
       type: text
-      regex: '(?i)proforma[^\x00]{0,64}\.exe\b'
+      regex: '(?i)proforma[^\x00\n]{0,64}\.exe\b'
 
   - id: iso-document-exe-lure-order
     desc: Order or purchase-order executable ISO member
@@ -233,7 +217,7 @@ traits:
     attack: T1036.007,T1204.002
     if:
       type: text
-      regex: '(?i)(purchase[_\s-]*order|order[_\s-]*sheet)[^\x00]{0,48}\.exe\b'
+      regex: '(?i)(purchase[_\s-]*order|order[_\s-]*sheet)[^\x00\n]{0,48}\.exe\b'
 
   - id: iso-document-com-lure-order
     desc: Document-themed order or .COM name marker
@@ -244,14 +228,32 @@ traits:
       type: text
       regex: '(?i)\b(purchase[_\s-]*order|purchase)\b[^\x00]{0,48}\.com\b'
 
+  # Two fixes, both to match the sibling `-order` atom above.
+  #
+  # `component`, not `suspicious`: the standalone reading claims an ISO member
+  # named like an invoice with a `.COM` executable extension, but nothing here
+  # checks that the file is an ISO. The umbrella `iso-document-com-lure`
+  # composite below already gates on `primary-volume-descriptor` and carries the
+  # suspicious verdict, which is where it belongs.
+  #
+  # The gap is now filename-safe characters rather than `[^\x00]`, which spanned
+  # arbitrary prose and made `.com` the TLD instead of the DOS executable
+  # extension. lodash's own JSDoc — "[quote attribute values](http://wonko.com/
+  # post/html-escaping)" — scored suspicious for an invoice lure inside the
+  # @antv/xflow-core bundle. A lure filename is one token (`INVOICE_2024.com`,
+  # `PROFORMA INVOICE.com`); a URL puts `](http://` in between.
+  #
+  # Residual and deliberate: a hostname like `invoice.<brand>.com` is still one
+  # token and still matches. As a component behind the PVD gate that costs
+  # nothing, and tightening further would start rejecting real member names.
   - id: iso-document-com-lure-invoice
     desc: Invoice or quote .COM ISO member
-    crit: suspicious
+    crit: component
     conf: 0.97
     attack: T1036.007,T1204.002
     if:
       type: text
-      regex: '(?i)\b(invoice|proforma|quote)\b[^\x00]{0,48}\.com\b'
+      regex: '(?i)\b(invoice|proforma|quote)[A-Za-z0-9._ +-]{0,40}\.com\b'
 
   - id: iso-dotnet-metadata-sig
     desc: .NET metadata signature string in ISO content
@@ -287,28 +289,6 @@ traits:
     if:
       type: text
       regex: '(?i)version\.dll;1\b'
-
-  - id: iso-dotnet-assembly-attr
-    desc: .NET AssemblyCompanyAttribute marker
-    crit: notable
-    conf: 0.96
-    if:
-      type: text
-      exact: AssemblyCompanyAttribute
-    # Keep for:[all] so opaque ISO carriers match, but suppress on real
-    # managed PEs that already expose CLR framework traits.
-    unless:
-      - id: metadata/binary/framework::clr-runtime-header
-
-  - id: iso-dotnet-assembly-title-attr
-    desc: .NET AssemblyTitleAttribute marker
-    crit: notable
-    conf: 0.96
-    if:
-      type: text
-      exact: AssemblyTitleAttribute
-    unless:
-      - id: metadata/binary/framework::clr-runtime-header
 
   # SmartScreen lure text is often extracted as separate string facts, so
   # keep the message and the bypass instruction as distinct atoms.
@@ -467,6 +447,66 @@ traits:
     if:
       type: text
       regex: '(?is)%ProgramFiles%.*?msedge\.exe'
+
+  # Opaque ISO images do not expose the managed PE's import/member facts. These
+  # text markers preserve only high-confidence API clusters; the collection
+  # and credential-theft intent remains in the objective composites, which
+  # supply the primary-volume-descriptor context.
+  - id: iso-dotnet-input-capture-cluster
+    desc: .NET input-capture API cluster in ISO content
+    crit: notable
+    conf: 0.99
+    attack: T1056.001,T1115
+    count_min: 2
+    if:
+      type: text
+      regex: '(?i)(UnhookWindowsHookEx|CallNextHookEx|SetClipboardViewer)'
+
+  - id: iso-dotnet-vault-access-cluster
+    desc: Windows Vault API cluster in ISO content
+    crit: notable
+    conf: 0.99
+    attack: T1555.004
+    count_min: 3
+    if:
+      type: text
+      regex: '(?i)(VaultOpenVault|VaultEnumerateVaults|VaultGetItem)'
+
+  - id: iso-dotnet-network-output-cluster
+    desc: .NET network-output API cluster in ISO content
+    crit: notable
+    conf: 0.98
+    attack: T1041
+    count_min: 3
+    if:
+      type: text
+      regex: '(?i)(WebClient|GetResponseStream|SmtpClient|TripleDES)'
+
+  - id: iso-java-jar-member
+    desc: Java archive member in ISO content
+    crit: component
+    conf: 0.98
+    if:
+      type: text
+      regex: '(?i)[A-Za-z0-9][A-Za-z0-9 ._-]{0,64}\.jar'
+
+  - id: iso-allatori-comment
+    desc: Allatori obfuscator comment in ISO content
+    crit: notable
+    conf: 0.99
+    if:
+      type: text
+      substr: Obfuscation by Allatori Obfuscator
+
+  - id: iso-obfuscated-jar-class-catalog
+    desc: Obfuscated Java class catalog in ISO content
+    crit: suspicious
+    conf: 0.98
+    attack: T1027
+    count_min: 8
+    if:
+      type: text
+      regex: '(?i)[i]{6,12}\.class'
 
 composite_rules:
   - id: iso-document-exe-lure
