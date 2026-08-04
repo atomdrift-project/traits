@@ -36,29 +36,6 @@ traits:
     if:
       type: text
       word: SevenZip.Compression.LZMA
-  - id: vb-newlatebinding
-    desc: VB NewLateBinding dispatch helper
-    crit: notable
-    conf: 0.92
-    if:
-      type: text
-      word: NewLateBinding
-    unless:
-      - id: metadata/signed/platform::microsoft
-  - id: vb-lateget-token
-    desc: VB LateGet dispatch token
-    crit: component
-    conf: 0.9
-    if:
-      type: text
-      word: LateGet
-  - id: resolveeventhandler-token
-    desc: ResolveEventHandler delegate token
-    crit: component
-    conf: 0.88
-    if:
-      type: text
-      word: ResolveEventHandler
   - id: convert-frombase64
     desc: Convert.FromBase64String call
     crit: component
@@ -135,6 +112,22 @@ traits:
       - id: metadata/package/testing/presence/harness/
       - id: metadata/package/testing/presence/fixture::test-filename-pattern
 composite_rules:
+  - id: dotnet-reactor-encrypted-process-stage
+    desc: Reactor-protected encrypted process stage
+    crit: hostile
+    conf: 0.98
+    attack: T1027.009,T1055
+    mbc: E1055
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/managed::reactor-module-guid
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
+      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: well-known/tool/reverse-engineering/
+      - id: well-known/game/mod/
+
   - id: dotnet-embedded-executable-resource-stager
     desc: .NET encrypted resource stager with hidden command launch
     crit: hostile
@@ -201,6 +194,10 @@ composite_rules:
         - id: well-known/app/windows-desktop-tools::steamtools-member
     unless:
       - id: well-known/app/windows-desktop-tools::steamtools-member
+      # DiscordChatExporter ships the Onova updater and the .NET runtime;
+      # their managed resource/reflection paths are expected application code.
+      - id: well-known/app/discord-chat-exporter::discord-chat-exporter-release
+      - id: well-known/lib/dotnet-runtime::dotnet-corelib-assembly
   - id: managed-resource-reflection-loader
     desc: .NET managed resource reflection loader
     crit: suspicious
@@ -285,7 +282,7 @@ composite_rules:
     needs: 2
     any:
       - id: sevenzip-helper-lzma
-      - id: vb-newlatebinding
+      - id: micro-behaviors/process/interpreter/reflection/vb::vb-newlatebinding
       - id: metadata/lang/compiler/managed::get-method-token
       - id: micro-behaviors/data/compress/library::dotnet-gzip-compression
     downgrade:
@@ -307,10 +304,7 @@ composite_rules:
     any:
       - id: sevenzip-helper
       - id: sevenzip-lzma-namespace
-      - id: vb-newlatebinding
-      - id: objectives/anti-static/obfuscation/reflection/invoke::vb-latecall-token
-      - id: vb-lateget-token
-      - id: resolveeventhandler-token
+      - id: micro-behaviors/process/interpreter/reflection/vb/
       - id: micro-behaviors/data/compress/library::dotnet-gzip-compression
     needs: 4
     downgrade:
@@ -325,10 +319,10 @@ composite_rules:
     all:
       - id: vb-loader-resource-pair
       - id: sevenzip-helper-lzma
-      - id: vb-newlatebinding
-      - id: objectives/anti-static/obfuscation/reflection/invoke::vb-latecall-token
-      - id: vb-lateget-token
-      - id: resolveeventhandler-token
+      - id: micro-behaviors/process/interpreter/reflection/vb::vb-newlatebinding
+      - id: micro-behaviors/process/interpreter/reflection/vb::vb-latecall-token
+      - id: micro-behaviors/process/interpreter/reflection/vb::vb-lateget-token
+      - id: micro-behaviors/process/interpreter/reflection/vb::resolveeventhandler-token
       - id: micro-behaviors/process/interpreter/reflection/runtime::create-instance-token
   - id: base64-file-dropper
     desc: Base64 decode and write file
@@ -480,3 +474,23 @@ composite_rules:
       - id: micro-behaviors/crypto/symmetric/3des::triple-des-decrypt-chain
       - id: micro-behaviors/data/compress/library::dotnet-gzip-compression
       - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+
+  # VB.NET wrappers that carry a second native PE plus temp/process staging
+  # strings are classic MSIL crypter/dropper shells (AgentTesla-class).
+  - id: vbnet-embedded-native-temp-dropper
+    desc: VB.NET assembly embeds a native temp-process dropper
+    crit: hostile
+    conf: 0.98
+    attack: T1027.009,T1106,T1059
+    all:
+      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/binary/layout::pe-embedded
+      - id: metadata/binary/layout::pe-no-signature-record
+      - id: micro-behaviors/process/interpreter/reflection/vb::vb-newlatebinding
+      - id: metadata/binary/resource::dotnet-large-high-entropy-managed-resource
+      - id: micro-behaviors/process/create/launch::create-process-api-name
+      - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+    unless:
+      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft-corporation
+      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
