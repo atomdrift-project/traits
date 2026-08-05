@@ -1,13 +1,108 @@
+# HandBrake — open-source video transcoder (https://handbrake.fr,
+# https://github.com/HandBrake/HandBrake). Windows CLI builds ship as a
+# large MinGW-linked HandBrakeCLI.exe that statically embeds libav/x264
+# and walks its own PE headers via the MinGW pseudo-reloc runtime.
+# Identify the product so loader/screenshot composites do not treat that
+# as reflective PE loading or desktop capture malware.
 defaults:
   platforms: [windows]
   for: [pe, dll]
+  size_min: 100000
   size_max: 268435456
   crit: notable
   conf: 0.98
 
 traits:
   - id: handbrake-windows-binary
-    desc: HandBrake Windows binary
+    desc: HandBrake Windows GUI or core path
     if:
       type: path
       regex: '(^|[\\/])HandBrake[\\/](HandBrake\.exe|hb\.dll)$'
+
+  - id: handbrake-cli-basename
+    desc: HandBrakeCLI executable basename
+    if:
+      type: basename
+      exact: HandBrakeCLI.exe
+      case_insensitive: true
+
+  # Version banner bytes in .rdata (text extraction sparsely samples this
+  # section on large MinGW HandBrakeCLI builds).
+  - id: handbrake-version-banner
+    desc: HandBrake version banner bytes
+    if:
+      type: hex
+      section: .rdata
+      pattern: "48 61 6E 64 42 72 61 6B 65 20"
+
+  - id: handbrake-cli-usage-bytes
+    desc: HandBrakeCLI usage synopsis bytes
+    if:
+      type: hex
+      section: .rdata
+      pattern: "55 73 61 67 65 3A 20 48 61 6E 64 42 72 61 6B 65 43 4C 49"
+
+  # The Windows GUI is a self-contained .NET/WPF application. Its managed
+  # HandBrake.dll is commonly discovered as an embedded x86 PE inside the
+  # ARM64 apphost, so the path-based identity above does not cover it.
+  - id: handbrake-team-company
+    desc: HandBrake Team PE company identity
+    if:
+      type: value
+      path: pe.version.company
+      exact: HandBrake Team
+
+  - id: handbrake-product-name
+    desc: HandBrake PE product identity
+    if:
+      type: value
+      path: pe.version.product_name
+      exact: HandBrake
+
+  - id: handbrake-managed-original-name
+    desc: HandBrake managed assembly filename
+    if:
+      type: value
+      path: pe.version.original_filename
+      regex: '^HandBrake\.dll$'
+
+  - id: handbrake-project-url
+    desc: HandBrake project URL
+    if:
+      type: text
+      section: .text
+      exact: https://handbrake.fr
+
+composite_rules:
+  - id: handbrake-cli
+    desc: HandBrake command-line transcoder
+    crit: notable
+    conf: 0.99
+    all:
+      - id: handbrake-cli-basename
+    any:
+      - id: handbrake-version-banner
+      - id: handbrake-cli-usage-bytes
+
+  - id: handbrake-app
+    desc: HandBrake video transcoder application
+    crit: notable
+    conf: 0.99
+    any:
+      - id: handbrake-windows-binary
+      - id: handbrake-cli
+      - id: handbrake-cli-basename
+      - id: handbrake-version-banner
+
+  # Benign context for the generic bundled-resource and repeated-PE heuristics.
+  # All markers describe the product independently; do not use the path alone
+  # to suppress a detection in a renamed or repacked binary.
+  - id: handbrake-known-release-context
+    desc: HandBrake managed release identity context
+    crit: exception
+    conf: 0.99
+    all:
+      - id: handbrake-team-company
+      - id: handbrake-product-name
+      - id: handbrake-managed-original-name
+      - id: handbrake-project-url
