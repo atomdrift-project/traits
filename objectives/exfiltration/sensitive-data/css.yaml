@@ -1,0 +1,88 @@
+# CSS-only exfiltration from data rendered into a trusted page or webmail UI.
+# These composites describe reusable oracle shapes from the CSS webmail
+# research: selectors and CSS resource behavior, not provider names or prose.
+defaults:
+  platforms: [windows, unix]
+  for: [html, text]
+  attack: T1041
+
+traits:
+  - id: css-external-fragment-link-sweep
+    desc: HTML enumerates external fragment links
+    crit: suspicious
+    conf: 0.94
+    for: [html]
+    count_min: 4
+    if:
+      type: text
+      regex: '(?is)<a\b[^>]{0,260}\bhref\s*=\s*["''](https?:)?//[^"'']{1,200}#[^"'']{1,120}["'']'
+
+  # A per-character font oracle declares one @font-face per candidate glyph,
+  # each scoped to exactly one codepoint, so whichever glyph the page renders
+  # fetches the font URL that names it. Ordinary webfont subsetting (Google
+  # Fonts, Fontsource, icon fonts) always writes block ranges or a
+  # comma-separated list, so requiring the whole value to be a lone codepoint
+  # is what separates the oracle from a normal @font-face stack.
+  - id: css-font-single-codepoint-sweep
+    desc: Font faces scoped to single Unicode codepoints
+    crit: suspicious
+    conf: 0.97
+    count_min: 8
+    if:
+      type: text
+      regex: '(?is)@font-face\s*\{[^}]{0,320}unicode-range\s*:\s*U\+[0-9a-f]{1,6}\s*[;}]'
+    unless:
+      - id: well-known/lib/ui/han-css/
+
+  - id: css-hidden-link-inset-oracle
+    desc: Variable-based link oracle
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?is)\binset\s*:\s*max\s*\([^;{}]{0,800}\bvar\s*\([^;{}]{0,100}\b100%\s*\)'
+
+composite_rules:
+  - id: css-attribute-selector-image-exfil
+    desc: CSS attribute sweep exfiltrates matched values through image loads
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/data/format/css::attribute-selector-family
+    any:
+      - id: micro-behaviors/communications/http/client/resource::stylesheet-remote-url-value
+      - id: micro-behaviors/communications/http/client/resource::stylesheet-image-set-external-fallback
+    near_bytes: 16000
+
+  - id: css-unicode-anchor-token-oracle
+    desc: CSS character oracle exfiltrates rendered numeric data through links
+    crit: hostile
+    conf: 0.98
+    for: [html]
+    all:
+      - id: css-font-single-codepoint-sweep
+      - id: css-external-fragment-link-sweep
+      - id: css-hidden-link-inset-oracle
+    near_bytes: 24000
+
+  - id: css-media-comment-sanitizer-bypass-exfil
+    desc: CSS media-comment bypass exfiltrates via remote loads
+    crit: hostile
+    conf: 0.98
+    attack: T1041,T1562.001
+    all:
+      - id: micro-behaviors/data/format/css::css-media-comment-rule-injection
+      - id: micro-behaviors/communications/http/client/resource::stylesheet-remote-url-value
+    near_bytes: 8000
+
+  - id: css-sanitizer-bypass-fullscreen-overlay
+    desc: CSS sanitizer bypass draws deceptive fullscreen overlay
+    crit: hostile
+    conf: 0.98
+    attack: T1189,T1562.001
+    all:
+      - id: micro-behaviors/data/format/css::css-media-comment-rule-injection
+      - id: micro-behaviors/ui/window/manage/dom::fixed-viewport-overlay-style
+      - id: micro-behaviors/ui/window/manage/dom::high-layer-overlay-style
+      - id: micro-behaviors/communications/http/client/resource::stylesheet-remote-url-value
+    near_bytes: 8000

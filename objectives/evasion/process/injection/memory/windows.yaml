@@ -6,6 +6,15 @@ defaults:
   platforms: [windows]
 # nt-write-virtual-memory removed - use micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-a instead
 composite_rules:
+  - id: explorer-injection-api-chain
+    desc: Injection API chain
+    crit: notable
+    conf: 0.98
+    all:
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-text
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/inject/dll::create-remote-thread-text
+
   - id: kernel-gui-process-inline-patch
     desc: Kernel driver prepares an inline patch for a GUI process module
     crit: hostile
@@ -34,7 +43,7 @@ composite_rules:
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
       - id: micro-behaviors/process/inject/runtime/call::get-thread-context-dup
       - id: micro-behaviors/process/inject/runtime/call::set-thread-context-dup
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
     needs: 2
     unless:
       - id: metadata/signed/platform/
@@ -48,7 +57,7 @@ composite_rules:
     all:
       - id: micro-behaviors/process/inject/dll::create-remote-thread
       - id: micro-behaviors/process/create/spawn::open-process
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
       - id: micro-behaviors/data/embedded/payload/resource::pe-resource-full-extraction
     unless:
       - id: metadata/signed/platform/
@@ -89,19 +98,19 @@ composite_rules:
       - id: well-known/game/mod::game-mod-embedded-dll
       - id: well-known/game/steam/
       - id: well-known/tool/sysadmin/chroot-win::chroot-windows-component
-      - id: well-known/lib/easyhook::easyhook-library
+      - id: well-known/lib/platform/easyhook::easyhook-library
       - id: well-known/tool/reverse-engineering/x64dbg::x64dbg-release-component
       - id: well-known/tool/reverse-engineering/scylla::scylla-unpacker
   # process-inject-api: composite referencing canonical injection/memory traits
   # CreateRemoteThread: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup (canonical)
   # WriteProcessMemory: micro-behaviors/process/inject/runtime/call::write-process-memory-dup (canonical)
-  # VirtualAllocEx: micro-behaviors/mem/protect/modify::virtual-alloc-ex (canonical)
+  # VirtualAllocEx: micro-behaviors/mem/alloc/remote::virtual-alloc-ex (canonical)
   - id: process-inject-remote-allocation
     desc: Remote-process memory allocation API
     crit: component
     conf: 0.8
     any:
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-dup
       - id: micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-a
   - id: process-inject-remote-action
     desc: Remote-process memory write or thread-creation API
@@ -119,20 +128,35 @@ composite_rules:
     all:
       - id: process-inject-remote-allocation
       - id: process-inject-remote-action
-    downgrade:
-      any:
-        - id: objectives/evasion/process/injection/memory/
     unless:
-      - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
       - id: metadata/binary/metrics/threshold::many-exports-200
       - id: metadata/binary/symbols/plugin/
       - id: metadata/library/qt/
-      # Only suppress for authentic .NET images — not string-table hits like
-      # mscoree.dll in AutoIt/interpreter runtimes (metadata/binary/framework::).
-      - id: metadata/binary/framework::dotnet-metadata
-      - id: metadata/binary/framework::clr-runtime-header
-      - id: metadata/binary/framework::dotnet-runtime
+      # Only suppress for authentic framework images — not string-table hits
+      # in native runtimes. The framework directory contains the validated
+      # metadata/header identities used by this rule.
+      - id: metadata/binary/framework/
       - id: metadata/signed/leaf::google-inc
+      - id: well-known/app/system/iobit::iobit-signed-component-context
+      - id: well-known/lib/runtime/electron::electron-chromium-runtime-strong
+      # syspin is a Pin To Taskbar utility; its remote-process API set is how
+      # it asks Explorer to pin a shortcut. Require the full identity before
+      # suppressing this capability.
+      - id: well-known/tool/sysadmin/syspin/
+  - id: named-explorer-remote-thread-injection
+    desc: Remote-thread injection targets Explorer
+    crit: hostile
+    conf: 0.995
+    mbc: B0033
+    attack: T1055,T1055.001
+    all:
+      - id: micro-behaviors/process/inject/runtime/call::remote-process-memory-api-cluster
+      - id: process-inject-remote-action
+      - id: explorer-injection-api-chain
+      - id: micro-behaviors/process/create/launch::launch-explorer
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/tool/reverse-engineering/
   - id: enumeration-and-impersonation-assisted-injection
     desc: Remote process injection with process targeting and token impersonation
     crit: hostile
@@ -188,7 +212,7 @@ composite_rules:
     mbc: "B0033"
     attack: "T1055"
     all:
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
       - id: micro-behaviors/process/inject/runtime/call::get-thread-context-dup
       - id: micro-behaviors/process/inject/runtime/call::set-thread-context-dup
@@ -197,7 +221,7 @@ composite_rules:
       - id: micro-behaviors/process/create/spawn::create-process-a
       - id: micro-behaviors/process/create/spawn::open-process
     unless:
-      - id: well-known/app/oneget::oneget-detours-dns-shim-context
+      - id: well-known/tool/sysadmin/oneget::oneget-detours-dns-shim-context
       - id: metadata/signed/platform/
       - id: well-known/tool/reverse-engineering/
       - id: well-known/tool/development/debugpy
@@ -214,7 +238,7 @@ composite_rules:
     attack: "T1055.003"
     all:
       - id: metadata/binary/metrics/structural::no-imports
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-text
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-text
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-text
       - id: micro-behaviors/process/inject/runtime/call::get-thread-context-text
       - id: micro-behaviors/process/inject/runtime/call::set-thread-context-text
@@ -235,17 +259,17 @@ composite_rules:
     any:
       - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
       - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-source
       - id: micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-a
     unless:
-      - id: well-known/lib/wine::wine-source-tree
+      - id: well-known/lib/platform/wine::wine-source-tree
       - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
       - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
       - id: well-known/game/mod::dalamud-source-tree
       - id: well-known/tool/development/debugpy::source-path-marker
-      - id: well-known/app/mozilla::firefox-source-tree-path
-      - id: well-known/lib/windows-erg/
+      - id: well-known/app/communication/thunderbird::firefox-source-tree-path
+      - id: well-known/lib/platform/windows-erg/
       - id: well-known/tool/sysadmin/kali/
   - id: source-remote-thread-injection
     desc: Source allocates and writes remote memory before starting a remote thread
@@ -262,11 +286,11 @@ composite_rules:
       - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-source
       - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-python-source
     unless:
-      - id: well-known/lib/wine::wine-source-tree
+      - id: well-known/lib/platform/wine::wine-source-tree
       - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
       - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
-      - id: well-known/app/mozilla::firefox-source-tree-path
-      - id: well-known/lib/windows-erg/
+      - id: well-known/app/communication/thunderbird::firefox-source-tree-path
+      - id: well-known/lib/platform/windows-erg/
       - id: well-known/tool/sysadmin/kali/
   - id: rust-remote-thread-shellcode-injection
     desc: Rust remote thread shellcode injection
@@ -276,7 +300,7 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/spawn::open-process
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
       - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
     any:
       - id: micro-behaviors/mem/protect/modify::virtual-protect-ex

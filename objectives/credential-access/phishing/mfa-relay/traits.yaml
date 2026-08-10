@@ -1,6 +1,7 @@
 defaults:
   platforms: [windows, unix]
-  for: [html, javascript, php]
+  # Web authentication forms are also commonly embedded in TypeScript sources.
+  for: [html, javascript, typescript, php]
   attack: T1566.002
   mbc: B0030
 
@@ -67,27 +68,25 @@ traits:
     regex: '(?i)(data-se\s*=\s*["'']help-link["'']|class\s*=\s*["''].{0,80}js-help-link)'
 
 # The report identifies SVG attachments that redirect through either a
-# xlink:href target or inline JavaScript. Keep the atoms structural; the
-# authentication-path composite below supplies the attack context.
-- id: svg-external-xlink-navigation
-  desc: SVG external xlink navigation
-  # External links are common in diagrams and help attachments.  The
-  # authentication-path composite below supplies the phishing context.
-  crit: notable
-  conf: 0.92
-  for: [svg]
-  if:
-    type: text
-    regex: '(?is)<a\b[^>]{0,260}\bxlink:href\s*=\s*["'']https?://'
+# xlink:href target or inline JavaScript. The xlink half is a neutral
+# navigation fact — draw.io and Inkscape exports carry it — so it lives in
+# micro-behaviors/data/format/html/svg-elements.yaml; the authentication-path
+# composite below supplies the attack context.
 
+# A bare `location=` spelling matched XML/XSD import attributes
+# (`<xs:import ... location="http://www.w3.org/1999/xlink.xsd">` in the W3C
+# XLink schema shipped by OpenSCAP), which are markup, not script navigation.
+# Requiring the member-access form (`window.location`, `location.href`,
+# `location.replace`) keeps every scripted-redirect spelling and drops the
+# attribute.
 - id: svg-location-external-assignment
-  desc: SVG external location assignment
+  desc: SVG script assigns location to external URL
   crit: suspicious
   conf: 0.94
   for: [svg]
   if:
     type: text
-    regex: '(?i)\b(window\.)?location(\.href|\.replace)?\s*(=|\()\s*["'']https?://'
+    regex: '(?i)(\.location|location\.(href|replace))\s*(=|\()\s*["'']https?://'
 
 - id: svg-authentication-endpoint-path
   desc: SVG contains an authentication endpoint path
@@ -119,9 +118,9 @@ composite_rules:
   crit: notable
   conf: 0.92
   unless:
-  - id: metadata/package/quality/false-positives::stacksjs-stx-framework-context
+  - id: metadata/package/quality/benign-context::stacksjs-stx-framework-context
   any:
-  - id: objectives/credential-access/phishing/captive-portal::post-form-method
+  - id: micro-behaviors/communications/http/post::html-form-post-method
   - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
   - id: micro-behaviors/communications/http/request/html::html-fetch-post-call
 - id: browser-external-redirect
@@ -229,7 +228,7 @@ composite_rules:
   attack: T1056.002,T1041,T1566.002
   for: [svg]
   all:
-  - id: svg-external-xlink-navigation
+  - id: micro-behaviors/data/format/html::svg-external-xlink-link
   - id: svg-authentication-endpoint-path
   near_bytes: 1600
 
@@ -243,4 +242,21 @@ composite_rules:
   - id: svg-location-external-assignment
   - id: svg-authentication-endpoint-path
   near_bytes: 1800
+  near_lines: 180
+
+# Some live AiTM kits use Beacon for the primary credential submission and
+# retain XHR as a fallback.  Beacon is neutral telemetry by itself; pairing it
+# with both first- and second-factor form references and a post-auth redirect
+# identifies the relay workflow without depending on a kit-specific route.
+- id: browser-sendbeacon-credential-mfa-relay
+  desc: Browser credentials and MFA sent via Beacon relay
+  crit: hostile
+  conf: 0.99
+  attack: T1056.002,T1111,T1041,T1566.002
+  for: [html, javascript, typescript]
+  all:
+  - id: browser-credential-field-reference
+  - id: browser-mfa-field-reference
+  - id: micro-behaviors/communications/http/request/beacon::browser-send-beacon-call
+  - id: browser-external-redirect
   near_lines: 180

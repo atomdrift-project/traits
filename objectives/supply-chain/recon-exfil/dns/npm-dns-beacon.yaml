@@ -108,7 +108,73 @@ traits:
     type: text
     regex: '(?is)\[[^\]\r\n]{0,220}\|\|\s*["''][uhd]["''][^\]\r\n]{0,220}\]\s*\.\s*join\s*\('
 
+  # Obfuscators commonly hide the resolver method behind a numeric string
+  # table. Keep the dispatch atom separate from the shared dotted-variable
+  # concatenation behavior so each remains reusable and accurately described.
+- id: numeric-dispatched-method-call
+  desc: Numeric-dispatched computed method call
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: '\[[A-Za-z_$][A-Za-z0-9_$]*\(\s*\d+\s*\)\s*\]\s*\('
+  # These API names are often stored as strings and resolved through the
+  # same dispatcher. They become meaningful only with the DNS canary and
+  # encoded-label atoms in the composites below.
+- id: host-profile-term-hostname
+  desc: Obfuscated hostname API name
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: '["'']hostname["'']'
+- id: host-profile-term-userinfo
+  desc: Obfuscated userInfo API name
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: '["'']userInfo["'']'
+- id: host-profile-term-username
+  desc: Obfuscated username field name
+  crit: component
+  conf: 0.96
+  if:
+    type: text
+    regex: '["'']username["'']'
+
 composite_rules:
+  # A numeric dispatch and dotted-label construction together identify the
+  # obfuscated resolver call; either atom alone is common in benign code.
+- id: obfuscated-dns-label-lookup
+  desc: Computed DNS lookup with encoded label
+  crit: suspicious
+  conf: 0.98
+  near_bytes: 1024
+  all:
+  - id: numeric-dispatched-method-call
+  - id: micro-behaviors/data/string/concat::js-dotted-variable-concat
+
+  # Require the computed-dispatch mechanic as well as two distinct identity
+  # terms.  Hostname/userInfo/username are ordinary URL, telemetry, and
+  # browser-automation fields when they appear without string-table dispatch.
+- id: obfuscated-host-profile-terms
+  desc: Host and user identity terms in computed dispatch
+  crit: suspicious
+  conf: 0.96
+  needs: 2
+  all:
+  - id: numeric-dispatched-method-call
+  any:
+  - id: host-profile-term-hostname
+  - id: host-profile-term-userinfo
+  - id: host-profile-term-username
+  unless:
+    - id: well-known/app/development/dbt-vscode::dbt-vscode-extension-context
+    - id: well-known/lib/web/whatwg-url::whatwg-url-parser-context
+    - id: well-known/lib/web/follow-redirects::node-http-url-parser-context
+    - id: well-known/app/development/browserstack::browserstack-ai-sdk-context
+
   # Import-time behavior: all three legs must occur in the same JavaScript
   # source. This intentionally does not require a literal canary domain: the
   # domain is commonly supplied by a helper/config module and may be absent
@@ -123,6 +189,22 @@ composite_rules:
   - id: objectives/anti-static/obfuscation/encoding/numeric::node-charcode-host-profile-methods
   - id: objectives/anti-static/obfuscation/imports::hex-charcode-resolve4-method
   - id: dns-host-profile-array-join
+
+- id: js-obfuscated-computed-host-profile-dns-beacon
+  desc: Node beacon sends host profile through computed DNS
+  crit: hostile
+  conf: 0.995
+  attack: "T1027.007,T1033,T1082,T1048.003"
+  mbc: "B0032,E1041"
+  all:
+  - id: encoded-dnshook-canary
+  - id: numeric-dispatched-method-call
+  - id: micro-behaviors/data/string/concat::js-dotted-variable-concat
+  any:
+  - id: host-profile-term-hostname
+  - id: host-profile-term-userinfo
+  - id: host-profile-term-username
+  needs: 2
 
   # Package-level behavior: the install hook is the delivery context for the
   # import-time beacon. Keep this archive-scoped so package.json and the loaded
@@ -139,6 +221,21 @@ composite_rules:
   - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-install
   - id: objectives/supply-chain/install-hook/scripts/lifecycle::install-runs-node-local-script
   - id: js-obfuscated-host-profile-dns-beacon
+
+  # Variant for packages that use an obfuscated computed resolver instead of
+  # the numeric-array resolver method family above.
+- id: npm-install-obfuscated-dns-label-beacon
+  desc: NPM install hook activates an obfuscated DNS beacon
+  crit: hostile
+  conf: 0.998
+  for: [npm, package.json, archives, javascript, typescript]
+  scope: archive
+  attack: "T1195.002,T1027.007,T1048.003"
+  mbc: "B0032,E1041"
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::has-install
+  - id: objectives/supply-chain/install-hook/scripts/lifecycle::install-runs-node-local-script
+  - id: js-obfuscated-computed-host-profile-dns-beacon
 
   # A release may split the DNS beacon across an install hook and a tiny
   # configuration/helper module.  An obfuscated CommonJS domain export is not

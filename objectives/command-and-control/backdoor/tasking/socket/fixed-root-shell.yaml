@@ -1,0 +1,171 @@
+# Detects the rctl/ENDLESSDOORS technique as a behavior: a custom socket
+# client registers a device, executes server-supplied shell commands, and can
+# turn a command into an interactive POSIX shell. Observed endpoints remain
+# IOCs rather than detection gates.
+defaults:
+  platforms: [unix, appliance]
+  for: [c, cpp, rust, python, go]
+  attack: T1059.004,T1071,T1095
+  mbc: B0030
+
+traits:
+  - id: rctlbash-posix-shell-path
+    desc: rctlbash flow references a POSIX shell
+    crit: component
+    conf: 0.98
+    if:
+      type: text
+      regex: '(?is)\brctlbash\b[\s\S]{0,240}/bin/sh|/bin/sh[\s\S]{0,240}\brctlbash\b'
+
+  - id: rctlbash-pty-trigger
+    desc: rctlbash interactive shell token
+    crit: component
+    conf: 0.99
+    if:
+      type: string_literal
+      exact: rctlbash
+
+  - id: bash-port-assignment
+    desc: Assigns the secondary shell port
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\bBASHPORT\b.{0,24}\b7001\b'
+
+  - id: bash-port-network-call
+    desc: Uses port 7001 for a shell channel
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(htons\s*\(\s*7001\s*\)|connect\([^;\n]{0,80}BASHPORT)'
+
+composite_rules:
+  - id: c-socket-receive-call
+    desc: C receives data through a socket API
+    crit: notable
+    conf: 0.86
+    for: [c, cpp]
+    any:
+      - id: micro-behaviors/communications/socket/receive::recv-symbol
+      - id: micro-behaviors/communications/socket/receive::recvfrom-symbol
+
+  - id: c-remote-command-channel
+    desc: C socket input reaches popen
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: c-socket-receive-call
+      - id: micro-behaviors/data/buffer::c-command-buffer
+      - id: micro-behaviors/process/create/shell/native::c-popen-variable-input
+    near_lines: 80
+
+  - id: rust-remote-command-channel
+    desc: Rust stream input reaches sh -c
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: micro-behaviors/communications/socket/receive::rust-socket-receive-call
+      - id: micro-behaviors/process/create/shell/runner::rust-shell-command-exec
+    near_lines: 80
+
+  - id: python-remote-command-channel
+    desc: Python socket input reaches shell execution
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/socket/receive::socket-receive
+      - id: micro-behaviors/process/create/subprocess::process-execution
+      - id: micro-behaviors/process/create/subprocess::shell-true-call
+    near_lines: 40
+
+  - id: registered-remote-command-shell
+    desc: Registration frame with socket command execution
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: micro-behaviors/communications/socket/framing::fixed-class-mac-registration
+    any:
+      - id: c-remote-command-channel
+      - id: rust-remote-command-channel
+      - id: python-remote-command-channel
+    near_lines: 80
+
+  - id: c-pty-shell-channel
+    desc: C socket channel exposes an interactive shell
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: c-socket-receive-call
+      - id: micro-behaviors/process/tty/pty::source-pty-allocation
+      - id: micro-behaviors/process/create/shell/native::c-shell-execution-path
+    near_lines: 100
+
+  - id: rust-pty-shell-channel
+    desc: Rust socket channel exposes an interactive shell
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/socket/receive::rust-socket-receive-call
+      - id: micro-behaviors/process/tty/pty::source-pty-allocation
+      - id: micro-behaviors/process/create/shell/runner::rust-shell-command-exec
+    near_lines: 100
+
+  - id: python-pty-shell-channel
+    desc: Python socket channel exposes an interactive shell
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/socket/receive::socket-receive
+      - id: micro-behaviors/process/tty/pty::python-pty-allocation
+      - id: micro-behaviors/process/create/subprocess::process-execution
+    near_lines: 100
+
+  - id: go-remote-command-channel
+    desc: Go socket read with shell execution
+    crit: suspicious
+    conf: 0.97
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/socket/receive::go-socket-read-call
+    any:
+      - id: micro-behaviors/process/create/shell/lang::go-exec-command-bin-sh
+      - id: micro-behaviors/process/create/direct::go-variable-shell-command
+      - id: micro-behaviors/process/create/direct::go-powershell-command
+    near_lines: 80
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
+
+  - id: go-remote-pty-shell-channel
+    desc: Go socket command channel exposes a PTY shell
+    crit: hostile
+    conf: 0.99
+    for: [go]
+    all:
+      - id: go-remote-command-channel
+      - id: micro-behaviors/process/tty/pty::go-pty-start
+      - id: micro-behaviors/data/buffer::go-io-copy
+    near_lines: 120
+
+  - id: rctlbash-assigned-pty-shell
+    desc: rctlbash shell uses an assigned secondary port
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: rctlbash-pty-trigger
+      - id: micro-behaviors/process/tty/pty::source-pty-allocation
+      - id: rctlbash-posix-shell-path
+      - id: bash-port-assignment
+    near_lines: 80
+
+  - id: rctlbash-network-pty-shell
+    desc: rctlbash shell uses a network secondary port
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: rctlbash-pty-trigger
+      - id: micro-behaviors/process/tty/pty::source-pty-allocation
+      - id: rctlbash-posix-shell-path
+      - id: bash-port-network-call
+    near_lines: 80

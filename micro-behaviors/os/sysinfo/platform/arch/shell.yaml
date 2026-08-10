@@ -6,8 +6,20 @@ defaults:
     - shell
   crit: component
 traits:
+  - id: sh-arch-query
+    desc: Reads CPU architecture with uname -m
+    crit: notable
+    conf: 0.9
+    attack: T1082
+    if:
+      type: text
+      regex: '(?m)(^|[;&|]\s*)uname\s+-m\b'
+  # Any `uname -<flag>` captured by command substitution. The flag is not
+  # constrained, so this covers `-n` (nodename) and `-r` (release) as well as
+  # `-s`/`-m`; describe it as "captures uname output" rather than claiming the
+  # OS/CPU fields specifically, which only `sh-arch-query` above pins down.
   - id: sh-uname-fingerprint
-    desc: Reads OS or CPU information with uname
+    desc: Captures uname output in a shell substitution
     crit: notable
     conf: 0.8
     attack: T1082
@@ -23,6 +35,16 @@ traits:
     if:
       type: text
       regex: "\\$\\(uname\\s+-[a-z]+\\)|`uname\\s+-[a-z]+`"
+  - id: arch-aware-curl-download
+    desc: Downloads a file after querying CPU architecture
+    crit: notable
+    conf: 0.9
+    attack: T1082,T1105
+    if:
+      type: text
+      regex: '(?is)\buname\s+-m\b.{0,260}\b(arm64|aarch64|x86_64)\b.{0,260}\bcurl\b'
+    not:
+      - regex: '(?is)\becho\s+curl\b'
   - id: os-release-read
     desc: Reads Linux os-release file
     crit: notable
@@ -98,11 +120,36 @@ traits:
       type: text
       regex: '(?i)\b(riscv|mips|ppc)\b'
 
+  # Relocated from objectives/command-and-control/dropper/delivery/fetch-exec,
+  # where it was named `architecture-parameterized-fetch` ("Selects a payload
+  # by host architecture") even though no leg of the matcher looks at a fetch,
+  # a URL or a payload. It only pairs a machine-arch read with a nearby
+  # `arch=`/`architecture` token — which OpenSCAP's system_info probe test does
+  # (`OS_ARCHITECTURE="`uname -m`"` … `grep "os_architecture: …"`), as does any
+  # portable build or install script. The dropper composites in
+  # objectives/evasion/fileless/memory reference it and supply the fetch,
+  # memfd and exec legs that carry the intent.
+  - id: arch-parameterized-variant
+    desc: Host architecture selects a build variant
+    crit: notable
+    conf: 0.94
+    for: [scripts]
+    attack: T1082
+    if:
+      type: text
+      regex: '(?is)(uname\s+-m|platform\.machine\(\)).{0,220}(arch=|architecture)'
+
 composite_rules:
   - id: multiple-architecture-references
     desc: References multiple CPU architecture names
     crit: notable
     conf: 0.94
+    # Two distinct architecture families, not one. With the default needs of 1
+    # a lone `x86_64-linux-gnu` path in a comment satisfied this composite, so
+    # the finding claimed "multiple" from a single token -- and it also handed
+    # `multi-arch-target` below a free second leg (see its own comment, which
+    # assumed this rule already required several tokens).
+    needs: 2
     any:
       - id: multiple-architecture-references--x86-or-amd64
       - id: multiple-architecture-references--x86-or-arm

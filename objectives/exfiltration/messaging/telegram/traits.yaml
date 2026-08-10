@@ -35,9 +35,11 @@ traits:
   desc: Hardcoded Telegram chat identifier
   crit: notable
   conf: 0.9
-  for: [javascript, typescript]
+  # The `chat_id = "<digits>"` operator-inbox constant is language-neutral;
+  # Rust and Go reporters embed it the same way JS ones do.
+  for: [javascript, typescript, rust, go]
   unless:
-  - id: well-known/app/google-web::official-google-web-asset
+  - id: well-known/app/browser/google-web::official-google-web-asset
   - id: well-known/tool/detection/redaction::sensitive-data-scanner
   if:
     type: text
@@ -156,6 +158,17 @@ traits:
     type: text
     word: NeedsUpload
 composite_rules:
+- id: rust-telegram-file-exfiltration
+  desc: Rust Telegram bot uploads enumerated local files
+  crit: hostile
+  conf: 0.98
+  attack: T1041,T1083,T1567.001
+  for: [rust]
+  all:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-api-file-upload
+  - id: micro-behaviors/fs/enumerate/directory::rust-glob-file-enumeration
+  - id: micro-behaviors/communications/messaging/send::rust-input-file-upload
+  near_bytes: 8192
 - id: go-telegram-upload-methods
   desc: Go Telegram upload workflow methods
   crit: component
@@ -245,7 +258,7 @@ composite_rules:
   # Self-directory and http/services/telegram refs removed: they matched this
   # composite's own telegram legs and suppressed it.
   unless:
-  - id: well-known/app/opencode-router
+  - id: well-known/app/ai/opencode-router
 - id: telegram-bot-c2
   desc: Telegram bot API data exfiltration
   crit: hostile
@@ -261,13 +274,19 @@ composite_rules:
   crit: suspicious
   conf: 0.96
   for: [binaries, scripts, source]
-  near_bytes: 512
+  # 512 bytes assumed all three constants sit in one config block. The common
+  # layout declares `token` and `chat_id` at the top of the file and only
+  # builds the api.telegram.org URL at the call site further down, which put
+  # the host well outside a 512-byte window. The three legs are specific
+  # enough (bot-token shape + chat-id constant + the Bot API host) that a
+  # file-region window is what keeps them correlated, not a paragraph one.
+  near_bytes: 4096
   all:
     - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
     - id: objectives/command-and-control/channel/messaging::hardcoded-telegram-bot-token-literal
     - id: hardcoded-chat-id-literal
   unless:
-    - id: well-known/app/opencode-router
+    - id: well-known/app/ai/opencode-router
 - id: telegram-hardcoded-system-profile-exfil
   desc: Hardcoded Telegram bot exfiltrates a host profile
   crit: hostile
@@ -279,6 +298,27 @@ composite_rules:
   all:
     - id: telegram-hardcoded-bot-config
     - id: telegram-system-profile-exfil
+
+# This variant places the bot token inside a complete URL and uses Node's
+# built-in HTTPS client, so standalone-token/config composites do not apply.
+# The host/environment source plus Telegram endpoint is still a complete
+# collection-to-sink path and is hostile at file scope.
+- id: javascript-telegram-host-environment-exfil
+  desc: JavaScript host and environment data sent to Telegram
+  crit: hostile
+  conf: 0.99
+  attack: "T1041,T1082,T1102"
+  mbc: E1041
+  for: [javascript, typescript]
+  near_bytes: 8192
+  all:
+  - id: objectives/exfiltration/sensitive-data::js-host-recon-env-harvest
+  - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
+  - id: objectives/command-and-control/channel/messaging::telegram-bot-api-token
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-send-message
+  unless:
+  - id: metadata/package/testing/
+  - id: well-known/app/ai/opencode-router/
 # Pairs credential/banking form automation with an operator-owned Telegram bot.
 # NOTE: the legs prove the two behaviors coexist in one script — they do NOT
 # prove the captured field values are what gets sent. Form-filling bots
@@ -297,7 +337,7 @@ composite_rules:
     - id: micro-behaviors/ui/window/form-input::browser-sensitive-field-automation
     - id: micro-behaviors/ui/window/form-input::browser-banking-credential-data-record
   unless:
-  - id: well-known/app/opencode-router
+  - id: well-known/app/ai/opencode-router
 - id: python-telegram-hardcoded-bot
   desc: Python Telegram bot with hardcoded token
   crit: suspicious
@@ -353,8 +393,8 @@ composite_rules:
   conf: 0.96
   near_bytes: 8192
   unless:
-  - id: well-known/app/telegram::telegram-desktop-source-identity
-  - id: well-known/app/telegram::telegram-desktop-dictionary-updater
+  - id: well-known/app/communication/telegram::telegram-desktop-source-identity
+  - id: well-known/app/communication/telegram::telegram-desktop-dictionary-updater
   all:
   - id: micro-behaviors/communications/messaging/send::telegram-bot-api-file-upload
   - id: telegram-archive-writer
