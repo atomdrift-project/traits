@@ -10,6 +10,20 @@ composite_rules:
     desc: Injection API chain
     crit: notable
     conf: 0.98
+    unless:
+      # A Windows API-provider DLL exports these routines as its normal
+      # implementation surface; it does not perform an injection chain.
+      - id: metadata/binary/vendor::windows-system-implementer-dll
+      # CyberLink PowerCinema's verified remote-control module uses this
+      # exact chain to install its hook in the selected media-window process.
+      - id: well-known/app/media/cyberlink::cyberlink-remote-control-injection-context
+      # QtWebEngineProcess is a framework helper whose process-management
+      # APIs are implementation plumbing, not an injection objective.
+      - id: metadata/library/qt::qt-webengine-process-binary
+      # Google-signed browser/runtime binaries expose the same APIs for their
+      # sandbox and renderer lifecycle; this API-only rule has no target or
+      # execution evidence to distinguish that normal implementation use.
+      - id: metadata/signed/leaf::google-inc
     all:
       - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-text
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
@@ -62,6 +76,7 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: well-known/tool/reverse-engineering/
+      - id: well-known/tool/browser::google-chrome-browser-context
 
   - id: resource-backed-injection-trinity
     desc: Resource-backed PE exposes a complete remote-thread injection trinity
@@ -74,17 +89,22 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: well-known/tool/reverse-engineering/
+      - id: well-known/tool/browser::google-chrome-browser-context
 
   - id: geta-oep-helper-marker
     desc: Named-event + shared-section IPC handshake (injector/unpacker loader stub)
     crit: notable
     conf: 0.9
     unless:
+      # KernelBase legitimately exports the API surface represented by this
+      # composite; it is an implementation DLL, not an injector.
+      - id: metadata/binary/vendor::windows-system-implementer-dll
       # Adobe MediaCore uses the same event/file-mapping IPC primitives for
       # legitimate component coordination.  Its signed binaries should not
       # inherit this loader-fragment context.
       - id: metadata/signed/leaf::adobe-systems-incorporated
       - id: metadata/file/string/identity::pe-product-name-7zip
+      - id: well-known/lib/platform/microsoft-catsrv::microsoft-catsrvut-library-context
     all:
       - id: micro-behaviors/process/sync/event::open-event
       - id: micro-behaviors/communications/ipc/file-mapping::open-file-mapping-w
@@ -143,6 +163,23 @@ composite_rules:
       # it asks Explorer to pin a shortcut. Require the full identity before
       # suppressing this capability.
       - id: well-known/tool/sysadmin/syspin/
+      # pzLauncher uses remote memory APIs to patch its game target.
+      - id: well-known/game/pvzlauncher/
+  - id: embedded-remote-thread-injector
+    desc: PE carrier combines remote memory APIs with remote thread execution
+    crit: hostile
+    conf: 0.99
+    mbc: "B0033"
+    attack: "T1055,T1027.009"
+    all:
+      - id: micro-behaviors/process/inject/runtime/call::remote-process-memory-api-cluster
+      - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
+      - id: metadata/binary/layout::many-pe-embedded
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/reverse-engineering/
+      - id: well-known/tool/sysadmin/
   - id: named-explorer-remote-thread-injection
     desc: Remote-thread injection targets Explorer
     crit: hostile
@@ -257,10 +294,10 @@ composite_rules:
     for: [c, cpp, csharp, rust]
     needs: 3
     any:
-      - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
-      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/process/inject/dll::create-remote-thread-source
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-source
       - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-source
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-source
       - id: micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-a
     unless:
       - id: well-known/lib/platform/wine::wine-source-tree
@@ -281,9 +318,10 @@ composite_rules:
     all:
       - id: micro-behaviors/process/attach/remote::source-open-process
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-source
-      - id: micro-behaviors/process/inject/runtime/call::create-remote-thread-dup
+      - id: micro-behaviors/process/inject/dll::create-remote-thread-source
     any:
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-source
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
+      - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-source
       - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex-python-source
     unless:
       - id: well-known/lib/platform/wine::wine-source-tree

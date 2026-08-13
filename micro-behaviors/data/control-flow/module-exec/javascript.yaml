@@ -20,7 +20,7 @@ traits:
     conf: 0.8
     if:
       type: text
-      regex: 'module\\.exports\\s*=\\s*\\{\\s*\\}'
+      regex: 'module\.exports\s*=\s*\{\s*\}'
   - id: commonjs-module-exports-identifier
     desc: CommonJS module.exports set to an identifier
     crit: baseline
@@ -73,7 +73,7 @@ traits:
           (#eq? @param "fn"))
 
   - id: async-iife-invoke
-    desc: Immediately invokes multiple async functions
+    desc: Immediately invokes an async function
     crit: notable
     conf: 0.7
     if:
@@ -111,7 +111,12 @@ traits:
     conf: 0.9
     if:
       type: text
-      regex: '(?m)^(const|let|var)\s+\w+\s*=\s*(?!require)\w+\(\s*["''][A-Za-z][\w-]{1,32}["'']'
+      regex: '(?m)^(const|let|var)\s+\w+\s*=\s*\w+\(\s*["''][A-Za-z][\w-]{1,32}["'']'
+      # `require(...)` is the CommonJS import, not a dynamic string call — filter
+      # those matches per-match (was an inline `(?!require)` lookahead the engine
+      # could not compile).
+      not:
+        - regex: '=\s*require\s*\('
   - id: module-scope-zero-arg-call
     desc: Module scope assigns zero-argument call
     crit: component
@@ -145,7 +150,31 @@ traits:
     conf: 0.85
     if:
       type: text
+      # `$` anchors the end of each extracted text run, not the end of the
+      # file, so this matched any *line* ending in `})();` — including an
+      # async IIFE nested inside a message/event listener halfway down the
+      # file. That handed a false "module end" to js-async-iife-import-hook
+      # and, through it, a false import-time stager finding. Pin the match to
+      # the file tail so the id keeps meaning what it says.
       regex: '\}\)\(\)\s*;?\s*$'
+      offset_range: [-16, null]
+  - id: js-synchronous-iife-start
+    desc: Starts a synchronous function expression
+    crit: component
+    conf: 0.86
+    # Import-time synchronous IIFEs are a real module-side-effect capability.
+    # Keep this separate from async-iife-invoke: a synchronous bootstrap has
+    # different syntax and is common in both startup code and npm trojans.
+    if:
+      type: text
+      regex: '(?m)^\s*\(\s*function\s*\([^)]{0,80}\)\s*\{'
+  - id: js-synchronous-iife-close
+    desc: Calls a parenthesized function expression
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: '\}\s*\)\s*\(\s*\)'
 composite_rules:
   - id: module-empty-export
     desc: JavaScript module exports an empty object
@@ -179,9 +208,26 @@ composite_rules:
     crit: notable
     conf: 0.92
     any:
+      - id: js-async-iife-import-hook
       - id: js-hoc-ensure-env-arrow
       - id: js-hoc-ensure-env-classic
       - id: micro-behaviors/process/exit/terminate::js-process-on-exit-hook
       - id: micro-behaviors/os/module/load::js-side-effect-require
       - id: micro-behaviors/os/module/load::js-require-extensions-mutate
       - id: micro-behaviors/os/module/load::js-module-resolvefilename-override
+  - id: js-async-iife-import-hook
+    desc: Async IIFE executes at module end
+    crit: notable
+    conf: 0.9
+    all:
+      - id: async-iife-invoke
+      - id: js-trailing-iife-closure
+    near_bytes: 4096
+  - id: js-synchronous-iife-invoke
+    desc: Immediately invokes a synchronous function
+    crit: notable
+    conf: 0.86
+    near_bytes: 2000
+    all:
+      - id: js-synchronous-iife-start
+      - id: js-synchronous-iife-close

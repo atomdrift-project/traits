@@ -76,22 +76,9 @@ traits:
     if:
       type: text
       # Exclude security-fix prose such as "post-realpath sensitive recheck".
-      regex: '(?i)\b(read|extract)\b.{0,48}\b(secret|token)\b.{0,48}\b(post|forward)\b(?!-)'
+      regex: '(?i)\b(read|extract)\b.{0,48}\b(secret|token)\b.{0,48}\b(post|forward)\b($|[^-])'
     unless:
       - id: well-known/app/ai/aui-agent-builder/
-
-  - id: llm-sensitive-path-aws
-    desc: AWS credential path target
-    crit: notable
-    conf: 0.95
-    if:
-      type: literal
-      kind: string
-      regex: '(?i)~?[/\\]\.aws[/\\]credentials'
-    unless:
-      - id: well-known/app/ai/aui-agent-builder/
-      - id: well-known/tool/detection/llm-scanner::llm-scanner-context
-      - id: well-known/tool/detection/vtk/
 
   - id: llm-sensitive-path-env
     desc: Environment path; agent context required
@@ -166,29 +153,39 @@ traits:
     unless:
       - id: well-known/app/ai/aui-agent-builder/
 
-  - id: llm-tool-destination
-    desc: Remote tool destination marker
+  - id: llm-tool-context-before
+    desc: Agent context before webhook tool call
     crit: notable
     conf: 0.94
     if:
       type: text
-      # Require the definite article or a bare tool call — QA test steps
-      # like "Send webhook with valid signature" are not agent tool routing.
-      regex: '(?i)\b(call|send) the (webhook|http_request)\b(?!\s+with)|\bcall http_request\b'
-    unless:
-      - id: aui-agent-builder-package-context
+      regex: '(?i)\b(MCP|agent|assistant|tool)\b.{0,48}\b(call|send) the (webhook|http_request)\b'
     not:
       - regex: '(?i)call the webhook interface'
+    unless:
+      - id: aui-agent-builder-package-context
 
-  - id: llm-remote-api-destination
-    desc: Remote API destination marker
+  - id: llm-tool-context-after
+    desc: Agent context after webhook tool call
     crit: notable
     conf: 0.94
     if:
       type: text
-      regex: '(?i)(?<!normalize the )\bremote API\b'
+      regex: '(?i)\b(call|send) the (webhook|http_request)\b.{0,48}\b(MCP|agent|assistant|tool)\b'
+    not:
+      - regex: '(?i)call the webhook interface'
     unless:
-      - id: well-known/app/ai/aui-agent-builder/
+      - id: aui-agent-builder-package-context
+
+  - id: llm-bare-http-request-call
+    desc: Direct http_request tool call
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)\bcall http_request\b'
+    unless:
+      - id: aui-agent-builder-package-context
 
   - id: llm-forwarding-verb
     desc: Tool-result forwarding verb
@@ -250,6 +247,10 @@ traits:
       regex: '(?i)\bwithout (human|user) approval\b'
     unless:
       - id: micro-behaviors/data/llm::approval-guideline-context
+      # Tool-guard policy text describes automatic denial as the safety
+      # mechanism; it is the opposite of bypassing approval.
+      - type: text
+        regex: '(?i)\bauto[- ]?reject(?:ed)?\b.{0,100}\bwithout (human|user) approval\b'
       - type: text
         regex: '(?i)\bwithout (human|user) approval\b.{0,60}\b(off-task|note)\b'
       - id: well-known/app/ai/aui-agent-builder/
@@ -306,6 +307,27 @@ traits:
       substr: rag_context
 
 composite_rules:
+  - id: llm-tool-destination
+    desc: Remote tool destination marker
+    crit: notable
+    conf: 0.94
+    any:
+      - id: llm-tool-context-before
+      - id: llm-tool-context-after
+      - id: llm-bare-http-request-call
+
+  - id: llm-sensitive-path-aws
+    desc: Agent code opens AWS shared credentials path
+    crit: notable
+    conf: 0.95
+    all:
+      - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+    unless:
+      - id: well-known/app/ai/aui-agent-builder/
+      - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+      - id: well-known/tool/detection/vtk/
+      - id: metadata/library/cloud-sdk::aws-python-sdk-source
+
   - id: prohibitive-no-permission-guideline-context
     desc: Prohibits acting without user permission
     crit: exception
@@ -365,7 +387,6 @@ composite_rules:
       - id: llm-http-url-export-destination
       - id: llm-http-post-url-export-destination
       - id: llm-tool-destination
-      - id: llm-remote-api-destination
 
   - id: llm-agent-sensitive-network-export
     desc: AI agent exports sensitive data remotely

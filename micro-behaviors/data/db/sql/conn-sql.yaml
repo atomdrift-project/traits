@@ -18,21 +18,14 @@ traits:
     desc: SQL SELECT syntax reference
     crit: notable
     conf: 0.6
-    # "select <noun> from <noun>" is also ordinary English, and the previous
-    # bare-word column list matched it: huggingface_hub's "sampling rate used
-    # to select frames from the video" and Mugshot's "'Select image from
-    # stock' menu item" both scored as queries.  Require the projection list
-    # to carry a SQL token no prose sentence has -- `*`, a comma-separated
-    # column list, a qualified `t.col`, a function call, or a quoted/backticked
-    # identifier -- and capture the FROM operand so `not:` can reject the
-    # remaining prose shapes, which name a determiner rather than a table.
+    # A source-level SELECT token is not enough: Python UI code commonly
+    # imports a function named `select`, and prose can contain "select ...
+    # from ...". SQL statements are string literals here, so use the literal
+    # projection/table shape and keep the parser's structured evidence.
     if:
-      type: text
-      regex: (?i)\bSELECT\s+[\w\s]{0,32}[*,.(`"][\w\s,.*()`"]{0,48}\sFROM\s+[\w.`"]{1,24}
-    not:
-      - regex: (?i)\bFROM\s+(the|a|an|this)\b
-      - regex: (?i)\bFROM\s+(that|these|those|your)\b
-      - regex: (?i)\bFROM\s+(it|its|their|our)\b
+      type: literal
+      kind: string
+      regex: '(?i)\bSELECT\s+(DISTINCT\s+)?[\w*`".(),]+(\s+AS\s+\w+)?\s+FROM\s+[\w`".]+'
     downgrade:
       any:
         - id: metadata/package/testing/harness/runtime/
@@ -127,23 +120,27 @@ traits:
     crit: notable
     conf: 0.5
     if:
-      type: text
+      type: literal
+      kind: string
       # A bare "delete from <word>" is common in collection logging.  A
       # clause makes the database interpretation materially more specific.
+      # Literal-only keeps JSDoc prose (e.g. db.d.ts migration notes) out.
       regex: (?i)\bDELETE\s+FROM\s+[a-z_][a-z0-9_]*\s+(WHERE|USING|RETURNING|LIMIT)\b
   - id: sql-delete-order-clause
     desc: SQL DELETE statement ordering clause
     crit: notable
     conf: 0.5
     if:
-      type: text
+      type: literal
+      kind: string
       regex: (?i)\bDELETE\s+FROM\s+[a-z_][a-z0-9_]*\s+ORDER\s+BY\b
   - id: sql-delete-terminated
     desc: Terminated SQL DELETE statement
     crit: notable
     conf: 0.5
     if:
-      type: text
+      type: literal
+      kind: string
       regex: (?i)\bDELETE\s+FROM\s+[a-z_][a-z0-9_]*\s*;
   - id: sql-create-table
     desc: SQL CREATE TABLE syntax reference
@@ -164,6 +161,14 @@ traits:
       - id: metadata/lang/source::linux-kernel-primary-tree-path
       - id: metadata/lang/source::openapi-generator-source-banner
       - id: well-known/lib/ui/highlight-js::browser-bundle
+  - id: sql-value-blob-column
+    desc: SQL value column stores BLOBs
+    crit: baseline
+    conf: 0.9
+    if:
+      type: literal
+      kind: string
+      regex: '(?i)\bvalue\s+BLOB\b'
   - id: sql-password-column
     desc: SQL password column definition
     crit: component
@@ -315,6 +320,23 @@ traits:
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: metadata/lang/source::linux-kernel-primary-tree-path
       - id: metadata/package/testing/presence/fixture::php-test-file
+
+  - id: sql-drop-database
+    desc: SQL DROP DATABASE or SCHEMA statement
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: '(?i)\bDROP\s+(DATABASE|SCHEMA)\b'
+
+  - id: sql-disable-foreign-key-checks
+    desc: MySQL globally disables foreign-key checks
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)\bSET\s+GLOBAL\s+FOREIGN_KEY_CHECKS\s*=\s*0\b'
+
   - id: sql-aes-encrypt-function
     desc: SQL AES_ENCRYPT function call
     crit: notable
@@ -333,6 +355,13 @@ traits:
       kind: string
       regex: '(?i)\bTRUNCATE\s+(TABLE|DATABASE|SCHEMA)\b'
 composite_rules:
+  - id: sql-blob-valued-table-schema
+    desc: SQL table stores BLOB values
+    crit: baseline
+    conf: 0.9
+    all:
+      - id: sql-create-table
+      - id: sql-value-blob-column
   - id: sql-delete
     desc: SQL DELETE statement with clause
     crit: notable

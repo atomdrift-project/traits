@@ -3,7 +3,7 @@ defaults:
   platforms:
     - unix
     - windows
-  for: [scripts, binaries]
+  for: [scripts, binaries, source]
 traits:
   - id: waterfox-path
     desc: Waterfox browser profile path
@@ -28,13 +28,6 @@ traits:
     if:
       type: text
       substr: Pale Moon/Profiles
-  - id: formhistory-sqlite
-    desc: Firefox formhistory.sqlite database
-    crit: component
-    conf: 0.85
-    if:
-      type: text
-      substr: formhistory.sqlite
   - id: key4-db
     desc: Firefox key4.db (master password database)
     crit: suspicious
@@ -55,11 +48,13 @@ traits:
     desc: Firefox NSS private key database
     crit: notable
     conf: 0.8
+    for: [binaries, source]
     if:
-      type: text
-      substr: nssPrivate
+      type: string_literal
+      regex: (?i)\bnssPrivate\b
     unless:
       - id: well-known/lib/crypto/nss/
+      - id: well-known/app/browser/palemoon/
   - id: pk11-decrypt
     desc: Firefox PK11SDR_Decrypt function
     crit: notable
@@ -70,6 +65,7 @@ traits:
       substr: PK11SDR_Decrypt
     unless:
       - id: well-known/lib/crypto/nss/
+      - id: well-known/app/browser/palemoon/
   - id: pl-base64decode-export
     desc: Firefox NSS base64 export
     crit: component
@@ -96,8 +92,21 @@ traits:
     conf: 0.9
     if:
       type: text
-      regex: SELECT.{0,40}(encrypted_value|originAttributes).{0,40}moz_cookies
+      regex: SELECT.{0,80}FROM\s+moz_cookies
       case_insensitive: true
+    unless:
+      - id: well-known/app/browser/palemoon/
+      - id: well-known/app/system/iobit::iobit-signed-component-context
+  - id: moz-formhistory-sql
+    desc: Firefox form-history SQL query
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: SELECT.{0,80}FROM\s+moz_formhistory
+      case_insensitive: true
+    unless:
+      - id: well-known/app/browser/palemoon/
   - id: moz-logins-sql
     desc: Firefox moz_logins SQL query
     crit: suspicious
@@ -110,6 +119,8 @@ traits:
     downgrade:
       any:
         - id: metadata/signed/certificate/identity::bitdefender-brand-text
+    unless:
+      - id: well-known/app/browser/palemoon/
   - id: webappsstore-db
     desc: Firefox webappsstore.sqlite database
     # A filename reference alone is inventory/cleanup evidence. Theft rules
@@ -119,6 +130,8 @@ traits:
     if:
       type: text
       substr: webappsstore.sqlite
+    unless:
+      - id: well-known/app/browser/palemoon/
   - id: ls-archive-db
     desc: Firefox ls-archive.sqlite database
     crit: suspicious
@@ -126,6 +139,8 @@ traits:
     if:
       type: text
       substr: ls-archive.sqlite
+    unless:
+      - id: well-known/app/browser/palemoon/
   - id: storage-default-path
     desc: Firefox storage/default path
     crit: notable
@@ -137,6 +152,7 @@ traits:
       - id: metadata/library/data::pulumi-python-provider-generated
       - id: well-known/app/communication/thunderbird::firefox-omni-runtime-path
       - id: well-known/app/communication/thunderbird::firefox-devtools-storage-actor
+      - id: well-known/app/browser/palemoon/
   - id: ls-data-db
     desc: Firefox ls/data.sqlite database
     crit: suspicious
@@ -144,6 +160,8 @@ traits:
     if:
       type: text
       substr: ls/data.sqlite
+    unless:
+      - id: well-known/app/browser/palemoon/
 composite_rules:
   - id: profiles-path
     desc: Firefox/Gecko Profiles directory
@@ -153,13 +171,17 @@ composite_rules:
       - id: waterfox-profiles
       - id: palemoon-profiles
       - id: objectives/credential-access/browser/firefox::profiles-ini
+    unless:
+      - id: well-known/app/browser/palemoon/
   - id: cookie-theft-comp
     desc: Firefox cookie theft
     crit: suspicious
     conf: 0.85
     all:
       - id: micro-behaviors/fs/path/application/browser::firefox-profile-directory
-      - id: objectives/credential-access/browser/chromium::chromium-cookie-sql
+      - id: moz-cookies-sql
+    unless:
+      - id: well-known/app/browser/palemoon/
   - id: password-theft-comp
     desc: Firefox password/form history theft
     crit: suspicious
@@ -167,12 +189,12 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/path/application/browser::firefox-profile-directory
     any:
-      - id: formhistory-sqlite
       - id: nss-private
       - id: objectives/credential-access/browser/firefox::logins
       - id: key4-db
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+      - id: well-known/app/browser/palemoon/
   - id: local-storage-access
     desc: Firefox browser storage database access
     crit: suspicious
@@ -209,3 +231,14 @@ composite_rules:
       - id: micro-behaviors/fs/path/application/browser::firefox-profile-directory
     unless:
       - id: micro-behaviors/crypto/certificate/usage::certutil-ca-bundle-export
+  - id: firefox-cookie-database-collection
+    desc: Firefox cookie database collection
+    crit: hostile
+    conf: 0.99
+    attack: T1555.003,T1119
+    for: [rust]
+    all:
+      - id: micro-behaviors/fs/path/application/browser::firefox-profile-directory
+      - id: moz-cookies-sql
+      - id: micro-behaviors/fs/file/copy::rust-fs-copy
+      - id: objectives/anti-static/obfuscation/string/conceal::obfuscate-macro-strings

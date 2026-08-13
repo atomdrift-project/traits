@@ -2,11 +2,26 @@
 # protocol mechanics; exploit intent is assembled by objective composites.
 defaults:
   platforms: [windows, unix]
-  for: [powershell, csharp, javascript, typescript, python, shell, php, java, c, cpp]
+  for: [scripts, source]
   crit: notable
   conf: 0.94
 
 traits:
+  - id: sharepoint-sts-metadata-endpoint
+    desc: SharePoint STS metadata endpoint
+    if:
+      type: text
+      regex: '(?i)/_layouts/15/metadata/json/1\b'
+
+  - id: sharepoint-principal-app-id
+    desc: SharePoint service principal app identifier
+    # The well-known SharePoint principal GUID (00000003-0000-0ff1-ce00-...).
+    # Legitimate in ACS/app-only OAuth flows, so notable on its own; forged
+    # actor tokens carry it as the issuer/audience/nameid of the inner token.
+    if:
+      type: text
+      regex: '(?i)\b00000003-0000-0ff1-ce00-000000000000\b'
+
   - id: sharepoint-wsfed-trust-endpoint
     desc: SharePoint WS-Federation trust endpoint
     if:
@@ -25,33 +40,30 @@ traits:
       type: text
       regex: '(?i)\b(FedAuth|ASP\.NET_SessionId)\b'
 
+  - id: sharepoint-auth-cookie-header
+    desc: Sends SharePoint auth cookie in HTTP headers
+    crit: notable
+    conf: 0.97
+    if:
+      type: text
+      # Match a concrete header/map entry, not a comment that merely names
+      # FedAuth. Python, PowerShell, JavaScript and other web clients use
+      # the same Cookie: FedAuth= structure.
+      regex: '(?is)["'']?Cookie["'']?\s*[:=]\s*[^}\n]{0,180}\bFedAuth\s*='
+
   - id: sharepoint-machine-key-material
     desc: .NET machine-key material
     if:
       type: text
       regex: '(?i)\b(machineKey|MachineKeySection|ValidationKey)\b|<machineKey\b'
 
-  - id: sharepoint-machine-key-before-sign
-    desc: Machine key before token signing
-    crit: suspicious
-    conf: 0.97
+  # A machine-key name near words such as "forge" or "mint" is not proof of
+  # signing: comments, helper names, and configuration examples use that
+  # vocabulary too. Require the concrete ASP.NET protection API instead.
+  - id: sharepoint-machine-key-protection-api
+    desc: ASP.NET machine-key protection API call
+    crit: notable
+    conf: 0.95
     if:
       type: text
-      regex: '(?i)\b(machineKey|validationKey)\b[^\r\n]{0,80}\b(sign|forge|mint)\w*'
-
-  - id: sharepoint-token-sign-before-machine-key
-    desc: Token signing before machine key
-    crit: suspicious
-    conf: 0.97
-    if:
-      type: text
-      regex: '(?i)\b(sign|forge|mint)\w*[^\r\n]{0,80}\b(machineKey|validationKey)\b'
-
-composite_rules:
-  - id: sharepoint-machine-key-signing
-    desc: Machine key token signing
-    crit: suspicious
-    conf: 0.98
-    any:
-      - id: sharepoint-machine-key-before-sign
-      - id: sharepoint-token-sign-before-machine-key
+      regex: '(?i)\b(MachineKey|MachineKeySection)\s*(\]::|::|\.)\s*(Protect|Unprotect|Sign|Verify)\s*\('

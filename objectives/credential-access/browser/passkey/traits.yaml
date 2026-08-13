@@ -26,6 +26,90 @@ defaults:
   mbc: B0028
 
 composite_rules:
+  # Pass-the-Passkey assertion mining: the Windows WebAuthn event channel can
+  # contain a complete, replayable PublicKeyCredential response. Require the
+  # channel/query, its assertion field, and the structured response fields so
+  # a generic event-log reader or a WebAuthn implementation alone is not enough.
+  - id: windows-webauthn-event-assertion-mining
+    desc: Mines replayable WebAuthn assertions from Windows event logs
+    crit: hostile
+    conf: 0.98
+    attack: "T1552.001,T1555.003,T1550"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-event-query
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-event-assertion-field
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-event-2106
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-assertion-response-fields
+
+  # Passkey Detour: a hook at the Windows API boundary can capture or replace
+  # an assertion while the browser still presents the normal credential UI.
+  # The API/library pair identifies the boundary; Detours or the named control
+  # pipe identifies interception rather than ordinary WebAuthn use.
+  - id: windows-webauthn-assertion-hook
+    desc: Hooks the Windows WebAuthn assertion boundary
+    crit: hostile
+    conf: 0.98
+    attack: "T1179,T1550"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-assertion-api
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-library
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-assertion-response-fields
+    any:
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-detours-transaction
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-hook-pipe
+
+  # A captured assertion is commonly moved out of the hooked process through
+  # a private control channel. Keep this separate from the hook composite so
+  # EDR triage can distinguish interception from assertion transport.
+  - id: windows-webauthn-assertion-control-channel
+    desc: Moves captured WebAuthn assertions through a hook control channel
+    crit: hostile
+    conf: 0.97
+    attack: "T1179,T1041"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-assertion-api
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-assertion-response-fields
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-hook-pipe
+
+  # An event-log assertion is credential material when serialized and sent over
+  # a network. The event-source gate keeps ordinary WebAuthn client code from
+  # being treated as exfiltration.
+  - id: windows-webauthn-event-assertion-forwarding
+    desc: Forwards an event-log WebAuthn assertion
+    crit: hostile
+    conf: 0.97
+    attack: "T1041,T1550"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-event-query
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-event-assertion-field
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-assertion-response-fields
+    any:
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::ps-post
+      - id: micro-behaviors/communications/http/post::http-post-call
+      - id: micro-behaviors/communications/http/request/client::http-client
+
+  # The same credential-forwarding behavior can start at an in-process hook.
+  # Require both hook-specific evidence and an HTTP client before inferring
+  # exfiltration.
+  - id: windows-webauthn-hook-assertion-forwarding
+    desc: Forwards a hooked WebAuthn assertion
+    crit: hostile
+    conf: 0.97
+    attack: "T1041,T1550"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-assertion-api
+      - id: micro-behaviors/os/security/auth/passkey::windows-webauthn-hook-pipe
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-assertion-response-fields
+    any:
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::ps-post
+      - id: micro-behaviors/communications/http/post::http-post-call
+      - id: micro-behaviors/communications/http/request/client::http-client
+
   # Pass-ta-key: rehydrate Chrome's wrapped device identity key and sign with it.
   # Referencing the enclave key material AND performing a CNG import-then-sign is
   # the silent assertion-forgery primitive. Browser bundles that legitimately
@@ -60,6 +144,7 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-data
       - id: micro-behaviors/communications/http/request/client::http-client
+      - id: micro-behaviors/communications/http/client/winhttp::winhttp-send-request
       - id: objectives/exfiltration/http
     unless:
       - id: well-known/app/browser/ungoogled-chromium/
@@ -129,6 +214,64 @@ composite_rules:
     any:
       - id: micro-behaviors/os/security/auth/passkey::wrapped-secret-field
       - id: micro-behaviors/os/security/auth/passkey::wrapped-identity-private-key-field
+      - id: micro-behaviors/os/security/auth/passkey::security-domain-secret-field
+    unless:
+      - id: well-known/app/browser/ungoogled-chromium/
+      - id: well-known/app/browser/microsoft-edge/
+      - id: well-known/app/browser/google-chrome-portable/
+      - id: well-known/tool/browser
+
+  # Silver Pass-ta-key can invalidate the registered device without deleting
+  # the local state file. Pair the exact cloud command with the state artifact
+  # it is used to invalidate; the command alone also appears in account-management
+  # implementations and is not enough to infer credential abuse.
+  - id: passkey-device-forget-reenrollment
+    desc: Invalidates Chrome passkey device enrollment
+    crit: suspicious
+    conf: 0.95
+    attack: "T1555.003,T1556"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::device-forget-command
+      - id: micro-behaviors/fs/path/sensitive/browser::chrome-passkey-enclave-state-file
+    unless:
+      - id: well-known/app/browser/ungoogled-chromium/
+      - id: well-known/app/browser/microsoft-edge/
+      - id: well-known/app/browser/google-chrome-portable/
+      - id: well-known/tool/browser
+
+  # During the uv_key_pending window, the attacker supplies a public key under
+  # the cloud-authenticator's device/add_uv_key operation. The field/state pair
+  # is the protocol structure from the research, not an English attack label.
+  - id: passkey-rogue-uv-key-registration
+    desc: Registers a replacement Chrome verification key
+    crit: hostile
+    conf: 0.97
+    attack: "T1555.003,T1550"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::device-add-uv-key-command
+      - id: micro-behaviors/os/security/auth/passkey::uv-key-pending-state
+      - id: micro-behaviors/os/security/auth/passkey::uv-public-key-field
+      - id: micro-behaviors/os/security/auth/passkey::identity-public-key-field
+    unless:
+      - id: well-known/app/browser/ungoogled-chromium/
+      - id: well-known/app/browser/microsoft-edge/
+      - id: well-known/app/browser/google-chrome-portable/
+      - id: well-known/tool/browser
+
+  # Unit 42 found the SDS in Chrome's FIDO device log during key wrapping. The
+  # command plus the browser-internal surface identifies key-material inspection;
+  # the field gate avoids treating every FIDO log reference as theft.
+  - id: passkey-sds-fido-log-harvest
+    desc: Extracts Chrome passkey secret from FIDO log
+    crit: suspicious
+    conf: 0.95
+    attack: "T1555.003,T1003.001"
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::chrome-fido-device-log-surface
+      - id: micro-behaviors/os/security/auth/passkey::keys-wrap-command
       - id: micro-behaviors/os/security/auth/passkey::security-domain-secret-field
     unless:
       - id: well-known/app/browser/ungoogled-chromium/

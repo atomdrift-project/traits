@@ -1,0 +1,136 @@
+# Cross-context replay of client-visible reasoning envelopes. Providers use
+# these fields for ordinary stateless continuation, so the protocol atoms
+# remain neutral. Hostile findings require the attack shape: repeated
+# assistant/model turns, opaque reasoning fields, and a reasoning-prefill tag.
+defaults:
+  platforms: [unix, windows]
+  for: [scripts, source, json]
+  attack: T1005,T1041,T1562
+
+traits:
+  - id: llm-reasoning-prefill-tag
+    desc: LLM message uses a reasoning-prefill tag
+    crit: suspicious
+    conf: 0.96
+    for: [json]
+    if:
+      type: value
+      path: messages[*].content[*].text
+      regex: '^<\s*/?\s*(thinking-copy|transcribed|reconciliation|thought)\s*>$'
+      case_insensitive: true
+
+  - id: llm-api-key-output-field
+    desc: API-key output field
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      regex: '["'']api[_-]?key["'']'
+      case_insensitive: true
+
+  - id: llm-access-token-output-field
+    desc: Access-token output field
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      regex: '["'']access[_-]?token["'']'
+      case_insensitive: true
+
+  - id: llm-password-output-field
+    desc: Password output field
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      regex: '["'']password["'']'
+      case_insensitive: true
+
+  - id: llm-private-key-output-field
+    desc: Private-key output field
+    crit: component
+    conf: 0.96
+    if:
+      type: text
+      regex: '["'']private[_-]?key["'']'
+      case_insensitive: true
+
+composite_rules:
+  - id: llm-reasoning-sensitive-field-list
+    desc: Multiple sensitive fields in a replayed reasoning transcription
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: llm-reasoning-prefill-tag
+      - id: micro-behaviors/data/llm::llm-repeated-reasoning-envelope-field
+    any:
+      - id: llm-api-key-output-field
+      - id: llm-access-token-output-field
+      - id: llm-password-output-field
+      - id: llm-private-key-output-field
+    needs: 2
+
+  - id: llm-reasoning-remote-upload-sink
+    desc: Remote upload sink near model payload
+    crit: notable
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/url/path::remote-transfer-url-path
+      - id: micro-behaviors/communications/http/request/body::remote-transfer-action-field
+    any:
+      - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+      - id: micro-behaviors/communications/http/request/client::requests-post-json-payload
+    needs: 1
+    near_bytes: 1200
+
+  - id: llm-cross-turn-reasoning-replay
+    desc: Replays opaque reasoning across assistant turns
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: llm-reasoning-prefill-tag
+      - id: micro-behaviors/data/llm::llm-opaque-thinking-content
+      - id: micro-behaviors/data/llm::llm-thinking-block-type
+      - id: micro-behaviors/data/llm::llm-repeated-encrypted-content-field
+      - id: micro-behaviors/data/llm::llm-repeated-assistant-role
+
+  - id: llm-opaque-reasoning-decoder
+    desc: Replays reasoning into a transcription decoder
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: llm-cross-turn-reasoning-replay
+      - id: llm-reasoning-prefill-tag
+      - id: micro-behaviors/communications/http/llm::llm-chat-api-endpoint
+    near_bytes: 16000
+
+  - id: llm-replayed-reasoning-transcription
+    desc: Uses a replayed reasoning envelope to force transcription
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: llm-reasoning-prefill-tag
+      - id: micro-behaviors/data/llm::llm-opaque-thinking-content
+    any:
+      - id: micro-behaviors/communications/http/llm::llm-chat-api-endpoint
+      - id: micro-behaviors/data/llm::llm-repeated-reasoning-envelope-field
+      - id: micro-behaviors/data/llm::llm-repeated-assistant-model-role
+    needs: 2
+
+  - id: llm-opaque-reasoning-secret-extraction
+    desc: Extracts sensitive fields from opaque reasoning
+    crit: hostile
+    conf: 0.99
+    attack: T1005,T1041
+    all:
+      - id: llm-replayed-reasoning-transcription
+      - id: llm-reasoning-sensitive-field-list
+
+  - id: llm-opaque-reasoning-prompt-poisoning-upload
+    desc: Replayed reasoning drives remote upload
+    crit: hostile
+    conf: 0.99
+    attack: T1041,T1562
+    all:
+      - id: llm-replayed-reasoning-transcription
+      - id: llm-reasoning-remote-upload-sink

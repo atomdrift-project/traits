@@ -17,12 +17,12 @@ traits:
       regex: '(?i)\$(publicIp|pubip|externalIp|egressIp)\s*='
 
   - id: host-key-from-identity
-    desc: Key from host or volume identity
+    desc: Direct key assignment from host identity
     crit: component
     conf: 0.92
     if:
       type: text
-      regex: '(?is)\b(key|seed)\s*[=:][^;\r\n]{0,64}\b(hostname|computer|machine)\b'
+      regex: '\b(key|seed)\s*[=:]\s*(hostname|computer|machine)\b'
 
   - id: host-key-from-volume
     desc: Key from volume serial
@@ -56,13 +56,6 @@ traits:
       type: text
       regex: '(?is)\b(computer_hash|machine_hash)\s*[=:][^;\r\n]{0,48}\b(machine|computer)(name)?\b'
 
-  - id: host-key-expression
-    desc: Assigns key from host identifier
-    crit: component
-    conf: 0.9
-    if:
-      type: text
-      regex: '\b(key|seed)\s*[=^+]\s*(serial|hostname|computer)\b'
   - id: host-key-combination
     desc: Combines key with host identifier
     crit: component
@@ -70,6 +63,31 @@ traits:
     if:
       type: text
       regex: '\b(key|seed)\s*[=^+]\s*\w{1,24}\s*[+|&^-]\s*(serial|hostname|computer)\b'
+
+  # A native loader can avoid an obvious `key = serial` assignment by hiding
+  # the host binding in a helper that returns the volume serial.  Keep the
+  # pieces bounded and combine them below so an ordinary disk-inventory
+  # routine is not treated as payload keying.
+  - id: native-host-key-helper-name
+    desc: Native helper named for a host-derived key
+    crit: component
+    conf: 0.9
+    for: [c, cpp]
+    platforms: [windows]
+    if:
+      type: text
+      regex: '\b(host|machine|victim)[_-]?(key|seed)\s*\('
+
+  - id: returns-volume-serial
+    desc: Returns a volume serial value from source
+    crit: component
+    conf: 0.9
+    for: [c, cpp]
+    platforms: [windows]
+    if:
+      type: text
+      regex: '\breturn\s+(serial|volume[_-]?serial)\b'
+
   - id: compute-hash-host
     desc: Hashes host-derived material
     crit: suspicious
@@ -81,7 +99,27 @@ traits:
       # APIs (for example TypeScript's CompilerHost) and is not fingerprinting.
       regex: '(?is)\bComputeHash\s*\([^)]{0,160}\b(host|serial|machine)\b'
 
+  - id: digest-host-expression
+    desc: Hash call directly receives host-derived data
+    crit: component
+    conf: 0.91
+    if:
+      type: text
+      regex: '(?i)\b(md5|sha1|sha256)\s*\([^\)\r\n]{0,80}\b(host(name)?|machine(name)?|serial)\b'
+
 composite_rules:
+  - id: volume-serial-host-key-helper
+    desc: Native host-key helper returns a volume serial
+    crit: suspicious
+    conf: 0.95
+    for: [c, cpp]
+    platforms: [windows]
+    all:
+      - id: native-host-key-helper-name
+      - id: micro-behaviors/os/sysinfo/disk::get-volume-information
+      - id: returns-volume-serial
+    near_lines: 20
+
   - id: external-ip-service-resolution
     desc: Resolves the host public IP externally
     crit: notable
@@ -165,10 +203,10 @@ composite_rules:
       - id: host-key-from-named-identity
       - id: host-key-from-machine-name
       - id: host-hash-variable-assignment
-      - id: host-key-expression
       - id: host-key-combination
       - id: compute-hash-host
       - id: digest-host-material
+      - id: volume-serial-host-key-helper
     unless:
       - id: well-known/lib/network/amqp091-go/
       - id: metadata/library/data::paramiko-source
@@ -181,7 +219,10 @@ composite_rules:
     all:
       - id: victim-identity-source
     any:
-      - id: micro-behaviors/crypto/hash/digest::source-digest-call
+      # A generic digest call near hostname discovery is common in message
+      # IDs, maildir names, and telemetry. Require the host token in the same
+      # invocation instead of treating file-wide proximity as data flow.
+      - id: digest-host-expression
     near_bytes: 1024
     near_lines: 8
     unless:
@@ -200,3 +241,33 @@ composite_rules:
       - id: well-known/lib/network/amqp091-go/
       - id: metadata/library/data::paramiko-source
       - id: well-known/lib/network/asyncssh::asyncssh-python-library
+
+  # The article's native samples use a victim-specific key to unwrap an
+  # executable stage.  Keep this composite family-oriented: it combines the
+  # host-binding objective with an existing runtime-crypter signal instead of
+  # naming OctLurk, SilkLurk, or any one key value.
+  - id: host-bound-runtime-crypter
+    desc: Host-bound payload crypter executes a stage in memory
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140,T1497.001,T1620
+    all:
+      - id: host-derived-key-material
+      - id: objectives/anti-static/obfuscation/payload/encrypted::runtime-crypter-in-memory-payload
+    near_bytes: 4096
+
+  # A language-neutral technique variant: an implant can implement its
+  # modular stage as interpreted code rather than native executable memory.
+  # Host-bound keying plus decode plus compiled-code execution is the useful
+  # structural signal; plugin or family names are intentionally not required.
+  - id: host-bound-dynamic-module
+    desc: Host-bound decoded module executes in memory
+    crit: hostile
+    conf: 0.98
+    for: [python]
+    attack: T1027,T1140,T1059.006,T1620
+    all:
+      - id: host-derived-key-material
+      - id: micro-behaviors/process/interpreter/python::exec-compiled-code
+      - id: micro-behaviors/data/decode/base64::b64decode-call
+    near_bytes: 4096

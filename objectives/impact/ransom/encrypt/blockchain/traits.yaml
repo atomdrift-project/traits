@@ -1,0 +1,59 @@
+# Ransomware that obtains campaign configuration from a blockchain-backed
+# dead drop. The chain request is not hostile by itself; the hostile rules
+# require it to feed a native file-locking and extortion workflow.
+defaults:
+  platforms: [linux, windows]
+  for: [source, binaries, scripts]
+  attack: T1486,T1102,T1071.001
+  mbc: B0040,B0025
+
+traits:
+  - id: block-stride-definition
+    desc: Block or chunk stride macro fragment
+    # A stride macro is a partial indicator, not evidence of file encryption:
+    # numerical kernels and codecs use the same naming and shape.
+    crit: component
+    conf: 0.93
+    for: [c, cpp]
+    if:
+      type: text
+      # Require the macro name to identify the block/chunk being stepped.
+      # Generic debugger/build macros such as CTX_FL_IGNORE_STEPS are not
+      # encryption controls and must not look like intermittent locking.
+      regex: '(?im)^\s*#define\s+\w*(BLOCK|CHUNK)\w*(STRIDE|STEP)\w*\s+.{0,60}(\*|\b\d{2,}\b)'
+
+composite_rules:
+  - id: intermittent-offset-encryption-loop
+    desc: File encryption loop uses a block stride
+    crit: suspicious
+    conf: 0.95
+    for: [c, cpp]
+    all:
+      - id: micro-behaviors/data/control-flow/loop::cursor-zero-init-for-loop
+      - id: micro-behaviors/data/control-flow/loop::cursor-advance-by-stride
+      - id: micro-behaviors/fs/file/binary::source-file-content-io
+    any:
+      - id: micro-behaviors/crypto/symmetric/encrypt::symmetric-encryption-operation
+      - id: micro-behaviors/crypto/symmetric/xor/loop::source-repeating-key-xor-loop
+      - id: micro-behaviors/fs/file/encrypt::native-file-encryption-routine
+    near_bytes: 1000
+
+  - id: blockchain-configured-ransomware
+    desc: Ransomware config read from an EVM contract
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: objectives/command-and-control/channel/deaddrop/blockchain::evm-contract-config-read
+      - id: objectives/impact/ransom/encrypt/native-locker::xchacha-file-crypto
+      - id: objectives/impact/ransom/encrypt/native-locker::curve25519-key-wrapping
+      - id: micro-behaviors/fs/file/binary::source-file-content-io
+      - id: objectives/impact/ransom/encrypt/config::ransom-note-text
+
+  - id: blockchain-configured-intermittent-locker
+    desc: Blockchain-configured intermittent file locker
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: blockchain-configured-ransomware
+      - id: intermittent-offset-encryption-loop
+      - id: block-stride-definition

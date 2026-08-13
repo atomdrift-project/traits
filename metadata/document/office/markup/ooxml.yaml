@@ -31,6 +31,34 @@ traits:
     if:
       type: text
       substr: application/vnd.ms-office.vbaProject
+  # These are ordinary OOXML package parts, not evidence of a macro. Keep
+  # them in the markup taxonomy so a normal workbook does not acquire a
+  # macro-path feature merely by using standard Excel storage.
+  - id: excel-workbook-part
+    desc: Excel workbook XML part
+    conf: 0.98
+    for: [ooxml]
+    if:
+      type: value
+      path: archive.members[*].path
+      exact: xl/workbook.xml
+  - id: excel-sharedstrings-part
+    desc: Excel shared strings table
+    conf: 0.97
+    for: [ooxml]
+    if:
+      type: value
+      path: archive.members[*].path
+      exact: xl/sharedStrings.xml
+  - id: excel-veryhidden-sheet-metric
+    desc: Excel workbook has a very-hidden worksheet
+    crit: notable
+    conf: 0.97
+    for: [ooxml]
+    if:
+      type: metrics
+      field: office.xlm.very_hidden_sheet_count
+      min: 1
   - id: ooxml-embedded-ole-part
     desc: Embedded OLE object part
     conf: 0.97
@@ -115,8 +143,11 @@ traits:
       type: text
       regex: word/media/image[0-9]+\.(jpeg|jpg|png|wmf)
   - id: ooxml-image-part
-    desc: OOXML package contains an embedded image part
-    crit: notable
+    desc: OOXML contains an image part
+    # Images are ordinary document content. Keep the structural fact visible
+    # as metadata without treating a normal Word/Excel illustration as a
+    # security-relevant finding.
+    crit: baseline
     conf: 0.9
     for: [ooxml]
     unless:
@@ -125,6 +156,17 @@ traits:
       type: metrics
       field: office.ooxml.image_part_count
       min: 1
+  - id: ooxml-many-image-parts
+    desc: OOXML document has many image parts
+    crit: baseline
+    conf: 0.9
+    for: [ooxml]
+    unless:
+      - id: metadata/file/format/appx::windows-appx-archive-context
+    if:
+      type: metrics
+      field: office.ooxml.image_part_count
+      min: 8
   - id: ooxml-parse-error
     desc: OOXML parser reported error
     crit: baseline
@@ -200,32 +242,56 @@ traits:
     for: [ooxml]
     unless:
       - id: metadata/file/format/appx::windows-appx-archive-context
-      - id: ooxml-printer-settings-only-bin
+      - id: ooxml-printer-settings-path
+      - id: ooxml-attached-toolbars-part
       - id: well-known/tool/offensive/metasploit::framework-context
     if:
       type: metrics
       field: archive.executable_count
       min: 1
-  - id: ooxml-printer-settings-path
-    desc: OOXML printer settings binary path
-    crit: component
-    conf: 0.98
-    for: [ooxml]
-    if:
-      type: text
-      substr: xl/printerSettings/
-  - id: ooxml-single-executable-member
-    desc: OOXML has one executable-class member
-    crit: component
-    conf: 0.95
+  - id: ooxml-multiple-executable-members
+    desc: OOXML has multiple executable-class members
+    crit: notable
+    conf: 0.9
     for: [ooxml]
     unless:
       - id: metadata/file/format/appx::windows-appx-archive-context
+      - id: ooxml-printer-settings-path
+      - id: ooxml-attached-toolbars-part
     if:
       type: metrics
-      field: archive.executable_count
-      min: 1
-      max: 1
+      field: archive.misplaced_executable_count
+      min: 2
+  # ECMA-376 defines a handful of parts that are binary by design. They land in
+  # archive.executable_count purely because of the .bin extension, so name them
+  # for what they are and let the executable-member rule exclude them.
+  - id: ooxml-printer-settings-path
+    desc: OOXML printer settings binary part
+    crit: baseline
+    conf: 0.98
+    for: [ooxml]
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: '/printerSettings/printerSettings[0-9]*\.bin$'
+  - id: ooxml-attached-toolbars-part
+    desc: Word attached toolbars customization part
+    crit: baseline
+    conf: 0.98
+    for: [ooxml]
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: '(^|/)attachedToolbars\.bin$'
+  - id: ooxml-embedded-font-part
+    desc: Office embedded font data part
+    crit: baseline
+    conf: 0.97
+    for: [ooxml]
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: '\.odttf$'
   - id: ooxml-large-archive-member
     desc: Large OOXML archive member
     crit: baseline
@@ -263,8 +329,11 @@ traits:
       field: binary.overall_entropy
       min: 7.2
   - id: ooxml-very-high-entropy-body
-    desc: Very-high-entropy OOXML container
-    crit: notable
+    desc: High-entropy OOXML container bytes
+    # ZIP-compressed OOXML commonly has near-random container bytes. The
+    # measurement is useful metadata, but is not an obfuscation behavior by
+    # itself; hostile document composites add active payload evidence.
+    crit: baseline
     conf: 0.9
     for: [ooxml]
     unless:
@@ -286,8 +355,11 @@ traits:
       field: archive.zip_bomb_ratio
       min: 20
   - id: ooxml-eightfold-compression-expansion
-    desc: OOXML archive expands at least eightfold
-    crit: notable
+    desc: OOXML expands eightfold when decompressed
+    # XML-heavy Word/Excel files routinely cross this ratio. Keep the metric
+    # as baseline metadata; VBA/OLE and executable-member composites retain
+    # the attack signal when those independent facts are present.
+    crit: baseline
     conf: 0.9
     for: [ooxml]
     unless:
@@ -337,13 +409,6 @@ composite_rules:
       - id: ooxml-dot-member-re-not-l
       - id: ooxml-dot-member-rel-not-s
       - id: ooxml-dot-member-rels-suffixed
-  - id: ooxml-printer-settings-only-bin
-    desc: Only executable-class member is printer data
-    crit: component
-    conf: 0.98
-    all:
-      - id: ooxml-printer-settings-path
-      - id: ooxml-single-executable-member
   - id: ooxml-word-document
     desc: OOXML Word document layout
     conf: 0.99
@@ -370,13 +435,16 @@ composite_rules:
       - id: ooxml-word-vba-document
       - id: ooxml-embedded-ole-part
   - id: ooxml-word-external-image-fetch
-    desc: Word external image fetch
+    desc: Word HTTP(S) external image fetch
     crit: suspicious
     conf: 0.98
     all:
       - id: ooxml-external-relationship
       - id: metadata/document/office/external-link::ooxml-external-image
+      - id: metadata/document/office/external-link::ooxml-http-external-relationship
       - id: metadata/document/office/external-link::ooxml-word-external-relationship-source
+    unless:
+      - id: metadata/package/testing/presence/fixture::ooxml-test-data-path
   - id: ooxml-word-encrypted-embedded-payload
     desc: Encrypted embedded Office payload
     crit: suspicious

@@ -1,6 +1,6 @@
-# Native Unix file-encryptor workflow signals for ELF/Mach-O and source.
+# Native file-encryptor workflow signals for source and compiled artifacts.
 defaults:
-  platforms: [unix]
+  platforms: [unix, windows]
   for: [source, binaries]
   attack: T1486
   mbc: B0040
@@ -25,20 +25,96 @@ traits:
     for: [c, cpp, rust, go, elf, macho]
     if:
       type: literal
-      regex: '(?i)^\.(encrypted|locked|crypt)$'
+      regex: '(?i)^\.(encrypted|locked|crypt|encrt)$'
 
 composite_rules:
+  - id: native-chacha20-file-encryptor
+    desc: Native ChaCha20 and RSA file-encryptor workflow
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/impact/ransom/encrypt/hybrid::chacha20-rsa-4096-file-key-wrap
+      - id: micro-behaviors/fs/file/encrypt::native-file-encryption-routine
+      - id: objectives/impact/ransom/encrypt/bulk-encryption::windows-encrypted-suffix-rename
+    any:
+      - id: micro-behaviors/fs/enumerate/directory::find-file-walker-wide
+      - id: micro-behaviors/fs/enumerate/directory::find-file-walker-wide-ex
+      - id: micro-behaviors/fs/enumerate/directory::find-file-source-walker
+
+  - id: native-chacha20-recovery-inhibited-locker
+    desc: Native ChaCha20 locker that deletes shadow copies
+    crit: hostile
+    conf: 0.99
+    attack: T1486,T1490
+    all:
+      - id: native-chacha20-file-encryptor
+      - id: objectives/impact/ransom/tactics::shadow-delete
+
+  - id: native-chacha8-rsa-file-encryptor
+    desc: Native ChaCha8 file encryptor with RSA key wrapping
+    crit: hostile
+    conf: 0.98
+    for: [c, cpp, pe, dll, elf]
+    all:
+      - id: micro-behaviors/crypto/symmetric/stream::chacha8-cipher-operation
+      - id: micro-behaviors/crypto/asymmetric/rsa::rsa-public-encrypt-call
+      - id: micro-behaviors/fs/file/encrypt::native-file-encryption-routine
+    any:
+      - id: native-encrypted-suffix-rename
+      - id: objectives/impact/ransom/note::ransom-note-filename-radm-pattern
+
+  - id: native-chacha8-recovery-inhibited-locker
+    desc: Native ChaCha8 locker that deletes shadow copies
+    crit: hostile
+    conf: 0.99
+    attack: T1486,T1490
+    for: [c, cpp, pe, dll]
+    all:
+      - id: native-chacha8-rsa-file-encryptor
+      - id: objectives/impact/ransom/tactics::shadow-delete
+
+  - id: native-chacha20-threaded-locker
+    desc: Native ChaCha20 locker with worker-drain polling
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: native-chacha20-file-encryptor
+      - id: micro-behaviors/process/sync/mutex::pthread-worker-drain-poll
+
+  - id: native-encryption-evidence
+    desc: Native file-encryption implementation
+    crit: suspicious
+    conf: 0.94
+    any:
+      - id: micro-behaviors/crypto/symmetric/encrypt::symmetric-encryption-operation
+      - id: micro-behaviors/fs/file/encrypt::native-file-encryption-routine
+
+  - id: native-ransom-note-evidence
+    desc: Native locker ransom-note artifact
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: objectives/impact/ransom/encrypt/filesystem::native-ransom-note-encryptor
+      - id: objectives/impact/ransom/note::ultimatum-filename-a
+      - id: objectives/impact/ransom/note::readme-first-ransom-note
+
   - id: native-file-encryptor-workflow
     desc: Native recursive file-encryptor workflow
     crit: hostile
     conf: 0.98
     all:
-      - id: micro-behaviors/crypto/symmetric/encrypt::symmetric-encryption-operation
+      - id: native-encryption-evidence
       - id: micro-behaviors/fs/directory/traverse::recursive-directory-traversal
       - id: native-encrypted-suffix-rename
-    any:
-      - id: objectives/impact/ransom/encrypt/filesystem::native-ransom-note-encryptor
-      - id: objectives/impact/ransom/note::ultimatum-filename-a
+      - id: native-ransom-note-evidence
+
+  - id: native-readme-first-suffix-locker
+    desc: Native locker note paired with encrypted suffix
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/impact/ransom/note::readme-first-ransom-note
+      - id: native-encrypted-suffix-literal
 
   - id: native-encrypted-suffix-rename
     desc: Native rename to encrypted suffix

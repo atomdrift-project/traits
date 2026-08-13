@@ -92,17 +92,6 @@ traits:
       type: symbol
       kind: call
       regex: '(^|\.)VirtualAllocEx$'
-  - id: virtual-alloc-ex-source
-    desc: VirtualAllocEx remote allocation in source
-    crit: notable
-    conf: 0.95
-    attack: T1055
-    mbc: C0032
-    for: [c, cpp, csharp, rust]
-    if:
-      type: symbol
-      kind: call
-      exact: VirtualAllocEx
   - id: virtual-alloc-source
     desc: VirtualAlloc executable buffer in source
     crit: notable
@@ -199,6 +188,30 @@ traits:
       # followed by a register-indirect call.
       pattern: '4C 8D 4? ?? 41 B8 20 00 00 00 [0-32] 41 FF (D0|D1|D2|D3|D4|D5|D6|D7)'
 
+  # These atoms describe the code-writing primitive itself.  They are kept at
+  # the neutral capability tier because instrumentation, profilers, and
+  # compatibility shims can all install an in-process trampoline.
+  - id: x64-relative-jump-patch-writer
+    desc: Writes an x64 relative JMP patch
+    crit: notable
+    conf: 0.95
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: 'C6 01 E9 ?? ?? ?? ?? 89 51'
+  - id: x64-indirect-jump-patch-writer
+    desc: Writes an x64 indirect JMP patch
+    crit: notable
+    conf: 0.95
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: '66 C7 01 FF 25 ?? ?? ?? ?? 48 89 51'
+
 composite_rules:
   - id: virtual-memory-allocation-protection-api-pair
     desc: Imports virtual-memory allocation and protection APIs
@@ -208,6 +221,22 @@ composite_rules:
     all:
       - id: virtual-alloc
       - id: virtual-protect
+  # Union of the surfaces that actually produce executable memory: the
+  # PAGE_EXECUTE_* constant in the clear, or a call site whose protection
+  # argument is the executable constant. A bare VirtualAlloc/VirtualProtect
+  # import pair is deliberately NOT a member -- every JIT and loader has one.
+  - id: executable-memory-staging
+    desc: Stages memory with executable page protection
+    crit: notable
+    conf: 0.9
+    for: [pe, dll]
+    any:
+      - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite
+      - id: virtualprotect-rwx-stack-arg-x86
+      - id: virtualprotect-rwx-direct-call-x86
+      - id: rwx-current-process-arg-call-x86
+      - id: virtualprotect-executable-resolved-x64
+      - id: virtualprotect-executable-read-register-x64
   # Neutral union of the x64 page-protection surfaces (plain VirtualProtect
   # import or a resolved/register-indirect call to it). A bare import
   # satisfies it — every runtime that JITs or maps code has one — so it
@@ -248,3 +277,15 @@ composite_rules:
       any:
         - id: metadata/signed/platform/
         - id: metadata/library/automation/
+  - id: x64-inline-jump-patch-capability
+    desc: x64 binary writes inline jump trampolines
+    crit: notable
+    conf: 0.95
+    for: [pe, dll]
+    arch: [x86-64]
+    all:
+      - id: virtual-protect-ex
+      - id: micro-behaviors/mem/sync/cache::flush-instruction-cache
+    any:
+      - id: x64-relative-jump-patch-writer
+      - id: x64-indirect-jump-patch-writer
