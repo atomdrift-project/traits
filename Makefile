@@ -1,5 +1,5 @@
 CLEAVE ?= $(if $(wildcard ../cleave/target/release/cleave),../cleave/target/release/cleave,cleave)
-YARA_PRECOMPILE ?= $(if $(wildcard ../cleave/target/release/yara-precompile),../cleave/target/release/yara-precompile,yara-precompile)
+YARA_PRECOMPILE ?= $(or $(wildcard ../cleave/target/release/yara-precompile),$(wildcard $(dir $(CLEAVE))../cleave/target/release/yara-precompile),$(shell command -v yara-precompile 2>/dev/null),yara-precompile)
 # Prefer the installed CLI; fall back to a sibling cleave checkout's build.
 # `go run github.com/atomdrift-project/cleave/tools/yara-update@latest` does not
 # work today: that directory declares `module yara-update`, so the import path
@@ -18,7 +18,10 @@ validate: check-precompile
 	$(CLEAVE) --traits-dir . validate
 
 # Cheap correctness gate on third-party/compiled/: complete, fingerprinted, and
-# built from the rule sources being committed. No compilation — one traits walk.
+# built from the rule sources being committed. No compilation — one walk that
+# hashes the rule text. Only rule sources count toward that fingerprint (`.yar`
+# plus the trait YAML carrying an inline `type: yara` rule), so an ordinary
+# trait edit does not send you back here.
 #
 # Sources come from the STAGED tree and the artifacts from the working tree,
 # the same pairing `precompile` writes, so regenerating always clears this
