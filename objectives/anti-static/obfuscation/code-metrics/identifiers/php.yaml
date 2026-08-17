@@ -7,41 +7,6 @@ defaults:
   mbc: "B0032"
 traits:
   # === PHP-Specific Obfuscation Patterns ===
-  - id: php-encoded-strings
-    desc: "High-entropy PHP strings suggesting obfuscation"
-    crit: suspicious
-    conf: 0.85
-    if:
-      type: metrics
-      field: strings.avg_entropy
-      min: 4.5
-      # Short PHP files commonly contain randomized test vectors; average
-      # string entropy alone is not enough evidence below this size.
-      min_size: 4096
-    unless:
-      # UTF-8 translation text can have high string entropy without being an
-      # encoded payload.  Keep entropy-based detection for ASCII source, where
-      # it is a useful obfuscation signal.
-      - type: metrics
-        field: text.high_byte_ratio
-        min: 0.05
-      - id: well-known/app/publishing/moodle-stubs/
-      - id: well-known/lib/runtime/php-runtime::source-tree
-      - id: well-known/lib/development/php-codesniffer::php-codesniffer-library
-      # Directory refs cover framework context and the serialized catalog.
-      - id: metadata/library/web-frameworks/
-      - type: text
-        # Dense ParagonIE constants and the serialized public-suffix catalog
-        # are structured data, not encoded PHP payloads.
-        regex: '(ParagonIE_Sodium|\$topLevelDomains\s*=\s*[''\"]\{"0":"ac","1":"com\.ac")'
-      # PEM key material is structured cryptographic configuration, not PHP
-      # string obfuscation.
-      - type: text
-        regex: '-----BEGIN [A-Z0-9 ]+ KEY-----'
-      # Schema migration scripts embed DDL/DML SQL in execSQL calls;
-      # short files can have high average string entropy without obfuscation.
-      - type: text
-        regex: '(?s)execSQL\s*\(\s*"[\s\S]*?(CREATE TABLE|ALTER TABLE|INSERT INTO|DROP TABLE)'
   - id: php-obfuscated-vars
     desc: "Obfuscated PHP variable names"
     crit: suspicious
@@ -193,27 +158,6 @@ traits:
     unless:
       - id: metadata/library/web-frameworks/
       - id: metadata/library/web-frameworks/
-  - id: php-non-ascii-name
-    desc: "Non-ASCII identifier"
-    crit: notable
-    conf: 0.9
-    if:
-      # Identifier-scoped (covers both PHP variables `$ѕystem` and bareword
-      # names `nаme`) — matches the cached identifier facts, never UTF-8
-      # string content, so it can't FP on legitimately non-ASCII literals.
-      # Replaces two tree-sitter rules (node: variable_name + node: name).
-      type: symbol
-      kind: identifier
-      regex: "[^\\x00-\\x7F]"
-    unless:
-      # Packed PHP archives (phar) append a binary/compressed manifest after
-      # the `__HALT_COMPILER()` stub marker. That tail is mis-parsed into
-      # spurious high-byte "identifier" tokens (e.g. /bin/phar.phar), not
-      # hand-written non-ASCII identifier obfuscation. Exempt phar archives.
-      # (ID is dir::id — the `phar` filename is not part of the trait ID, so the
-      # previous metadata/file/magic/phar::php-archive ref was dangling/dead.)
-      - id: metadata/file/magic/identity::php-archive
-      - id: well-known/lib/development/php-codesniffer::php-codesniffer-library
   - id: php-non-ascii-subscript
     desc: "Unquoted non-ASCII PHP array index"
     crit: suspicious
@@ -222,8 +166,8 @@ traits:
       # Match a non-ASCII token at the start of the bracket expression. A
       # tree-sitter subscript node includes nested array literals and quoted
       # localized keys, so matching that whole node mislabels UI translations
-      # as identifier obfuscation. Non-ASCII variable/name tokens are covered
-      # separately by php-non-ascii-name.
+      # as identifier obfuscation. A non-ASCII variable/name token alone is a
+      # neutral language feature and is not treated as obfuscation.
       type: text
       # A leading `$` means the subscript is a variable expression, not an
       # unquoted bare token. PHP permits Unicode variable names, which math
@@ -277,7 +221,7 @@ composite_rules:
       # catalog string, not a request-driven shell payload.
       - id: metadata/library/data::php-top-level-domain-catalog
     any:
-      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-encoded-strings
+      - id: metadata/file/metrics::high-average-string-entropy
       - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-single-long-line
       - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-obfuscated-vars
   - id: php-encoded-payload
@@ -285,7 +229,7 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     all:
-      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-encoded-strings
+      - id: metadata/file/metrics::high-average-string-entropy
     any:
       - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-obfuscated-vars
       - id: objectives/anti-static/obfuscation/code-metrics/identifiers::php-many-short-functions
