@@ -2,117 +2,119 @@ defaults:
   attack: T1219
   platforms:
   - windows
+  # MSI containers route as Unknown (oledoc rules never see the package body).
+  # Component/stealth markers live in nested PE members; ApplicationSettings
+  # live in extracted system.config (xml). Avoid for:[all] text (filetype-cap).
   for:
-  - oledoc
+  - pe
+  - dll
+  - xml
   conf: 0.95
-  size_max: 5000000
+  size_max: 50000000
 traits:
-- id: msi-clientservice-dll
-  desc: ScreenConnect ClientService in MSI
-  crit: notable
-  if:
-    type: text
-    substr: ScreenConnect.ClientService.dll
-- id: msi-backstage-shell
-  desc: ScreenConnect BackstageShell in MSI
-  crit: notable
-  if:
-    type: text
-    substr: ScreenConnect.WindowsBackstageShell.exe
-- id: msi-credential-provider
-  desc: ScreenConnect credential provider in MSI
-  crit: notable
-  if:
-    type: text
-    substr: ScreenConnect.WindowsCredentialProvider.dll
-- id: msi-auth-package
-  desc: ScreenConnect auth package in MSI
-  crit: notable
-  if:
-    type: text
-    substr: ScreenConnect.WindowsAuthenticationPackage.dll
+# Assembly-name stems live in traits.yaml. Config/stealth markers here also
+# cover ScreenConnect ApplicationSettings XML (system.config) so extracted
+# CAB configs surface the cloud relay host during manual or future archive walks.
 - id: msi-remote-control-banner
   desc: ScreenConnect remote control banner
   crit: suspicious
   if:
     type: text
     substr: Your computer is being controlled by {0}
+    section: ".text"
+- id: msi-client-service-executable-name
+  desc: ScreenConnect names its service executable
+  crit: notable
+  conf: 0.96
+  if:
+    type: text
+    substr: ClientServiceExecutableName
+    section: ".text"
 - id: msi-launch-parameters-constraint
-  desc: ScreenConnect launch parameters config
+  desc: ScreenConnect pins client launch parameters
   crit: notable
   if:
     type: text
     substr: ClientLaunchParametersConstraint
 - id: msi-relay-host-parameter
-  desc: ScreenConnect relay host parameter
+  desc: ScreenConnect cloud relay host parameter
   crit: suspicious
   conf: 0.98
   if:
     type: text
-    regex: "\\?h=[a-z0-9-]+-relay\\.screenconnect\\.com&amp;p=443"
+    regex: "\\?h=[a-z0-9-]+-relay\\.screenconnect\\.com(&amp;|&)p=443"
 - id: msi-rsa-key-parameter
-  desc: ScreenConnect RSA key parameter
+  desc: ScreenConnect embeds relay RSA key blob
   crit: component
   conf: 0.96
   if:
     type: text
     substr: BgIAAACkAABSU0Ex
 - id: msi-feedback-survey-hidden
-  desc: ScreenConnect hides survey prompt
+  desc: ScreenConnect suppresses survey prompt
   crit: suspicious
   conf: 0.98
   if:
     type: text
     substr: ShowFeedbackSurveyForm
+    section: ".text"
 - id: msi-under-control-banner-hidden
-  desc: ScreenConnect hides control banner
+  desc: ScreenConnect suppresses control banner
   crit: suspicious
   conf: 0.98
   if:
     type: text
     substr: AccessShowUnderControlBanner
+    section: ".text"
 - id: msi-balloon-connect-hidden
-  desc: ScreenConnect hides connect balloon
+  desc: ScreenConnect suppresses connect balloon
   crit: suspicious
   conf: 0.98
   if:
     type: text
     substr: AccessShowBalloonOnConnect
+    section: ".text"
 - id: msi-balloon-hide-hidden
-  desc: ScreenConnect hides hide balloon
+  desc: ScreenConnect suppresses hide balloon
   crit: suspicious
   conf: 0.98
   if:
     type: text
     substr: AccessShowBalloonOnHide
+    section: ".text"
 - id: msi-tray-icon-hidden
-  desc: ScreenConnect hides tray icon
+  desc: ScreenConnect suppresses tray icon
   crit: suspicious
   conf: 0.98
   if:
     type: text
     substr: AccessShowSystemTrayIcon
+    section: ".text"
 - id: msi-wallpaper-hiding
-  desc: ScreenConnect toggles wallpaper hiding
+  desc: ScreenConnect can hide desktop wallpaper
   crit: suspicious
   conf: 0.97
   if:
     type: text
     substr: HideWallpaperOnConnect
+    section: ".text"
 composite_rules:
 - id: msi-screenconnect-components
-  desc: ScreenConnect component bundle in MSI
+  desc: ScreenConnect component bundle in package
   crit: suspicious
   conf: 0.98
+  scope: outer
   needs: 3
   any:
-  - id: msi-clientservice-dll
-  - id: msi-backstage-shell
-  - id: msi-credential-provider
-  - id: msi-auth-package
+  - id: screenconnect-clientservice-dll
+  - id: screenconnect-backstage-shell
+  - id: screenconnect-credential-provider
+  - id: screenconnect-auth-package
   - id: msi-remote-control-banner
+  - id: msi-client-service-executable-name
+  - id: metadata/package/files/msi::msi-screenconnect-creator-summary
 - id: msi-stealth-feedback-group
-  desc: ScreenConnect suppresses local feedback
+  desc: ScreenConnect suppresses local feedback UI
   crit: suspicious
   conf: 0.99
   needs: 2
@@ -130,7 +132,7 @@ composite_rules:
   - id: msi-balloon-hide-hidden
   - id: msi-tray-icon-hidden
 - id: msi-screenconnect-stealth-config
-  desc: ScreenConnect stealth config in MSI
+  desc: ScreenConnect stealth client configuration
   crit: suspicious
   conf: 0.99
   all:
@@ -138,20 +140,32 @@ composite_rules:
   - id: msi-stealth-feedback-group
   - id: msi-stealth-access-group
 - id: msi-screenconnect-relay-config
-  desc: ScreenConnect relay config in MSI
+  desc: ScreenConnect pinned cloud relay endpoint
   crit: suspicious
   conf: 0.99
   all:
   - id: msi-launch-parameters-constraint
   - id: msi-relay-host-parameter
   - id: msi-rsa-key-parameter
+# ServiceExe* names often live only in the MSI file table. Nested PE members
+# expose ClientServiceExecutableName; extracted system.config exposes the relay.
+- id: msi-screenconnect-service-persistence
+  desc: ScreenConnect service persistence signal
+  crit: component
+  conf: 0.97
+  scope: outer
+  any:
+  - id: objectives/persistence/system/service/install::msi-service-wrapper-binaries
+  - id: objectives/persistence/system/service/install::msi-serviceinstall-table
+  - id: msi-client-service-executable-name
 - id: msi-screenconnect-service-installer
-  desc: ScreenConnect service installer MSI
+  desc: Stealth ScreenConnect service install MSI
   crit: hostile
   conf: 0.99
+  scope: outer
   all:
   - id: msi-screenconnect-components
-  - id: objectives/persistence/system/service/install::msi-service-wrapper-binaries
+  - id: msi-screenconnect-service-persistence
   any:
   - id: msi-screenconnect-stealth-config
   - id: msi-screenconnect-relay-config
