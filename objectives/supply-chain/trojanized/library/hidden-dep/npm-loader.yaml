@@ -52,6 +52,27 @@ traits:
     path: dependencies.assertcoreutils
     exists: true
 
+# npm-doc-{dev,deploy,builder}: payload packages pulled by big.js / bignumber
+# clones. Declared in package.json and/or required at import time; often paired
+# with the from_str() empty-catch stub. builder is also used by OtterCookie.
+- id: npm-doc-payload-dependency
+  desc: Depends on npm-doc payload package
+  crit: suspicious
+  conf: 0.98
+  for: [package.json]
+  if:
+    type: text
+    regex: '"npm-doc-(dev|deploy|builder)"\s*:'
+
+- id: require-npm-doc-payload
+  desc: Requires npm-doc payload module
+  crit: suspicious
+  conf: 0.98
+  for: [javascript, typescript]
+  if:
+    type: import
+    regex: '^npm-doc-(dev|deploy|builder)$'
+
 - id: slot-loader-dependency
   desc: Depends on slot loader payload
   crit: suspicious
@@ -87,6 +108,21 @@ traits:
   if:
     type: import
     regex: '^(lint-builder|lint-null)$'
+
+# Family of npm path-stdlib clones (path-addon, path-addon-extend, …) that
+# exist only to be required from a copied Joyent path.js at module load.
+- id: require-path-addon-family
+  desc: Requires a path-addon npm package
+  crit: notable
+  conf: 0.95
+  for: [javascript, typescript]
+  if:
+    type: symbol
+    kind: call
+    exact: require
+    arg:
+      kind: string
+      regex: '^path-addon'
 
 - id: require-four-sdk-aes-ipheriv
   desc: Requires four-sdk-aes-ipheriv
@@ -330,6 +366,23 @@ composite_rules:
   - id: wime-zle-dependency
   - id: levex-refa-dependency
   - id: slot-loader-dependency
+  - id: npm-doc-payload-dependency
+
+- id: npm-doc-from-str-payload-loader
+  desc: npm-doc payload loaded via from_str stub
+  crit: hostile
+  conf: 0.98
+  for: [javascript, typescript]
+  attack: "T1195.002,T1059.007"
+  mbc: B0024
+  all:
+  - id: require-npm-doc-payload
+  - id: from-str-no-argument-call
+  - id: swallowed-loader-errors
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+
 - id: wime-zle-hidden-loader
   desc: Embedded wime-zle dependency loader
   crit: hostile
@@ -421,3 +474,22 @@ composite_rules:
   - id: micro-behaviors/crypto/library/blockchain/transaction::ethers-library-reference
   - id: metadata/package/manifest/name::npm-sdk-suffix
   - id: metadata/package/manifest/name::npm-hyphenated-multiword-name
+
+# Copied Node path.js that require()s a path-addon* package pinned to `*` so
+# the latest (attacker-controlled) sidecar runs on every import. The official
+# path / path-browserify packages never take a wildcard sidecar.
+- id: path-clone-wildcard-addon-sidecar
+  desc: Path clone loads wildcard path-addon sidecar
+  crit: hostile
+  conf: 0.99
+  for: [javascript, typescript, package.json, archives]
+  scope: archive
+  attack: "T1195.002,T1059.007"
+  mbc: B0024
+  all:
+  - id: well-known/lib/core/node-path::node-path-module-implementation
+  - id: require-path-addon-family
+  - id: metadata/package/dependencies/manifest::npm-wildcard-dependency
+  - id: objectives/supply-chain/impersonation/core-module::main-path-js
+  unless:
+  - id: well-known/lib/core/node-path::package-name

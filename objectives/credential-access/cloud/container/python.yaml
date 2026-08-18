@@ -117,19 +117,25 @@ composite_rules:
   near_lines: 6
 - id: python-cloud-kube-secret-harvest
   desc: Python harvests cloud or Kubernetes secrets
-  crit: hostile
-  conf: 0.98
+  # Service-account reads plus adjacent credential markers are collection
+  # capability. Hostile intent requires an exfiltration composite
+  # (archive-upload / encrypted-post) that adds a network sink.
+  crit: notable
+  conf: 0.9
   all:
   - id: python-kube-serviceaccount-read
   any:
   - id: micro-behaviors/os/env/vars/credentials::python-ai-provider-key-env-read
   - id: objectives/supply-chain/credential-theft/env::python-cloud-creds
   - id: objectives/supply-chain/credential-theft/env::python-package-tokens
+  - id: objectives/supply-chain/credential-theft/env::python-bulk-secret-env-harvest
+  - id: python-kubectl-secret-list
   - id: python-kubectl-secret-dump
   - id: python-secretsmanager-access
   - id: micro-behaviors/os/container/runtime::api-secrets-path
   - id: micro-behaviors/fs/path/sensitive/credentials::kube-config
   - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+  - id: objectives/credential-access/dump/process::python-proc-memory-credential-scrape
   needs: 2
 - id: python-encrypted-secret-bundle-exfil
   desc: Python encrypts and exfiltrates a cloud secret bundle
@@ -155,12 +161,20 @@ composite_rules:
   desc: Python reads Kubernetes serviceaccount files
   crit: suspicious
   conf: 0.94
+  # Require a concrete open/path hit plus the token path so this is not a
+  # low-value needs<=1 any-only composite filtered from scan output.
+  all:
+  - id: python-serviceaccount-token-path-reference
   any:
   - id: python-serviceaccount-path-reference
   - id: python-opens-serviceaccount-file
   unless:
   - id: metadata/package/testing/presence/harness::python-test-file
   - id: metadata/package/testing/presence/harness/
+  # Vendored clients (OpenAI WIF, official kubernetes clients, etc.) open the
+  # in-cluster token as library auth — not credential theft.
+  - id: metadata/package/files/dependency::bundled-python-library-path
+  - id: well-known/lib/ai/llm/provider::openai-python-k8s-workload-identity
 - id: python-secretsmanager-access
   desc: Python accesses AWS Secrets Manager
   crit: suspicious
@@ -184,8 +198,10 @@ composite_rules:
   near_bytes: 2048
 - id: python-secret-tar-archive
   desc: Python archives harvested secret files
-  crit: suspicious
-  conf: 0.9
+  # Packaging credential paths into a tar is a notable collection shape;
+  # hostility comes from upload composites that post the archive.
+  crit: notable
+  conf: 0.88
   all:
   - id: micro-behaviors/data/archive/create/tar::python-tar-gz-write-mode
   any:
