@@ -45,13 +45,22 @@ traits:
     if:
       type: text
       regex: '"echo":\s*false'
+  # Anchored on the command STRING, not on the `"command":` key that precedes
+  # it. The fake-recruiter repos that ship this file pad the gap between key
+  # and value with several hundred spaces so the payload scrolls off the right
+  # edge of the editor -- and that padding also took the value out of reach of
+  # the key-anchored form of this rule, which is why the hostile composites
+  # below stopped firing on the very samples they were written for. Requiring
+  # the URL keeps the match to an actual download command rather than any
+  # mention of curl.
   - id: tasks-command-curl-wget
-    desc: VSCode task command downloads URL
-    crit: component
+    desc: Task command string fetches a URL
+    crit: notable
     conf: 0.9
+    attack: T1105
     if:
       type: text
-      regex: '"command":\s*"[^\n"]{0,80}\b(curl|wget)\b'
+      regex: '"(curl|wget)(\.exe)?\s[^"\n]{0,200}https?://'
   - id: tasks-command-vercel
     desc: VSCode task command uses Vercel
     crit: component
@@ -59,13 +68,15 @@ traits:
     if:
       type: text
       regex: '"command":\s*"[^"\n]{0,240}vercel\.app'
+  # Same padding pitfall as tasks-command-curl-wget: key-anchored matchers miss
+  # the shortener when hundreds of spaces sit between `"command":` and the URL.
   - id: tasks-command-shortlink
-    desc: VSCode task command uses shortlink
+    desc: Task command string uses a URL shortener
     crit: component
     conf: 0.86
     if:
       type: text
-      regex: '"command":\s*"[^"\n]{0,240}(short\.gy|bit\.ly|tinyurl\.com)'
+      regex: 'https?://[^"\n]{0,60}(short\.gy|bit\.ly|tinyurl\.com)'
   - id: tasks-command-pipe-shell
     desc: VSCode task command pipes shell
     crit: component
@@ -98,13 +109,20 @@ traits:
     if:
       type: text
       regex: '"task\.allowAutomaticTasks"\s*:\s*(true|"on")'
+  # `node` must be followed by whitespace, i.e. actually invoked with an
+  # argument. The previous `\bnode\b` form matched the hyphen-terminated
+  # `node-red` inside a path, so a conda paths.json listing
+  # `lib/node_modules/node-red/.../fontawesome-webfont.ttf` read as a task
+  # executing a font. Keep the match inside one JSON string ([^"\n]) but do
+  # not anchor at the string start: the real samples guard the call with
+  # `command -v node >/dev/null && node ./fonts/x.woff2`.
   - id: tasks-command-exec-media
-    desc: VSCode task runs font file via node
+    desc: Task command runs font file via node
     crit: suspicious
     conf: 0.95
     if:
       type: text
-      regex: '\bnode\b[^"\n]{0,120}\.(woff2?|ttf|otf|eot)\b'
+      regex: '\bnode(\.exe)?\s+[^"\n]{0,160}\.(woff2?|ttf|otf|eot)\b'
 composite_rules:
   - id: vscode-task-persistence
     # Folder-open tasks are a real developer workflow (for example, starting
@@ -167,6 +185,9 @@ composite_rules:
       - id: tasks-hidden
       - id: metadata/package/config::task-reveal-never
       - id: tasks-echo-disabled
+      # Padding the command off the right edge of the editor conceals the task
+      # from a reviewer just as `reveal: never` conceals it from the user.
+      - id: objectives/anti-static/obfuscation/syntax::json-key-value-space-padded
     needs: 2
   - id: vscode-concealed-remote-shell-autorun
     desc: Concealed folder-open task fetches and pipes a remote shell
