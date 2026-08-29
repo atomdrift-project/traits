@@ -61,7 +61,72 @@ traits:
       regex: 'https?://[^"''\s]{1,160}/(yhs/)?search\?[^"''\s]{0,160}[?&](hspart|hsimp)='
       case_insensitive: true
 
+  - id: search-provider-redirect-endpoint
+    desc: Search provider URL is a redirect endpoint
+    crit: suspicious
+    conf: 0.9
+    for: [json, chrome-manifest]
+    attack: T1176
+    if:
+      # A real engine answers on a search path -- `/search?q=`, `/?q=`. A
+      # declared provider whose URL is `/link?`, `/go?` or `/redirect?` is not
+      # answering the query at all; it is bouncing it onward, which is where
+      # the affiliate tag gets attached and how the user's chosen engine is
+      # kept out of the loop. Seen as
+      # `earthapp.net/admin/public/link?q={searchTerms}` behind an extension
+      # named for a map.
+      type: value
+      path: chrome_settings_overrides.search_provider.search_url
+      regex: '(?i)/(link|go|redirect)\?'
+
 composite_rules:
+  # The provider grant plus a destination that only forwards. Either alone is
+  # ordinary -- extensions may set a search engine, and redirectors exist --
+  # but an extension that takes the default-search grant and spends it on a
+  # bounce endpoint is monetizing the query, not serving it.
+  - id: search-override-through-redirect-endpoint
+    desc: Search override points at a redirect endpoint
+    crit: suspicious
+    conf: 0.93
+    attack: T1176
+    scope: archive
+    all:
+      - id: search-provider-redirect-endpoint
+    any:
+      - id: metadata/permission/manifest::extension-default-search-provider
+      - id: metadata/permission/manifest::chrome-search-provider-override
+
+  # A default-search override that also ships static redirect rules. The
+  # override alone is how an honest search extension works -- the user picks
+  # it, the browser asks for confirmation, and queries typed in the omnibox go
+  # to the new provider. Redirect rules are for the queries that did *not* go
+  # there: searches issued from a page, a sidebar, or another engine the user
+  # kept. Shipping both means the takeover is not meant to be escapable.
+  - id: search-override-with-redirect-rules
+    desc: Search override ships network redirect rules
+    crit: suspicious
+    conf: 0.93
+    attack: T1176
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::extension-default-search-provider
+    any:
+      - id: micro-behaviors/process/hook/webextension::dnr-redirect-named-ruleset
+      - id: micro-behaviors/process/hook/webextension::dnr-redirect-named-ruleset-file
+
+  # The same pair with the monetization evidence attached: the destination is
+  # a search-branded host carrying a `{searchTerms}` template and a source tag,
+  # so the redirected queries are being sold on.
+  - id: monetized-search-override-redirect
+    desc: Monetized search override with redirect rules
+    crit: suspicious
+    conf: 0.95
+    attack: T1176
+    scope: archive
+    all:
+      - id: extension-search-monetization
+      - id: search-override-with-redirect-rules
+
   - id: extension-remote-php-navigation-abuse
     desc: Extension cache-busts PHP control endpoint into navigation
     crit: hostile
@@ -148,18 +213,19 @@ composite_rules:
       - id: browser-setting-change-keep-prompt-instruction
       - id: micro-behaviors/ui/window/manage/style::fixed-viewport-style
 
-  # Search-override extension mints a persistent per-user id and phones it home
-  # with the extension id/version — install/user tracking for a monetized search
-  # provider, not a neutral update check.
-  - id: extension-search-uid-telemetry
-    desc: Search override reports tracking uid home
+  # Search-override extension tags both its install navigation and uninstall
+  # callback with a generated client identifier. This is lifecycle attribution
+  # coupled to a browser-setting change, but it does not prove that search
+  # queries themselves carry the identifier.
+  - id: search-override-lifecycle-client-id
+    desc: Search override tags lifecycle URLs with client ID
     crit: suspicious
     conf: 0.92
     attack: T1176
     scope: archive
     all:
       - id: metadata/permission/manifest::extension-default-search-provider
-      - id: micro-behaviors/communications/http/url/query::extension-campaign-identity-query-fields
+      - id: objectives/collection/monitor/tracking::extension-client-id-lifecycle-navigation
 
   - id: extension-search-monetization
     desc: Browser extension search monetization
@@ -375,6 +441,13 @@ composite_rules:
   # tab and installs an uninstall landing page is a stronger PUP signal than
   # a remote catalog alone. Keep the family identity leg so ordinary
   # extensions with optional onboarding pages remain notable.
+  #
+  # The publisher leg is a directory reference to the recognized
+  # newtab-wallpaper-adware families (Owhit, Gameograf, …) rather than a
+  # hardcoded pair, so a new extension from any of them — or a future family
+  # added to that directory — trips the same suspicious rating from any of its
+  # identity signals (manifest author, promo host, or the family composite).
+  # The lifecycle legs supply the promo behaviour.
   - id: named-newtab-promo-lifecycle
     desc: Named new-tab publisher forces promo lifecycle
     crit: suspicious
@@ -384,10 +457,9 @@ composite_rules:
     for: [crx, xpi, zip]
     all:
       - id: metadata/permission/manifest::chrome-newtab-override
-      - id: well-known/unwanted/newtab-wallpaper-adware::owhit-manifest-author
-      - id: well-known/unwanted/newtab-wallpaper-adware::owhit-promo-host
       - id: micro-behaviors/browser-extension/tabs::install-https-tab-open
       - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: well-known/unwanted/newtab-wallpaper-adware
 
   # REMOVED: `campaign-tracked-newtab-search-hijack` (was hostile).
   #
@@ -548,3 +620,21 @@ composite_rules:
     any:
       - id: micro-behaviors/browser-extension/tabs::chrome-tabs-on-activated
       - id: micro-behaviors/browser-extension/tabs::chrome-tabs-on-updated
+
+  # An overridden new tab whose link targets arrive from a publisher endpoint
+  # and are interpolated straight into page markup means the publisher decides,
+  # at any moment after store review, where every new-tab click sends the user.
+  # The shipped bundle looks static; the surface the user actually sees is a
+  # live, remotely-swappable ad slot. Separate from `newtab-remote-promo-
+  # catalog`, which only observes that a catalog is fetched — this one requires
+  # the fetched values to reach a markup sink.
+  - id: newtab-remote-controlled-link-injection
+    desc: Remote catalog drives overridden new-tab links
+    crit: suspicious
+    conf: 0.93
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip]
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: micro-behaviors/communications/http/request/json::external-json-to-dynamic-innerhtml

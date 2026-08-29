@@ -258,8 +258,74 @@ traits:
     attack: T1140
     for: [javascript, typescript]
     if:
-      type: text
-      regex: '\bFunction\s*\(\s*(atob|Buffer\.from)\s*\('
+      # Match executable syntax, not filter rules, signatures, or documentation
+      # that quote `new Function(atob(...))` as inert text.
+      type: tree-sitter
+      query: |
+        [
+          (call_expression
+            function: (identifier) @ctor
+            arguments: (arguments
+              (call_expression
+                function: (identifier) @decoder))
+            (#eq? @ctor "Function")
+            (#eq? @decoder "atob"))
+          (call_expression
+            function: (identifier) @ctor
+            arguments: (arguments
+              (call_expression
+                function: (member_expression
+                  object: (identifier) @decoder_object
+                  property: (property_identifier) @decoder_method)))
+            (#eq? @ctor "Function")
+            (#eq? @decoder_object "Buffer")
+            (#eq? @decoder_method "from"))
+          (call_expression
+            function: (identifier) @ctor
+            arguments: (arguments
+              (call_expression
+                function: (member_expression
+                  object: (call_expression
+                    function: (member_expression
+                      object: (identifier) @decoder_object
+                      property: (property_identifier) @decoder_method))
+                  property: (property_identifier) @conversion_method)))
+            (#eq? @ctor "Function")
+            (#eq? @decoder_object "Buffer")
+            (#eq? @decoder_method "from")
+            (#eq? @conversion_method "toString"))
+          (new_expression
+            constructor: (identifier) @ctor
+            arguments: (arguments
+              (call_expression
+                function: (identifier) @decoder))
+            (#eq? @ctor "Function")
+            (#eq? @decoder "atob"))
+          (new_expression
+            constructor: (identifier) @ctor
+            arguments: (arguments
+              (call_expression
+                function: (member_expression
+                  object: (identifier) @decoder_object
+                  property: (property_identifier) @decoder_method)))
+            (#eq? @ctor "Function")
+            (#eq? @decoder_object "Buffer")
+            (#eq? @decoder_method "from"))
+          (new_expression
+            constructor: (identifier) @ctor
+            arguments: (arguments
+              (call_expression
+                function: (member_expression
+                  object: (call_expression
+                    function: (member_expression
+                      object: (identifier) @decoder_object
+                      property: (property_identifier) @decoder_method))
+                  property: (property_identifier) @conversion_method)))
+            (#eq? @ctor "Function")
+            (#eq? @decoder_object "Buffer")
+            (#eq? @decoder_method "from")
+            (#eq? @conversion_method "toString"))
+        ]
 
 composite_rules:
   # A real b64decode call near a shell-enabled subprocess. Merely decoding
@@ -453,7 +519,7 @@ composite_rules:
     near_lines: 12
     unless:
       - id: metadata/package/testing/
-      - id: metadata/package/scripts::jupyter-code-cell-generator
+      - id: metadata/package/scripts/develop::jupyter-code-cell-generator
       - id: well-known/tool/development/ide-contexts/
       - id: metadata/library/versioneer/
       - id: well-known/lib/ai/pyaigis/
@@ -476,7 +542,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/payload/encoded::large-base64-string-dup
     unless:
       - id: metadata/package/testing/
-      - id: metadata/package/scripts::jupyter-code-cell-generator
+      - id: metadata/package/scripts/develop::jupyter-code-cell-generator
       - id: well-known/tool/development/ide-contexts/
       - id: metadata/library/versioneer/
       - id: python-benign-decode-subprocess-context
@@ -531,6 +597,10 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/python::exec-builtin
     unless:
       - id: metadata/package/testing/
+      # PEP 3333 mandates latin-1 at WSGI's byte/str boundary, and the py2
+      # re-raise shim puts a literal-argument exec() a few lines away. Every
+      # WSGI adapter has both; Passenger's wsgi-loader.py read as hostile.
+      - id: metadata/lang/version::python2-wsgi-compat-shim
   - id: large-encoded-string
     desc: Large high-entropy string literal
     crit: suspicious

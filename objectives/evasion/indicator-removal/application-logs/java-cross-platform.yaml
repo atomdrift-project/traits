@@ -1,0 +1,103 @@
+# The recovered Java payload deletes both the application's active/rotated log
+# family and the embedded database log. Pairing the two deletion targets avoids
+# treating ordinary log rotation as hostile evidence removal.
+defaults:
+  platforms: [unix, windows]
+  for: [java]
+  attack: T1070.001
+  mbc: F0005
+
+traits:
+  - id: java-active-server-log-name-check
+    desc: Java checks active server log name
+    crit: component
+    conf: 0.98
+    if:
+      type: text
+      regex: '\.equals\s*\(\s*["'']server\.log["'']\s*\)'
+
+  - id: java-rotated-server-log-delete
+    desc: Java deletes rotated server logs
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: '\.startsWith\s*\(\s*["'']server\.log\.["'']\s*\)[^;]{0,260}\.delete\s*\('
+
+  - id: java-derby-log-delete
+    desc: Java deletes Apache Derby database log
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: text
+      regex: 'new\s+File\s*\(\s*["''][^"'']{0,160}derby\.log["'']\s*\)\s*\.delete\s*\(\s*\)'
+
+  - id: jvm-active-server-log-name
+    desc: JVM active server log constant
+    crit: component
+    conf: 0.96
+    for: [class, jar, zip]
+    if:
+      type: value
+      path: class.strings[*]
+      exact: server.log
+
+  - id: jvm-rotated-server-log-prefix
+    desc: JVM rotated server log prefix constant
+    crit: component
+    conf: 0.96
+    for: [class, jar, zip]
+    if:
+      type: value
+      path: class.strings[*]
+      exact: server.log.
+
+  - id: jvm-derby-log-path
+    desc: JVM Apache Derby log path constant
+    crit: component
+    conf: 0.96
+    for: [class, jar, zip]
+    if:
+      type: value
+      path: class.strings[*]
+      regex: '(^|[/\\])derby\.log$'
+
+composite_rules:
+  - id: java-server-log-family-delete
+    desc: Java deletes server log family
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: java-active-server-log-name-check
+      - id: java-rotated-server-log-delete
+    near_lines: 16
+
+  - id: java-application-database-log-wipe
+    desc: Java wipes application and database logs
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: java-server-log-family-delete
+      - id: java-derby-log-delete
+
+  - id: jvm-server-log-family-delete
+    desc: JVM bytecode deletes active and rotated server logs
+    crit: suspicious
+    conf: 0.98
+    for: [class, jar, zip]
+    scope: outer
+    all:
+      - id: jvm-active-server-log-name
+      - id: jvm-rotated-server-log-prefix
+      - id: micro-behaviors/fs/directory/readdir::jvm-file-listfiles
+      - id: micro-behaviors/fs/delete/file::java-file-delete-bytecode
+
+  - id: jvm-application-database-log-wipe
+    desc: JVM bytecode wipes application and database logs
+    crit: hostile
+    conf: 0.995
+    for: [class, jar, zip]
+    scope: outer
+    all:
+      - id: jvm-server-log-family-delete
+      - id: jvm-derby-log-path

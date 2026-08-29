@@ -1,3 +1,18 @@
+# ConnectWise ScreenConnect (formerly ScreenConnect / ConnectWise Control) —
+# a commercial remote-monitoring-and-management product.
+#
+# It is legitimate software with a legitimate installer, and it is also one of
+# the most frequently abused remote-access tools in intrusion sets: the client
+# is a single self-contained executable whose relay host, instance key, and
+# unattended-access flag are baked in at build time on the *server* side, so
+# an operator can hand a victim a stock, validly signed binary that phones a
+# relay the operator controls. Nothing in the file has to be modified, which is
+# why byte-level malware signatures do not catch the abuse — the identity of
+# the tool is the finding, and the deployment context decides the verdict.
+#
+# Kept in dual-use/ rather than malware/: this fingerprints the product, not a
+# campaign. Analysts need it surfaced wherever an RMM client turns up in an
+# artifact that should not contain one.
 defaults:
   attack: T1219
   platforms:
@@ -166,6 +181,40 @@ traits:
     regex: '(?i)\b(ConnectWise Control|ScreenConnect\.ClientService)\b'
     section: ".text"
   mbc: C0048
+- id: screenconnect-product-version-resource
+  size_min: 512
+  size_max: 500000000
+  desc: ScreenConnect PE product identity
+  crit: notable
+  conf: 0.99
+  platforms:
+  - windows
+  if:
+    type: value
+    path: pe.version.product_name
+    exact: ScreenConnect
+  mbc: C0048
+- id: screenconnect-clientsetup-filename
+  desc: ScreenConnect client installer filename
+  crit: notable
+  conf: 0.98
+  platforms: [windows]
+  if:
+    type: basename
+    exact: ScreenConnect.ClientSetup.exe
+    case_insensitive: true
+  mbc: C0048
+- id: screenconnect-bare-ip-relay-parameters
+  desc: ScreenConnect bare-IP relay parameters
+  crit: notable
+  conf: 0.97
+  platforms: [windows]
+  for: [pe, dll, csharp]
+  if:
+    type: text
+    regex: '[?&]h=(\d{1,3}\.){3}\d{1,3}(&amp;|&)p=\d{2,5}(&amp;|&)k='
+    is: external_ip
+  mbc: C0002
 - id: screenconnect-clientsetup-name-script
   desc: ScreenConnect client installer name
   crit: notable
@@ -237,10 +286,10 @@ traits:
   platforms:
   - windows
   if:
-    type: value
-    path: pe.debug.pdb.path
+    type: text
     regex: '\\cwcontrol\\Custom\\DotNetRunner\\Release\\DotNetRunner\.pdb$'
     case_insensitive: true
+    section: .rdata
   mbc: C0048
 - id: screenconnect-vendor-hosted-endpoint
   size_min: 512
@@ -307,6 +356,22 @@ traits:
     regex: '(?i)\bScreenConnect\b'
     section: ".rdata"
   mbc: C0048
+- id: screenconnect-relay-uri-scheme
+  size_min: 512
+  size_max: 500000000
+  desc: ScreenConnect relay URI scheme handling
+  crit: notable
+  conf: 0.95
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+  if:
+    type: text
+    substr: GetInstanceFingerprintFromUrlScheme
+    section: .text
+  mbc: C0048
 composite_rules:
 - id: screenconnect-authenticode-signer
   size_min: 512
@@ -355,18 +420,48 @@ composite_rules:
   all:
   - id: screenconnect-component-detected
   - id: objectives/persistence/system/service/install::service-startup
+# Identity verdict for the product, and deliberately SUSPICIOUS rather than
+# notable.
+#
+# ScreenConnect is licensed software with real customers, so the instinct is to
+# call its presence neutral and let context decide. That instinct is calibrated
+# to a corporate estate that has bought it. It is wrong for the population this
+# ruleset actually sees: loose artifacts pulled from malware feeds, mail
+# attachments, sandbox submissions and incoming packages. In that population an
+# unattended ScreenConnect client is overwhelmingly initial access — the
+# tech-support-scam and ransomware-affiliate crews reach for it precisely
+# because the binary is stock, validly signed by ConnectWise, and therefore
+# invisible to signature-based detection. The relay host and the access flag are
+# baked in server-side at build time, so there is nothing in the file to modify
+# and nothing for a hash to catch.
+#
+# `suspicious` is the honest reading of "potentially unwanted": it says an
+# analyst should look, not that the file is malicious. An estate that deploys
+# ScreenConnect on purpose will see it on its own agents and can suppress it
+# there, where the deployment context is actually known; we do not have that
+# context and must not assume it. `hostile` still requires an anomaly on top —
+# see `objectives/command-and-control/backdoor/control/rmm::
+# screenconnect-anomalous-deployment` for what counts.
 - id: screenconnect-family
   size_min: 512
   size_max: 500000000
   desc: ScreenConnect remote access tool
-  crit: notable
+  crit: suspicious
   conf: 0.95
   platforms:
   - windows
+  # The file default is `for: [pe]`; msi/xml are needed so the packaged
+  # installer and the extracted system.config reach the same verdict as a
+  # loose client executable.
+  for: [pe, dll, msi, xml]
   mbc: C0048
   needs: 2
   any:
   - id: screenconnect-component-detected
+  # The MSI/package spelling of the same identity, so a ScreenConnect installer
+  # reaches this verdict too. Without it an .msi payload produced only the
+  # component-bundle observation and never the product conclusion.
+  - id: msi-screenconnect-components
   - id: connectwisecontrol-client-marker
   - id: screenconnect-product-marker
   - id: screenconnect-authenticode-signer
@@ -375,6 +470,7 @@ composite_rules:
   - id: screenconnect-dotnet-runner-pdb
   - id: connectvpn-c2-domain
   - id: screenconnect-rdata-product-marker
+  - id: screenconnect-product-version-resource
 
 - id: screenconnect-signed-launcher-context
   desc: Verified vendor-hosted ScreenConnect signed launcher context
@@ -394,8 +490,38 @@ composite_rules:
   conf: 0.98
   platforms:
   - windows
-  any:
-  - id: screenconnect-family
-  - id: screenconnect-component-detected
+  all:
   - id: screenconnect-authenticode-signer
-  - id: screenconnect-rdata-product-marker
+  any:
+  - id: screenconnect-clickonce-runner-pdb
+  - id: screenconnect-dotnet-service-runner-pdb
+  - id: screenconnect-dotnet-runner-pdb
+- id: screenconnect-unattended-access-client
+  desc: ScreenConnect unattended remote-access client
+  crit: suspicious
+  conf: 0.94
+  platforms:
+  - windows
+  all:
+  - id: screenconnect-core-dll
+  any:
+  - id: screenconnect-clientservice-dll
+  - id: screenconnect-backstage-shell
+  - id: screenconnect-relay-uri-scheme
+
+# "Configured for unattended service access": either the PE side shows a full
+# headless service client (core + ClientService/BackstageShell), or the MSI
+# bakes in the unattended-access role (e=Access&y=Guest). Grouped here as one
+# identity-config observation so the anomalous-deployment objective can name it
+# with a single leg. Notable on its own — the impropriety verdict is the
+# objective composite that pairs this with the product identity.
+- id: screenconnect-unattended-service-config
+  desc: ScreenConnect configured for unattended access
+  crit: notable
+  conf: 0.95
+  platforms: [windows]
+  for: [pe, dll, msi, xml]
+  mbc: C0048
+  any:
+  - id: screenconnect-unattended-access-client
+  - id: msi-unattended-access-launch-parameter

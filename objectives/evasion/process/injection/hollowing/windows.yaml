@@ -215,6 +215,20 @@ composite_rules:
     any:
       - id: rev-ntresumethread
       - id: dotnet-reversed-dynamic-api-resolution
+  - id: dotnet-encrypted-delegate-runpe-loader
+    desc: Packed .NET RunPE loader decrypts a stage and creates a host process
+    crit: hostile
+    conf: 0.99
+    attack: T1055.012,T1027.002,T1140
+    all:
+      - id: objectives/anti-static/obfuscation/imports::dotnet-sparse-import-encrypted-delegate-loader
+      - id: micro-behaviors/os/api-resolution/dynamic::managed-process-module-reference
+      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-aes-crypto-evidence
+      - id: objectives/command-and-control/dropper/staging/encrypted::dotnet-md5-crypto-service
+      - id: micro-behaviors/data/embedded/payload/resource::assemblyresolve-hook
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
   # `thread-marker-recognized-profile` lived here: `many-imports OR
   # go-runtime-marker`, which detects "this binary has a big import table or is
   # written in Go" and says nothing about thread markers or hollowing. Nothing
@@ -273,6 +287,27 @@ composite_rules:
     unless:
       - id: metadata/binary/metrics/threshold::many-exports-200
       - id: well-known/lib/runtime/electron::electron-chromium-runtime-strong
+  # Classic RunPE sequence expressed purely through ntdll API names staged for
+  # dynamic resolution: unmap the host image, write the replacement image into
+  # its address space, resume the suspended thread. Loaders written in Go or
+  # any other language without an ntdll import table leave exactly this string
+  # trio and nothing in the import directory. Unmapping another image and then
+  # resuming its thread has no benign use outside a debugger or an OS loader,
+  # both of which are excluded below.
+  - id: ntdll-unmap-write-resume-runpe
+    desc: ntdll unmap, remote write and thread resume RunPE chain
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: unmap-section-apis
+      - id: memory-write-apis
+      - id: micro-behaviors/process/inject/runtime/ntapi::nt-resume-thread
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor::windows-system-implementer-dll
+      - id: well-known/lib/platform/wine/
+      - id: well-known/tool/reverse-engineering/
+
   - id: hollowing-primitives
     desc: Process hollowing API primitives
     crit: suspicious
@@ -459,6 +494,11 @@ composite_rules:
     unless:
       - id: well-known/tool/sysadmin/sandboxie::sandboxie-known-signed-context
       - id: metadata/binary/vendor::microsoft-signed-kernel-api-dll-context
+      # A .NET self-contained publish appends the whole runtime after the host
+      # stub, so the CLR's own loader and injection primitives are shipped bytes,
+      # not this program's behaviour. GitVersion 5.1.3 (a 45MB apphost bundle in a
+      # RubyGem) read as a stack-string loader, a hollowing chain and an injector.
+      - id: metadata/binary/framework::dotnet-runtime-host-stub
   # A loader-shaped x64 thread start plus an executable-memory transition is
   # the purpose-defining evidence; the individual atoms remain reusable.
   - id: inline-pe-executable-thread-stage

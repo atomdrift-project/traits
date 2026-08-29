@@ -109,6 +109,8 @@ traits:
     type: text
     substr: -ExclusionExtension
     case_insensitive: true
+  unless:
+  - id: metadata/build/ci/agent::ci-runner-windows-configuration-context
 - id: defender-exclusion-process
   desc: Windows Defender process exclusion
   crit: suspicious
@@ -119,9 +121,9 @@ traits:
   - csharp
   - java
   unless:
-  - id: well-known/app/ai/aui-agent-builder/
+  - id: well-known/app/ai/agent-runtime/aui-agent-builder/
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
   - id: well-known/tool/development/go-x-build::go-x-build-infra-context
   if:
     type: text
@@ -158,7 +160,7 @@ traits:
     regex: Set-MpPreference\s+.{0,50}-DisableRealtimeMonitoring\s+\$?true
     case_insensitive: true
   unless:
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
   - id: metadata/file/profile/metrics::powershell-no-parsed-call-sites
   - id: well-known/tool/development/go-x-build::go-x-build-infra-context
 - id: defender-disable-realtime-reg
@@ -195,7 +197,7 @@ traits:
     regex: Set-MpPreference\s+.{0,50}-DisableBehaviorMonitoring\s+\$?true
     case_insensitive: true
   unless:
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
 - id: defender-disable-ioav
   desc: Disable IOAV protection
   crit: suspicious
@@ -208,7 +210,7 @@ traits:
     regex: Set-MpPreference\s+.{0,50}-DisableIOAVProtection\s+\$?true
     case_insensitive: true
   unless:
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
 - id: defender-disable-archive-scan
   desc: Disable Defender archive scanning
   crit: suspicious
@@ -221,7 +223,7 @@ traits:
     regex: Set-MpPreference\s+.{0,80}-DisableArchiveScanning\s+\$?true
     case_insensitive: true
   unless:
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
 - id: defender-disable-script-scan
   desc: Disable Defender script scanning
   crit: suspicious
@@ -234,7 +236,7 @@ traits:
     regex: Set-MpPreference\s+.{0,80}-DisableScriptScanning\s+\$?true
     case_insensitive: true
   unless:
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
 - id: defender-controlled-folder-off
   desc: Disable Controlled Folder Access
   crit: suspicious
@@ -266,8 +268,8 @@ traits:
     regex: 'WinDefend[\s\S]{0,160}WdNisSvc[\s\S]{0,160}(Sense|SecurityHealthService)'
     case_insensitive: true
 - id: powershell-disable-service-loop
-  desc: PowerShell disables services loop
-  crit: suspicious
+  desc: PowerShell stops and disables services
+  crit: notable
   conf: 0.9
   for:
   - powershell
@@ -526,6 +528,11 @@ traits:
     pattern: "b8 57 00 07 80 c3"
     section: .text
   unless:
+  # `mov eax, E_INVALIDARG; ret` is an ordinary HRESULT return stub emitted
+  # throughout large MSVC images; statically linked CoreCLR (single-file
+  # apphost) carries many of them alongside its own AMSI provider calls.
+  - id: metadata/binary/framework::dotnet-singlefilehost-runtime
+  - id: metadata/binary/framework::dotnet-selfcontained-bundle
   - id: well-known/lib/platform/microsoft-catsrv::microsoft-catsrv-library-context
   - id: well-known/lib/runtime/dotnet-runtime::coreclr-runtime-context
 
@@ -652,6 +659,41 @@ traits:
     type: text
     regex: '(?i)\bDefender\s+(SubmitSamplesConsent|DisableEnhancedNotifications)\s+[01]\b'
 
+# Defender exclusion-tampering that also HIDES the exclusion from the machine's
+# own administrators / the Security app UI. A legitimate installer that adds an
+# exclusion has no reason to conceal it -- HideExclusionsFromLocalAdmins,
+# HideExclusionsFromLocalUsers and HideExclusionsUI exist only to keep a
+# defender-blind spot invisible to the person who could notice and remove it.
+# Each is `notable` alone (an admin could set it deliberately); the composite
+# pairs concealment with an actual exclusion write.
+- id: defender-hide-exclusions-from-admins
+  desc: Defender hides exclusions from local admins
+  crit: notable
+  conf: 0.95
+  for: [batch, powershell, vbs, javascript, csharp, pe, dll]
+  if:
+    type: text
+    substr: HideExclusionsFromLocalAdmins
+    case_insensitive: true
+- id: defender-hide-exclusions-from-users
+  desc: Defender hides exclusions from local users
+  crit: notable
+  conf: 0.95
+  for: [batch, powershell, vbs, javascript, csharp, pe, dll]
+  if:
+    type: text
+    substr: HideExclusionsFromLocalUsers
+    case_insensitive: true
+- id: defender-hide-exclusions-ui
+  desc: Defender hides the exclusions UI
+  crit: notable
+  conf: 0.93
+  for: [batch, powershell, vbs, javascript, csharp, pe, dll]
+  if:
+    type: text
+    substr: HideExclusionsUI
+    case_insensitive: true
+
 composite_rules:
 - id: defender-notification-policy-tamper
   desc: Adds Defender notification-disable policy
@@ -674,6 +716,7 @@ composite_rules:
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
   - id: well-known/tool/development/go-x-build::go-x-build-infra-context
   - id: well-known/app/enterprise/dotmatics-dtx::dtx-cloud-management-context
+  - id: metadata/build/ci/agent::ci-runner-windows-configuration-context
 
 - id: defender-systemdrive-exclusion
   desc: Defender exclusion targets system drive
@@ -819,7 +862,7 @@ composite_rules:
   - id: defender-controlled-folder-off
   - id: defender-memory-integrity-off
   unless:
-  - id: well-known/app/ai/comfy-test::generated-vm-template
+  - id: well-known/app/ai/media/comfy-test::generated-vm-template
 - id: defender-service-disable-loop
   desc: Defender service disable loop
   crit: hostile
@@ -909,6 +952,11 @@ composite_rules:
   - id: micro-behaviors/os/security/amsi::amsi-library-reference
   - id: micro-behaviors/os/security/amsi::amsi-scan-buffer-reference
   unless:
+  # CoreCLR itself imports amsi.dll and calls AmsiScanBuffer to scan the
+  # assemblies it loads; the statically linked single-file apphost carries
+  # that provider code next to unrelated E_INVALIDARG return stubs.
+  - id: metadata/binary/framework::dotnet-singlefilehost-runtime
+  - id: metadata/binary/framework::dotnet-selfcontained-bundle
   - id: well-known/lib/runtime/dotnet-runtime::coreclr-runtime-context
 
 - id: amsi-patch-manual-api-resolution
@@ -979,7 +1027,7 @@ composite_rules:
   - id: uac-bypass-comp
   - id: tasklist-av-check
   unless:
-  - id: well-known/app/ai/aui-agent-builder/
+  - id: well-known/app/ai/agent-runtime/aui-agent-builder/
   - id: well-known/app/data/dbeaver::windows-defender-exclusion-helper-script
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
 
@@ -1125,3 +1173,17 @@ composite_rules:
   all:
   - id: defender-adminflows-tamper-cluster
   - id: objectives/impact/degrade/edr/targeting::edr-security-process-termination
+
+- id: defender-hidden-exclusion-tamper
+  desc: Adds a Defender exclusion and hides it from admins
+  crit: hostile
+  conf: 0.98
+  for: [batch, powershell, vbs, javascript, csharp, pe, dll]
+  attack: T1562.001,T1564
+  mbc: E1562
+  all:
+    - id: micro-behaviors/os/security/defender::defender-exclusion-cmdlet
+  any:
+    - id: defender-hide-exclusions-from-admins
+    - id: defender-hide-exclusions-from-users
+    - id: defender-hide-exclusions-ui
