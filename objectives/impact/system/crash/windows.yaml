@@ -32,23 +32,57 @@ traits:
     if:
       type: text
       regex: 0x[Cc]000007[Bb]|3221226363
-  - id: asyncrat-processcritical-type
-    desc: AsyncRAT ProcessCritical helper type
+  - id: processcritical-helper-type
+    desc: ProcessCritical helper type name
     crit: component
     conf: 0.97
     for: [pe]
     if:
       type: text
       substr: ProcessCritical
-  - id: asyncrat-bdos-setting-field
-    desc: AsyncRAT BDOS crash setting field
+  - id: bdos-crash-setting-field
+    desc: BDOS crash setting field
     crit: component
     conf: 0.96
     for: [pe]
     if:
       type: text
       exact: BDOS
+  - id: c-true-break-on-termination-source
+    desc: C true flag precedes termination class
+    crit: component
+    conf: 0.94
+    for: [c, cpp, csharp]
+    if:
+      type: text
+      regex: '(?s)\b\w+\s+\w+\s*=\s*(TRUE|1)\s*;.{0,768}\bProcessBreakOnTermination\b'
+      case_insensitive: true
+  - id: rust-true-break-on-termination-source
+    desc: Rust true flag precedes termination class
+    crit: component
+    conf: 0.94
+    for: [rust]
+    if:
+      type: text
+      regex: '(?s)\blet\s+(mut\s+)?\w+[^=]{0,16}=\s*true.{0,768}ProcessBreakOnTermination'
+  - id: go-true-break-on-termination-source
+    desc: Go true flag precedes termination class
+    crit: component
+    conf: 0.94
+    for: [go]
+    if:
+      type: text
+      regex: '(?s)\b(var\s+\w+\s+bool\s*=|\w+\s*:=)\s*true.{0,768}ProcessBreakOnTermination'
 composite_rules:
+  - id: critical-process-termination-policy-source
+    desc: Configures process as critical to Windows stability
+    crit: suspicious
+    conf: 0.98
+    for: [c, cpp, csharp, rust, go]
+    all:
+      - id: micro-behaviors/process/control/info::nt-set-information-process-source
+      - id: micro-behaviors/process/control/critical::process-break-on-termination-source
+      - id: micro-behaviors/os/module/load::get-proc-address-source-call
   - id: bsod-raise-error
     desc: NtRaiseHardError reference with ntdll context
     crit: suspicious
@@ -83,8 +117,11 @@ composite_rules:
       - id: micro-behaviors/os/privilege/token::python-rtl-adjust-privilege-call
     needs: 1
   - id: critical-process-bsod-risk
-    desc: AsyncRAT critical-process termination crash capability
-    crit: hostile
+    desc: Critical-process termination can crash Windows
+    # This proves the dormant capability, but not that the configuration
+    # enables it. Malware families such as AsyncRAT compile this helper into
+    # builds whose encrypted BDOS option is false.
+    crit: suspicious
     conf: 0.96
     mbc: B0033
     for:
@@ -92,11 +129,29 @@ composite_rules:
     all:
       - id: micro-behaviors/os/syscall/invoke::ntdll-import
       - id: micro-behaviors/process/control/critical::rtl-set-process-is-critical-reference
-      - id: asyncrat-processcritical-type
-      - id: asyncrat-bdos-setting-field
+      - id: processcritical-helper-type
+      - id: bdos-crash-setting-field
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/linking/api-set::api-set-core-cluster
+  - id: current-process-critical-termination-crash
+    desc: Enables current-process critical termination to crash Windows if killed
+    crit: hostile
+    conf: 0.98
+    mbc: B0033
+    for: [c, cpp, csharp, rust, go]
+    all:
+      - id: micro-behaviors/process/control/critical::current-process-break-on-termination-control
+      - id: process-break-on-termination-enabled-source
+  - id: process-break-on-termination-enabled-source
+    desc: Enables termination-critical state with true flag
+    crit: component
+    conf: 0.94
+    for: [c, cpp, csharp, rust, go]
+    any:
+      - id: c-true-break-on-termination-source
+      - id: rust-true-break-on-termination-source
+      - id: go-true-break-on-termination-source
   - id: python-bsod-traits
     desc: Python BSOD trigger via ctypes
     crit: hostile
