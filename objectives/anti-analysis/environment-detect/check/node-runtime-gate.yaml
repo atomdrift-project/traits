@@ -11,6 +11,19 @@ defaults:
   attack: T1497
   mbc: B0007
 
+traits:
+  # Walks `module.parent` up to the process entry point and checks whether any
+  # ancestor sits in a git checkout. A dependency runs from node_modules; the
+  # only ancestor with a .git directory is the developer or the package's own
+  # maintainer running it from source -- the one audience the payload must not
+  # fire for. (purescript installer sabotage: rate-map, load-from-cwd-or-npm.)
+  - id: node-parent-chain-git-checkout-probe
+    desc: Require chain probed for git checkout
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      regex: 'parent\s*=\s*parent\.parent[\s\S]{0,300}existsSync\s*\([^)]{0,80}["'']\.git["'']'
 composite_rules:
   - id: node-ci-test-runtime-gate
     desc: Execution gated on absent CI and test runtime
@@ -22,3 +35,21 @@ composite_rules:
       - id: micro-behaviors/os/env/vars/cicd::node-env-test-comparison
     unless:
       - id: metadata/package/testing/presence/harness/
+
+# An installer that patches the consumer's installed modules and first
+# checks whether it is running inside a checked-out repository (the parent
+# process chain). The runtime-patch rules under supply-chain convict the
+# covert patching; this states the gate -- patching that hides from
+# development environments is patching that expects to be investigated,
+# and the probe is what makes it evasion rather than sloppiness.
+#
+# Worked example: the purescript npm installer's rate-map, which probes the
+# parent chain for a git checkout before rewriting installed module source.
+  - id: dev-environment-gated-module-patching
+    desc: Module patching gated on dev-environment probe
+    crit: hostile
+    conf: 0.96
+    attack: T1027,T1195.002
+    all:
+      - id: node-parent-chain-git-checkout-probe
+      - id: objectives/supply-chain/trojanized/library/runtime-patch::installed-module-source-patch

@@ -315,6 +315,35 @@ traits:
     # where the line break is a literal `\` + `n`, not real whitespace.
     regex: 'ExecStart=-?[^\s\n]{0,60}/\.[A-Za-z0-9_-]{1,40}([\s\\"'']|$)'
 
+# The sibling exec-start-hidden-executable keys on the *executable* being a
+# dotfile. A unit can also hide the payload in an argument: the executable is a
+# stock interpreter (`java`, `node`, `python`) and what it runs is a hidden
+# path or a file inside a hidden directory, e.g. `ExecStart=/usr/bin/java -jar
+# /usr/lib/jvm/.cache/jre-runtime.dat` (Virtualizor BGP-hijack update, Aug
+# 2026). Measured over 394 stock /usr/lib/systemd/system + /etc/systemd/system
+# units: zero ExecStart lines carry a hidden path argument.
+- id: exec-start-hidden-argument
+  desc: Systemd ExecStart hidden dotfile argument
+  # `php` widens the file defaults: droppers in that language embed the unit
+  # body as a string literal, leaving no parsed .service file to scan (the
+  # trojanized Virtualizor update injected exactly this shape into PHP core
+  # files).
+  for: [shell, python, php, systemd, go, rust, objc, c]
+  crit: suspicious
+  conf: 0.93
+  if:
+    type: text
+    # Require a stock interpreter as the first token. Arbitrary programs often
+    # receive legitimate hidden config paths (for example a kubeconfig), while
+    # an interpreter directly consuming such a path is the payload shape this
+    # objective describes.
+    regex: 'ExecStart=-?\S*/(java|python3?|node|php|perl|ruby|bash|sh)\b[^\n]{0,80}/\.'
+  unless:
+    # User-session and project dot-directories are ordinary (mirrors the
+    # exclusions on exec-start-hidden-executable).
+    - type: text
+      regex: 'ExecStart=[^\r\n]{0,200}\.(local|config|venv|github)/'
+
 - id: exec-start-userwritable-path
   desc: ExecStart from user writable path
   for: [systemd]
@@ -611,6 +640,25 @@ composite_rules:
   - id: systemctl-enable
   - id: wanted-by-target
 
+# Argument-form sibling of hidden-daemon-systemd-persistence: the executable
+# is a stock interpreter, the hidden dotfile is what it executes. Wiring that
+# into autostart (WantedBy/enable) or auto-respawn (Restart=always) is the
+# persistence shape of supply-chain JVM stagers such as the trojanized
+# Virtualizor update (java -jar /usr/lib/jvm/.cache/jre-runtime.dat).
+- id: hidden-interpreter-payload-autostart
+  desc: Systemd autostarts hidden interpreter payload
+  crit: hostile
+  conf: 0.96
+  attack: T1543.002,T1036.004
+  mbc: B0030
+  for: [shell, python, php, systemd, go, rust, objc, c]
+  all:
+  - id: exec-start-hidden-argument
+  any:
+  - id: micro-behaviors/os/service/restart-policy::restart-always
+  - id: wanted-by-target
+  - id: systemctl-enable
+
 - id: systemd-user-auto-restart-process-control
   desc: User service auto-restart and process termination
   # Desktop installers and session managers commonly restart user services
@@ -693,6 +741,12 @@ composite_rules:
   - id: micro-behaviors/os/service/dependency::after-exists
   - id: micro-behaviors/os/service/unit-field::condition-exists
   - id: micro-behaviors/os/service/unit-field::standard-output-exists
+# The rule claimed a unit was undocumented and uncommented while checking
+# neither: the only positive leg is `ExecStart=`. systemd's own
+# `systemd-ask-password@.service` and `systemd-journalctl@.service` carry a
+# `Documentation=man:...` line and an SPDX/licence comment header and were
+# still reported as undocumented. The two absences the description names are
+# now actually required.
 - id: systemd-no-docs-or-comments
   desc: Systemd unit is undocumented and lacks comments
   crit: suspicious
@@ -701,7 +755,11 @@ composite_rules:
   all:
   - id: micro-behaviors/os/service/config::exec-start
   unless:
-  - id: objectives/persistence/system/service/systemd/
+  - id: micro-behaviors/os/service/config::documentation-exists
+  - id: comment-exists
+  # Was this rule's own directory. A unit that declares dependencies or an
+  # environment is a real unit, which is the exemption this reached for.
+  - id: systemd-has-dependency-or-env
   - id: metadata/package/testing/
 
 - id: systemd-has-dependency-or-env
@@ -819,9 +877,10 @@ composite_rules:
 
 - id: native-systemd-persistent-stealer
   # A compiled binary that authors a systemd unit to relaunch itself across
-  # reboots AND harvests credentials or installs an eBPF hiding rootkit is an
-  # autonomous persistent implant, not a service installer. The stealer/rootkit
-  # leg supplies the malicious intent the bare persistence directives lack.
+  # reboots AND harvests credentials or carries hidden-object rootkit
+  # identifiers is an autonomous persistent implant, not a service installer.
+  # The stealer/rootkit leg supplies the malicious intent the bare
+  # persistence directives lack.
   desc: Installs systemd persistence for stealer
   crit: hostile
   conf: 0.95
@@ -831,7 +890,7 @@ composite_rules:
   any:
   - id: objectives/credential-access/theft/multi-app::multi-app-credential-stealer
   - id: objectives/credential-access/discord/token::native-discord-token-grabber
-  - id: objectives/evasion/kernel-hide/ebpf::bpf-hidden-object-names
+  - id: objectives/evasion/kernel-hide/keywords::hidden-object-identifiers
   - id: well-known/dual-use/tunnel/tor::expert-bundle-artifact
 - id: native-systemd-iot-bot-persistence
   desc: HTTP-flooding IoT bot authors a systemd persistence unit

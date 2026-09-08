@@ -28,6 +28,21 @@ defaults:
   mbc: B0032
 
 composite_rules:
+  # A source diff can expose the same ncc-bundle stager even when the bundle
+  # itself is unavailable. Require the decoder, remote curl, and file write
+  # together so ordinary base64 fixtures or documentation do not qualify.
+  - id: diff-cicd-decoded-remote-secret-stager
+    desc: Diff adds decoded remote CI secret stager
+    crit: hostile
+    conf: 0.99
+    for: [text]
+    attack: T1195.002,T1059.004,T1041
+    near_bytes: 1200
+    all:
+      - id: micro-behaviors/data/decode/command::base64-decode-to-file
+      - id: micro-behaviors/data/decode/base64::base64-d-cmd
+      - id: micro-behaviors/communications/http/curl::curl-command-remote-url
+
   - id: bundled-artifact-appended-payload
     desc: Bundler output with appended obfuscated line
     crit: suspicious
@@ -44,7 +59,7 @@ composite_rules:
     # The tell that the trailing line is not the emitter's own work.
     any:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
-      - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
+      - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
       - id: micro-behaviors/data/decode/base64::buffer-from-base64
     needs: 1
     unless:
@@ -74,3 +89,64 @@ composite_rules:
       - id: micro-behaviors/communications/http/request/client::post-method-text
       - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
       - id: micro-behaviors/data/serialize/json::identity-platform-json-payload
+
+  # The other half of the appended-payload shape: rather than an obfuscated
+  # blob, the tail of the built bundle carries a plain loader that pulls a
+  # script from a host of the attacker's choosing and attaches it to the page.
+  # art-template 4.13.3/4.13.5/4.13.6 shipped exactly this, six lines after
+  # the UMD footer of the real library. The remote host changes per campaign,
+  # so the rule keys on the shape and the position, never on the domain.
+  - id: bundle-tail-remote-script-injector
+    desc: Built bundle ends with a remote script injector
+    crit: hostile
+    conf: 0.95
+    attack: T1195.002,T1059.007
+    all:
+      # Generated artifact, and the loader sits past its footer: the remote
+      # URL literal is in the last 2KB, where a bundler emits only its own
+      # epilogue.
+      - id: metadata/library/structure::js-known-bundler-output
+      - id: micro-behaviors/communications/http/url/domain::js-http-url-literal-in-file-tail
+      - id: micro-behaviors/process/create/load/remote-code::js-dom-createelement-literal
+      - id: micro-behaviors/process/create/load/remote-code::js-head-append-script-node
+    unless:
+      - id: metadata/package/testing/
+
+  # Some injected loaders hide the endpoint by rebuilding the HTTP scheme with
+  # character codes rather than leaving an HTTP literal in the bundle tail.
+  # Require that specific URL-reconstruction shape and keep all legs close:
+  # ordinary framework bundles contain unrelated fromCharCode calls, encoded
+  # documentation URLs, and script bootstraps in the same file.
+  - id: bundle-charcode-remote-script-injector
+    desc: Bundle reconstructs and injects remote script
+    crit: hostile
+    conf: 0.95
+    attack: T1195.002,T1059.007,T1105
+    near_bytes: 4096
+    all:
+      - id: metadata/library/structure::js-known-bundler-output
+      - id: micro-behaviors/communications/url/encoded::javascript-charcode-http-scheme
+      - id: micro-behaviors/process/create/load/remote-code::js-head-append-script-node
+      - id: micro-behaviors/ui/window/manage/dom::browser-create-script-element
+    unless:
+      - id: metadata/package/testing/
+
+  # The woven-in twin of the shapes above: instead of appending to the tail,
+  # the trojanized build hides a function that silently shells out to run a
+  # base64-decoded stager staged through /tmp. tj-actions/changed-files
+  # (March 2025) wove `updateFeatures` into its ncc bundle: `exec
+  # .getExecOutput('bash', ['-c', 'echo <b64> | base64 -d > /tmp/run.sh &&
+  # bash /tmp/run.sh'])` with `silent: true, ignoreReturnCode: true`, then
+  # printed the captured stdout -- the dumped CI secrets -- via core.info.
+  # silent:true is routine for captured output, and decoding to /tmp is
+  # routine for installers; a silenced CI exec whose command line IS a
+  # decode-to-tmp-and-run, all inside one function, is neither.
+  - id: bundled-action-silent-decoded-stager
+    desc: Bundled action silently runs decoded stager
+    crit: hostile
+    conf: 0.96
+    attack: T1195.002,T1059.004,T1041
+    near_bytes: 1024
+    all:
+      - id: micro-behaviors/process/create/shell/bridge::silent-getexecoutput-text
+      - id: objectives/anti-static/obfuscation/encoding/base64::base64-decode-redirect-exec

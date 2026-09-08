@@ -1,10 +1,10 @@
 # Hostile / suspicious composites for npm-published bundles that combine
 # obfuscator.io packing with structural and string-table content signals.
 #
-# Standalone obfuscator.io output is already hostile via
-# objectives/anti-static/obfuscation/obfuscator/js-obfuscator::obfuscated-eval-npm-trojan.
-# These composites add independent findings that capture distinct
-# tampering shapes and the in-table identifiers obfuscator.io leaves behind.
+# Standalone layered obfuscator output is suspicious via
+# objectives/anti-static/obfuscation/obfuscator/js-obfuscator::name-mangled-concealed-runtime.
+# These composites add independent behaviors that can justify hostile findings
+# and capture distinct tampering shapes and in-table identifiers.
 #
 # String-table reasoning: obfuscator.io collects all property names and
 # string literals referenced by the original source into a single array
@@ -111,7 +111,60 @@ traits:
     if:
       type: text
       regex: '\[\s*https\s*,\s*os\s*,\s*packageJson\s*,\s*spawnSync\s*,\s*vscode\s*\]'
+
+  # A complete private-key PEM block embedded in a heavily obfuscated runtime
+  # is not ordinary package configuration when the same file also reads
+  # browser or application storage and executes fetched text. Requiring the
+  # complete block avoids treating UI labels and BEGIN-only placeholders as
+  # key material while retaining the high-signal payload shape.
+  - id: obfuscated-private-key-text
+    desc: Obfuscated file contains private-key material
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?is)BEGIN( [A-Z]+)? PRIVATE KEY-----[\w+/=\s]{64,}END( [A-Z]+)? PRIVATE KEY'
+    unless:
+      - id: well-known/app/ai/agent-runtime/aui-agent-builder::generated-web-ui-bundle
+  - id: obfuscated-storage-access-text
+    desc: Obfuscated file reads local storage
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: localStorage
+  - id: obfuscated-fetch-text
+    desc: Obfuscated file contains fetch call
+    crit: component
+    conf: 0.85
+    if:
+      type: text
+      substr: fetch
+  - id: obfuscated-eval-text
+    desc: Obfuscated file contains eval sink
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: eval
 composite_rules:
+  - id: obfuscated-private-key-fetch-eval-stage
+    desc: Obfuscated runtime fetches and evaluates with a private key
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1027,T1059.007,T1552.004
+    mbc: B0024
+    all:
+      - id: obfuscated-private-key-text
+      - id: obfuscated-storage-access-text
+      - id: obfuscated-fetch-text
+      - id: obfuscated-eval-text
+    any:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling-with-string-table-rotation
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::any-name-mangling
+    needs: 1
+
   - id: obfuscated-vscode-host-network-stage-current
     desc: Obfuscated VS Code runtime bridges host and network APIs
     crit: hostile
@@ -196,7 +249,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/string/dynamic::arithmetic-decoder-wrapper-call
       - id: micro-behaviors/process/daemonize/detach::detached-obfuscated-true
       - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-true
-      - id: micro-behaviors/process/interpreter/eval::js-function-constructor
+      - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
     unless:
       - id: metadata/package/testing/
 
@@ -299,7 +352,7 @@ composite_rules:
     desc: Bundle contains a hidden-stage execution primitive
     crit: component
     any:
-      - id: micro-behaviors/process/interpreter/eval::js-function-constructor
+      - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
       - id: micro-behaviors/fs/write/file/mode::node-obfuscated-write-mode
       - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-expression
       - id: micro-behaviors/data/encode/payload::large-encoded-blob-literal
@@ -499,3 +552,24 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/string/array::hex-array-near-indexed-charcode-decoder
     unless:
       - id: metadata/package/testing/harness/runtime/
+
+# A marketplace extension whose runtime module is a reverse shell. The
+# reverse-shell rules above convict the shell; this states the supply
+# chain -- the payload is not something the victim ran, it is something
+# they installed from a marketplace that promised a tool.
+#
+# Worked example: the CSF-RED extension set whose extension.js connects
+# an exec'd shell to a remote operator socket on activation.
+  - id: marketplace-extension-reverse-shell-runtime
+    desc: Marketplace extension runtime is a reverse shell
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1059
+    scope: archive
+    # Flattened: node-socket-pipe-shell-stdin and net-connect are
+    # file-scoped matchers that do not fold to the archive container.
+    all:
+      - id: metadata/library/vscode::vscode-extension-marker
+      - id: micro-behaviors/process/create/shell/bridge::child-process-require
+      - id: micro-behaviors/process/fd/stdio::node-stream-pipe
+      - id: objectives/command-and-control/reverse-shell/dup::node-socket-pipe-shell-stdin

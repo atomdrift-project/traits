@@ -1,0 +1,53 @@
+# A module that reads the project's `.git/config` and posts it to an OOB
+# collector. The file-read-to-OOB transport is convicted by the exfiltration
+# rules; this states the source -- `.git/config` carries the remote URLs and
+# any configured credential helpers, so harvesting it is credential access
+# dressed as project inspection, and the OOB endpoint exists to receive it.
+#
+# Worked example: the blocks-nextjs placeholder package, whose loader reads
+# `.git/config` and POSTs the JSON-wrapped contents to an oastify host.
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1552.001,T1041
+  mbc: E1041
+
+composite_rules:
+  - id: git-config-read-oob-exfil
+    desc: Git configuration read posted to OOB collector
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: micro-behaviors/fs/read/file::git-config-file-read
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+
+# SSH private key names enumerated beside an outbound HTTP request. Reading
+# key filenames alone is inventory; pairing the enumeration with a POST or
+# urlopen is the classic stealer shape -- find the keys, then send them.
+#
+# Worked example: the agent-skill credential-harvester PoC whose tool
+# collects ~/.ssh/id_rsa, id_ed25519 and id_ecdsa into the same bundle it
+# posts to its collector.
+  - id: ssh-key-enum-posted-out
+    desc: SSH key enumeration sent to collector
+    crit: hostile
+    conf: 0.96
+    for: [python]
+    # A stealer bundles the enumerated keys into the very request it posts --
+    # "the same bundle it posts" per the worked example above -- so harvest
+    # and send sit close together. Without a proximity bound this also fires
+    # on any unrelated networked CLI that happens to check which SSH key type
+    # is present anywhere in a large file: Baseten's truss SSH ProxyCommand
+    # helper (truss/cli/proxy_command.py) checks for `id_ed25519`/`id_rsa` to
+    # find the *public* key to submit for certificate signing near the top of
+    # the file, then makes its unrelated signed HTTPS API calls ~190 lines
+    # later -- no key content ever reaches the request body. Bounding the
+    # window keeps the compact harvest-then-post shape this rule targets
+    # while dropping coincidental co-occurrence in a large file.
+    near_lines: 40
+    all:
+      - id: micro-behaviors/fs/path/sensitive/credentials::ssh-private-key-filename-enum
+    any:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-request-data-body
+      - id: micro-behaviors/communications/http/request/client::python-http-post-any

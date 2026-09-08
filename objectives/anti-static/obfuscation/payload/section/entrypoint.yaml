@@ -5,13 +5,47 @@ defaults:
   conf: 0.85
 
 composite_rules:
-  - id: ep-in-last-section-rwx
-    desc: Entry point in last RWX section
+  # An unsigned PE whose entry point is both writable and executable, resolves
+  # APIs dynamically, and actively detects debuggers is a compact loader shape.
+  # Keep the decision independent of a product or malware-family name.
+  - id: unsigned-rwx-api-resolver-loader
+    desc: Unsigned RWX entrypoint hides an API resolver loader
+    crit: hostile
+    conf: 0.96
+    attack: T1027,T1620,T1622
+    all:
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
+      - id: metadata/hardening/memory::wx-section
+      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: well-known/tool/reverse-engineering/
+
+  - id: ep-in-rwx-section
+    desc: Entry point in a writable RWX section
     crit: suspicious
     conf: 0.85
     all:
-      - id: metadata/binary/anomaly/format::pe-entry-in-last-section
+      - id: metadata/binary/section/metrics::pe-entry-in-writable-section
       - id: metadata/hardening/memory::wx-section
     unless:
       - id: objectives/anti-static/pack/detect::enigma-protector
       - id: well-known/dual-use/access-control/hasp-license-manager/
+      # HWiNFO's protected client library enters through its unpack stub in a
+      # RWX section by design; the verified vendor identity marks it benign.
+      - id: well-known/app/utility/hwinfo::hwinfo-component-context
+      # Every WDK kernel driver looks like this. The linker puts DriverEntry in
+      # INIT, a discardable section it marks read/write/execute so the kernel
+      # can free it after initialisation. The entry point sitting in a writable
+      # executable section is the documented layout there, not a stub that
+      # unpacks itself, so it separates nothing. `pe-entry-in-writable-section`
+      # already downgrades on this same driver marker.
+      - id: metadata/binary/resource::kernel-driver-init
+      # Parser regression corpora intentionally include minimal PE fixtures
+      # whose only section is RWX; the embedded demo explains its real purpose.
+      - id: micro-behaviors/ui/terminal::pe-manual-import-demo-message
+      # SharpOD 0.6d is a VMProtect-packed x64dbg plugin whose product resource
+      # identifies the legitimate anti-anti-debugging tool.
+      - id: well-known/tool/reverse-engineering/scyllahide::sharpod-plugin-string

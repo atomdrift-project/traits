@@ -17,9 +17,6 @@ traits:
     min: 200
   unless:
   - type: metrics
-    field: binary.avg_string_entropy
-    max: 3.2
-  - type: metrics
     field: binary.string_count
     min: 1000
   - id: metadata/binary/resource::kernel-driver-idata
@@ -31,11 +28,11 @@ traits:
     - id: micro-behaviors/dylib/library/abi-graphics::graphics-runtime-library-name
     - id: metadata/binary/metrics/threshold::many-exports-200
 - id: massive-code-blob
-  desc: Extremely large average function size
+  desc: Function with a 50+ block control-flow graph
   crit: component
   conf: 0.85
   if:
-    id: metadata/lang/compiler/aot::huge-runtime-average-function
+    id: metadata/binary/metrics/structural::large-functions
   unless:
   - type: metrics
     field: functions.count
@@ -222,44 +219,6 @@ composite_rules:
   - id: micro-behaviors/dylib/library/family/
   - id: well-known/tool/sysadmin/unix-benign/
   - id: well-known/tool/reverse-engineering/rizin::rz-test-usage
-- id: unexpected-socket-ops
-  desc: Socket operations in non-network library
-  crit: suspicious
-  conf: 0.6
-  all:
-  - id: micro-behaviors/communications/socket/create::create
-  - id: micro-behaviors/communications/socket/connect::connect
-  unless:
-  - id: objectives/supply-chain/trojanized/backdoor/
-  - id: metadata/lang/compiled/
-  - id: metadata/signed/platform::apple
-  - id: well-known/app/ai/tool-server/mcu-ai-debug/
-  - id: well-known/tool/sysadmin/alpine-packages::alpine-filebrowser-binary
-- id: unexpected-crypto-safe-context
-  desc: Known crypto library or runtime context
-  crit: exception
-  conf: 0.99
-  any:
-  - id: micro-behaviors/crypto/library/implementation::crypto-library-context
-  - id: well-known/app/communication/telegram::telegram-desktop-official-client
-  - id: metadata/package/files/system-package/
-  - id: well-known/tool/sysadmin/alpine-packages::alpine-jitsu-bulker-binary
-  - id: well-known/lib/runtime/v8::nodejs-runtime
-  - id: well-known/lib/runtime/node-runtime::node-shared-library
-- id: unexpected-crypto
-  desc: Cryptographic operations in non-crypto library
-  crit: suspicious
-  conf: 0.75
-  needs: 2
-  any:
-  - id: micro-behaviors/crypto/symmetric/aes/constant::aes-sbox-bytes
-  - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
-  - id: micro-behaviors/crypto/asymmetric/rsa::ed25519-constant-bytes
-  unless:
-  - id: unexpected-crypto-safe-context
-  downgrade:
-    any:
-    - id: metadata/binary/metrics/structural::very-high-section-count
 - id: unexpected-capabilities
   # Was "Unexpected capability combination in library" at needs:2, but nothing
   # here establishes "library" (`for: so` matches every ELF, executables
@@ -274,9 +233,9 @@ composite_rules:
   for: [so, dylib, dll]
   needs: 3
   any:
-  - id: unexpected-socket-ops
+  - id: micro-behaviors/communications/socket/connect::library-socket-client
   - id: micro-behaviors/process/create/direct::fork-shell-operations
-  - id: unexpected-crypto
+  - id: micro-behaviors/crypto/library/implementation::multiple-crypto-primitive-markers
   unless:
   - id: well-known/tool/development/darling/
   - id: well-known/app/development/github-desktop::official-signed-app-bundle
@@ -288,8 +247,8 @@ composite_rules:
   all:
   - id: objectives/supply-chain/trojanized/backdoor::high-entropy-strings-dup
   any:
-  - id: unexpected-crypto
-  - id: unexpected-socket-ops
+  - id: micro-behaviors/crypto/library/implementation::multiple-crypto-primitive-markers
+  - id: micro-behaviors/communications/socket/connect::library-socket-client
 - id: packed-rust-http-ws-c2
   desc: Packed Rust HTTP/WebSocket C2 implant
   crit: hostile
@@ -345,14 +304,17 @@ composite_rules:
   - id: metadata/binary/instruction::byte-load-xor-sequence
   - id: ssh-hook-pattern
   - id: rsa-in-compression-lib
-- id: potential-code-injection
-  desc: Potential code injection indicators
+# Named for what is actually observed. The former `many-huge-functions` leg
+# paired one control-flow-graph size metric with another, so any large native
+# application - a 45 MB system-information utility, a game, a browser - reported
+# "potential code injection" on nothing but its own size. Interposition is the
+# only leg that carried the XZ-family meaning, so it is now required.
+- id: interposition-in-large-functions
+  desc: Linker interposition inside large opaque functions
   crit: suspicious
   conf: 0.8
   all:
   - id: massive-code-blob
-  any:
-  - id: metadata/binary/metrics/structural::many-huge-functions
   - id: glibc-hijack
 - id: auth-bypass-indicator
   desc: Authentication bypass backdoor indicator

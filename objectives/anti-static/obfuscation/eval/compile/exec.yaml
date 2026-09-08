@@ -33,9 +33,9 @@ traits:
     type: text
     substr: "exec(self._code, None, self._locals)"
 
-- id: compile-exec-chain
-  desc: compile() followed by exec() in script
-  crit: suspicious
+- id: compile-result-code-assignment
+  desc: Compile result assigned to _code variable
+  crit: component
   conf: 0.92
   if:
     type: text
@@ -47,7 +47,6 @@ traits:
     substr: "TempliteCompiler"
   - type: text
     substr: "cpython.run_startup"
-  - id: objectives/anti-static/obfuscation/eval/compile/
 
 - id: compile-synthetic-filename-unless-cond-3--rx-1
   desc: Regex component marker
@@ -83,23 +82,35 @@ traits:
   count_max: 1025885
 composite_rules:
 - id: compile-exec-obfuscation
-  desc: Dynamic compile-then-exec obfuscation
+  desc: Staged _code compile result executed nearby
   crit: suspicious
   conf: 0.94
+  # near_lines keeps this a *chain*: compile() feeding an exec() a few lines
+  # later, the packer shape. Without it, a file merely using compile() for
+  # one purpose (e.g. a syntax-check probe) and exec() for an unrelated one
+  # hundreds of lines away satisfies both legs on bag-of-features co-presence
+  # alone -- matplotlib's sphinxext/plot_directive.py does exactly this:
+  # `compile(text, '<string>', 'exec')` only validates doctest syntax in
+  # contains_doctest() (discarding the result), while the unrelated
+  # `exec(code, ns)` in _run_code() executes doc example code at Sphinx
+  # build time, ~200 lines away.
+  near_lines: 20
   all:
   - id: micro-behaviors/process/interpreter/python::compile-builtin
   - id: micro-behaviors/process/interpreter/python::exec-builtin
-  any:
-  - id: micro-behaviors/process/interpreter/python::compile-synthetic-filename
-  - id: compile-exec-chain
+  - id: compile-result-code-assignment
   unless:
+  # Source obtained from `inspect.getsource` is the program's own text, so
+  # compiling it back is runtime patching rather than concealment -- unsloth's
+  # `rl_replacements.py` rewrites TRL trainer methods that way.
+  - id: micro-behaviors/process/interpreter/python::inspect-getsource-call
   - id: metadata/package/testing/presence/harness::python-test-file
   - id: metadata/package/testing/presence/harness/
   - id: well-known/tool/detection/
   - id: cpython-profiling-doc-extension
-  - id: objectives/anti-static/obfuscation/eval/compile/
-  - id: objectives/anti-static/obfuscation/eval/compile/
   - id: metadata/library/automation/
+  - id: metadata/library/python-stdlib::python-stdlib-install-path
+  - id: well-known/lib/runtime/cpython::cpython-bdb-module
 - id: lazy-computation-graph-compiler-marker
   desc: Lazy computation graph compiler marker
   crit: component

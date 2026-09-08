@@ -19,14 +19,6 @@ traits:
     offset_range: [0, null]
   unless:
   - id: well-known/dual-use/remote-admin/action1::action1-version-resource-context
-- id: embedded-pe-mz-nop-scan
-  desc: Scans for embedded MZ payload
-  crit: notable
-  conf: 0.9
-  if:
-    type: hex
-    pattern: 81 38 4D 5A 90 00
-    offset_range: [0, null]
 - id: stack-random-exe-drop-name
   desc: Stack-built random exe drop name
   crit: component
@@ -67,11 +59,12 @@ traits:
   desc: CTS newline-terminated infection trailer marker
   crit: component
   conf: 0.95
-  size_max: 1048576
+  size_max: 536870912
   if:
     type: hex
     pattern: 43 54 53 0A
-    section: UPX0
+    # CTS appends marker + original size + 16-byte RC4 key.
+    offset: -24
 - id: skip-windows-install-dir--windows
   desc: Skips Windows installation directories (WINDOWS)
   crit: component
@@ -240,10 +233,13 @@ composite_rules:
   - id: metadata/binary/layout::repeated-standard-pe-images
   - id: metadata/binary/layout::large-overlay-1mb
   - id: metadata/binary/layout::overlay-dominates-third
-  - id: micro-behaviors/fs/file/open::file-create-win
-  - id: micro-behaviors/fs/file/read::read-file
-  - id: micro-behaviors/fs/file/write/direct::write-file
-  - id: micro-behaviors/fs/enumerate/directory::find-first-file-a
+  # Native infectors may use either Win32 handles or C stdio for host content.
+  # Require normalized seek/read-write behavior instead of one import ABI.
+  - id: micro-behaviors/fs/file/binary::file-content-io
+  # Use the complete FindFirst/FindNext walker rather than one spelling of
+  # FindFirstFile. Dynamically resolved and wide-character walkers perform the
+  # same target traversal and still need every independent rewrite/carrier leg.
+  - id: micro-behaviors/fs/enumerate/directory::find-file-walker
   any:
   - id: micro-behaviors/fs/file/handle::set-file-pointer
   - id: micro-behaviors/fs/file/copy::copyfile-a
@@ -293,7 +289,7 @@ composite_rules:
   attack: T1554
   all:
   - id: oep-restoration-patch-write
-  - id: embedded-pe-mz-nop-scan
+  - id: micro-behaviors/data/format/pe-parser::mz-nop-header-scan
   any:
   - id: stack-random-exe-drop-name
   - id: objectives/anti-static/obfuscation/payload/section::unusual-alignment-pe
@@ -319,7 +315,7 @@ composite_rules:
   crit: hostile
   conf: 0.96
   attack: T1204
-  size_max: 1048576
+  size_max: 536870912
   all:
   - id: cts-trailer-marker
   - id: micro-behaviors/fs/path/extension::exe-dup

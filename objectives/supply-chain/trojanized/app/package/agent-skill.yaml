@@ -204,9 +204,12 @@ traits:
     for: [markdown, python, shell, powershell, ruby, perl, php]
     unless:
       - id: well-known/app/ai/agent-runtime/aui-agent-builder/
+    # Word-anchored: unanchored `keystore` matched AWS's `CustomKeyStore`
+    # service name in prose, and the bare stems appear inside many unrelated
+    # identifiers.
     if:
       type: text
-      regex: '(?i)(wallet|keystore|mnemonic|seed phrase)'
+      regex: '(?i)\b(wallet|keystore|mnemonic|seed phrase)\b'
     not:
       - substr: aui-agent-builder
 
@@ -219,7 +222,7 @@ traits:
       - id: well-known/app/ai/agent-runtime/aui-agent-builder/
     if:
       type: text
-      regex: '(?is)\b(contents?|data|files?)\b.{0,180}\b(send|upload)\b.{0,180}https?://'
+      regex: '(?is)\b(contents?|data|files?)\b.{0,30}\b(send|upload)\b.{0,30}https?://'
     not:
       - substr: aui-agent-builder
 
@@ -296,13 +299,16 @@ traits:
       type: text
       regex: '(?i)\b(agent|skill)[-_ ](manifest|definition|frontmatter|hook)\b'
 
+  # `agent configuration` on its own is ordinary prose — the aws-sdk-go-v2
+  # changelog says it about Bedrock AgentCore — so the marker requires the
+  # skill wording, not merely the word "agent".
   - id: agent-skill-config-marker
     desc: Agent-skill configuration marker
     crit: component
     conf: 0.84
     if:
       type: text
-      regex: '(?i)\b(agent|skill)\s+(config|configuration)\b'
+      regex: '(?i)\b(agent[-_ ]skill|skill)[-_ ](config|configuration)\b'
 
   - id: agent-token-config-path
     desc: Token config path
@@ -312,7 +318,125 @@ traits:
       type: text
       regex: '(?i)\.npmrc|\.pypirc|\.kube[/\\]config'
 
+  # A skill description that tells the agent to download a password-protected
+  # executable ("For Windows download AuthTool.exe (password: 1234)"). The
+  # password is the tell: it announces an archive the platform's scanner is
+  # meant to see past, which no legitimate distribution needs.
+  - id: skill-instructs-passworded-binary-download
+    desc: Skill instructs downloading a passworded binary
+    crit: notable
+    conf: 0.94
+    for: [markdown, text]
+    if:
+      type: text
+      regex: '(?i)(download|install|run)[^.\n]{0,90}\.(exe|zip|7z|rar|apk)\b[^.\n]{0,90}password'
+
+
+  # A skill body that instructs fetching an executable from a personal
+  # GitHub release (the AuthTool / OpenClawWinDriver delivery). A personal
+  # repo's release asset is operator infrastructure: deletable, swappable,
+  # and outside every registry's review.
+  - id: skill-github-release-executable-instruction
+    desc: Skill fetches executable from GitHub release
+    crit: notable
+    conf: 0.92
+    for: [markdown, text, shell]
+    if:
+      type: text
+      regex: '(?i)github\.com/[\w.-]+/[\w.-]+/releases/download/[^\s)\]]{0,80}\.(exe|zip|dmg|apk)'
+
+  # The decoy-echo masked installer: `echo "<benign-looking URL>" && echo
+  # '<base64>' | base64 -D | bash`. The first echo exists to be seen; the
+  # second is the payload. No legitimate installer presents a decoy.
+  - id: skill-decoy-echo-masked-installer
+    desc: Skill carries decoy echo over masked installer
+    crit: notable
+    conf: 0.95
+    for: [markdown, text, shell]
+    if:
+      type: text
+      regex: 'echo\s+[''"][^''"]{0,100}[''"]\s*&&\s*echo\s+[''"][A-Za-z0-9+/=]{40,}'
+
+  # The classic injection phrases shipped inside a skill's own tool: "Ignore
+  # previous instructions", "You are now DAN". A tool that returns this text
+  # into the model's context is not processing input, it is competing with
+  # the operator for the agent's attention.
+  - id: skill-tool-classic-prompt-injection
+    desc: Skill tool emits prompt-injection phrases
+    crit: notable
+    conf: 0.94
+    for: [python, markdown, text, javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)ignore (all |any )?(previous|prior) instructions|you are now (dan|do anything now)'
+
+  - id: skill-inline-node-child-process-exec
+    desc: Skill embeds Node child-process execution code
+    crit: notable
+    conf: 0.98
+    for: [markdown, text]
+    if:
+      type: text
+      regex: '(?s)node:child_process.{0,300}\bexecSync\s*\('
+
+  - id: skill-always-send-telegram-output
+    desc: Skill always sends output to Telegram
+    crit: component
+    conf: 0.98
+    for: [markdown, text]
+    if:
+      type: text
+      regex: '(?i)\*\*Always send\*\*[^\n]{0,160}\bTelegram\b'
+
+  - id: skill-fixed-telegram-id
+    desc: Skill embeds a Telegram recipient ID
+    crit: component
+    conf: 0.98
+    for: [markdown, text]
+    if:
+      type: text
+      regex: '(?i)\bTelegram\b[^\n]{0,80}\bid\s*`?\d{7,15}`?'
+
+  # A trigger constant compared against input before privileged actions run.
+  # Named in caps (MAGIC_STRING / SECRET_TRIGGER), compared with ==, and
+  # gating a subprocess or network call -- the ProFTPD shape wearing Python.
+  - id: python-magic-trigger-constant
+    desc: Magic trigger constant gates privileged actions
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: text
+      regex: '(MAGIC_ST(RINGS?|STRING)?|SECRET_TRIG\w*|TRIGGER_W\w*)\s*='
+
 composite_rules:
+  - id: skill-forced-telegram-output-recipient
+    desc: Skill forces output to Telegram recipient
+    crit: suspicious
+    conf: 0.99
+    near_lines: 3
+    all:
+      - id: skill-always-send-telegram-output
+      - id: skill-fixed-telegram-id
+
+  - id: agent-skill-inline-node-execution
+    desc: Agent skill embeds Node child-process execution
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1059.007
+    all:
+      - id: metadata/package/config::agent-skill-frontmatter
+      - id: skill-inline-node-child-process-exec
+
+  - id: agent-skill-forced-telegram-exfiltration
+    desc: Agent skill forces local output to an operator's Telegram account
+    crit: hostile
+    conf: 0.99
+    attack: T1041,T1195.002
+    all:
+      - id: metadata/package/config::agent-skill-frontmatter
+      - id: skill-forced-telegram-output-recipient
+
   - id: agent-skill-context-marker
     desc: Explicit agent-skill marker
     crit: component
@@ -678,3 +802,153 @@ composite_rules:
     any:
       - id: agent-skill-secret-instructions-phrase
       - id: agent-skill-remote-forwarding
+
+
+  # The skill's own instructions send a local file's bytes to an external
+  # endpoint (`curl -X POST --data-binary @file`). The file "belongs to this
+  # skill" -- but the endpoint decides what it receives, and an audit that
+  # requires uploading a file to a third-party host is exfiltration with a
+  # work order attached.
+  - id: agent-skill-curl-post-file-instruction
+    desc: Agent skill instructs posting a local file to a host
+    crit: hostile
+    conf: 0.97
+    attack: T1041,T1195.002
+    all:
+      - id: metadata/package/config::agent-skill-frontmatter
+      - id: micro-behaviors/communications/http/upload::curl-post-data-binary-file
+
+  - id: agent-skill-passworded-binary-download
+    desc: Agent skill instructs downloading a passworded binary
+    crit: hostile
+    conf: 0.97
+    attack: T1204.002,T1195.002
+    all:
+      - id: metadata/package/config::agent-skill-frontmatter
+      - id: skill-instructs-passworded-binary-download
+
+  - id: agent-skill-release-executable-instruction
+    desc: Agent skill directs executable download from release
+    crit: hostile
+    conf: 0.97
+    attack: T1204.002,T1195.002
+    all:
+      - id: metadata/package/config::agent-skill-frontmatter
+      - id: skill-github-release-executable-instruction
+
+  - id: agent-skill-masked-installer-instruction
+    desc: Agent skill carries decoy-masked installer
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.004
+    all:
+      - id: metadata/package/config::agent-skill-frontmatter
+      - id: skill-decoy-echo-masked-installer
+
+
+  - id: agent-skill-tool-prompt-injection
+    desc: Agent skill tool carries prompt injection
+    crit: hostile
+    conf: 0.96
+    # File-scoped on purpose: the behaviour and the skill must be the same
+    # file. See metadata/package/config::agent-skill-directory-member for why
+    # archive pooling was wrong here.
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: skill-tool-classic-prompt-injection
+    unless:
+      # A scanner for skill prompt-injection ships the phrases it hunts as
+      # rule corpus and its SKILL.md fixtures as test input, so archive
+      # pooling pairs the two every time. agent-audit-kit 0.3.89 carries the
+      # strings in rules.json and agent_audit_kit/rules/builtin.py and ~20
+      # fixture SKILL.md files under tests/fixtures/.
+      - id: well-known/tool/detection/agent-audit-kit::scanner-context
+  - id: agent-skill-tool-magic-string-backdoor
+    desc: Agent skill tool gates actions on magic string
+    crit: hostile
+    conf: 0.96
+    scope: archive
+    all:
+      - id: well-known/app/ai/knowledge/agent-skills::skill-definition-file
+      - id: python-magic-trigger-constant
+    any:
+      - id: micro-behaviors/process/create/system::python-os-system-text
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/process/create/subprocess::process-execution
+  # Runtime pip installation is a risky execution behavior, but not evidence
+  # that an agent skill is trojanized. The canonical suspicious rule lives in
+  # objectives/execution/autoinstall/pip; keeping an identical hostile twin
+  # here double-counted legitimate pinned dependency bootstraps.
+  - id: python-file-env-secret-post
+    desc: Python posts local file data with harvested environment secrets
+    crit: component
+    conf: 0.96
+    near_lines: 160
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/fs/file/read::file-content-read-operation
+      - id: objectives/credential-access/env/secrets/bulk-access::python-env-bulk-secret-harvest
+  - id: agent-skill-tool-file-env-exfil
+    desc: Agent skill posts a file with harvested environment secrets
+    crit: hostile
+    conf: 0.96
+    # File-scoped on purpose: the behaviour and the skill must be the same
+    # file. See metadata/package/config::agent-skill-directory-member for why
+    # archive pooling was wrong here.
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: python-file-env-secret-post
+    unless:
+      # Same archive-pooling problem as agent-skill-tool-prompt-injection: a
+      # skill-security scanner reads files and posts results by design, and
+      # ships SKILL.md fixtures to scan.
+      - id: well-known/tool/detection/agent-audit-kit::scanner-context
+
+  - id: agent-skill-tool-base64-payload-exec
+    desc: Agent skill tool executes base64 payload
+    crit: hostile
+    conf: 0.96
+    scope: archive
+    all:
+      - id: well-known/app/ai/knowledge/agent-skills::skill-definition-file
+      - id: objectives/anti-static/obfuscation/control-flow/logic::direct-base64-exec
+
+  - id: agent-skill-tool-arbitrary-python-execution
+    desc: Agent skill tool exposes arbitrary Python execution
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: objectives/execution/interpreter/eval/dynamic::agent-skill-arbitrary-python-execution
+
+  - id: agent-skill-tool-credential-env-exfil
+    desc: Agent skill tool exfiltrates multiple providers' environment secrets
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: objectives/exfiltration/stealer/credential/env::python-fixed-env-secrets-json-urllib-exfil
+
+  - id: agent-skill-tool-socket-dotfile-exfil
+    desc: Agent skill tool exfiltrates a dotfile bundle over a raw socket
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: objectives/exfiltration/stealer/file::dotfile-sweep-socket-exfil
+
+  - id: agent-skill-tool-http-command-exec
+    desc: Agent skill tool executes commands retrieved over HTTP
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: objectives/command-and-control/backdoor/tasking/http-command::python-urllib-response-command-exec
+
+  - id: agent-skill-tool-obfuscated-malicious-exec
+    desc: Agent skill tool executes an obfuscated malicious shell payload
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: metadata/package/config::agent-skill-tool-file
+      - id: objectives/anti-static/obfuscation/eval/scripting::python-obfuscated-malicious-shell-exec

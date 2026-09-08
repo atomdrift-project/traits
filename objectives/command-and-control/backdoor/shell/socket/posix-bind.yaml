@@ -12,11 +12,32 @@ composite_rules:
   - id: posix-bind-shell-source
     desc: C source bind shell (bind+dup2+shell)
     for: [c, cpp]
+    # A bind shell is one function: the socket is set up, the descriptors are
+    # moved, and the shell is launched within a few dozen lines. Without a
+    # proximity bound the legs pool across a whole translation unit, which
+    # convicted the pristine ircII 2.2.9 `ircaux.c` -- its DCC listener binds
+    # and listens at line 525, and an unrelated `dup2` feeding a decompression
+    # pipe sits at line 1140, six hundred lines away and attached to no socket
+    # at all.
+    near_lines: 60
     all:
       - id: micro-behaviors/communications/socket/bind/function::bind
-      - id: micro-behaviors/communications/socket/listen::listen
+      # `listen-sym` (the call), not the `listen` composite: that composite
+      # also requires `socket/create::posix-socket-import`, an import-table
+      # lookup that only a compiled binary can satisfy -- C source declares
+      # `#include <sys/socket.h>` and has no import named `socket`. Depending
+      # on it made this rule, declared `for: [c, cpp]`, unable to fire on any
+      # source file; the vsftpd 2.3.4 backdoor matched every other leg and
+      # still scored clean.
+      - id: micro-behaviors/communications/socket/listen::listen-sym
       - id: micro-behaviors/process/fd/dup::dup2
     any:
       - id: micro-behaviors/process/create/shell/spawn::system-fn
       - id: micro-behaviors/process/interpreter/shell::bin-sh
       - id: objectives/command-and-control/reverse-shell/dup::c-source-shell-path
+    unless:
+      # Socket test helpers deliberately exercise bind/listen/dup2 patterns:
+      # checkpointctl's test/piggie/piggie.c binds 127.0.0.1:5000 and dup2s
+      # log-file fds for namespace tests, with system() only running a fixed
+      # `ip link` setup command -- no shell ever touches the socket.
+      - id: metadata/package/testing/

@@ -12,8 +12,11 @@
 #
 # The launch/console/temp-write legs are all neutral capabilities in
 # micro-behaviors/; the install-hook context is what makes the combination
-# hostile. `scope: outer` lets the hook declaration (package.json,
-# pyproject/setup.py) and the payload live in different archive members.
+# hostile. Keep the proof payload file-scoped to its hook: archive-wide
+# correlation lets an ordinary outer package borrow a custom install class
+# from one vendored dependency and calculator demo code from another file.
+# Cross-file lifecycle launchers need a separate reference-aware rule that
+# proves the hook actually invokes the payload file.
 defaults:
   platforms: [windows, linux, macos, unix]
   for: [python, javascript, typescript, shell, batch, powershell, ruby, php]
@@ -36,7 +39,7 @@ composite_rules:
     desc: Package install hook launches the calculator payload
     crit: hostile
     conf: 0.96
-    scope: outer
+    scope: file
     mbc: E1059
     all:
       - id: package-install-hook-present
@@ -53,7 +56,7 @@ composite_rules:
     desc: Package install hook opens a user-visible console
     crit: suspicious
     conf: 0.9
-    scope: outer
+    scope: file
     mbc: C0033
     all:
       - id: package-install-hook-present
@@ -80,3 +83,28 @@ composite_rules:
       - id: micro-behaviors/process/create/shell/lang::python-subprocess-cmd-c
       - id: micro-behaviors/process/create/shell/command-flag::cmd-k-persistent-console
       - id: micro-behaviors/process/create/exec::cmd-exe-reference
+
+  # An install hook that writes a hidden dot-entry into the user's HOME. Real
+  # packaging never does this: pip/npm install into site-packages and the build
+  # tree, and applications create their `~/.config`/`~/.foo` state at first run,
+  # not during install. A setup.py `install` command (or a module-scope side
+  # effect in setup.py) that does `Path.home() / ".name"` then write_text/mkdir
+  # is planting a footprint on every machine that installs the package -- the
+  # marker/persistence half of a dependency-confusion probe, and stage one of a
+  # campaign that swaps the payload later. Suspicious on the mechanism, not the
+  # (here harmless) content, matching how the calculator/console PoCs above are
+  # scored. The hook and write must be in the same source file; merely shipping
+  # a setup.py beside application code that writes user state proves no hook.
+  - id: install-hook-writes-home-dotfile
+    desc: Install hook writes a hidden file in HOME
+    crit: suspicious
+    conf: 0.9
+    scope: file
+    mbc: F0012
+    all:
+      - id: package-install-hook-present
+      - id: micro-behaviors/fs/path/location::home-hidden-dotpath
+    any:
+      - id: micro-behaviors/fs/write/file/direct::python-pathlib-write-text
+      - id: micro-behaviors/fs/file/open::write-append-create-mode
+      - id: micro-behaviors/fs/directory/mkdir::mkdir-python

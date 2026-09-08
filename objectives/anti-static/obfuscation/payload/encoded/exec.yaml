@@ -313,6 +313,23 @@ traits:
             (#eq? @conversion_method "toString"))
         ]
 
+  - id: ruby-eval-base64-direct-flow
+    desc: Ruby eval directly consumes Base64 decode
+    crit: suspicious
+    conf: 0.97
+    attack: T1059
+    mbc: B0032
+    for: [ruby]
+    # Join the decoder and evaluator at the call expression. Mere proximity
+    # also occurs in serializers that decode data and use eval for unrelated
+    # metaprogramming.
+    if:
+      type: text
+      regex: '\beval\s*\(?\s*(::)?Base64\.decode64\s*\('
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/lib/cloud/browserstack::package-member-path
+
 composite_rules:
   # A real b64decode call near a shell-enabled subprocess. Merely decoding
   # ordinary subprocess output (screenshots, clipboard images, certificates)
@@ -428,6 +445,17 @@ composite_rules:
       - id: metadata/library/runtime::shiboken-embedded-support-loader
       - id: metadata/library/versioneer::embedded-source-wrapper
       - id: well-known/tool/development/yarn::yarn-cli-bundle-marker
+  - id: base64-ssh-keyfile-staging
+    desc: Base64 credential staged for SSH identity
+    crit: exception
+    conf: 0.97
+    for: [javascript, typescript]
+    scope: file
+    near_lines: 16
+    all:
+      - id: micro-behaviors/data/decode/base64::buffer-from-base64-to-utf8
+      - id: micro-behaviors/fs/chmod/modify::node-create-restricted-mode
+      - id: micro-behaviors/communications/ssh/client::strict-host-disable
   - id: electron-ml-parity-harness
     desc: Electron ML parity test harness
     crit: component
@@ -445,16 +473,16 @@ composite_rules:
     conf: 0.95
     mbc: B0032
     attack: T1140
-    # Python has AST/call-fact rules for direct decode-to-execution patterns;
-    # a file-wide proximity rule is too broad for ordinary Python helpers
-    # that decode screenshots or resolve type names with eval().
-    for: [javascript, typescript, ruby]
+    # Python and Ruby have direct-flow rules for decode-to-execution patterns;
+    # proximity is too broad for helpers that decode data and independently
+    # use eval for type resolution or metaprogramming.
+    for: [javascript, typescript]
     all:
       - id: micro-behaviors/data/decode/base64::base64-decoding
     any:
-      - id: micro-behaviors/process/interpreter/eval::js-eval-call-expression-arg
-      - id: micro-behaviors/process/interpreter/eval::function-ctor-call-expr-arg
-      - id: micro-behaviors/process/interpreter/eval::ruby-eval
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-call-expression-arg
+      - id: micro-behaviors/process/interpreter/eval/compile::function-ctor-call-expr-arg
+      - id: micro-behaviors/process/interpreter/eval/direct::ruby-eval
     # A decode in one stage and an unrelated eval elsewhere in a large source
     # file is common in data/ML tooling.  Require the decode and evaluator to
     # be genuinely adjacent so this describes a decode-then-evaluate flow.
@@ -471,23 +499,50 @@ composite_rules:
       - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
       - id: well-known/tool/detection/agent-glovebox::staticscan-eval-payload-fixture-context
   - id: base64-exec-proximity
-    desc: Base64 decode + exec in same file
-    crit: hostile
+    desc: Nearby Base64 decode and exec call
+    # Proximity alone does not prove that decoded bytes reach the process
+    # execution sink. It remains suspicious obfuscation evidence, but cannot
+    # support a hostile data-flow claim: build clients may decode a credential,
+    # write it to a restricted temporary file, then invoke ssh with that file.
+    crit: suspicious
     conf: 0.95
     mbc: B0032
     attack: T1140
     for: [scripts, -python, source]
+    # The dropper shape is a decode whose output is handed to an exec, so the
+    # two have to sit together. Without a proximity bound this fired on any
+    # program that both decodes Base64 somewhere and spawns a process somewhere
+    # else -- a screen recorder decoding frame data and spawning ffmpeg
+    # hundreds of lines apart, for instance. `near_lines` matches the bound the
+    # base64-subprocess-proximity sibling already uses.
+    near_lines: 12
     all:
       - id: micro-behaviors/data/decode/base64::base64-decoding
     any:
       - id: exec-function-call
       - id: micro-behaviors/process/create/exec/
     unless:
+      # Build/deployment clients commonly accept a Base64-wrapped SSH key,
+      # write it with mode 0600, and then invoke ssh using that identity. The
+      # decoded bytes are a credential file, not an obfuscated executable.
+      - id: base64-ssh-keyfile-staging
       - id: metadata/library/structure/
+      # The base64-subprocess-proximity sibling below already carries this
+      # exclusion; this rule targets the same dropper shape and was missing
+      # it. esbuild's own wasm-tests.js decodes a base64 zip fixture into a
+      # test directory with fs.writeFileSync, then execFileSync's the
+      # already-built esbuild binary against that directory to compare
+      # native vs. WASM output -- the exec target is a fixed, known binary,
+      # never the decoded bytes.
+      - id: metadata/package/testing/
       - id: metadata/library/web-frameworks/
       - id: well-known/lib/ui/ace-editor
-      - id: objectives/anti-static/obfuscation/payload/encoded/
-      - id: objectives/anti-static/obfuscation/payload/encoded/
+      - id: well-known/lib/ai/inspect-evals::eval-corpus-context
+      # A spec file that decodes the base64 command its own code just built,
+      # to assert on it, is testing the encoder rather than dropping a payload:
+      # oh-my-pi's `open.test.ts` decodes the `powershell -EncodedCommand`
+      # argument captured from a mocked spawn.
+      - id: metadata/package/testing/presence/scripted/
   - id: base64-subprocess-proximity
     desc: Base64 decode + subprocess execution
     crit: hostile
@@ -504,7 +559,10 @@ composite_rules:
       - id: micro-behaviors/process/create/subprocess::process-execution
       - id: micro-behaviors/process/create/exec::js-child-process
       - id: micro-behaviors/process/create/system::ruby-system
-    near_lines: 12
+    # Generated bundles often place tens of kilobytes of unrelated modules on
+    # a handful of physical lines. Byte proximity preserves the intended
+    # decode-and-launch shape in both minified and normally formatted source.
+    near_bytes: 1024
     unless:
       - id: metadata/package/testing/
       - id: metadata/package/scripts/develop::jupyter-code-cell-generator
@@ -670,7 +728,7 @@ composite_rules:
       any:
         - id: metadata/package/testing/harness/runtime/
   - id: python-packed-payload
-    desc: Python packed payload (exec + base64 + zlib + __import__)
+    desc: Python execs a Base64-decoded packed payload
     crit: hostile
     conf: 0.95
     attack: T1027
@@ -747,7 +805,7 @@ composite_rules:
       - id: micro-behaviors/data/decode/base64::base64-decoding
       - id: micro-behaviors/process/create/shell/bridge::child-process-require
     any:
-      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
       - id: objectives/execution/interpreter/eval/dynamic::eval-variable
       - id: objectives/anti-static/obfuscation/encoding/content::encoded-eval
     unless:
@@ -774,7 +832,7 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/shell/bridge::child-process-exec
     any:
-      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
       - id: objectives/execution/interpreter/eval/dynamic::eval-variable
       - id: objectives/anti-static/obfuscation/encoding/content::encoded-eval
     downgrade:
@@ -788,20 +846,16 @@ composite_rules:
       - id: metadata/library/structure/
       - id: well-known/app/development/setup-bun/
   - id: ruby-eval-base64-decode
-    desc: Ruby eval of Base64-decoded data
+    desc: Ruby evaluates a Base64-decoded payload
     crit: hostile
-    conf: 0.95
+    conf: 0.97
     attack: T1059
     mbc: B0032
-    for:
-      - ruby
-    near_bytes: 1024
+    for: [ruby]
     all:
+      - id: ruby-eval-base64-direct-flow
       - id: micro-behaviors/data/decode/base64::base64-decoding
-      - id: micro-behaviors/process/interpreter/eval::ruby-eval
-    unless:
-      - id: metadata/package/testing/
-      - id: well-known/lib/cloud/browserstack::package-member-path
+      - id: micro-behaviors/process/interpreter/eval/direct::ruby-eval
   - id: ruby-eval-zlib-base64-decode
     desc: Ruby eval zlib base64 payload
     crit: hostile
@@ -814,7 +868,7 @@ composite_rules:
     all:
       - id: micro-behaviors/data/decode/base64::base64-decoding
       - id: micro-behaviors/data/compress/library::ruby-zlib-inflate
-      - id: micro-behaviors/process/interpreter/eval::ruby-eval
+      - id: micro-behaviors/process/interpreter/eval/direct::ruby-eval
     unless:
       - id: metadata/package/testing/
       - id: well-known/lib/cloud/browserstack::package-member-path
@@ -864,21 +918,24 @@ composite_rules:
       - id: micro-behaviors/process/create/exec/
     unless:
       - id: metadata/package/testing/
+  # `eval "$(printf %s "$x" | base64 -d)"` is one expression. Without a bound
+  # the legs pooled across a whole script: agent-glovebox's container entrypoint
+  # base64-decodes a delivered grant value in one function and execs a command
+  # hundreds of lines away.
   - id: shell-eval-base64-decode
     desc: Shell eval with base64 decode
     crit: suspicious
     conf: 0.85
     attack: T1059.004
     mbc: B0032
+    near_bytes: 400
     for:
       - shell
     all:
       - id: micro-behaviors/data/decode/base64::base64-decoding
     any:
-      - id: micro-behaviors/process/interpreter/eval::shell-eval
+      - id: micro-behaviors/process/interpreter/eval/direct::shell-eval
       - id: micro-behaviors/process/create/shell/spawn::shell-exec
-    unless:
-      - id: objectives/anti-static/obfuscation/payload/encoded/
   - id: perl-eval-base64-decode
     desc: Perl eval + base64 decode (payload execution)
     crit: hostile
@@ -889,7 +946,7 @@ composite_rules:
       - perl
     all:
       - id: micro-behaviors/data/decode/base64::base64-decoding
-      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
     unless:
       - id: metadata/package/testing/
   - id: exec-join-chr-obfuscation
@@ -921,6 +978,7 @@ composite_rules:
       - id: metadata/binary/installer/family/
       - id: well-known/lib/runtime/rocm/
       - id: well-known/lib/development/llvm/
+      - id: well-known/lib/ai/tensorflow::tensorflow-native-library
       - id: well-known/tool/reverse-engineering/
 
   - id: x86-rwx-obfuscated-memory-dispatch

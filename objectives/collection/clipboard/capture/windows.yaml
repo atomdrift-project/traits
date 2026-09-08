@@ -6,7 +6,7 @@ defaults:
 
 composite_rules:
 - id: clipboard-screen-hook-benign-runtime-context
-  desc: GUI runtime with built-in clipboard, screen, and hook support
+  desc: Recognized GUI runtime or clipboard library
   crit: exception
   conf: 0.95
   any:
@@ -18,20 +18,66 @@ composite_rules:
   - id: well-known/app/browser-extension/
   - id: well-known/app/system/
   - id: well-known/app/productivity/wetype/
+  - id: well-known/lib/platform/clipboard-rs::clipboard-rs-listener-constructor
+# `RegisterClipboardFormat` was the second `all:` leg and is not monitoring at
+# all -- it registers a custom format NAME, which is what any program that puts
+# its own data type on the clipboard does. Watching the clipboard means asking
+# to be told when it changes: `AddClipboardFormatListener`, or polling
+# `GetClipboardSequenceNumber`. Those now carry the monitoring half.
+#
+# The `any:` legs were directory references wide enough to be satisfied by the
+# clipboard access itself: `objectives/collection/clipboard/monitor/` includes
+# a `component` that matches the substring "WndProc" (in every Windows GUI
+# binary), and `objectives/credential-access/` includes `clipboard/crypto::
+# clipboard-rw`, which is a clipboard read plus a clipboard write. IObit
+# Unlocker and filename-lister's `flister.exe` are ordinary GUI tools that copy
+# a path to the clipboard; nothing in either watches it.
 - id: windows-clipboard-capture-with-user-monitoring
-  desc: Clipboard capture with user monitoring
+  desc: Clipboard read with change-notification watch
   crit: suspicious
   conf: 0.9
   all:
   - id: micro-behaviors/os/clipboard/access::get-clipboard-data
-  - id: micro-behaviors/os/clipboard/access::register-clipboard-format
   any:
-  - id: objectives/collection/keylog/capture/
-  - id: objectives/collection/clipboard/monitor/
+  - id: micro-behaviors/os/clipboard/access::clipboard-sequence-number
+  - id: micro-behaviors/os/clipboard/access::dotnet-add-clipboard-listener
+  # Named directly rather than as a directory reference: the directory also
+  # holds `windows-surveillance-benign-context`, a `crit: exception` composite
+  # meant to be consumed only from unless:/downgrade: elsewhere in its own
+  # file. `surv-keylog-present` is the actual keylog-capability atom (and
+  # already carries its own well-known/lib/media/ffmpeg exclusion, so a large
+  # media binary's unrelated GDI/input surface doesn't pair with clipboard
+  # access here either).
+  - id: objectives/collection/keylog/capture::surv-keylog-present
   - id: objectives/exfiltration/stealer/credential/clipboard/
-  - id: objectives/credential-access/
   unless:
-  - id: objectives/collection/clipboard/capture/
+  # A compiled AutoIt script carries the whole AutoIt runtime, and that runtime
+  # is a Windows automation library: clipboard read/write, keyboard and mouse
+  # state polling, window enumeration, host and locale queries, and temp-file
+  # extraction of its own embedded script. Every compiled .au3 therefore shows
+  # the full API surface regardless of what the script does -- Closure
+  # Library's CI helper is 30 lines that close a dialog box.
+  - id: metadata/lang/compiled::autoit-compiled-script
+  # Recognized GUI runtimes and clipboard libraries carry these APIs as part
+  # of their public feature surface, whether or not a consumer starts a watch.
+  - id: clipboard-screen-hook-benign-runtime-context
+  # Chromium's two recognized binary basenames share one direct composite;
+  # Electron's integration symbol is baseline and cannot join the exception.
+  - id: well-known/lib/runtime/electron::chromium-engine-binary-basename
+  - id: well-known/lib/runtime/electron::electron-node-symbol
+  # The ConPTY console host Windows Terminal ships -- vendored by node-pty as
+  # `OpenConsole.exe` -- is Microsoft's own console implementation.
+  - id: metadata/binary/vendor::microsoft-corp-marker-cert
+  # Anthropic's Claude Code native helper reads the clipboard for paste
+  # support; product, publisher and member-path markers identify the binary.
+  - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-windows-package-context
+  # FFmpeg statically links a broad USER32 surface (its gdigrab/vfwcap
+  # screen- and video-capture input devices touch the same GDI/clipboard
+  # bitmap-transfer family), so its Windows builds import the full clipboard
+  # API including GetClipboardSequenceNumber. A batch CLI transcoder with no
+  # message loop or background persistence isn't watching the clipboard for
+  # typed secrets.
+  - id: well-known/lib/media/ffmpeg::ffmpeg-lib-marker
 - id: windows-clipboard-screen-hook-surveillance
   desc: Windows clipboard access with keyboard and screen capture
   crit: suspicious
@@ -178,8 +224,6 @@ composite_rules:
   - id: micro-behaviors/communications/ip/endpoint::external-ipv4-port-rsrc-pair
   - id: micro-behaviors/communications/ip/endpoint::external-ipv4-port-pe
   needs: 1
-  unless:
-  - id: objectives/collection/clipboard/capture/
 
 # Unsigned RATs that read the clipboard, capture bitmaps, and POST uploads
 # through a runtime-resolved WinHTTP table (screenshot.bmp / X-Filename).

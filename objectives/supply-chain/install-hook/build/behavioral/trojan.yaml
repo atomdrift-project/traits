@@ -39,6 +39,14 @@ traits:
       - id: metadata/build/pip::python-packaging-tool-tests
       - id: metadata/build/pip::setuptools-package-index
       - id: metadata/build/pip::setuptools-easy-install-source
+    downgrade:
+      any:
+      # Source-built sdists (scikit-hep/fastjet shape) drive the autotools/make
+      # toolchain from the install class to place already-built artifacts —
+      # build orchestration, not arbitrary payload execution. Curl/wget/shell
+      # targets keep the suspicious rating.
+      - id: micro-behaviors/process/create/shell/build::make-toolchain-invocation
+      - id: micro-behaviors/process/create/shell/build::make-toolchain-shell-format
   - id: setup-call-subprocess
     desc: Packaging setup near subprocess usage
     crit: notable
@@ -146,6 +154,18 @@ traits:
     if:
       type: text
       regex: '(?m)^\s*class\s+\w+\s*\(.{0,80}\b(install|build(_ext)?)\b.{0,80}\)\s*:'
+  # Keep the decode and hidden-process evidence in one source file. Package
+  # archives commonly contain an inert setup.py alongside unrelated runtime
+  # modules that decode Base64 or suppress subprocess output; pooling those
+  # independent files must not manufacture an install-hook conviction.
+  - id: setup-hidden-decoded-process-chain
+    desc: Build script decodes before suppressed process
+    crit: suspicious
+    conf: 0.96
+    for: [python]
+    if:
+      type: text
+      regex: '(?s)b64decode.{0,900}DEVNULL.{0,900}(cmdclass|setup\s*\()'
   # Matcher is wget→/tmp/.sh only — not setup.py-specific. Keep as notable
   # staging signal; the setup.py install-hook composite below adds path context.
   - id: wget-shell-script-to-tmp
@@ -566,6 +586,14 @@ traits:
     if:
       type: text
       regex: '(?m)fn\s+verify_\w*(checksum|sha256)'
+  - id: rust-build-sha256-hex-digest-compare
+    desc: build.rs SHA-256 hex digest check
+    crit: component
+    conf: 0.92
+    for: [rust]
+    if:
+      type: text
+      regex: 'hex::encode\s*\(\s*Sha256::digest|Sha256::digest[\s\S]{0,120}hex::encode'
   - id: rust-build-tar-extract-command
     desc: build.rs extracts tar archive
     crit: component
@@ -595,6 +623,43 @@ traits:
       regex: 'os\.system\([^\n]{0,120}rm\s+-[^\n]{0,120}\.egg-info'
 
 composite_rules:
+  - id: python-import-time-download-write-execute
+    desc: Python import downloads and runs an executable
+    crit: hostile
+    conf: 0.98
+    scope: file
+    all:
+      - id: metadata/build/pip::packaging-setuptools-imported-setup-call
+      - id: micro-behaviors/communications/http/request/client::requests-get-url-literal
+      - id: micro-behaviors/fs/file/write/direct::py-open-executable-path
+      - id: micro-behaviors/process/interpreter/python::module-scope-exec-builtin
+
+  - id: python-packaging-curl-download-execute
+    desc: Python packaging executes curl against a remote URL
+    crit: hostile
+    conf: 0.98
+    for: [python]
+    scope: file
+    all:
+      - id: metadata/build/pip::packaging-setuptools-imported-setup-call
+      - id: micro-behaviors/communications/http/curl::curl-command-remote-url
+      - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
+    any:
+      - id: micro-behaviors/process/create/system::python-os-system
+      - id: micro-behaviors/process/create/local-exec::local-execution
+      - id: micro-behaviors/process/create/subprocess::python-exec-capability
+
+  - id: python-packaging-curl-pipe-execute
+    desc: Packaging code pipes a curl payload to Python
+    crit: hostile
+    conf: 0.99
+    scope: file
+    all:
+      - id: metadata/build/pip::packaging-setuptools-imported-setup-call
+      - id: micro-behaviors/communications/http/curl::curl-command-remote-url
+      - id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec-python-shell
+      - id: micro-behaviors/process/create/system::python-os-system
+
   - id: rust-build-rs-command-output
     desc: build.rs captures command output
     crit: component
@@ -632,14 +697,16 @@ composite_rules:
       - id: objectives/supply-chain/recon-exfil/install-hook::rust-build-file-metadata-body
       - id: micro-behaviors/process/create/direct::rust-indirect-command-new
 
-  - id: setup-py-subprocess-popen
-    desc: setup.py build extension runs subprocess.Popen
-    crit: suspicious
-    conf: 0.9
-    for: [python]
-    all:
-      - id: metadata/build/pip::root-setup-py-path
-      - id: micro-behaviors/process/create/subprocess::build-extension-subprocess-popen
+  # Removed: setup-py-subprocess-popen ("root setup.py + build_ext/cmdclass near
+  # subprocess.Popen", crit suspicious). Spawning a helper from a build_ext
+  # override is how every C-extension sdist discovers its toolchain — M2Crypto
+  # runs `cpp -Wp,-v` to enumerate include dirs, and lxml/pycurl/psycopg2 do the
+  # same with pkg-config/xml2-config. The matcher captured no install-hook
+  # intent, so the composite asserted a trojanized build hook the evidence never
+  # supported. The neutral observation is already carried at notable by
+  # micro-behaviors/process/create/subprocess::build-extension-subprocess-popen;
+  # hostile build hooks are covered by the setup-* composites below, which
+  # require obfuscation, shell=True, or a computed command.
 
   # Was an atomic trait whose regex accepted `(build\.rs|fn main)` — so any Rust
   # file with a main() that spawns a shell within 300 chars qualified as a build
@@ -832,9 +899,192 @@ composite_rules:
     any:
       - id: objectives/supply-chain/install-hook/build/behavioral::openrewrite-python-package-marker
       - id: metadata/package/files/system-package::os-python-runtime-path
-      - id: metadata/package/documentation::python-openerdirector-install-doc
+      - id: metadata/package/documentation/source-documentation::python-openerdirector-install-doc
       - id: setup-codex-environment-script
   # === Python Build Trojan ===
+  # The same install-time network call, carrying who and where it landed.
+  #
+  # `setup-py-network-in-install` says a build class reaches the network, which
+  # a legitimate package occasionally does -- fetching a wheel for a platform
+  # it could not vendor, checking a licence server. What it does not do is
+  # describe the machine while doing it. `socket.gethostname()` plus the login
+  # name or the OS is a victim record, and an install hook runs on every
+  # consumer before anything has been imported, so the record is taken from
+  # people who only asked to install a dependency.
+  #
+  # Worked example: a `RunCommand(install)` that builds
+  # `?action=setup&host=...&user=...&os=...` and opens it against a
+  # webhook.site collector before calling `install.run(self)` so the install
+  # still succeeds.
+  #
+  # `install-hook/dropper/setup::setup-install-host-identity-payload` describes
+  # the same act as one regex -- `gethostname()` then `getuser()` then
+  # `requests.get(`, in that order and within 240 characters of each other.
+  # This is the structural form: it does not care about the order the fields
+  # are read in, and it takes the network leg from whichever client the hook
+  # actually uses, so a release that swaps `requests` for `urllib` or reads the
+  # user first still lands here.
+  # An install hook that both hides what it runs and throws away what it says.
+  #
+  # Suppressing a child's stdout and stderr during an install is the part that
+  # does not have an innocent reading. A build step that compiles an extension
+  # or fetches a wheel wants its errors seen -- that is how a failed install
+  # gets diagnosed. Routing both streams to DEVNULL means the author expects
+  # output the installing user should not read, or expects failures they should
+  # not notice.
+  #
+  # Paired with base64 in the same hook, which is what conceals *which* command
+  # runs: the string is not sensitive data, it is the command line, and the
+  # only thing encoding buys is that a reader skimming setup.py sees a blob.
+  #
+  # Worked example: a `requests` typosquat whose install class decodes
+  # `ioreg -d2 -c IOPlatformExpertDevice` and `IOPlatformUUID` from base64 to
+  # read the Mac's hardware UUID, then launches a bundled binary with
+  # `close_fds=True` and both streams to DEVNULL before deferring to
+  # `install.run(self)` so the install still appears to succeed.
+  - id: setup-py-install-hidden-decoded-exec
+    desc: Install hook runs a decoded command silently
+    crit: hostile
+    conf: 0.96
+    scope: leaf
+    near_bytes: 4096
+    attack: "T1195.002,T1027,T1564.003"
+    mbc: "E1027"
+    all:
+      - id: setup-py-or-cmdclass-marker
+      - id: setup-install-or-build-class
+      - id: setup-hidden-decoded-process-chain
+    # No `metadata/package/testing/` suppression, unlike the network rules in
+    # this file. A `setup.py` legitimately configures a test command -- the
+    # real `requests` ships a `PyTest(TestCommand)` class -- so the marker
+    # fires on any clone of a package that does, which is exactly what a
+    # typosquat is. The four legs here are specific enough to stand without it:
+    # a build class that decodes a string and runs it with both streams
+    # discarded is not a test harness.
+    unless:
+      - id: setup-py-network-known-package-profile
+
+  # An install hook that talks to a raw IP address.
+  #
+  # `setup-py-network-in-install` establishes that a build class reaches the
+  # network; the destination is what makes this one hostile. A published
+  # package that needs a network call uses a hostname -- an API it documents, a
+  # CDN, a registry. A literal `http://<ip>:<port>` is where you send data when
+  # you do not want a name in DNS or in the source, and no legitimate install
+  # step has a reason to hardcode one. Pairing the two says the install phase
+  # is reaching an unnamed host.
+  #
+  # Worked example: a `PostInstallCommand(install)` that globs `/home` for
+  # `prices.txt` and POSTs each file's contents to `http://140.238.202.225:8080`.
+  - id: setup-py-install-raw-ip-callback
+    desc: Install class contacts a raw IP address
+    crit: hostile
+    conf: 0.96
+    scope: leaf
+    attack: "T1195.002,T1041"
+    mbc: "E1041"
+    all:
+      - id: setup-py-network-in-install
+      - id: micro-behaviors/communications/ip/literal::http-ip-url
+
+  # An install hook that POSTs a body to the network, rather than just
+  # fetching.
+  #
+  # `setup-py-network-in-install` covers any network call from a build class;
+  # this narrows to the ones that *upload*. A `urlopen(url, data=...)` or a
+  # POST during install is sending something out, not pulling a dependency in
+  # -- and the only thing a package has to send at install time is information
+  # about the machine it is installing on. The data is often obfuscated (an
+  # encoded `os.environ`, a URL assembled from split strings to dodge a string
+  # match), but the direction is not: bytes are leaving.
+  #
+  # Worked example: an `InstallCommand(install)` that json-encodes
+  # `os.environ.copy()`, builds an `*.oast.fun` URL from `'oa'+'st'` fragments,
+  # and `urlopen`s it with the encoded environment as the POST body.
+  # An install hook that decodes a base64 blob and pipes it to a shell.
+  #
+  # `echo <b64> | base64 -d | bash` (or `| sh`) is the shell-side twin of
+  # `exec(b64decode(...))`: the command that actually runs never appears in the
+  # source, only its encoded form. Wrapped in a build class it runs at install,
+  # and `os.system`/`subprocess` hands it to `/bin/sh` -- so nothing about the
+  # published package reveals what executes on the consumer's machine.
+  #
+  # Worked example: a `CustomInstall(install)` whose `run()` calls
+  # `os.system('echo %s | base64 -d | bash' % encoded)`.
+  # An install hook that opens a raw socket to a hardcoded address and sends
+  # host data over it.
+  #
+  # `setup-py-install-uploads-data` covers the HTTP case; this is the same act
+  # one layer down. A build class that does `socket.connect(("<ip>", <port>))`
+  # and `send(systeminfo)` is exfiltrating over a bare TCP socket -- no URL, no
+  # library, just a literal address. Nothing an install legitimately does opens
+  # a socket to a hardcoded IP to push the machine's uptime and platform.
+  #
+  # Worked example: a `PostInstallCommand(install)` that connects to
+  # `("134.209.85.64", 9090)` and sends `f"{uptime} --- {systeminfo}"`.
+  - id: setup-py-install-raw-socket-exfil
+    desc: Install hook sends host data over a raw socket
+    crit: hostile
+    conf: 0.96
+    # The hook declaration, socket dial, and host-data read must occur in the
+    # same exact analyzed source unit. Use the direct cmdclass atom here: the
+    # broader python-install-hook composite propagates to its archive parent,
+    # which loses the member identity needed for this correlation.
+    scope: leaf
+    # Evaluate the behavior on Python source leaves. A hostile leaf finding
+    # propagates to its package; evaluating on archive types instead pools
+    # unrelated member findings after their original locations are lost.
+    for: [python]
+    attack: "T1195.002,T1041,T1571"
+    mbc: "E1041"
+    all:
+      - id: metadata/build/package/recipe::setup-cmdclass-install
+      - id: micro-behaviors/communications/socket/dial::python-connect-ip-port
+    any:
+      - id: micro-behaviors/os/sysinfo/platform/runtime::platform-system
+      - id: micro-behaviors/os/sysinfo/platform/kernel::python-uptime-check
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+
+  - id: setup-py-install-base64-shell-pipe
+    desc: Install hook pipes a decoded blob to a shell
+    crit: hostile
+    conf: 0.97
+    scope: archive
+    for: [python, package.json, tar, zip, whl, archives]
+    attack: "T1195.002,T1027,T1059.004"
+    mbc: "B0032,E1027"
+    all:
+      - id: metadata/build/package/recipe::python-install-hook
+      - id: micro-behaviors/data/decode/base64::base64-decode-piped-shell
+
+  - id: setup-py-install-uploads-data
+    desc: Install hook uploads a body to the network
+    crit: hostile
+    conf: 0.95
+    scope: archive
+    for: [python, package.json, tar, zip, whl, archives]
+    attack: "T1195.002,T1041"
+    mbc: "E1041"
+    all:
+      - id: setup-py-network-in-install
+    any:
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-data
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+
+  - id: setup-py-install-host-profile-beacon
+    desc: Install class beacons a host profile
+    crit: hostile
+    conf: 0.97
+    scope: leaf
+    attack: "T1195.002,T1082,T1033,T1041"
+    mbc: "E1041"
+    all:
+      - id: setup-py-network-in-install
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+    any:
+      - id: micro-behaviors/process/user/query::python-getpass-user
+      - id: micro-behaviors/os/sysinfo/platform/runtime::platform-system
+
   - id: setup-py-network-in-install
     desc: Network API used from setup install or build class
     crit: suspicious
@@ -1056,6 +1306,7 @@ composite_rules:
     any:
       - id: rust-build-sha256-checksum-compare
       - id: rust-build-sha256-verify-function
+      - id: rust-build-sha256-hex-digest-compare
   - id: rust-build-rs-external-artifact-download
     desc: build.rs downloads external build artifact
     crit: suspicious
@@ -1071,6 +1322,7 @@ composite_rules:
       - id: well-known/lib/data/duckdb::libduckdb-download-build-marker
       - id: rust-build-rs-pinned-artifact-verify
       - id: well-known/lib/runtime/wasmer/
+      - id: well-known/lib/ai/sherpa-onnx/
   - id: rust-build-rs-http-post
     desc: Cargo build script sends HTTP POST
     crit: notable
@@ -1241,6 +1493,9 @@ composite_rules:
       # Proc macros commonly invoke rustfmt to format generated code.  That is
       # build tooling, not an install-time payload.
       - id: micro-behaviors/process/create/direct::rustfmt-process-command
+      # Cargo metadata only reads the workspace graph for code generation;
+      # invoking it from a proc macro is build introspection, not a payload.
+      - id: micro-behaviors/process/create/direct::rust-cargo-metadata-command
       - id: well-known/lib/development/cargo-test-macro::source-tree-path
       - id: well-known/lib/development/tauri::tauri-macros-context
       # An integration test under tests/ that embeds a proc-macro fixture and

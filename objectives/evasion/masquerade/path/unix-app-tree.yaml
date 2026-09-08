@@ -1,0 +1,94 @@
+# Payload staging inside a host application's install/config tree.
+#
+# On hosts running recognizable server software, attackers stage payloads in
+# the application's own directories so the files blend with the expected
+# process and file tree (Wiz AI-infrastructure honeypot telemetry, 2026:
+# XMRig dropped at /usr/src/node-red/xmrig to blend with the Node.js process
+# tree; a Langflow miner staged at /app/data/.claude/unicorn because a
+# .claude/ config directory looks native on an AI server).
+#
+# Legitimate software installs into these trees through package managers and
+# image builds; a runtime download or binary staged there by a script is
+# borrowing the location as camouflage. ATT&CK: T1036.005 (Masquerading:
+# Match Legitimate Name or Location).
+defaults:
+  platforms: [unix]
+  for: [shell, python, javascript, typescript, text, json]
+  attack: T1036.005
+
+traits:
+  - id: stage-into-claude-config-dir
+    desc: Stages file in Claude config directory
+    crit: suspicious
+    conf: 0.92
+    # Claude Code writes settings and session state under .claude/, never
+    # executables. A download, copy/move, or chmod targeting .claude/<file>
+    # is camouflage: on an AI server the directory looks native, so an
+    # admin triaging processes is less likely to flag it.
+    if:
+      type: text
+      # Anchored to the USER's config directory. `.claude/` at a repository
+      # root is the documented project-config location -- agent-glovebox checks
+      # in `.claude/hooks/` and its own scripts install and chmod them -- while
+      # the camouflage this rule describes stages into the home directory that
+      # every Claude Code install has.
+      regex: '(?im)(^|[;&|(]\s*)(curl|wget|mv|cp|chmod|install)\s[^|\n]{0,50}(~|\$HOME)/\.claude/\S{1,8}'
+      # Installing an MCP/agent client's own documented settings file there is
+      # the supported setup step, not camouflage; only non-config destinations
+      # (a binary, a script, a payload) are staging.
+      not:
+        - regex: '(?i)\.claude/[\w.-]*\.(json|jsonc|ya?ml|toml|md|txt)\b'
+    unless:
+      # A detection rule that excludes ~/.claude/ paths quotes the same shape.
+      - id: metadata/file/catalog/identity::elastic-security-detection-rule
+
+  - id: fetch-into-app-tree-path
+    desc: Fetch writes into app install tree
+    crit: notable
+    conf: 0.9
+    # The download's own -o/-O argument names a path under the app tree.
+    # Tying the fetch and the destination to one command is what separates
+    # staging a payload inside an installed application from an install
+    # script that merely mkdirs an /opt directory near an unrelated fetch.
+    if:
+      type: text
+      # `/opt/bin` and `/opt/local/bin` are shared third-party bin directories,
+      # the /usr/local/bin of /opt: fetching a release binary into one and
+      # chmod-ing it is the documented manual-install recipe (nomad's Packer
+      # image build installs Envoy that way). The masquerade this rule is about
+      # is staging inside an application's OWN subtree, `/opt/<app>/...`.
+      regex: '\b(curl|wget)[^|\n]{0,80}\s-\w*[oO]\s/(opt|usr/(src|lib/node_modules)|app/data)/\S{2,50}'
+    not:
+      - regex: '/opt/(local/)?bin/|/opt/cache/bin/'
+
+  - id: fetch-redirect-app-tree-path
+    desc: Fetch redirected into app install tree
+    crit: notable
+    conf: 0.88
+    # Same behavior as a shell redirect: `curl <url> > /opt/<app>/x`.
+    if:
+      type: text
+      regex: '\b(curl|wget)[^|\n]{0,80}>\s*/(opt|usr/(src|lib/node_modules)|app/data)/\S{2,50}'
+
+composite_rules:
+  - id: download-staged-app-install-tree
+    desc: Downloads payload into application install tree
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: fetch-into-app-tree-path
+      - id: fetch-redirect-app-tree-path
+
+  - id: staged-app-tree-executable
+    desc: Stages executable in application install tree
+    crit: suspicious
+    conf: 0.93
+    # Download into an app tree plus an exec bit set on a path in that same
+    # tree: a runtime script planting a runnable file where the host
+    # application's own files live, so the payload blends with the process
+    # tree. The chmod must name the app tree as well — a nearby
+    # `chmod +x /usr/bin/<tool>` in an installer says nothing about staging.
+    all:
+      - id: download-staged-app-install-tree
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-exec-app-tree-path
+    near_bytes: 400

@@ -2,31 +2,27 @@ defaults:
   platforms: [windows]
   for: [pe]
 
-traits:
-  - id: zero-import-count
-    desc: Import count is exactly zero
-    crit: baseline
-    conf: 0.9
-    if:
-      type: metrics
-      field: pe.import_dll_count
-      max: 0.0
-
 composite_rules:
   - id: importless-office-component-cert-marker
     desc: Importless Office component with Microsoft certificate metadata
     crit: notable
     conf: 0.94
     all:
-      - id: zero-import-count
+      - id: metadata/binary/metrics/structural::no-imports
       - id: objectives/evasion/masquerade/brand/wrapper::office-2016-component-claim
       - id: metadata/binary/vendor::microsoft-corp-marker-cert
+  # `metadata/binary/framework::dotnet-metadata` is deliberately NOT a leg here:
+  # every managed assembly is importless by construction, so including it made
+  # this rule assert "recognized Microsoft PE" over any unsigned .NET binary at
+  # all -- Snake Keylogger stubs included. `importless-microsoft-masquerade`
+  # below already names `dotnet-metadata` in its own `unless:`, so the managed
+  # carve-out is kept where it is actually needed.
   - id: importless-microsoft-recognized-marker
     desc: Recognized Microsoft importless PE marker
     crit: notable
     conf: 0.9
     all:
-      - id: zero-import-count
+      - id: metadata/binary/metrics/structural::no-imports
     any:
       - id: metadata/signed/trust-level::signer-evidence-present
       - id: metadata/signed/platform::microsoft
@@ -36,16 +32,46 @@ composite_rules:
       - id: metadata/binary/resource::resource-only-dll
       - id: well-known/app/utility/installer::startallback-installer
       - id: metadata/binary/linking/api-set::api-set-forwarder-dll
-      - id: metadata/binary/framework::dotnet-metadata
       - id: well-known/lib/platform/wine::wine-runtime-component
       - id: importless-office-component-cert-marker
       - id: well-known/app/enterprise/microsoft-office-c2r::microsoft-office-c2r-common
+  # `importless-microsoft-recognized-marker` above enumerates the importless
+  # Microsoft PEs that are simply what they say they are -- signed images,
+  # resource-only DLLs and API-set forwarders -- but nothing referenced it, so
+  # the carve-out never applied. A .NET assembly has no import
+  # table by construction: TheBrain's Electron bundle ships 220 of them
+  # (`Microsoft.AspNetCore.*.dll`), each carrying Microsoft's own VERSIONINFO
+  # because Microsoft published them.
   - id: importless-microsoft-masquerade
     desc: Importless PE claiming to be Microsoft Corporation
     crit: suspicious
     conf: 0.95
     all:
       - id: metadata/binary/vendor::microsoft-corp-marker
-      - id: zero-import-count
+      - id: metadata/binary/metrics/structural::no-imports
     unless:
-      - id: objectives/evasion/masquerade/identity/vendor/
+      # An API-set forwarder stub has no imports because it only forwards, and it
+      # carries Microsoft's name because it reimplements a Microsoft contract;
+      # Wine's builtin DLLs (msstyles, type libraries, lz32) are the same case.
+      # Both are already listed in `importless-microsoft-recognized-marker`,
+      # which expands past the suppression budget.
+      - id: well-known/lib/platform/wine::wine-builtin-dll-marker
+      - id: metadata/binary/linking/api-set::api-set-forwarder-dll
+      # The basename form above only matches on-disk api-ms-win-*.dll names, so
+      # carved/embedded stubs (named `embedded:pe:apisetstub@...`, e.g. the 17
+      # ApiSet forwarders inside GitVersion's GitVersion.exe) need the content
+      # identity: Microsoft's own stub description.
+      - id: metadata/binary/vendor::apiset-stub
+      # Naming the reason directly rather than the whole aggregator above,
+      # which expands past the suppression budget: a managed assembly has no
+      # import table because the CLR resolves its references, so "importless"
+      # says nothing about it.
+      - id: metadata/binary/framework::dotnet-metadata
+      # MSTest 2010's own Microsoft.VisualStudio.QualityTools.LoadTestExcelCommon.tlb
+      # carries genuine Microsoft VERSIONINFO on a COM type library, which
+      # has no import table by construction.
+      - id: metadata/file/extension/typelib::tlb
+      # Resource-only PEs have neither executable code nor imports. Their
+      # Microsoft VERSIONINFO identifies packaged system data, not a binary
+      # impersonating Microsoft.
+      - id: metadata/binary/metrics/structural::pe-no-executable-sections

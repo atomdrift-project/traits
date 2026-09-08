@@ -53,6 +53,22 @@ traits:
     type: text
     regex: '(?i)(projectBashDenyRules|bashDenied)'
 
+  # A permission table serializes several tool-call wildcards together:
+  # `NotebookEdit(*)SlashCommand(*)Bash(rm -rf /*)`. The `Bash(rm ...)` entry
+  # is one row of that table, not a command the binary runs. Requiring a
+  # second `Name(*)` wildcard next to the Bash entry keeps this general
+  # across harness vendors instead of naming any one product's tools.
+  # Raw bytes, not extracted strings: Go lays each pattern down as its own
+  # string constant, so the run splitter never yields the pair together even
+  # though the table is contiguous in .rodata.
+- id: ai-cli-tool-pattern-table
+  desc: AI CLI tool-pattern permission table
+  platforms: [unix]
+  for: [elf, macho]
+  if:
+    type: raw
+    regex: '(?i)[A-Za-z][A-Za-z0-9]*\(\*\)[^()\n]{0,40}Bash\s*\(\s*rm\s+-(rf|fr)\s+/'
+
 - id: destructive-action-prohibition-phrase
   desc: Destructive action prohibition phrase
   crit: notable
@@ -61,6 +77,26 @@ traits:
   if:
     type: text
     regex: '(?i)\b(no|never)\s+(destruction|destructive)\b'
+
+# Agent guardrails quote the command they refuse to run. Two orders, because
+# the verdict word can lead ("NEVER run `rm -rf`") or follow ("`rm -rf /` is
+# still DENIED by the catastrophic-standalone rule") -- MiniMax Code's prompt
+# builder and its permission registry are one of each.
+- id: destructive-command-prohibited-prose
+  desc: Prose forbids a destructive rm command
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)(never|do not|don.t|refuse|forbidden)[^\n]{0,60}rm\s+-rf'
+
+- id: destructive-command-denied-prose
+  desc: Prose marks a destructive rm as denied
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)rm\s+-rf[^\n]{0,60}(denied|blocked|not allowed|rejected)'
 
 - id: execute-command-tool-name
   desc: execute_command tool name
@@ -160,7 +196,9 @@ composite_rules:
   for: [elf, macho]
   all:
   - id: ai-cli-bash-tool-root-rm-pattern
+  any:
   - id: ai-cli-bash-deny-rule-marker
+  - id: ai-cli-tool-pattern-table
 
 - id: python-command-safety-blocklists
   desc: Python command safety blocklists

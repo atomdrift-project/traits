@@ -1,0 +1,55 @@
+# A C reverse shell carried as *source text* rather than as a binary.
+#
+# Build-time supply-chain trojans ship their payload this way: the compromised
+# tarball's configure/test script writes a C file, compiles it with the
+# toolchain the victim is already using, and runs the result -- so the shipped
+# archive contains no executable to scan and no network code in any file the
+# maintainer diffs. The 2002 sendmail 8.12.6 trojan is the canonical example.
+# The source itself is language-agnostic evidence: these three legs together
+# (an AF_INET socket address, the socket duplicated onto standard I/O, and an
+# exec of a shell) describe a reverse shell and nothing else, whatever file
+# the text happens to live in.
+defaults:
+  platforms: [unix]
+  for: [shell, python, perl, ruby, php, javascript, c, cpp]
+  attack: T1059.004
+  mbc: B0022
+
+composite_rules:
+  - id: embedded-c-reverse-shell-source
+    desc: C reverse-shell source text
+    crit: hostile
+    conf: 0.96
+    scope: file
+    all:
+      - id: micro-behaviors/communications/socket/create::c-sockaddr-in-declaration
+      # Use the materialized atom directly.  The source-dup2-stdio sibling is
+      # a low-value `any:` composite and is not emitted as a finding, which
+      # prevented C reverse-shell code embedded in configure/heredoc carriers
+      # from reaching this hostile conclusion.
+      - id: micro-behaviors/process/fd/dup::source-dup2-stdio-fd
+      - id: micro-behaviors/process/create/shell/target::c-argv-array-shell-path
+    unless:
+      - id: metadata/package/testing/harness/unit/
+      - id: metadata/package/testing/presence/harness/
+
+  # A source archive has its own record, separate from the configure member
+  # that carries the heredoc.  Keep the same concrete reverse-shell legs at
+  # archive scope so a trojanized build script is reported on the artifact a
+  # reviewer actually received, not only on the nested source member.
+  - id: archive-configure-embedded-c-reverse-shell
+    desc: Archive embeds a configure-time C reverse shell
+    crit: hostile
+    conf: 0.99
+    for: [archives]
+    scope: archive
+    attack: T1195.002,T1059.004
+    mbc: B0024
+    all:
+      - id: metadata/package/files/name::configure-script
+      - id: objectives/execution/compile/runtime::heredoc-writes-native-source
+      - id: micro-behaviors/communications/socket/create::c-sockaddr-in-declaration
+      - id: micro-behaviors/process/fd/dup::source-dup2-stdio-fd
+      - id: micro-behaviors/process/create/shell/target::c-argv-array-shell-path
+    unless:
+      - id: metadata/package/testing/harness/

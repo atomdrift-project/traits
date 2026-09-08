@@ -17,7 +17,6 @@ traits:
     not:
       - regex: \\u(1680|180[eE]|200[0-9a-aA-A]|202[fF]|205[fF]|3000)
     unless:
-      - id: objectives/anti-static/obfuscation/string/encoding/
       # Unicode escapes in a generated production bundle are commonly
       # library tables or localized data, not concealed source. The bundle
       # structure remains visible to other traits, including decoder and
@@ -417,7 +416,6 @@ traits:
       type: string_literal
       regex: (\\u[0-9a-fA-F]{4}){3,}
     unless:
-      - id: objectives/anti-static/obfuscation/string/encoding/
       # Production bundles routinely embed Unicode-range regex tables from
       # React, HTML parsers, date/locale libraries, and CSS runtimes.  A large
       # minified bundle is independently identified as generated output; its
@@ -489,6 +487,36 @@ traits:
     if:
       type: text
       word: tsProtoGlobalThis
+  # `Buffer.from([100,108,45,116,97,114]).toString()` spells a name from
+  # decimal code points so the plain text ("dl-tar", a module or host name)
+  # never appears in the file. Binary test fixtures write bytes in hex and
+  # rarely round-trip them straight back to a string.
+  - id: js-byte-array-buffer-string
+    desc: String rebuilt from a decimal byte array
+    crit: suspicious
+    conf: 0.88
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: 'Buffer\.from\(\s*\[\s*\d{2,3}\s*,\s*\d{2,3}\s*,[\d,\s]{1,400}\]\s*\)\.toString\('
+    unless:
+      - id: metadata/package/testing/
+  - id: js-byte-array-encoded-require
+    desc: require/resolve of a byte-array-encoded name
+    crit: suspicious
+    conf: 0.94
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: 'require(\.resolve)?\s*\(\s*Buffer\.from\(\s*\[\s*\d{2,3}\s*,'
 composite_rules:
   - id: js-array-swap-pattern
     desc: Temporary-variable array swap pattern
@@ -559,10 +587,10 @@ composite_rules:
     all:
       - id: js-global-property-write-assignment
     any:
-      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
-      - id: micro-behaviors/process/interpreter/eval::js-function-constructor
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
+      - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
       - id: micro-behaviors/data/decode/base64::atob-decode
-      - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
+      - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
     unless:
       - id: metadata/library/structure/
       - id: well-known/lib/web/jquery::license-url
@@ -642,14 +670,21 @@ composite_rules:
       - id: js-lzstring-utf16-table-split
       - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
       - id: js-split-join-cleanup
+    unless:
+      # A minified bundle splits, joins, swaps array entries and indexes with
+      # charAt in unrelated helpers all day; the shape is native to bundler
+      # output. `js-string-deobfuscation-recognized-marker` above was written
+      # to say so and nothing referenced it, and referencing it expands past
+      # the suppression budget, so the webpack identity is named directly --
+      # Notion's `.webpack/main/SqliteServer.js` is terser-minified webpack.
+      - id: metadata/library/structure::js-webpack-bundle-minified
+      - id: metadata/library/structure::js-webpack-minified-module-call
     downgrade:
       any:
         - id: metadata/build/bundler::babel-transpiled
         - id: metadata/library/structure/
-    unless:
-      - id: objectives/anti-static/obfuscation/string/encoding/
   - id: js-reverse-string-obfuscation
-    desc: String reversal obfuscation pattern
+    desc: Reversed string feeding decode or dynamic execution
     crit: suspicious
     conf: 0.9
     mbc: B0032
@@ -657,12 +692,32 @@ composite_rules:
     for:
       - javascript
     size_max: 300000
+    # Reversing a string is an ordinary operation on its own (anonymisation
+    # mocks, palindrome checks, pretty-printers). It becomes concealment only
+    # when the reversal FEEDS the decode or the dynamic execution, which is
+    # what the byte window enforces: `eval(atob(s.split("").reverse().join("")))`
+    # is one expression. Without it, any bundle holding lodash (whose lazy-chain
+    # code splits, reverses and joins) plus an unrelated base64 decode matched --
+    # Next.js's compiled `jsonwebtoken/index.js` is exactly that pair.
+    # The chain itself is a neutral string operation and already has an atom
+    # under micro-behaviors/data/string/reverse, whose regex requires the
+    # `.split(...).reverse().join(` expression rather than the three calls
+    # occurring separately. The local `js-split-reverse-join-chain` composite
+    # that used to sit here asked for the same thing with three proximity legs
+    # and could be satisfied without the chain ever appearing: in es-toolkit's
+    # browser.global.js, vendored in Koodo Reader, the nearest real
+    # `.split("")` is 7.5 KB from the nearest `.reverse()`, yet the 64-byte
+    # window was met and this rule then paired the result with the
+    # `new Function` in es-toolkit's lodash-compatible `template()` compiler.
+    near_bytes: 800
     all:
-      - id: js-array-join-symbol
-      - id: js-string-split
-      - id: js-array-reverse
-    unless:
-      - id: objectives/anti-static/obfuscation/string/encoding/
+      - id: micro-behaviors/data/string/reverse::split-reverse-join-string
+    any:
+      - id: micro-behaviors/process/interpreter/eval/
+      - id: micro-behaviors/data/decode/base64::base64-decoding
+      - id: dense-fromcharcode
+      - id: dense-unicode-escapes
+      - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
 
   - id: js-dict-string-reconstruction
     desc: JavaScript string reconstructed from dictionary lookup and array iteration
@@ -762,7 +817,6 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/string/reconstruct::js-extreme-short-token-density
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::permutation-obfuscation
     unless:
-      - id: objectives/anti-static/obfuscation/string/encoding/
       - id: micro-behaviors/communications/http/oauth/
       - id: well-known/tool/detection/security-scanner/
       - id: micro-behaviors/crypto/library/provider::node-crypto-verify

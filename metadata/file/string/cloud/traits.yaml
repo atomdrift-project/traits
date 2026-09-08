@@ -9,6 +9,14 @@ traits:
     if:
       type: text
       substr: 169.254.169.254/latest/api/token
+  - id: aws-user-data-endpoint
+    desc: AWS EC2 user-data endpoint
+    crit: notable
+    conf: 0.9
+    entropy_max: 7.8
+    if:
+      type: text
+      regex: '(https?://)?169\.254\.169\.254/latest/user-data/?\b'
   # Split form used by Node http.request({host, path}) — contiguous URL
   # substr above misses these. Catches future IMDSv2 probes that separate
   # host and path literals.
@@ -54,13 +62,18 @@ traits:
     if:
       type: text
       substr: X-aws-ec2-metadata-token-ttl-seconds
+  # `metadata/instance` is Azure IMDS (`.../metadata/instance?api-version=`),
+  # not an AWS path -- AWS serves `/latest/meta-data/...`. Matching it here
+  # mislabels Azure references as AWS and lets one Azure URL satisfy two legs
+  # of multi-provider composites. Azure coverage lives in
+  # `azure-metadata-endpoint` below.
   - id: aws-metadata-endpoint
     desc: AWS EC2 metadata endpoint
     crit: notable
     conf: 0.85
     if:
       type: text
-      regex: 169\.254\.169\.254/(latest/meta-data|metadata/instance)
+      regex: 169\.254\.169\.254/latest/meta-data
     unless:
       - id: metadata/package/testing/
       - id: well-known/app/development/vscode-extension/vscode-marketplace::m365-agents-toolkit-vsix
@@ -76,6 +89,24 @@ traits:
   # not EC2 IMDS at 169.254.169.254.  Keep the endpoint itself neutral: SDKs
   # and workload agents can legitimately consume it.  Install-hook composites
   # add the supply-chain and credential-theft context.
+  # The ECS task-credential endpoint named by its documented path rather than
+  # by a resolved credential ID. `aws-ecs-task-credentials-endpoint` below
+  # requires the opaque GUID that ECS appends via
+  # $AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, which is what a container reading
+  # its own credentials produces at run time; code that hardcodes the base URL
+  # is naming the vendor endpoint itself, with no ID to substitute, because it
+  # is probing rather than authenticating. b10connoisseur's IMDS sweep lists
+  # `("ECS Task", "http://169.254.170.2/v2/credentials", {})` beside the AWS,
+  # GCP, Azure and Alibaba metadata roots.
+  - id: aws-ecs-credentials-base-path
+    desc: AWS ECS task credentials base endpoint
+    crit: notable
+    conf: 0.95
+    for: [scripts, package.json, binaries, source, text]
+    if:
+      type: text
+      regex: '169\.254\.170\.2/v[0-9]+/credentials'
+
   - id: aws-ecs-task-credentials-endpoint
     desc: AWS ECS task credentials endpoint
     crit: notable

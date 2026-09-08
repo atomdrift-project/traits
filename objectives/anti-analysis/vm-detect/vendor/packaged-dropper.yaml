@@ -1,0 +1,64 @@
+# A published package ships a compiled binary that both stages a payload and
+# checks whether it is being watched.
+#
+# A pipe-to-shell string, a release URL, and a hypervisor vendor name can each
+# occur independently in a bundled runtime. The hostile join therefore requires
+# the release URL inside the pipeline plus a concrete VM-detection technique.
+#
+# The size of these binaries is not evidence and is deliberately not used. A
+# `bun build --compile` or `deno compile` artifact embeds an entire runtime, so
+# 100 MB is ordinary; measured here, a legitimate 119 MB `@cloudflare/workerd`
+# and a 59 MB `@pagefind` platform package each produce no suspicious findings
+# at all, and a benign `bun --compile` control produced 102 traits with none
+# above notable and neither of the legs below. What separates the malicious set
+# is behaviour carried in the embedded program, not the packaging.
+#
+# Worked example: the `@42ailab/42plugin` platform set (`-linux-x64`,
+# `-darwin-arm64`, `-win32-x64` and siblings), whose bundled `bin/42plugin`
+# carries both.
+defaults:
+  platforms: [unix, windows]
+  attack: T1497.001,T1105
+  mbc: B0009
+
+composite_rules:
+  - id: packaged-binary-sandbox-aware-stager
+    desc: Shipped binary stages payload and checks sandbox
+    crit: hostile
+    conf: 0.95
+    # Same file, not merely the same archive. Both halves are single strings,
+    # and pooling them across an archive made any large bundle a match: the
+    # Kibana image paired an `nvm` install line in one plugin's Dockerfile with
+    # a hypervisor name in another vendor's hardware table, and a CodeGPT VSIX
+    # paired a security warning that *quotes* `curl … | sh` with a VM string
+    # from a different bundle megabytes away. The finding claims one shipped
+    # program does both, which is also what the worked example describes -- a
+    # `bin/42plugin` carrying both -- so the evidence has to land in one file.
+    #
+    # `scope: file` alone is not enough for a flat source-tree archive (a Go
+    # module proxy zip, a GitHub source zip): loose sibling members with no
+    # decode step of their own can still pool under the shared archive root.
+    # containerd's module zip did exactly that -- a Vagrantfile's `VBOX`
+    # string (ordinary VirtualBox test-provisioner config) paired with an
+    # unrelated `curl | sh` line in script/release/deploy-cri, a release
+    # script nowhere near it. `for: [binaries]` restores the composite's own
+    # documented identity -- a *compiled* artifact (bin/42plugin, a
+    # bun/deno --compile output) carries its embedded strings as one
+    # self-contained leaf, so the true worked example still matches while
+    # loose text/script siblings sharing an archive root no longer can.
+    for: [binaries]
+    scope: file
+    all:
+      - id: objectives/command-and-control/dropper/execution/pipe::curl-download-pipe-shell
+      - id: objectives/command-and-control/dropper/download::github-release-url-pipe-shell
+      - id: vendor-vbox
+    any:
+      - id: cpuid-check
+      - id: file-check
+      - id: mac-prefix
+      - id: comprehensive-evasion
+    needs: 1
+    unless:
+      # Belt and braces for the pooling failure above: an OS image is not a
+      # published package under any scope.
+      - id: metadata/package/files/system-package::container-rootfs-system-content

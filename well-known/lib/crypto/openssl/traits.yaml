@@ -76,7 +76,36 @@ traits:
     if:
       type: text
       substr: 'CRYPTOGAMS by <https://github.com/dot-asm>'
+  # The e_capi engine plugin (capi.dll / capieay32.dll) is OpenSSL's own
+  # bridge to the Windows CertOpenStore/CertEnumCertificatesInStore API --
+  # its entire job is walking the CryptoAPI store, so it exports neither
+  # OpenSSL_version nor EVP_EncryptInit (those live in libcrypto, which the
+  # engine dynamically loads rather than statically links). bind_engine is
+  # the fixed entry point every OpenSSL ENGINE plugin exports.
+  - id: openssl-capi-engine-exports
+    desc: OpenSSL CAPI engine plugin exports
+    crit: baseline
+    conf: 0.92
+    for: [pe, dll]
+    if:
+      type: export
+      exact: bind_engine
+  - id: openssl-capi-engine-source-marker
+    desc: OpenSSL CAPI engine source string
+    crit: baseline
+    conf: 0.95
+    for: [binaries]
+    if:
+      type: text
+      substr: e_capi.c
 composite_rules:
+  - id: openssl-capi-engine
+    desc: OpenSSL CryptoAPI (CAPI) engine plugin
+    crit: notable
+    conf: 0.95
+    all:
+      - id: openssl-capi-engine-exports
+      - id: openssl-capi-engine-source-marker
   - id: openssl-library
     desc: OpenSSL cryptographic library binary
     crit: baseline
@@ -102,3 +131,24 @@ composite_rules:
       - id: cryptogams-attrib-dotasm
       - id: openssl-project-copyright
       - id: openssl-eric-young-copyright
+
+  # A stripped static build carries none of the banners or export symbols above
+  # -- Telegram Desktop's Windows binary has no `OpenSSL_version` export, no
+  # CRYPTOGAMS attribution and no copyright string -- but OpenSSL's own
+  # OSSL_HTTP diagnostics survive as exact literals. Two of them establish the
+  # embedded library, which is what the cert-store rules' `unless:` on this
+  # directory needs in order to recognise a TLS stack building its trust store
+  # from the Windows roots.
+  - id: openssl-embedded-static-build
+    desc: Embedded OpenSSL library in a stripped build
+    crit: notable
+    conf: 0.95
+    # The file default caps at 50 MB, which a bundled desktop application
+    # exceeds by design -- Telegram Desktop's Windows build is 218 MB, and the
+    # identity was skipped on exactly the files that need it most.
+    size_max: 1073741824
+    all:
+      - id: micro-behaviors/communications/http/client/library::openssl-http-client-diagnostics
+    any:
+      - id: micro-behaviors/crypto/library/keyword::openssl-evp-encrypt
+      - id: micro-behaviors/crypto/library/provider::openssl-evp-pkey-api-reference

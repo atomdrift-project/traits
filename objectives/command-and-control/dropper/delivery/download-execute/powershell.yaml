@@ -12,13 +12,6 @@ traits:
     if:
       type: text
       regex: (?is)DownloadFile\s*\(\s*['"]https?://[^'"]{1,220}\.exe['"]
-  - id: webclient-downloadfile-msi
-    desc: WebClient fetches MSI URL
-    crit: suspicious
-    conf: 0.94
-    if:
-      type: text
-      regex: (?is)DownloadFile\s*\(\s*['"]https?://[^'"]{1,220}\.msi['"]
   - id: webclient-downloads-js-to-exe
     desc: WebClient writes JS as EXE
     crit: suspicious
@@ -62,6 +55,7 @@ traits:
     for: [scripts, documents, binaries, archives]
     unless:
       - id: well-known/tool/offensive/reconprobe/
+      - id: well-known/tool/offensive/impacket::source-tree-member
     if:
       type: text
       regex: '(?i)powershell.{0,560}-W\s+Hidden.{0,320}-Exec\s+Bypass.{0,320}-Enc\b'
@@ -89,7 +83,16 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1059.001,T1105,T1564.003
-    near_bytes: 4096
+    # 4096 bytes still stitched unrelated occurrences together in installer
+    # scripts that are themselves a few hundred lines dense with unrelated
+    # setup steps: clawmetry's install.ps1 does a 127.0.0.1-only dashboard
+    # health-check (Invoke-WebRequest) ~65 lines from an unrelated
+    # Start-Process -WindowStyle Hidden that launches its OWN already
+    # pip-installed local daemon module -- no data from the web request
+    # feeds the launched process. Tighten to a true one-chain distance and
+    # exclude a localhost-only probe, which is a self health-check, not
+    # network stage retrieval.
+    near_bytes: 512
     all:
       - id: micro-behaviors/process/create/shell/remote-powershell::powershell-hidden-window
       - id: micro-behaviors/communications/http/lib/invoke-webrequest::invoke-webrequest
@@ -99,6 +102,7 @@ composite_rules:
       - id: well-known/app/ai/media/comfy-test::generated-vm-template
       - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-ssh-installer-exception
       - id: micro-behaviors/crypto/hash/file::hash-pinned-download-context
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::iwr-localhost-uri
 
   - id: powershell-streamed-archive-msi-dropper
     desc: Hidden PowerShell streams archive and launches MSI
@@ -162,11 +166,11 @@ composite_rules:
     crit: hostile
     conf: 0.98
     all:
-      - id: webclient-downloadfile-msi
+      - id: micro-behaviors/communications/http/download/webclient::webclient-downloadfile-msi-url
       - id: msiexec-programdata-msi
     any:
       - id: dated-product-msi-name
-      - id: objectives/execution/lolbin/os::msiexec-execution
+      - id: micro-behaviors/process/create/installer::msiexec-package-verb
   - id: powershell-temp-msi-install
     desc: PowerShell stages and installs TEMP MSI
     crit: hostile

@@ -61,8 +61,90 @@ traits:
       # A nested helper that happens to POST is not an import-time side effect.
       # Keep the call at module scope and require the external URL plus payload
       # on the same statement so ordinary HTTP helper libraries do not match.
-      regex: '(?m)^(requests|httpx)\.post\s*\(\s*["'']https?://[^\n]{0,220}\bdata\s*='
+      #
+      # `data=` and `json=` are the two ways `requests` takes a body, and a
+      # beacon sending a dict of host fields reaches for `json=` at least as
+      # often. Accepting only `data=` left the commoner spelling unmatched.
+      regex: '(?m)^(requests|httpx)\.post\s*\(\s*["'']https?://[^\n]{0,220}\b(data|json)\s*='
+
+  # curl invoked through a subprocess argument list -- `Popen(["curl", "-sk",
+  # url])`. The shell-string curl atoms elsewhere anchor on `curl <flags> URL`
+  # with whitespace, which the list form (each token a separate quoted element)
+  # never presents. A beacon that shells out to curl instead of importing an
+  # HTTP client uses exactly this shape.
+  - id: beacon-curl-arglist
+    desc: curl invoked via subprocess arg list
+    crit: notable
+    conf: 0.85
+    if:
+      # A list literal whose first element is "curl"/"wget" is a subprocess
+      # argv -- `["curl", "-sk", url]`. Matched on the single opening element
+      # rather than the `Popen([...` that precedes it, because the call and the
+      # list often sit on separate lines and archive-member text matching does
+      # not reliably span the break. The install/import context and host-read
+      # legs supply the precision.
+      type: text
+      regex: '\[\s*["''](curl|wget)["'']\s*,'
 composite_rules:
+  # An import-time beacon that does not depend on the file being named
+  # `__init__.py`.
+  #
+  # Every composite above anchors on `init-py-file`, which is right for the
+  # cases they describe -- a package's `__init__` is what `import <pkg>` runs,
+  # so that filename is the delivery mechanism. But the same beacon placed in
+  # any module runs the moment something imports it, and a release that ships
+  # it under another name (or misspells `__init__` so the module is dead
+  # weight and the file is only there to be read) matches none of them.
+  #
+  # What carries the meaning here is the pair, not the filename: a module-scope
+  # POST to an external URL, in a file that also reads the machine's identity.
+  # Neither is unusual alone -- telemetry posts, and plenty of code asks for the
+  # hostname -- but a package that sends who and where it landed to a fixed
+  # endpoint at import time was not asked to.
+  #
+  # Worked example: a `requests` typosquat whose module is 326 bytes and does
+  # nothing but POST `{package_name, version, user, cwd, hostname}` to a
+  # hardcoded collector.
+  - id: import-time-host-profile-beacon
+    desc: Import-time POST carries host identity
+    crit: hostile
+    conf: 0.96
+    mbc: E1041
+    attack: "T1195.002,T1082,T1033,T1041"
+    all:
+      - id: import-time-requests-post-data
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+      - id: micro-behaviors/os/sysinfo/hostname::python-os-uname-nodename
+      - id: micro-behaviors/process/user/query::python-getpass-user
+
+  # The same beacon written so the POST carries no literal URL.
+  #
+  # The rule above needs the endpoint inline, which is what keeps a bare
+  # `requests.post` from matching ordinary client code. A module that assigns
+  # `url = "..."` and `data = {...}` first and ends with
+  # `requests.post(url, data=data)` defeats that, so the precision has to come
+  # from somewhere else -- here, from the endpoint being an out-of-band
+  # collaborator host, which exists only to prove a request reached it. Paired
+  # with a host-identity read in the same file, there is nothing else it can be.
+  #
+  # Worked example: a module whose whole body sets `PACKAGE_NAME`, `HOSTNAME`
+  # from `os.uname().nodename` and `CURRENT_PATH`, then posts them to an
+  # `*.oastify.com` host.
+  - id: import-time-oob-host-profile-beacon
+    desc: Import-time POST of host identity to OOB
+    crit: hostile
+    conf: 0.96
+    mbc: E1041
+    attack: "T1195.002,T1082,T1041"
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+      - id: micro-behaviors/os/sysinfo/hostname::python-os-uname-nodename
+      - id: micro-behaviors/process/user/query::python-getpass-user
+
   - id: init-base64-http-profile-exfil
     desc: Import-time base64 host profile exfiltration
     crit: hostile
@@ -214,3 +296,79 @@ composite_rules:
       - id: objectives/credential-access/wallet/desktop::doteth-keystore
       - id: micro-behaviors/fs/path/sensitive/ssh::keys
       - id: micro-behaviors/fs/path/sensitive/credentials::container-credentials
+
+  # Shared context: this code runs as a side effect of installing or importing
+  # the package -- either the module the `import <pkg>` statement executes
+  # (`__init__.py`) or a setup.py install hook. Both are the delivery mechanism
+  # for a beacon: the victim never calls a function, the mere install/import
+  # fires it.
+  - id: runs-at-import-or-install
+    desc: Code runs at import or install time
+    crit: notable
+    conf: 0.9
+    any:
+      - id: metadata/file/profile/identity::init-py-file
+      - id: objectives/supply-chain/install-hook/proof-of-concept::package-install-hook-present
+      # A bare setup.py runs at build/install even without a cmdclass hook: pip
+      # executes it. The beacon legs (hostname read + curl) are what make the
+      # combination a verdict, so "this is a setup.py" is a sufficient context.
+      - id: metadata/build/pip::root-setup-py
+
+  # A host-identity beacon that exfiltrates via a curl subprocess rather than an
+  # HTTP client library. The import/install context fires it unbidden; reading
+  # the machine's hostname and handing it to `curl` in the same file is the
+  # dependency-confusion recon beacon -- who and where the package landed, sent
+  # to the attacker's collector the moment pip touches it. Suspicious on the
+  # mechanism: the payload is a single confirming request, but nothing legitimate
+  # shells out to curl with the hostname at install time.
+  - id: import-install-host-profile-curl-beacon
+    desc: Import/install host profile sent via curl
+    crit: suspicious
+    conf: 0.9
+    # File-scoped: the file that runs at import must be the file that carries
+    # the beacon. `scope: outer` pooled the legs across an entire outermost
+    # container, so any application shipping an embedded CPython matched --
+    # GeekLink.app's packed_env satisfied all of them from four unrelated
+    # packages: 396 stdlib/site-packages `__init__.py` files for the
+    # import-time context, `socket.gethostname()` in CPython's platform.py and
+    # uuid.py, huggingface_hub's hf_api.py for the OOB host, pip's vendored
+    # urllib3 for the resolver call, and functorch's magic_trace.py for the
+    # curl arglist. Both rules' own notes already say the evidence belongs to
+    # one file.
+    mbc: E1041
+    attack: "T1195.002,T1082,T1041"
+    all:
+      - id: runs-at-import-or-install
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+      - id: beacon-curl-arglist
+
+  # A resolve-only beacon: the package looks up an out-of-band / canary hostname
+  # at install or import, using DNS alone (`socket.gethostbyname(<token>.
+  # canarytokens.com)`) so no HTTP request is ever made. The DNS query is the
+  # signal -- a canary domain exists only to record that something resolved it,
+  # which confirms the package executed on a target. Suspicious: it carries
+  # little data, but a dependency-confusion probe and a real campaign's stage-one
+  # callback look identical here, and neither is packaging work.
+  - id: import-install-dns-oob-beacon
+    desc: Import/install DNS lookup of an OOB host
+    crit: suspicious
+    conf: 0.9
+    # File-scoped: the file that runs at import must be the file that carries
+    # the beacon. `scope: outer` pooled the legs across an entire outermost
+    # container, so any application shipping an embedded CPython matched --
+    # GeekLink.app's packed_env satisfied all of them from four unrelated
+    # packages: 396 stdlib/site-packages `__init__.py` files for the
+    # import-time context, `socket.gethostname()` in CPython's platform.py and
+    # uuid.py, huggingface_hub's hf_api.py for the OOB host, pip's vendored
+    # urllib3 for the resolver call, and functorch's magic_trace.py for the
+    # curl arglist. Both rules' own notes already say the evidence belongs to
+    # one file.
+    mbc: E1041
+    attack: "T1195.002,T1041"
+    all:
+      - id: runs-at-import-or-install
+      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+    any:
+      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname
+      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
+      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname-ex

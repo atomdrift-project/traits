@@ -39,16 +39,6 @@ traits:
   if:
     type: text
     exact: shell32,OpenAs_RunDLL
-- id: rundll32-suspicious-export
-  desc: Rundll32 with suspicious export
-  crit: suspicious
-  conf: 0.85
-  for: [javascript, vbs, batch, powershell, python]
-  if:
-    type: text
-    regex: >-
-      (^|[;&|`"'(])\s*rundll32(\.exe)?\s+[^\r\n,]{1,160},\s*(qwerty|Run|start)\b
-    case_insensitive: true
 - id: cmd-start-rundll32-template
   desc: cmd start rundll32 execution template
   crit: suspicious
@@ -264,6 +254,17 @@ traits:
     case_insensitive: true
   unless:
   - id: metadata/file/profile/identity::generated-attack-map-context
+- id: msiexec-embedding-invocation
+  desc: msiexec.exe invoked in embedding mode
+  crit: notable
+  attack: "T1218.007"
+  for: [batch, powershell, python, javascript, vbs, csharp]
+  # Embedding mode is the COM custom-action server handshake the Installer
+  # service performs internally. A script spelling it out is borrowing the
+  # signed msiexec binary as an execution host for something else.
+  if:
+    type: text
+    regex: '(?i)\bmsiexec(\.exe)?\s+-Embedding\b'
 - id: scriptrunner-execution
   desc: ScriptRunner.exe with -appvscript (LOLBin)
   crit: suspicious
@@ -306,7 +307,7 @@ composite_rules:
   for: [batch, powershell, vbs, javascript, python, csharp, pe, dll]
   all:
   - id: micro-behaviors/process/create/shell/script-host::rundll32-exec-with-args
-  - id: objectives/persistence/login/scheduled-task/cli::windows-schtasks-create
+  - id: micro-behaviors/os/autorun/scheduled::windows-schtasks-create
   - id: micro-behaviors/os/autorun/scheduled::schtasks-action-argument
   - id: micro-behaviors/fs/path/location::user-profile-dll-path
   near_bytes: 2048
@@ -338,6 +339,9 @@ composite_rules:
   # An installer that pinned and verified the package's digest is a
   # bootstrap, not msiexec LOLBin abuse.
   - id: micro-behaviors/crypto/hash/file::hash-pinned-download-context
+  # ClusterFuzz GCE provisioning uses msiexec to install VC redist and
+  # Python dependencies on fresh fuzzing VMs - legitimate unattended setup.
+  - id: well-known/tool/sysadmin/clusterfuzz::gce-windows-provisioner
 - id: python-msiexec-unattended-machine-install
   desc: Python performs unattended system-wide MSI install
   crit: suspicious
@@ -351,28 +355,6 @@ composite_rules:
   - id: msiexec-allusers-property
   unless:
   - id: micro-behaviors/crypto/hash/file::hash-pinned-download-context
-- id: msiexec-execution
-  desc: msiexec.exe execution
-  crit: suspicious
-  attack: "T1218.007"
-  for: [batch, powershell, python]
-  all:
-  - id: micro-behaviors/process/create/installer::msiexec-package-verb
-  - id: micro-behaviors/fs/path/extension::msi
-  unless:
-  downgrade:
-    any:
-    - type: raw
-      regex: 'msiexec(\.exe)?[^\\r\\n]{0,64}-Embedding\b'
-      case_insensitive: true
-    - type: raw
-      regex: 'msiexec(\.exe)?\s+/[ilxapqfy]'
-      case_insensitive: true
-    - id: objectives/execution/lolbin/os/
-    - type: text
-      substr: ChocolateyProcessAsAdmin
-    - type: text
-      substr: Start-ChocolateyProcessAsAdmin
 - id: rundll32-openas-execution
   desc: OpenAs_RunDLL execution via rundll32
   crit: suspicious
@@ -394,7 +376,7 @@ composite_rules:
   - id: cmstp-execution
   - id: installutil-execution
   - id: micro-behaviors/process/create/launch::mshta-execution
-  - id: msiexec-execution
+  - id: micro-behaviors/process/create/installer::msiexec-package-verb
   - id: msiexec-unattended-machine-install
   - id: python-msiexec-unattended-machine-install
   - id: odbcconf-regsvr

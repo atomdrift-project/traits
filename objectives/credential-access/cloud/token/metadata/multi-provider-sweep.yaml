@@ -1,0 +1,101 @@
+# One file that asks several different clouds for their instance credentials.
+#
+# A workload runs in one cloud. Its code -- or the SDK it uses -- talks to that
+# cloud's metadata service and no other, because the others are unreachable and
+# there is nothing to ask them for. Code that probes AWS, Azure, GCP and
+# Alibaba in turn is not configured for anywhere: it is finding out where it
+# landed and taking whatever credentials that place hands out.
+#
+# The endpoints are all link-local or fixed, so this is not an "external
+# address" pattern and the rules keyed on that do not see it. What identifies
+# it is the breadth -- two or more providers named in the same file.
+#
+# `needs: 2` rather than one: a single metadata reference is ordinary in cloud
+# code, in a deployment guide, or in an SSRF test fixture. A second provider is
+# what turns a configured client into a sweep.
+#
+# Worked example: a PyPI package whose module walks AWS IMDSv2, the ECS task
+# credential endpoint, GCP's computeMetadata tree, Azure IMDS and Alibaba's
+# 100.100.100.200, alongside /var/run/secrets and the kubelet pod list.
+defaults:
+  platforms: [unix, windows]
+  for: [python, shell, javascript, typescript, php, go, source]
+  attack: "T1552.005,T1580"
+  mbc: E1552
+
+composite_rules:
+  # Per-provider evidence groups. The sweep counts *providers*, not legs: the
+  # GCP token URL (`.../service-accounts/default/token`) contains the broader
+  # service-accounts path, so one URL satisfies two atoms. Without grouping, a
+  # single-provider file reaches `needs: 2` on its own.
+  - id: aws-metadata-reference
+    desc: AWS instance metadata endpoint reference
+    crit: notable
+    conf: 0.9
+    any:
+      - id: metadata/file/string/cloud::aws-metadata-endpoint
+      - id: metadata/file/string/cloud::aws-ecs-task-credentials-endpoint
+  - id: azure-metadata-reference
+    desc: Azure instance metadata endpoint reference
+    crit: notable
+    conf: 0.9
+    any:
+      - id: metadata/file/string/cloud::azure-metadata-endpoint
+      - id: metadata/file/string/cloud::azure-managed-identity-token-path
+  - id: gcp-metadata-reference
+    desc: GCP instance metadata endpoint reference
+    crit: notable
+    conf: 0.9
+    any:
+      - id: metadata/file/string/cloud::gcp-service-accounts-metadata-path
+      - id: metadata/file/string/cloud::gcp-service-account-token-path
+  # At least one endpoint that actually hands out a credential. Breadth alone
+  # says "several clouds named"; this says what is being asked for.
+  - id: cloud-credential-endpoint-reference
+    desc: Cloud instance credential endpoint reference
+    crit: notable
+    conf: 0.92
+    any:
+      - id: micro-behaviors/communications/http/services/aws::ec2-imds-iam-credentials-endpoint
+      - id: metadata/file/string/cloud::aws-ecs-task-credentials-endpoint
+      - id: metadata/file/string/cloud::aws-ecs-credentials-base-path
+      - id: metadata/file/string/cloud::aws-ecs-iam-metadata-path
+      - id: metadata/file/string/cloud::azure-managed-identity-token-path
+      - id: metadata/file/string/cloud::gcp-service-accounts-metadata-path
+      - id: metadata/file/string/cloud::gcp-service-account-token-path
+
+  - id: multi-cloud-metadata-credential-sweep
+    desc: Probes several clouds for instance credentials
+    crit: hostile
+    conf: 0.96
+    needs: 2
+    # Breadth was the whole test, and breadth alone does not distinguish
+    # "which cloud am I on?" from "give me your keys". Both questions go to the
+    # same link-local address; only the path differs, and the root paths
+    # (`/latest/meta-data/`, `/metadata/instance`, `/computeMetadata/v1`) return
+    # placement facts, not credentials. Cloud-detection code legitimately tries
+    # each provider in turn and stops at the first that answers -- Ray's
+    # `usage_lib.get_cloud_from_metadata_requests()` probes Azure, then GCP,
+    # then AWS purely to record `cloud_provider` in its usage telemetry, and it
+    # requests no credential path from any of them. Requiring one credential
+    # endpoint keeps the description honest; the sweeps this rule was written
+    # for still match, because taking the credentials is the point of them.
+    all:
+      - id: cloud-credential-endpoint-reference
+      # Endpoint strings can be emitted as a selected workload-identity
+      # configuration without ever being contacted. A sweep must also contain
+      # code capable of issuing the metadata request it claims to make.
+      - id: micro-behaviors/communications/http/request/client::http-client
+    any:
+      - id: aws-metadata-reference
+      - id: azure-metadata-reference
+      - id: gcp-metadata-reference
+    unless:
+      # Official OpenAI SDK workload-identity module (Python and JS/TS): it
+      # ships one subject-token provider per cloud (Azure IMDS, GCP metadata
+      # server, k8s service-account file) for the caller to select
+      # explicitly. The module names several providers by design but never
+      # sweeps them. The JS/TS build (auth/subject-token-providers.{mjs,js})
+      # carries the same three providers in one file as the Python module.
+      - id: well-known/lib/ai/llm/provider::openai-python-k8s-workload-identity
+      - id: well-known/lib/ai/llm/provider::openai-workload-identity-source

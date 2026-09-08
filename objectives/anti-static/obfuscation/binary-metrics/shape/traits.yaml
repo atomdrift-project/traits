@@ -7,21 +7,6 @@ defaults:
   attack: T1027
   mbc: B0032
 traits:
-- id: high-entropy-regions
-  desc: Multiple high entropy regions
-  crit: suspicious
-  conf: 0.75
-  if:
-    type: metrics
-    field: binary.high_entropy_regions
-    min: 8
-  unless:
-  - id: metadata/lang/compiler/systems::go-binary
-  - id: metadata/lang/compiled/
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
-  - type: metrics
-    field: binary.code_entropy
-    max: 5.5
 - id: upx-many-wx-sections
   desc: UPX-like many WX sections
   crit: component
@@ -44,7 +29,6 @@ traits:
     field: sections.executable_writable_count
     min: 1
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   - id: metadata/binary/layout::legacy-watcom-packed-utility
   - type: section
     writable: true
@@ -62,7 +46,6 @@ traits:
     field: sections.executable_writable_count
     min: 2
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   - id: metadata/binary/layout::legacy-watcom-packed-utility
   - id: metadata/binary/symbols/exports/
   - id: metadata/binary/layout::svk-packed-section
@@ -73,7 +56,7 @@ traits:
   attack: T1045
   if:
     type: metrics
-    field: binary.section_name_entropy
+    field: sections.name_entropy
     min: 5.4
 - id: dominant-section
   desc: Single section dominates file
@@ -90,22 +73,11 @@ traits:
   - type: section
     regex: "^(UPX\\d|\\.upx)"
   - type: metrics
-    field: binary.import_density
+    field: dependencies.count
     max: 0
   - id: metadata/binary/framework::dotnet-metadata
   - id: metadata/binary/layout::legacy-watcom-packed-utility
   - id: metadata/binary/metrics/threshold::many-exports-20
-  downgrade:
-    any:
-    - id: objectives/anti-static/obfuscation/binary-metrics/shape/
-- id: high-import-entropy
-  desc: High entropy import names (obfuscated
-  crit: suspicious
-  conf: 0.8
-  if:
-    type: metrics
-    field: binary.import_entropy
-    min: 5.0
 - id: no-strings
   desc: "No readable strings"
   crit: baseline
@@ -155,16 +127,6 @@ traits:
   - id: well-known/app/system/drivers/nvidia::gsp-firmware-binary-path
   - id: metadata/binary/section/name::fwimage-section
 
-- id: high-string-entropy
-  desc: High entropy strings (encoded data)
-  crit: suspicious
-  conf: 0.8
-  if:
-    type: metrics
-    field: binary.avg_string_entropy
-    min: 5.0
-  unless:
-  - id: well-known/lib/development/tree-sitter::tree-sitter-grammar-library
 - id: many-high-entropy-strings
   desc: Many high-entropy strings in binary
   crit: suspicious
@@ -174,9 +136,6 @@ traits:
     field: binary.high_entropy_string_count
     min: 20
   unless:
-  - type: metrics
-    field: binary.avg_string_entropy
-    max: 3.2
   - type: metrics
     field: functions.count
     min: 500
@@ -189,10 +148,11 @@ traits:
   - type: metrics
     field: binary.max_string_length
     min: 10000
+  # Go toolchain tool binaries (go/pkg/tool/<os_arch>/*) embed build IDs and
+  # constant hash tables that trip the entropy count at small function
+  # counts; the official distribution layout is stable across releases.
+  - id: well-known/tool/development/go-toolchain::go-toolchain-tool-path
   - id: well-known/app/productivity/txtconverter::signed-installer-context
-  downgrade:
-    all:
-    - id: objectives/anti-static/obfuscation/binary-metrics/shape/
 - id: many-tiny-functions
   desc: Many tiny functions (<16 bytes)
   crit: notable
@@ -201,29 +161,6 @@ traits:
     type: metrics
     field: binary.tiny_func_count
     min: 500
-  unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
-- id: small-avg-function
-  desc: Very small average function size
-  crit: notable
-  conf: 0.4
-  size_min: 65536
-  if:
-    type: metrics
-    field: binary.avg_func_size
-    min: 1
-    max: 32
-  unless:
-  - type: metrics
-    field: functions.count
-    max: 5
-  - id: metadata/binary/framework/
-  - id: metadata/lang/compiler/systems/
-  - id: well-known/tool/sysadmin/hopenpgp-tools/
-  - type: basename
-    substr: hopenpgp-tools
-  - type: basename
-    regex: '[\\/]h(op|ot|kt|okey)$'
 - id: high-avg-complexity
   desc: High average cyclomatic complexity
   crit: notable
@@ -270,7 +207,7 @@ traits:
   attack: T1027.002
   if:
     type: metrics
-    field: binary.high_complexity_func_count
+    field: binary.huge_func_count
     min: 80
   downgrade:
     any:
@@ -278,21 +215,9 @@ traits:
     - id: metadata/signed/platform::microsoft-corporation
     - id: well-known/tool/reverse-engineering/ollydbg::ollydbg-executable-marker
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   - id: metadata/binary/framework/
   - type: basename
     exact: urlmon.dll
-  - id: metadata/signed/platform::apple
-- id: very-complex-functions
-  desc: Has many very high complexity
-  crit: suspicious
-  conf: 0.7
-  attack: T1027.002
-  if:
-    type: metrics
-    field: binary.very_high_complexity_func_count
-    min: 5
-  unless:
   - id: metadata/signed/platform::apple
 - id: many-basic-blocks
   desc: High basic blocks per function
@@ -313,54 +238,6 @@ traits:
     - type: metrics
       field: imports.count
       min: 80
-- id: many-linear-functions
-  desc: Many linear functions (possible VM
-  crit: suspicious
-  conf: 0.6
-  if:
-    type: metrics
-    field: binary.linear_func_count
-    min: 50
-- id: recursive-functions
-  desc: Has recursive functions
-  crit: suspicious
-  conf: 0.5
-  if:
-    type: metrics
-    field: binary.recursive_func_count
-    min: 3
-- id: many-noreturn-functions
-  desc: "Many noreturn funcs (anti-analysis pattern)"
-  crit: suspicious
-  conf: 0.7
-  if:
-    type: metrics
-    field: binary.noreturn_func_count
-    min: 20
-- id: large-stack-frames
-  desc: Has functions with large stack
-  crit: suspicious
-  conf: 0.6
-  if:
-    type: metrics
-    field: binary.large_stack_func_count
-    min: 3
-- id: huge-stack-frame
-  desc: Extremely large max stack frame
-  crit: suspicious
-  conf: 0.7
-  if:
-    type: metrics
-    field: binary.max_stack_frame
-    min: 65536
-- id: high-avg-stack
-  desc: High average stack frame size
-  crit: suspicious
-  conf: 0.6
-  if:
-    type: metrics
-    field: binary.avg_stack_frame
-    min: 2048
 - id: large-overlay
   desc: Large overlay relative to file
   crit: baseline
@@ -375,7 +252,6 @@ traits:
     field: binary.overlay_ratio
     min: 0.5
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   - id: metadata/binary/linking/runtime::cosmopolitan-marker
   - id: well-known/tool/reverse-engineering/resource-hacker::resource-hacker-marker
   - id: metadata/binary/linking/runtime::cosmopolitan-marker
@@ -434,8 +310,6 @@ traits:
     type: metrics
     field: binary.overlay_size
     min: 81920
-  unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
 - id: high-string-density-large-pe
   desc: Large PE with dense string corpus
   crit: component
@@ -445,8 +319,8 @@ traits:
   size_min: 250000
   if:
     type: metrics
-    field: binary.string_density
-    min: 12.0
+    field: binary.string_count
+    min: 20000
     min_size: 500000
 - id: function-count-1000-plus
   desc: Binary has 1000 or more functions
@@ -471,9 +345,16 @@ traits:
     entropy_max: 0.01
     length_min: 4096
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
-  downgrade:
-    any:
+    # Topala's SIW diagnostic utilities are signed commercial binaries whose
+    # large executables trip section-entropy heuristics; the vendor identity
+    # (manifest marker) marks them as the known-benign diagnostic family.
+    - id: well-known/app/utility/siw::siw-family-identity
+    # When the section headers describe more file than exists, the "zero
+    # entropy" being measured is absent bytes, not zeroed ones. Go's
+    # `debug/pe/testdata/vmlinuz-4.15.0-47-generic` is 474 bytes of kernel EFI
+    # headers whose `.bss` header claims 8 MB -- a header fixture, not a carved
+    # payload.
+    - id: metadata/binary/anomaly::inflated-section-headers
 
 composite_rules:
 - id: complexity-with-sparse-strings
@@ -611,7 +492,6 @@ composite_rules:
   - id: noisy-avg-string-length
   unless:
   - id: metadata/binary/framework::dotnet-metadata
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   - id: well-known/lib/runtime/jvm
   - id: well-known/lib/media/skiko
 
@@ -838,7 +718,6 @@ composite_rules:
   any:
   - id: metadata/binary/metrics/structural::high-code-entropy
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay-raw
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-import-entropy
 - id: signed-7zsfx-installer
   desc: Signed 7z self-extracting installer
   crit: component
@@ -863,7 +742,6 @@ composite_rules:
   - id: metadata/file/magic/identity::zip-archive
   - id: metadata/file/magic/identity::gzip
   - id: metadata/binary/framework::dotnet-metadata
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
 - id: packed-binary-recognized
   desc: Packed binary known recognized profile
   crit: component
@@ -882,7 +760,7 @@ composite_rules:
   conf: 0.8
   all:
   - id: metadata/binary/metrics/threshold::high-string-count-1000
-  - id: metadata/binary/metrics/threshold::avg-string-entropy-4-max
+  - id: metadata/binary/metrics/threshold::few-high-entropy-strings-20
   any:
   - id: metadata/binary/metrics/structural::help-usage-string
   - id: micro-behaviors/ui/help::options-usage-string
@@ -902,7 +780,6 @@ composite_rules:
   downgrade:
     any:
     - id: micro-behaviors/data/encode/pecompact::pecompact-signature
-    - id: objectives/anti-static/obfuscation/binary-metrics/shape/
 - id: importless-corrupted-pe-loader
   desc: Importless PE with corrupted header and embedded payload
   crit: notable
@@ -998,12 +875,21 @@ composite_rules:
   - macho
   attack: T1027.009
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
+  # A signed Mach-O's trailing region IS its code signature; the metadata
+  # sibling already stands down on the PE equivalent (`cert-table-present`).
+  - id: metadata/binary/layout::macho-code-signature-trailer
   - id: well-known/app/system/macos-system-binaries
   - id: metadata/binary/installer/family/
+  # A 7z self-extracting installer (e.g. Datacolor Colibri's 462MB SFX)
+  # carries its compressed payload in the overlay by design.
+  - id: micro-behaviors/data/embedded/payload/installer::7z-sfx-config-marker
+  # The general form of the 7z-SFX carve-out above: any recognized archive
+  # stream appended to the image is packaged data whose entropy is a property
+  # of the compression, not of concealment. classinx's eeoPlayerProxy.exe
+  # appends a 3.9 MB gzip stream to a signed CEF host binary.
+  - id: micro-behaviors/data/embedded/payload/installer::embedded-archive-stream
   - id: metadata/signed/developer::sordum-software
   - id: well-known/lib/runtime/protection/vmware-thinapp/
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   all:
   - id: high-entropy-overlay-raw
   - id: large-overlay-size
@@ -1015,8 +901,6 @@ composite_rules:
   crit: suspicious
   conf: 0.85
   attack: T1027.009
-  unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   all:
   - id: metadata/binary/layout::has-overlay
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::high-entropy-overlay
@@ -1073,8 +957,6 @@ composite_rules:
   - id: metadata/binary/metrics/structural::few-sections
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::wx-sections
   unless:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape/
   - id: metadata/binary/layout/
   - id: metadata/binary/layout::legacy-watcom-packed-utility
   - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
@@ -1103,9 +985,6 @@ composite_rules:
   - id: metadata/binary/metrics/threshold::many-exports-100
   - id: metadata/binary/section/names::debug-info
   - id: well-known/lib/development/tree-sitter::tree-sitter-grammar-library
-  downgrade:
-    any:
-    - id: objectives/anti-static/obfuscation/binary-metrics/shape/
 - id: heavy-control-flow-obfuscation
   desc: Heavy control flow obfuscation
   crit: hostile
@@ -1113,7 +992,7 @@ composite_rules:
   attack: T1027.002
   all:
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-avg-complexity
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-complex-functions
+  - id: metadata/binary/metrics/structural::extreme-max-complexity
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::many-complex-functions
 - id: vm-based-obfuscation
   desc: VM-based obfuscation detected
@@ -1121,17 +1000,15 @@ composite_rules:
   conf: 0.9
   all:
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-high-avg-complexity
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::very-complex-functions
+  - id: metadata/binary/metrics/structural::extreme-max-complexity
 - id: anti-analysis-pattern
   desc: Anti-analysis pattern detected
   crit: suspicious
   conf: 0.6
-  needs: 3
+  needs: 2
   any:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::many-noreturn-functions
   - id: objectives/anti-static/obfuscation/binary-metrics/shape::many-complex-functions
   - id: metadata/binary/metrics/structural::few-leaf-functions
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::large-stack-frames
 - id: large-binary-low-average-complexity
   desc: Large binary with low average complexity
   crit: baseline

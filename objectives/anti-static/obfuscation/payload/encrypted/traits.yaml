@@ -38,9 +38,10 @@ traits:
   - pe
   size_min: 20000
   if:
-    type: metrics
-    field: binary.data_to_file_ratio
-    min: 0.7
+    type: section
+    exact: .data
+    compare_to: total
+    size_ratio_min: 0.7
   unless:
   - id: well-known/dual-use/access-control/zprotect/
   - type: text
@@ -53,25 +54,6 @@ traits:
     - id: micro-behaviors/dylib/library/abi-graphics::graphics-runtime-library-name
     - id: metadata/binary/metrics/structural::many-functions
     - id: metadata/package/versioning::pe-version-resource
-- id: minimal-text
-  desc: Small code section (<5% of file)
-  crit: suspicious
-  conf: 0.65
-  for:
-  - macho
-  if:
-    type: metrics
-    field: binary.text_to_file_ratio
-    max: 0.05
-  unless:
-  - id: metadata/binary/framework/
-  - id: metadata/signed/platform::apple
-  - id: metadata/binary/metrics/structural/
-  - id: metadata/binary/layout::macho-object-file
-  - id: well-known/lib/runtime/jvm
-  - type: metrics
-    field: exports.count
-    min: 20
 - id: gcc-amd64-darwin-exec-debug-basename
   desc: gcc-amd64-darwin exec debug basename
   crit: component
@@ -139,7 +121,6 @@ traits:
   downgrade:
     any:
     - id: metadata/signed/platform::apple
-    - id: objectives/anti-static/obfuscation/payload/encrypted/
 - id: string-concealment
   desc: Very few visible strings (<10)
   crit: suspicious
@@ -154,12 +135,16 @@ traits:
   - regex: '\.(dat|map)$'
   - regex: '^(snapshot_blob|v8_context_snapshot)\.bin$'
   unless:
+  # A truncated PE may contain only headers and a small section prefix.  Its
+  # sparse strings do not establish an encrypted payload in the absent bytes.
+  - id: metadata/binary/anomaly::inflated-section-headers
+  # Wine's `apisetschema.dll` is a schema table with no code and no strings.
+  - id: well-known/lib/platform/wine::wine-builtin-dll-marker
   - type: basename
     regex: '\.(node|pak|map|asar)$'
   - type: basename
     regex: '(\.deb|\.gz|snapshot_blob\.bin|v8_context_snapshot\.bin)$'
   - id: metadata/binary/metrics/structural::small-elf-binary
-  - id: objectives/anti-static/obfuscation/payload/encrypted/
   - type: basename
     regex: '^[^/]+%[^/]+\.so(\.\d+)*$'
   # Extracted embedded sub-objects (eBPF bytecode, packer payloads) are
@@ -188,7 +173,6 @@ traits:
     regex: '\.(asar|svg|ttf|woff2?)$'
   - type: basename
     regex: '(\.deb|\.gz|snapshot_blob\.bin|v8_context_snapshot\.bin)$'
-  - id: objectives/anti-static/obfuscation/payload/encrypted/
   - type: metrics
     field: imports.count
     min: 80
@@ -222,22 +206,6 @@ traits:
   # Atomic libm imports for the math-cipher cluster (Mach-O custom crypto
   # typically pulls multiple libm functions + system()).  system() itself
   # lives in `micro-behaviors/process/create/shell/spawn::system-fn`.
-- id: dominant-rsrc-entropy-threshold
-  desc: Dominant .rsrc entropy threshold
-  crit: component
-  conf: 0.9
-  if:
-    type: metrics
-    field: pe.rsrc_entropy
-    min: 6.6
-- id: major-rsrc-entropy-threshold
-  desc: Major .rsrc entropy threshold
-  crit: component
-  conf: 0.9
-  if:
-    type: metrics
-    field: pe.rsrc_entropy
-    min: 6.4
 composite_rules:
 - id: tiny-cstring-recognized-marker
   desc: Recognized tiny __cstring marker
@@ -253,34 +221,6 @@ composite_rules:
   - id: well-known/lib/runtime/jvm
   - id: metadata/binary/metrics/threshold::high-string-count-1000
   - id: metadata/package/testing/presence/harness::binary-test-directory
-- id: dominant-rsrc-section
-  desc: Dominant .rsrc section
-  crit: suspicious
-  conf: 0.7
-  all:
-  - id: metadata/binary/section/metrics::dominant-rsrc-section
-  - id: dominant-rsrc-entropy-threshold
-  downgrade:
-    any:
-    - id: well-known/app/system/drivers/
-    - id: well-known/app/security/mcafee-epolicy/
-    - id: well-known/app/infrastructure/atlantis/
-    - id: well-known/app/system/stresstimulus/
-- id: major-rsrc-section
-  desc: Major .rsrc section
-  crit: suspicious
-  conf: 0.8
-  all:
-  - id: metadata/binary/section/metrics::major-rsrc-section
-  - id: major-rsrc-entropy-threshold
-  downgrade:
-    any:
-    - id: metadata/binary/layout/
-    - id: well-known/app/system/drivers/
-    - id: well-known/app/security/mcafee-epolicy/
-    - id: objectives/anti-static/pack/asprotect/
-    - id: metadata/binary/installer/sfx::freearc-sfx
-    - id: well-known/app/infrastructure/atlantis/
 - id: dominant-high-entropy-resource-benign-context
   desc: Recognized benign dominant encrypted-resource context
   crit: exception
@@ -393,7 +333,7 @@ composite_rules:
   any:
   - id: large-const-section
   - id: metadata/binary/section/metrics::tiny-cstring-section
-  - id: minimal-text
+  - id: metadata/binary/metrics/structural::macho-small-text-section-ratio
   - id: string-concealment
   unless:
   - id: metadata/binary/framework/
@@ -501,7 +441,7 @@ composite_rules:
   any:
   - id: objectives/evasion/masquerade/extension/engine::wscript-engine-jscript-override
   - id: micro-behaviors/os/api-resolution/hash-based::multiplicative-hash-loop
-  - id: metadata/binary/metrics/structural::high-import-density
+  - id: metadata/binary/metrics/structural::very-many-imports
   needs: 2
   unless:
   - id: metadata/signed/platform/
@@ -547,7 +487,7 @@ composite_rules:
   - id: micro-behaviors/os/env/access::peb-access-x64
   - id: objectives/anti-static/obfuscation/imports::pe-export-walk-primitive
   - id: high-entropy-rsrc
-  - id: dominant-rsrc-section
+  - id: metadata/binary/resource::dominant-high-entropy-rsrc-section
 - id: pe-encrypted-resource-with-evasion
   desc: PE encrypted resource with anti-analysis
   crit: suspicious
@@ -555,7 +495,7 @@ composite_rules:
   for:
   - pe
   all:
-  - id: dominant-rsrc-section
+  - id: metadata/binary/resource::dominant-high-entropy-rsrc-section
   - id: micro-behaviors/data/embedded/payload/resource::pe-resource-full-extraction
   any:
   - id: micro-behaviors/process/enumerate/psapi::psapi-process-scan

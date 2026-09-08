@@ -1,0 +1,165 @@
+# Build-time payloads that ride in the build system rather than the product.
+#
+# Two releases in this corpus were backdoored this way, and neither touched a
+# line of the shipped program.
+#
+# The trojanized openssh-3.4p1 of 2002 added one line to
+# `openbsd-compat/Makefile.in`:
+#
+#   all: @ $(CC) bf-test.c -o bf-test; ./bf-test>bf-test.out; sh ./bf-test.out &
+#
+# and a `bf-test.c` beside it that looks like a Blowfish compatibility check
+# and is really an obfuscated byte table XORed out to a stream. Running `make`
+# compiled it, captured what it printed, and fed that to a detached shell.
+#
+# The trojanized irssi-0.8.4 of the same year put the payload in `configure`,
+# inside what reads as an ordinary autoconf feature test: a here-doc C program
+# that forks, opens a TCP socket to a fixed address, and moves stdin, stdout
+# and stderr onto it. The advisory's own detection advice was to grep the
+# source tree for SOCK_STREAM in configure.
+#
+# Both are stated below without reference to the file, the payload, or the
+# address, because the build system is a durable place to hide: the victim
+# runs it before any of the security review that a shipped binary would get.
+defaults:
+  platforms: [unix]
+  for: [makefile, shell, text]
+  attack: T1195.002,T1059.004
+  mbc: B0024
+
+traits:
+  - id: recipe-compiles-local-source
+    desc: Recipe compiles a local C source
+    crit: notable
+    conf: 0.85
+    # `$(CC) bf-test.c -o bf-test`. Ordinary inside a compiler's own test
+    # suite; the conviction below comes from what happens to the output.
+    if:
+      type: text
+      regex: '(\$\(?CC\)?|\bgcc|\bcc)\s+[\w./-]{1,40}\.c\s+-o\s+[\w./-]{1,40}'
+
+  - id: recipe-captures-program-output
+    desc: Recipe redirects program output to file
+    crit: notable
+    conf: 0.85
+    # `./bf-test>bf-test.out` -- the helper's stdout becomes a file.
+    if:
+      type: text
+      regex: '\./[\w.-]{1,40}\s*>\s*\.?/?[\w.-]{1,40}'
+
+  - id: recipe-shells-a-local-file
+    desc: Recipe shells a local output file
+    crit: suspicious
+    conf: 0.9
+    # `sh ./bf-test.out &`. The file did not exist when the recipe started;
+    # it is whatever the helper just printed. The interpreter must sit at a
+    # command position: without the leading anchor, the `sh` in a wrapper
+    # name (`clangwrap.sh ./all.bash` -- run all.bash with that wrapper, not
+    # through sh) satisfies `\bsh` at the `.sh` boundary and misfires.
+    # Require an output-style suffix. `sh ./helper` is also ordinary script
+    # composition: OpenSSL's test Makefile runs extensionless testca/testssl
+    # helpers this way. The build-payload tell is interpreting a generated
+    # output artifact (`./bf-test.out`) as shell code.
+    if:
+      type: text
+      regex: '(^|[;|&({\s`])(sh|bash|/bin/sh)\s+\.?/[\w.-]{1,40}\.out(\s*&|\s*$|\s*;)'
+
+  - id: recipe-runs-helper-detached
+    desc: Recipe runs a built helper detached
+    crit: notable
+    conf: 0.85
+    # `tests/tests >/dev/null 2>&1 &` -- output discarded, no exit status
+    # collected. A build that compiles something to learn an answer waits for
+    # it; this one only wants it to have run.
+    if:
+      type: text
+      # The helper is named by a path, not by a bare word: `./bf-test` or
+      # `tests/tests`. That keeps ordinary `make >/dev/null 2>&1 &` out.
+      regex: '(\./|[\w-]{1,20}/)[\w.-]{1,30}\s*>\s*/dev/null\s+2>&1\s*&'
+
+  - id: recipe-removes-c-source
+    desc: Build recipe removes a C source file
+    crit: component
+    conf: 0.9
+    # `rm -rf tests/tests.c tests/tests` immediately after a compile-and-run
+    # is the proftpd rootkit's evidence cleanup, and that is what the
+    # `build-compiles-runs-and-erases-helper` composite below convicts.
+    #
+    # On its own the matcher establishes only that an `rm` names a `.c` file;
+    # it does not check that anything was compiled, so it could not support
+    # the "the source it compiled" claim its old name and `suspicious` rating
+    # made. Removing a C source during a build is the ordinary shape of a
+    # compiler feature probe -- generate a snippet, try to compile it, delete
+    # it -- which is what every configure script does and what BlueZ's
+    # acinclude.m4 does with `echo '#include <errno.h>' > fortify.c` ...
+    # `rm -f fortify.c fortify.o` to test for -D_FORTIFY_SOURCE=3. That made
+    # it a leg of a signature with no clear meaning alone, which is what
+    # `component` is for; the compile, the detached run and the 4-line window
+    # in the composite are what carry the intent, and they are unchanged.
+    if:
+      type: text
+      regex: '\brm\s+-[rf]{1,2}\s+[\w./-]{1,40}\.c\b'
+    unless:
+      # Go's own syscall-table generators (mkerrors.sh) compile a generated
+      # `_errors.c`, run it to emit constants, and remove the temp files.
+      # Erasing generated intermediates is ordinary codegen cleanup.
+      - id: well-known/tool/development/go-toolchain::go-toolchain-source-path
+      # radare2's bolt helper compiles a probe snippet to `.a.c` for the
+      # local disassembler view and removes the temp files afterwards.
+      - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
+
+composite_rules:
+  - id: build-recipe-shells-compiled-output
+    desc: Build runs a built program's output
+    crit: hostile
+    conf: 0.96
+    near_lines: 3
+    # Compile a helper, keep what it prints, execute that. Every step is a
+    # normal build action; the sequence is a self-extracting payload, and no
+    # legitimate recipe needs the middle step at all -- a build that wants to
+    # run generated shell writes it with a rule, not by running a C program to
+    # find out what the script should say.
+    all:
+      - id: recipe-compiles-local-source
+      - id: recipe-captures-program-output
+      - id: recipe-shells-a-local-file
+    unless:
+      - id: metadata/package/testing/
+
+  - id: build-script-embeds-socket-backdoor
+    desc: Build script embeds a socket backdoor
+    crit: hostile
+    conf: 0.96
+    # A configure script writing a C program is ordinary autoconf: that is how
+    # every feature test works, and plenty of them create sockets to find out
+    # whether -lsocket is needed. None of them move the process's standard
+    # descriptors onto the socket afterwards. A feature test asks a question;
+    # this one answers to somebody.
+    all:
+      - id: objectives/execution/compile/runtime::heredoc-writes-native-source
+      - id: micro-behaviors/communications/socket/create::c-sockaddr-in-declaration
+      - id: micro-behaviors/process/fd/dup::source-dup2-stdio
+    any:
+      - id: micro-behaviors/communications/socket/tcp::sock-stream
+      - id: micro-behaviors/communications/socket/connect::connect
+    unless:
+      - id: metadata/package/testing/
+
+  - id: build-compiles-runs-and-erases-helper
+    desc: Build runs then erases a helper
+    crit: hostile
+    conf: 0.96
+    near_lines: 4
+    # The proftpd 1.3.3c rootkit's configure: compile `tests/tests.c`, run it
+    # in the background with both streams discarded, then delete the source
+    # and the binary. What it does while it runs -- that release's helper
+    # opened a TCP connection to a fixed address and sent a fixed request, so
+    # the operator learned who was building -- is deliberately not required
+    # here. The compile-run-erase sequence is the intent, whatever the helper
+    # turns out to do.
+    all:
+      - id: recipe-compiles-local-source
+      - id: recipe-runs-helper-detached
+      - id: recipe-removes-c-source
+    unless:
+      - id: metadata/package/testing/

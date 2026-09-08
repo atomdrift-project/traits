@@ -37,14 +37,6 @@ traits:
   - id: metadata/lang/compiler/systems::go-binary
   - id: metadata/file/magic/identity::macho-32
   - id: metadata/file/magic/identity::macho-64
-- id: encoded-string-array
-  desc: Array of short encoded strings
-  crit: component
-  conf: 0.8
-  attack: T1027
-  if:
-    type: text
-    regex: "(var|let|const)\\s+\\w{1,10}\\s*=\\s*\\[\\s*\"[A-Za-z0-9+/=_]{8,40}\""
 - id: modular-key-index
   desc: Modular arithmetic key index
   crit: suspicious
@@ -81,6 +73,13 @@ composite_rules:
   conf: 0.9
   attack: T1027
   mbc: B0032
+  # The hook declaration is a manifest fact and the XOR machinery is in a
+  # JavaScript member, so the two never share a file. Inheriting this file's
+  # `for: [javascript, typescript]` default with no `scope:` made the rule
+  # unsatisfiable: at the manifest the XOR legs are absent, at the script the
+  # hook leg is, and at the container the file type was rejected outright.
+  scope: archive
+  for: [javascript, typescript, package.json, archives]
   all:
   - id: any-install-lifecycle-hook
   any:
@@ -88,23 +87,54 @@ composite_rules:
   - id: xor-fromcharcode-rebuild
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-loop
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-charcode-assignment
-  - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+  - id: micro-behaviors/crypto/symmetric/xor/loop::js-byte-array-xor-modulo-key-loop
   unless:
   - id: metadata/library/structure::dart-flutter-js-bundle
 - id: obfuscated-postinstall-dropper
   desc: Obfuscated npm postinstall dropper
   crit: hostile
   conf: 0.95
-  for:
-  - package.json
+  # Same shape as its leg above: restricted to package.json while requiring a
+  # rule whose evidence lives in a script member, so it could never match.
+  scope: archive
+  for: [javascript, typescript, package.json, archives]
+  # Legs flattened rather than referencing `xor-string-decode-infra`. That rule
+  # is itself archive-scoped, and a composite layered over an archive-scoped
+  # composite does not resolve reliably -- the inner rule's finding is not
+  # available to the outer pass, so this stayed dark even with every underlying
+  # condition satisfied. Inlining the hook declaration and requiring two
+  # distinct decoding techniques preserves the original meaning: an install hook
+  # plus real string-decoding machinery, not a single incidental XOR.
+  # `scope: archive` is an argument about ONE package: the hook is declared in
+  # the manifest and the decoder lives in a sibling script. A shipped desktop
+  # application bundles thousands of unrelated vendored packages under one
+  # archive, so the pooling stops meaning anything -- VSCodium's DMG pairs the
+  # editor's own build-script `postinstall` with `charCodeAt(x)^y` and base64
+  # string tables from minified bundles hundreds of megabytes away.
+  unless:
+  - id: well-known/lib/runtime/electron::electron-app-resources-path
+  # The manifest carrying the hook has to be publishable for "npm postinstall
+  # dropper" to mean anything. A manifest marked private never reaches a
+  # registry: Notion's `app.asar` holds the application's own development
+  # manifest (`"private": true`, electron-forge scripts, a `postinstall` that
+  # runs the repository's build script) beside the webpack bundles whose
+  # `charCodeAt`/base64 helpers supplied the "obfuscation" legs.
+  - id: metadata/package/manifest/publishing::is-private
+  - id: metadata/package/files/system-package::container-rootfs-system-content
   all:
-  - id: xor-string-decode-infra
+  - id: any-install-lifecycle-hook
+  needs: 2
   any:
-  - id: encoded-string-array
+  - id: xor-charcode-decode-func
+  - id: xor-fromcharcode-rebuild
+  - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-loop
+  - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-charcode-assignment
+  - id: micro-behaviors/crypto/symmetric/xor/loop::js-byte-array-xor-modulo-key-loop
   - id: base64-then-xor-chain
   - id: modular-key-index
   - id: objectives/anti-static/obfuscation/string/encoding::js-strong-obfuscation
   - id: micro-behaviors/data/encode/xor::js-xor-dynamic-char-at
+  - id: objectives/anti-static/obfuscation/string/encoding::js-xor-numeric-array-string-reconstruction
 - id: arithmetic-encoded-dropper
   desc: Arithmetic-decoded payload executed via Function constructor
   # Sibling of obfuscated-postinstall-dropper for the arithmetic/Caesar decoder
@@ -117,13 +147,12 @@ composite_rules:
   mbc: B0032
   near_lines: 60
   all:
-  - id: encoded-string-array
   - id: micro-behaviors/data/encode/char-code::fromcharcode-call
   - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
   any:
-  - id: micro-behaviors/process/interpreter/eval::js-function-constructor
-  - id: micro-behaviors/process/interpreter/eval::js-new-function-constructor
-  - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+  - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
+  - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
+  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
   unless:
   - id: metadata/package/testing/
   - id: well-known/tool/detection/security-scanner/
@@ -149,7 +178,7 @@ composite_rules:
   scope: archive
   all:
   - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
-  - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+  - id: micro-behaviors/crypto/symmetric/xor/loop::js-byte-array-xor-modulo-key-loop
   - id: objectives/evasion/self-delete/file/script::node-self-delete
   - id: objectives/evasion/self-delete/file/script::manifest-swap
 - id: obfuscated-postinstall-cmd-exe
@@ -216,10 +245,34 @@ composite_rules:
   - id: objectives/supply-chain/hidden-payload/eval::megabyte-charcode-packed-payload
   - id: objectives/supply-chain/hidden-payload/eval::packed-charcode-indirect-eval-loader
   - id: objectives/anti-static/obfuscation/string/encoding::js-xor-numeric-array-string-reconstruction
-  - id: objectives/supply-chain/hidden-payload/trojan::single-line-packed-loader-metrics
   - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
   - id: micro-behaviors/data/decode/custom::fromcharcode-map-array
   needs: 1
+  # `scope: archive` pools evidence file-agnostically, so a completely
+  # unrelated bundled/minified JS file elsewhere in the package can supply
+  # the only obfuscation leg while an entirely benign preinstall script
+  # (a bare Node-version gate) supplies the hook leg. Prisma's own
+  # build/studio.js (Prisma Studio's bundled frontend) triggers
+  # charcodeat-arithmetic through ordinary vendored string-width/Unicode
+  # helper code -- its actual scripts/preinstall-entry.js just requires a
+  # tiny esbuild-bundled Node-version check with no decode/eval sink at
+  # all. Named directly (not via the js-any-bundle-output aggregator,
+  # which expands past the suppression budget): a large minified bundle
+  # is not obfuscation.
+  unless:
+  - id: metadata/library/structure::js-large-minified-bundle
+  # `single-line-packed-loader-metrics` (bare `text.max_line_length >= 20000`,
+  # crit: component) used to sit in this list. It has no ratio/context check,
+  # so it fires on any ordinary single-line bundler output -- and this
+  # composite pools `scope: archive`, meaning a legitimate preinstall script
+  # anywhere in the package convicts the whole thing the moment ANY unrelated
+  # vendored dependency happens to ship as a one-line minified bundle. dd-trace
+  # vendors jsonpath-plus (26KB, one line) and meriyah (154KB, one line) this
+  # way -- ordinary esbuild/rollup output, nowhere near its own preinstall.js.
+  # A component-level bare metric was never strong enough to stand alone as
+  # the sole qualifying leg of a hostile, archive-pooled composite; the
+  # remaining legs are all real obfuscation techniques (decode loops, eval
+  # sinks, charcode transforms), which is what "obfuscated" actually means.
 # obfuscator.io-packed install hook. A package whose install lifecycle runs a
 # bundled script, and that script is obfuscator.io output (string-array
 # rotation + decoder dispatch, hex/dollar name mangling). Unlike the eval- and
@@ -250,10 +303,18 @@ composite_rules:
   any:
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::advanced-array-shuffling
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::strong-js-obfuscation
-  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::obfuscated-eval-npm-trojan
+  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::name-mangled-concealed-runtime
   unless:
-  - id: metadata/package/testing/
-  - id: metadata/package/testing/presence/fixture::test-filename-pattern
+    # Test contexts only -- NOT the whole `metadata/package/testing/`
+    # directory. That fold pulls in `test-or-declaration-file`, whose
+    # `declaration-file-extension` leg matches the `dist/*.d.ts` member every
+    # published TypeScript package ships, so any package with type
+    # declarations was exonerated regardless of what its hook ran. The
+    # runtime-harness directory (the is-test family the leg traits above
+    # suppress on) plus the test-filename pattern keep the genuine fixture
+    # carve-out.
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/fixture::test-filename-pattern
 - id: install-hook-computed-module-loader
   desc: Install hook uses an obfuscated computed Node module loader
   crit: hostile

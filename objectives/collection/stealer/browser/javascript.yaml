@@ -16,6 +16,33 @@ traits:
   if:
     type: text
     regex: '([?&]gclid=|["'']gclid["''])'
+# Location gate on financial pages: the script reads the page URL and only
+# proceeds on account/withdraw/crypto paths. Skimmers stay silent everywhere
+# else so the injected collector only runs where money moves. Two spellings:
+# decoded source (`location...indexOf('myaccount...`) and packer keyword
+# tables (`location|if|indexOf|myaccount|...`, token order preserved). No
+# merchant, domain, or campaign string is assumed.
+- id: location-indexof-financial-page
+  desc: Location checked for financial page marker
+  crit: component
+  conf: 0.9
+  if:
+    type: literal
+    regex: 'location.{0,40}indexOf\(.(myaccount|withdraw|BTC|checkout|payment)'
+- id: document-location-financial-page-alias
+  desc: Document location copied before page gate
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: 'document\.location.{0,120}indexOf\s*\([''"''][^''"'']{0,24}(withdraw|checkout|payment|BTC)'
+- id: packed-financial-page-table
+  desc: Packer table gates on financial page marker
+  crit: component
+  conf: 0.9
+  if:
+    type: literal
+    regex: 'location\|[a-z]+\|indexOf\|(myaccount|withdraw|BTC)'
   unless:
   - id: metadata/lang/scripted::dts-declaration-file
   - id: metadata/library/runtime::acquire-vscode-api
@@ -362,8 +389,6 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/http/cookies::document-cookie-split-iterate
   - id: micro-behaviors/communications/http/cookies::document-cookie-write
-  unless:
-  - id: objectives/collection/stealer/browser/
   # Cookie get+set with no exfil is a cookie utility, not a stealer. In a
   # minified bundle it's invariably js-cookie-style helper code (the hostile
   # js-browser-skimmer below still fires — it additionally requires fetch+POST).
@@ -600,3 +625,119 @@ composite_rules:
     any:
     - id: metadata/package/testing/
     - id: metadata/signed/platform/
+
+# The XHR spelling of the skimmer: every cookie swept and handed to a
+# ready-state-callback transport. The fetch-based skimmer above requires a
+# POST body; trackers built on XMLHttpRequest never show one, so the harvest
+# rides an XHR that fires on state change.
+#
+# Worked example: the trojanized Great Suspender build, whose injected
+# tracker sweeps document.cookie and beacons it home from an XHR handler
+# while it also records keystrokes.
+#
+# The sweep and the transport must be the same code (near_bytes), or the rule
+# is a file-wide coincidence between two idioms that every web bundle
+# contains: `document.cookie.split(';')` is the body of every hand-rolled
+# `getCookie`, and `.onreadystatechange` is set by every hand-rolled XHR
+# wrapper (see that trait's own note). Paddle's checkout library, vendored as
+# ameliabooking's public/js/paddle/paddle.js, has its `getCookie` helper 11 KB
+# away from the nearest readystatechange handler.
+- id: js-xhr-cookie-skimmer
+  desc: Browser script harvests cookies via XHR transport
+  crit: hostile
+  conf: 0.95
+  mbc: E1005
+  near_bytes: 2048
+  all:
+  - id: micro-behaviors/communications/http/cookies::document-cookie-split-iterate
+  - id: micro-behaviors/communications/http/client/xmlhttp::xhr-readystatechange-handler
+  downgrade:
+    any:
+    - id: metadata/package/testing/
+    - id: metadata/signed/platform/
+
+# Either spelling of the same gate (decoded source or packer table).
+- id: financial-page-gate
+  desc: Execution gated on financial page marker
+  crit: component
+  conf: 0.9
+  any:
+    - id: location-indexof-financial-page
+    - id: document-location-financial-page-alias
+    - id: packed-financial-page-table
+
+# Targeted injector: the script only fires on financial pages (location gate
+# above) and pulls a remote script there. A generic loader has no page gate;
+# a gated loader that only runs where money moves is a skimmer injector.
+- id: financial-page-gated-script-inject
+  desc: Script injection gated on financial pages
+  crit: hostile
+  conf: 0.97
+  near_bytes: 8192
+  all:
+    - id: financial-page-gate
+    - id: micro-behaviors/process/create/load/remote-code::js-remote-src-assignment
+
+# Collection is a separate objective from the transport rule in the
+# exfiltration tree: a payment form is first turned into attacker-readable
+# JSON, then may be sent by any HTTP client. Keeping the acquisition signal
+# here lets future skimmers that change their transport remain detectable.
+- id: browser-payment-form-capture
+  desc: Browser script serializes a payment form for collection
+  crit: hostile
+  conf: 0.90
+  attack: T1056.002
+  mbc: E1005
+  all:
+    - id: objectives/exfiltration/stealer/credential/browser::payment-form-serialize-array
+    - id: micro-behaviors/data/serialize/json::json-stringify-identifier
+    - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+- id: browser-card-websocket-capture
+  desc: Browser captures card fields before opening a WebSocket
+  crit: hostile
+  conf: 0.96
+  attack: T1056.002,T1041
+  mbc: E1005
+  all:
+    - id: objectives/exfiltration/stealer/credential/browser::browser-card-number-selector
+    - id: objectives/exfiltration/stealer/credential/browser::browser-card-secret-selector
+    - id: micro-behaviors/communications/http/websocket::websocket-constructor-call
+    - id: micro-behaviors/communications/websocket/send::websocket-instance-send-call
+
+- id: browser-wallet-extension-key-harvest
+  desc: Browser extension harvests wallet files and sends key material
+  crit: hostile
+  conf: 0.98
+  attack: T1555.004,T1041
+  mbc: E1011
+  all:
+    - id: objectives/collection/file-targeting/filter::wallet-files
+    - id: objectives/collection/file-targeting/filter::wallet-extension
+    - id: micro-behaviors/communications/ipc/message::chrome-runtime-send-message
+    - id: micro-behaviors/data/db/web-storage::dom-storage-getitem
+
+- id: obfuscated-cookie-token-remote-loader
+  desc: Obfuscated browser code harvests cookies and tokens before remote loading
+  crit: hostile
+  conf: 0.98
+  attack: T1539,T1555.003,T1027,T1105
+  mbc: E1005
+  all:
+    - id: micro-behaviors/communications/http/cookies::document-cookie-read
+    - id: micro-behaviors/communications/http/auth::access-token-field-reference
+    - id: micro-behaviors/communications/http/request/json::fetch-external-url
+    - id: micro-behaviors/process/create/load/remote-code::js-remote-script-element
+    - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
+
+- id: browser-cookie-harvest-ajax-loader
+  desc: Browser script harvests and rewrites cookies while contacting remote code
+  crit: hostile
+  conf: 0.97
+  attack: T1539,T1185,T1105
+  mbc: E1005
+  all:
+    - id: objectives/collection/stealer/browser::js-cookie-harvest-all
+    - id: micro-behaviors/communications/http/request/client::jquery-ajax-call
+    - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+    - id: micro-behaviors/communications/http/cookies::document-cookie-write

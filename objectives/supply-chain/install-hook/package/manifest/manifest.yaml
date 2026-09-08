@@ -27,6 +27,12 @@ traits:
       - id: well-known/lib/development/tree-sitter-grammar-npm::tree-sitter-grammar-npm-package
       - type: path
         regex: '(^|/)package/(?:[^/]+/)+package\.json$'
+      # A source-workspace package may deliberately emit a bundled action into
+      # a parent .github/actions directory; the release command documents that
+      # the parent main entrypoint is build output, not package traversal.
+      - type: value
+        path: scripts.release
+        regex: '\bncc\s+build\b.{0,80}\s-o\s+\.\./'
   # === Install Hooks ===
   # preinstall detection lives with the install-time behavior rules. Composites
   # reference that objective trait directly rather than duplicating metadata.
@@ -115,16 +121,24 @@ traits:
     unless:
       - id: metadata/package/testing/presence/harness::example-directory
   # An install hook that redirects a command's stdout over a source file
-  # rewrites the package on the consumer's machine: whatever the hook prints
-  # becomes code that require() loads. void-elements@0.1.1 regenerates its own
-  # `main` this way from a scraped web page, so the module that runs is never
-  # the module that was published or reviewed. The shape is ecosystem-agnostic
-  # -- the redirect target is a module the package itself loads -- and it is
-  # the hook phase that matters: a `build`/`prepare` script generating sources
-  # runs for the author, preinstall and postinstall run for every consumer.
+  # generates code on the consumer's machine: whatever the hook prints becomes
+  # a module require() can load. void-elements@0.1.1 regenerates its own `main`
+  # this way from a scraped web page, so the module that runs is never the
+  # module that was published or reviewed. The shape is ecosystem-agnostic --
+  # the redirect target is a module the package itself loads -- and it is the
+  # hook phase that matters: a `build`/`prepare` script generating sources runs
+  # for the author, preinstall and postinstall run for every consumer.
+  #
+  # The redirect on its own is notable, not suspicious: install-time codegen is
+  # ordinary practice. jsonpath ships `node lib/aesprim.js > generated/
+  # aesprim-browser.js`, which patches the already-installed esprima into a
+  # browser build -- purely local, no network, and unchanged since 1.0.1.
+  # What convicts is the *input* to the redirect, so the composites below
+  # supply it: content pulled over cleartext HTTP, or dependencies fetched by
+  # the same hook that then rewrites the package's own sources.
   - id: preinstall-writes-module-source
     desc: preinstall redirects output into a module file
-    crit: suspicious
+    crit: notable
     conf: 0.93
     attack: "T1195.002"
     if:
@@ -133,7 +147,7 @@ traits:
       regex: '>\s*[\w./-]{0,40}\.(js|mjs|cjs|ts|py|rb)\b'
   - id: postinstall-writes-module-source
     desc: postinstall redirects output into a module file
-    crit: suspicious
+    crit: notable
     conf: 0.93
     attack: "T1195.002"
     if:
@@ -204,15 +218,6 @@ traits:
         path: "repository"
         exact: "npm/security-holder"
       # Package name is a hyphenated multi-word name
-  - id: npm-version-inflated-90plus
-    desc: npm package version major 90+
-    crit: suspicious
-    conf: 0.85
-    if:
-      type: value
-      path: version
-      regex: "^9[0-9]\\.[0-9]+\\.[0-9]+$"
-    attack: "T1195.002"
       # === Description Patterns ===
   - id: desc-lightweight
     desc: Description mentions lightweight
@@ -468,6 +473,10 @@ composite_rules:
       - id: metadata/package/manifest/freeform/
       - id: objectives/supply-chain/impersonation/package/manifest/
       - id: tabby-builtin-plugin-keyword
+      # A hook whose entire body invokes a second dependency manager is local
+      # project bootstrap plumbing; absent provenance does not make it an npm
+      # supply-chain payload when the hook delivers no code of its own.
+      - id: metadata/package/scripts/lifecycle::package-manager-bootstrap-hook
     downgrade:
       any:
         - id: metadata/package/manifest/freeform::pkg-skeleton-small
@@ -585,8 +594,17 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::postinstall-local-ts-subpackage-build
       - id: metadata/package/scripts/lifecycle::postinstall-protobuf-codegen-download
       - id: tabby-builtin-plugin-keyword
-  - id: dependency-confusion-candidate
-    desc: Stable-version install-hook package lacks provenance
+  # The two original legs -- "major version >= 1" and "has an install hook" --
+  # describe most published packages and say nothing about provenance, which is
+  # what the finding claims. The missing leg is now required: a package that
+  # names its repository, or that is marked private and therefore never
+  # published, has provenance. The id says only what the legs test -- an
+  # install-hook package with no declared source -- rather than asserting the
+  # dependency-confusion intent nothing here checks for. VSCodium's app manifest
+  # is both (`"private": true`, `repository.url` = github.com/microsoft/vscode)
+  # and its install hooks are the editor's own build scripts.
+  - id: versioned-install-hook-without-source-repository
+    desc: Versioned install-hook package lacks a declared source repository
     crit: suspicious
     conf: 0.9
     attack: "T1195.002"
@@ -594,7 +612,15 @@ composite_rules:
       - id: metadata/package/versioning::mature-version
       - id: metadata/package/scripts/lifecycle::install-hooks
     unless:
-      - id: objectives/supply-chain/install-hook/package/manifest/
+      - id: metadata/package/manifest/repository::has-repository-url
+      - id: metadata/package/manifest/repository::has-repository-field
+      - id: metadata/package/manifest/publishing::is-private
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      # AgentAuditKit ships intentional vulnerable configs as scanner
+      # fixtures (examples/vulnerable-configs/10-supply-chain-risks ships a
+      # postinstall curl|bash plus an expected-findings.json); the scanner
+      # context marks the tool that hunts this pattern.
+      - id: well-known/tool/detection/agent-audit-kit::scanner-context
   - id: junk-package-postinstall-webhook
     desc: Junk npm package sends install callback to webhook.site
     crit: hostile
@@ -610,8 +636,6 @@ composite_rules:
       - id: metadata/package/quality/empty::npm-empty-description-any
       - id: metadata/package/quality/empty::npm-no-keywords
     needs: 2
-    unless:
-      - id: objectives/supply-chain/install-hook/package/manifest/
   - id: sfdc-placeholder-package
     desc: sfdc package looks like placeholder squatter
     crit: hostile
@@ -726,15 +750,35 @@ composite_rules:
     unless:
       - id: well-known/app/ai/knowledge/lean-ctx::source-tree-path
 
+  # The other half of the void-elements shape, and the one that does not depend
+  # on the fetch happening to be cleartext. A hook that first installs packages
+  # and then redirects a command's stdout over one of the package's own module
+  # files rebuilds the shipped source from code that was resolved at install
+  # time -- unpinned, unreviewed, and different on every machine and every day.
+  # Install-time codegen from material already in the tarball (jsonpath's
+  # `node lib/aesprim.js > generated/...`) does not reach for a package manager
+  # first, so it does not match.
+  - id: install-hook-installs-deps-then-rewrites-module-source
+    desc: Install hook installs deps then rewrites module source
+    crit: suspicious
+    conf: 0.94
+    attack: "T1195.002"
+    mbc: B0024
+    all:
+      - id: install-hook-runs-pkg-install
+    any:
+      - id: preinstall-writes-module-source
+      - id: postinstall-writes-module-source
+
   # The two halves of void-elements@0.1.1 read together. The manifest hook
   # redirects a script's stdout over a module file, and somewhere in the
   # package that script fetches its content over cleartext HTTP. The result is
   # that the module `require()` loads is whatever an on-path attacker returns
   # -- no lockfile, integrity hash, or TLS covers it, and it is re-fetched on
   # every install forever. Archive scope is safe here because
-  # `*-writes-module-source` is a rare leg: a hook that writes over a source
-  # file is not something ordinary packages do, so it cannot pool with
-  # unrelated code the way a bare "has a hook" leg would.
+  # `*-writes-module-source` is a narrow leg: a hook that writes over a
+  # source file is uncommon, so it cannot pool with unrelated code the way
+  # a bare "has a hook" leg would.
   - id: install-hook-rebuilds-module-over-cleartext-http
     desc: Install hook rebuilds a module from cleartext HTTP
     crit: hostile

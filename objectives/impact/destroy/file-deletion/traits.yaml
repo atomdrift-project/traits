@@ -136,7 +136,7 @@ traits:
   conf: 0.95
   if:
     type: text
-    regex: \b(files|data|documents)\b.{0,30}\b(will be|are)\b.{0,20}\bdestroyed\b
+    regex: '\b(files|data|documents)\b.{0,24}\b(will be|are)\b.{0,20}\bdestroyed\b'
     case_insensitive: true
   not:
   - regex: (?i)\bdata on the (usb|removable|target|selected) disk will be destroyed\b
@@ -250,6 +250,9 @@ traits:
   if:
     type: text
     regex: '\brm\s+-rf\s+/\s+--no-preserve-root\b'
+  unless:
+  - id: micro-behaviors/process/create/shell/guard::ai-cli-destructive-command-deny-rules
+  - id: well-known/tool/detection/innerwarden::innerwarden-defensive-tool-context
 
 - id: unix-root-rm-binary-string
   desc: Native binary root-filesystem rm command
@@ -305,6 +308,11 @@ traits:
   if:
     type: encoded
     regex: '/bin/rm(\b|$)'
+  unless:
+  # Inline source maps are themselves Base64 containers and can faithfully
+  # preserve ordinary build/cleanup source containing /bin/rm. The map is
+  # debug metadata, not a runtime decoder hiding the executable path.
+  - id: metadata/file/format/structured::sourcemap-inline-base64
 
 - id: shell-variable-recursive-home-delete
   desc: Variable-selected recursive home delete
@@ -345,7 +353,7 @@ traits:
   for: [pe]
   if:
     type: text
-    regex: '(?i)\.exe\b.{0,128}\.gho\b.{0,128}\.bak\b'
+    regex: '(?i)\.exe\b[^b\n]{0,128}\.gho\b[^b\n]{0,128}\.bak\b'
 
 composite_rules:
 - id: unix-root-rm-no-preserve-command
@@ -453,3 +461,27 @@ composite_rules:
   - id: micro-behaviors/process/create/exec::comspec-reference
   - id: micro-behaviors/dylib/library/legacy::mfc42-ref
   - id: objectives/impact/infect/binary/rewrite::ghost-image-filter
+
+# The file-deletion face of a root wipe: an `rm` with a root-path glob. The
+# build-recipe and shell-out rules convict the recipe or the caller; this one
+# states the deletion itself with the recursion marker beside it, whichever
+# surface dispatched it.
+#
+# Worked examples: the gentoo SphinxTrain ebuild (`rm -rf /` in a package
+# recipe) and the kubernetes.el wipe (a quoted root-rm handed to a shell).
+- id: root-glob-recursive-wipe
+  desc: Root-path glob deleted recursively
+  crit: hostile
+  conf: 0.96
+  for: [shell, text, python, javascript, typescript, ruby, perl, php]
+  all:
+  - id: unix-root-rm-glob
+  - id: micro-behaviors/fs/delete/directory::recursive-root
+- id: quoted-root-wipe-shell-command
+  desc: Quoted root-wipe command awaiting a shell
+  crit: hostile
+  conf: 0.95
+  for: [shell, text, python, javascript, typescript, ruby]
+  all:
+  - id: objectives/impact/destroy/shell-out::quoted-root-wipe-command
+  - id: no-preserve-root

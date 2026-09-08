@@ -14,6 +14,14 @@ traits:
       regex: ([a-z0-9]{8,32}\.)?burpcollaborator\.net\b
     unless:
       - id: metadata/package/testing/presence/harness::go-test-file
+  - id: burp-attack-live
+    desc: Burp attack.live OOB service
+    conf: 0.95
+    if:
+      type: text
+      regex: ([a-z0-9]{16,64}\.)?burp\.attack\.live\b
+    unless:
+      - id: metadata/package/testing/presence/harness::go-test-file
   - id: collab-digi-ninja
     desc: collab.digi.ninja OOB service
     if:
@@ -21,9 +29,14 @@ traits:
       regex: ([a-z0-9-]+\.)?collab\.digi\.ninja\b
   - id: interact-sh-me-fun
     desc: interact.sh OOB service (me/fun)
+    # text/markdown: prompt-injection payloads embed a bare callback domain
+    # (ping <data>.<random>.oast.fun) with no URL scheme, delivered as agent
+    # context rather than code. Multi-label prefix: the attacker encodes the
+    # victim IP and a per-session identifier in the subdomain chain.
+    for: [scripts, -batch, -jcl, -lua, -perl, -applescript, -vbs, pe, go, package.json, text, markdown]
     if:
       type: text
-      regex: ([a-z0-9]{8,64}\.)?oast\.(me|fun)\b
+      regex: ([a-z0-9]{1,64}\.){1,4}oast\.(me|fun)\b
     unless:
       - id: well-known/tool/offensive/projectdiscovery::nuclei-engine-go-module
   - id: interact-sh-pro-live
@@ -98,7 +111,11 @@ traits:
       regex: ([a-z0-9-]+\.)?httpdump\.app\b
   - id: webhook-site-reference
     desc: webhook.site service reference
-    for: [binaries, package.json, xml, javascript, typescript, php, batch, vbs, html]
+    # `python` belongs here beside the other sources: the sibling
+    # `webhook-site-source-call` only sees the URL when it is written inline as
+    # a call argument, and a `setup.py` beacon usually binds it to a constant
+    # first (`BEACON_URL = "https://webhook.site/..."`) and passes the name.
+    for: [binaries, package.json, xml, javascript, typescript, php, batch, vbs, html, python, svg]
     if:
       type: text
       regex: ([a-z0-9-]+\.)?webhook\.site\b
@@ -107,6 +124,34 @@ traits:
       # contains any test elsewhere — malicious packages bundle a token test.js
       # to silence package-level suppressors.
       - id: metadata/package/testing/harness/runtime/
+
+  - id: webhook-site-uuid-path
+    desc: webhook.site UUID callback path
+    crit: suspicious
+    conf: 0.98
+    attack: T1041
+    for: [javascript, typescript, shell, package.json]
+    if:
+      type: text
+      regex: 'webhook\.site/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+  # Python libraries commonly document webhook management with a copied
+  # webhook.site example URL. Match a URL only when it is an argument to an
+  # executable HTTP-style call; docstrings and doctest prose do not produce a
+  # call fact.
+  - id: python-webhook-site-call
+    desc: Python call sends to webhook.site
+    crit: suspicious
+    conf: 0.95
+    attack: T1041
+    for: [python]
+    if:
+      type: symbol
+      kind: call
+      regex: '(?i)(get|post|put|patch|delete|request|send|urlopen|open)'
+      arg:
+        kind: string
+        substr: webhook.site/
 
   - id: composer-post-install-webhook-site
     desc: Composer post-install targets webhook.site
@@ -159,6 +204,19 @@ traits:
     if:
       type: text
       regex: 'canarytokens\.com/tags/traffic/[A-Za-z0-9_-]{8,}'
+
+  # A canarytokens host used bare, with no URL scheme -- the shape a DNS beacon
+  # takes: `socket.gethostbyname("m460fjdk...canarytokens.com")`. The
+  # scheme-anchored atoms above only see it inside an http(s) URL, so a
+  # resolve-only callback slips past them. The random token subdomain is what
+  # keeps this precise: a prose mention of "canarytokens.com" has no such label,
+  # and the whole domain exists only to receive OOB callbacks.
+  - id: canarytokens-bare-host
+    desc: Bare CanaryTokens callback hostname
+    conf: 0.95
+    if:
+      type: text
+      regex: '[a-z0-9]{6,}\.canarytokens\.(com|org)\b'
   - id: unicode-escaped-canarytokens-com
     desc: Escaped CanaryTokens.com OOB URL
     if:
@@ -264,6 +322,7 @@ composite_rules:
       - id: requestrepo
       - id: canarytokens-dup
       - id: canarytokens-com
+      - id: canarytokens-bare-host
       - id: unicode-escaped-canarytokens-com
       - id: beez-buzz
       - id: oastify
@@ -370,7 +429,7 @@ composite_rules:
     all:
       - id: oob-endpoint-any
       - id: micro-behaviors/communications/http/post::php-stream-context-http-post
-      - id: micro-behaviors/data/serialize/object::json-encode
+      - id: micro-behaviors/data/serialize/json::php-json-encode
     near_bytes: 4096
     unless:
       - id: metadata/package/testing/harness/runtime/
@@ -411,3 +470,48 @@ composite_rules:
       - id: micro-behaviors/data/control-flow/error-handling::silent-error-handler
     unless:
       - id: metadata/package/testing/harness/runtime/
+
+  # The GET spelling of the python OOB beacon: a urlopen against an OOB
+  # collaborator with errors swallowed, no JSON body at all. The sibling
+  # python-oob-json-post needs a payload; a bare "the install happened"
+  # ping to webhook.site/oastify/interact.sh -- proof-of-reach is the
+  # service's whole function -- convicts on the contact alone.
+  - id: python-urlopen-oob-swallowed-beacon
+    desc: Python silently opens an OOB collector
+    crit: hostile
+    conf: 0.95
+    attack: T1048,T1041
+    mbc: E1041
+    for: [python]
+    scope: file
+    near_lines: 10
+    all:
+      - id: oob-endpoint-any
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
+      - id: micro-behaviors/data/control-flow/error-handling::silent-exception-pass
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/security-scanner/
+
+# Install-time OS recon reported to an OOB collector. The container rules
+# convict the secret harvesting; this one states the callback -- a lifecycle
+# script that shells `whoami`/`hostname`-style recon and hands the output to
+# a webhook UUID path is an installation census, and the collector exists to
+# receive it.
+#
+# Worked example: the kube-serviceaccount OOB package, whose postinstall
+# collects identity commands and the serviceaccount directory listing, then
+# curls the result to a webhook.site UUID.
+  - id: os-recon-to-oob-collector
+    desc: OS recon reported to OOB collector
+    crit: hostile
+    conf: 0.96
+    attack: T1041,T1082,T1087
+    mbc: E1041
+    for: [javascript, typescript, package.json]
+    all:
+      - id: webhook-site-uuid-path
+      # The recon engine: a shell-out from the lifecycle script (the commands
+      # collected -- whoami, hostname, ip, secrets listings -- ride inside
+      # the spawned shell's text, not the JS).
+      - id: micro-behaviors/process/create/shell/bridge::child-process-destructure-require

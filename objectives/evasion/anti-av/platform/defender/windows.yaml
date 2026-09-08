@@ -40,22 +40,6 @@ traits:
   if:
     type: text
     exact: KillDefenderProcesses
-- id: defender-preference-option-prefix
-  desc: Defender Add-MpPreference option prefix
-  crit: notable
-  conf: 0.96
-  for: [scripts, binaries, java]
-  if:
-    type: text
-    regex: '(?i)\bAdd-MpPreference\b\s+-'
-- id: defender-exclusion-option-text
-  desc: Defender exclusion option
-  crit: notable
-  conf: 0.95
-  for: [scripts, binaries]
-  if:
-    type: text
-    regex: '(?i)\s+-(ExclusionPath|ExclusionProcess|ExclusionExtension)\b'
 - id: defender-add-mppreference-hex
   desc: Hex encoded Defender exclusion cmdlet
   crit: suspicious
@@ -125,6 +109,58 @@ traits:
   - id: well-known/tool/development/go-x-build::go-x-build-infra-context
   if:
     id: micro-behaviors/os/security/defender::defender-exclusion-process-parameter
+- id: defender-exclusion-user-profile-environment
+  desc: Defender excludes the user profile tree
+  crit: suspicious
+  conf: 0.96
+  for: [scripts, binaries, source]
+  if:
+    type: text
+    regex: '-ExclusionPath[\s\S]{0,240}(\$env:UserProfile\b|%UserProfile%)([\s";,)]|$)'
+    case_insensitive: true
+- id: defender-exclusion-programdata-environment
+  desc: Defender excludes the ProgramData tree
+  crit: suspicious
+  conf: 0.97
+  for: [scripts, binaries, source]
+  if:
+    type: text
+    regex: '-ExclusionPath[\s\S]{0,240}(\$env:ProgramData\b|%ProgramData%)([\s";,)]|$)'
+    case_insensitive: true
+- id: defender-exclusion-allusers-profile-environment
+  desc: Defender excludes the shared profile tree
+  crit: suspicious
+  conf: 0.97
+  for: [scripts, binaries, source]
+  if:
+    type: text
+    regex: '-ExclusionPath[\s\S]{0,240}%AllUsersProfile%([\s";,)]|$)'
+    case_insensitive: true
+- id: defender-exclusion-temp-environment
+  desc: Defender excludes the temporary directory
+  crit: notable
+  conf: 0.93
+  for: [scripts, binaries, source]
+  if:
+    type: text
+    regex: '-ExclusionPath[\s\S]{0,240}(\$env:(TEMP|TMP)\b|%(TEMP|TMP)%)([\s";,)]|$)'
+    case_insensitive: true
+- id: defender-exclusion-executable-extension
+  desc: Defender excludes executable files
+  crit: suspicious
+  conf: 0.99
+  for: [scripts, binaries, source]
+  if:
+    type: text
+    regex: '(?i)-ExclusionExtension[^\r\n]{0,200}\.exe\b'
+- id: defender-exclusion-driver-extension
+  desc: Defender excludes kernel-driver files
+  crit: suspicious
+  conf: 0.99
+  for: [scripts, binaries, source]
+  if:
+    type: text
+    regex: '(?i)-ExclusionExtension[^\r\n]{0,200}\.sys\b'
 # Excluding the entire user-profile tree (C:\Users) blinds Defender for every
 # download, document, and roaming payload. Installers exclude a product folder,
 # not the whole Users volume.
@@ -144,20 +180,6 @@ traits:
   if:
     type: text
     regex: '(?i)-ExclusionProcess\s+[''"]javaw(\.exe)?[''"]'
-- id: defender-disable-realtime
-  desc: Disable Windows Defender realtime
-  crit: suspicious
-  conf: 0.95
-  for: [pe, dll, batch, powershell]
-  if:
-    type: text
-    regex: Set-MpPreference\s+.{0,50}-DisableRealtimeMonitoring\s+\$?true
-    case_insensitive: true
-  unless:
-  - id: well-known/app/ai/media/comfy-test::generated-vm-template
-  - id: metadata/file/profile/metrics::powershell-no-parsed-call-sites
-  - id: well-known/tool/development/go-x-build::go-x-build-infra-context
-  - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-test-defender-exception
 - id: defender-disable-sample-submission
   desc: Disable automatic Defender sample submission
   crit: suspicious
@@ -198,6 +220,10 @@ traits:
     type: text
     regex: 'reg\s+add.{0,120}DisableAntiSpyware.{0,80}/d\s+1'
     case_insensitive: true
+  unless:
+    # ClusterFuzz GCE Windows provisioning disables Defender on fuzzing VMs
+    # to prevent interference with fuzzing; this is legitimate fleet setup.
+    - id: well-known/tool/sysadmin/clusterfuzz::gce-windows-provisioner
 - id: defender-disable-behavior
   desc: Disable behavior monitoring
   crit: suspicious
@@ -294,10 +320,15 @@ traits:
   desc: Exclude an explicit drive root from Defender
   crit: suspicious
   conf: 0.98
-  for: [scripts, binaries]
+  for: [scripts, binaries, source]
   if:
     type: text
-    regex: -ExclusionPath\s+["']?[A-Za-z]:\\?["']?(\s|;|$)
+    # The bare drive root may appear anywhere in the argument list — first
+    # ('-ExclusionPath C:\') or last in a comma-separated sweep of top-level
+    # directories ('-ExclusionPath C:\ProgramData','C:\Users','C:\'). A rooted
+    # subdirectory (C:\folder) does not match: the char after the backslash
+    # must terminate the argument.
+    regex: -ExclusionPath[^\r\n]{0,200}["']?[A-Za-z]:\\?["']?(\s|,|;|$)
     case_insensitive: true
   unless:
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
@@ -712,27 +743,13 @@ composite_rules:
   - id: defender-notification-disable-policy
   - id: micro-behaviors/os/registry/manipulate::reg-exe-add-command
 
-- id: defender-exclusion-command-text
-  desc: Defender exclusion addition command
-  crit: suspicious
-  conf: 0.98
-  all:
-  - id: defender-preference-option-prefix
-  - id: defender-exclusion-option-text
-  near_bytes: 256
-  unless:
-  - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
-  - id: well-known/tool/development/go-x-build::go-x-build-infra-context
-  - id: well-known/app/enterprise/dotmatics-dtx::dtx-cloud-management-context
-  - id: metadata/build/ci/agent::ci-runner-windows-configuration-context
-
 - id: defender-systemdrive-exclusion
   desc: Defender exclusion targets system drive
   crit: suspicious
   conf: 0.99
   for: [scripts, binaries]
   all:
-  - id: defender-exclusion-option-text
+  - id: micro-behaviors/os/security/defender::defender-exclusion-option-text
   any:
   - id: micro-behaviors/os/env/vars/system-info::systemdrive-percent-lookup
   - id: micro-behaviors/os/env/vars/system-info::systemdrive-powershell-lookup
@@ -744,11 +761,27 @@ composite_rules:
   conf: 0.99
   for: [scripts, binaries]
   all:
-  - id: defender-exclusion-command-text
+  - id: micro-behaviors/os/security/defender::defender-exclusion-command
   any:
   - id: defender-drive-exclusion
   - id: defender-systemdrive-exclusion
   near_bytes: 256
+
+- id: defender-broad-path-and-binary-extension-exclusions
+  desc: Adds broad Defender path exclusions plus executable and driver extensions
+  crit: hostile
+  conf: 0.99
+  for: [scripts, binaries, source]
+  all:
+  - id: micro-behaviors/os/security/defender::defender-exclusion-command
+  - id: defender-exclusion-executable-extension
+  - id: defender-exclusion-driver-extension
+  any:
+  - id: defender-exclusion-user-profile-environment
+  - id: defender-exclusion-programdata-environment
+  - id: defender-exclusion-allusers-profile-environment
+  - id: defender-exclusion-temp-environment
+  needs: 2
 
 - id: defender-whole-drive-exclusion-edr-kill
   desc: Excludes an entire drive then force-kills a security process
@@ -760,6 +793,23 @@ composite_rules:
   - id: objectives/impact/degrade/edr/targeting::edr-security-process-termination
   near_bytes: 1024
 
+# Writing an exclusion straight to HKLM\...\Windows Defender\Exclusions\Paths
+# with reg.exe (or a raw registry API) instead of the Add-MpPreference cmdlet
+# is the bypass form: it skips the preference API's logging surface and is the
+# write Tamper Protection exists to block. Management software uses the
+# cmdlet; nothing legitimate hand-writes the exclusion store.
+- id: defender-exclusion-registry-write
+  desc: Writes a Defender path exclusion directly to the registry
+  crit: suspicious
+  conf: 0.97
+  attack: T1562.001,T1112
+  for: [scripts, binaries]
+  all:
+  - id: micro-behaviors/os/security/defender::defender-path-exclusion-registry-key
+  any:
+  - id: micro-behaviors/os/registry/manipulate::reg-exe-add-command
+  - id: micro-behaviors/os/registry/manipulate::dotnet-registry-key-write
+
 - id: native-defender-exclusion-loader
   desc: Native loader invokes PowerShell to add Defender exclusions
   crit: hostile
@@ -767,7 +817,7 @@ composite_rules:
   attack: T1059.001,T1562.001
   for: [pe, dll]
   all:
-  - id: defender-exclusion-command-text
+  - id: micro-behaviors/os/security/defender::defender-exclusion-command
   - id: micro-behaviors/process/create/shell/lang::powershell-keyword
   - id: micro-behaviors/os/privilege/check::admin-sid-check
   unless:
@@ -825,7 +875,7 @@ composite_rules:
   - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden
   - id: defender-exclusion-users-root
   any:
-  - id: defender-preference-option-prefix
+  - id: micro-behaviors/os/security/defender::defender-preference-option-prefix
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
 - id: users-root-and-javaw-exclusion
   desc: Defender excludes the Users tree and javaw
@@ -862,7 +912,7 @@ composite_rules:
   conf: 0.98
   needs: 3
   any:
-  - id: defender-disable-realtime
+  - id: micro-behaviors/os/security/defender::defender-disable-realtime
   - id: defender-disable-behavior
   - id: defender-disable-ioav
   - id: defender-disable-archive-scan
@@ -925,7 +975,7 @@ composite_rules:
   - batch
   - powershell
   any:
-  - id: defender-disable-realtime
+  - id: micro-behaviors/os/security/defender::defender-disable-realtime
   - id: defender-disable-behavior
   - id: defender-disable-ioav
   - id: defender-disable-archive-scan
@@ -1155,7 +1205,7 @@ composite_rules:
   conf: 0.98
   for: [powershell]
   all:
-  - id: defender-disable-realtime
+  - id: micro-behaviors/os/security/defender::defender-disable-realtime
   - id: micro-behaviors/os/module/load::powershell-install-module
   - id: micro-behaviors/os/module/load::powershell-skip-publisher-check
   unless:
@@ -1234,7 +1284,7 @@ composite_rules:
   conf: 0.995
   for: [pe, dll]
   all:
-    - id: defender-disable-realtime
+    - id: micro-behaviors/os/security/defender::defender-disable-realtime
     - id: defender-disable-sample-submission
     - id: defender-disable-cloud-reporting
   unless:

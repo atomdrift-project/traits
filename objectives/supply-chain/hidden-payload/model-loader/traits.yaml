@@ -70,6 +70,48 @@ traits:
       exact: None.py
 
 composite_rules:
+
+  # A package that deserializes a bundled PyTorch checkpoint the moment it is
+  # imported.
+  #
+  # `torch.load` runs the pickle inside the file, so loading an untrusted
+  # checkpoint is arbitrary code execution -- this is the mechanism behind the
+  # PyTorch model-weights advisories, and `weights_only=False` (still the
+  # default in older torch) makes it unconditional. A real SDK loads its model
+  # lazily, inside the function that needs it, from a path the caller supplies.
+  # Doing it at *import* over a checkpoint shipped *in the package* means every
+  # `import <pkg>` deserializes attacker-controlled bytes, before the caller
+  # has done anything.
+  #
+  # Archive-scoped: the checkpoint is a package data file, the `torch.load` call
+  # is in `__init__.py`, and the module-level execution is a property of that
+  # file -- three members of one distribution.
+  #
+  # Worked example: an "AI Labs SDK" whose `__init__.py` does
+  # `model = torch.load(os.path.join(dirname, "model.pt"), weights_only=False)`
+  # at module scope, with `model.pt` bundled alongside.
+  - id: import-time-torch-checkpoint-load
+    desc: Bundled torch checkpoint deserialized at import
+    crit: hostile
+    conf: 0.95
+    scope: archive
+    for: [python, package.json, tar, zip, whl, archives]
+    attack: "T1195.002,T1059.006"
+    mbc: "E1027"
+    # The import-time leg has to be the `torch.load` itself. Pairing a
+    # `torch.load` anywhere with a module-level call anywhere convicted any ML
+    # distribution: under archive scope the two need not even share a file, and
+    # `module-level-side-effect-call` fires on the ordinary module-scope
+    # `argparse.ArgumentParser(...)` that every example script opens with. Ray's
+    # ray/tune/examples/mnist_pytorch_trainable.py was read that way -- its
+    # `torch.load` is inside `load_checkpoint(self, checkpoint_dir)`, restoring
+    # a checkpoint the trainable itself wrote a few lines earlier with
+    # `torch.save`, which is the opposite of a bundled payload.
+    all:
+      - id: micro-behaviors/data/serialize/unsafe::module-scope-torch-load
+      - id: metadata/package/files/archive-member::pytorch-checkpoint-member
+    unless:
+      - id: metadata/package/testing/presence/harness::verified-python-test-file
   # This is the concrete implicit-default path: the unresolved custom
   # pipeline becomes None.py and a pipeline subclass is loaded from the repo.
   - id: implicit-model-python-module

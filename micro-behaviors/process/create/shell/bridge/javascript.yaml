@@ -335,6 +335,34 @@ traits:
       type: text
       regex: '\bBun\.(spawn|spawnSync|exec|execSync)\b'
 
+  # `exec("echo '<b64>' | base64 --decode | bash")` -- the command string
+  # carries its own payload and pipes it straight into a shell, so nothing
+  # readable ever reaches the source. The cross-platform spelling
+  # (`base64 --decode 2>/dev/null || base64 -D`) is the macOS/Linux form.
+  - id: js-exec-decode-pipe-shell-command
+    desc: Exec runs a decode-and-pipe shell command
+    crit: suspicious
+    conf: 0.94
+    attack: T1059.007,T1140
+    unless:
+      # agent-glovebox's deny-rules test suite quotes `base64 -d | sh` shapes
+      # as deny-pattern rows for its defensive allow/deny engine -- quoted
+      # policy text, not an executed pipeline.
+      - id: well-known/tool/detection/agent-glovebox::archive-context
+      # The same thing one tool over: a command-permission classifier's
+      # deny-list module, where the pipeline is a documented category label
+      # rather than a command. `type: text` reads comments, and MiniMax Code's
+      # @mavis/permission spells its encoding-bypass rule out in one.
+      - id: well-known/tool/detection/pattern-catalog::js-command-deny-list-catalog
+    if:
+      # Just the decode-into-shell pipeline. The earlier form led with
+      # `(exec|execSync)\s*\(` and scanned up to 400 characters to reach it,
+      # which the engine's regex-explosion check rejects -- that shape makes
+      # the lazy DFA grow without bound on minified bundles. The composites
+      # that consume this supply the child-process leg, so nothing is lost:
+      # a `base64 -d | sh` pipeline is the payload either way.
+      type: text
+      regex: 'base64 --?d[^\n]{0,60}\|\s*\(?(ba)?sh'
 composite_rules:
   - id: js-exec
     desc: Executes a command through Node.js child_process exec

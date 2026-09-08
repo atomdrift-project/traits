@@ -35,10 +35,30 @@ traits:
     conf: 0.9
     if:
       type: text
-      regex: '\[\s*["''][A-Za-z0-9+/]{16,}={0,2}["'']\s*,\s*["''][A-Za-z0-9+/]{16,}'
+      # The second element is closed off as well as the first, so the evidence
+      # run carries both tokens whole — the `not:` filters below need to see
+      # the trailing padding of the second element, not just the first.
+      regex: '\[\s*["''][A-Za-z0-9+/]{16,}={0,2}["'']\s*,\s*["''][A-Za-z0-9+/]{16,}={0,2}["'']'
     not:
       - regex: '["''][a-z0-9+/]{16,}={0,2}["'']\s*,'
       - regex: '["''][A-Z0-9+/]{16,}={0,2}["'']\s*,'
+      # Chassis/slot/port identifiers use the Base64 alphabet but the slash-
+      # delimited numeric suffix is a network interface, not encoded data.
+      - regex: '["''][A-Za-z]+\d+/\d+/\d+["'']\s*,'
+      # Two *terminated* Base64 streams in a row: a table of complete values,
+      # not one payload cut into pieces. `=` is only legal at the very end of a
+      # Base64 stream, so a padded element that is *followed* by another
+      # element cannot be a leading fragment of a longer encoding — the pieces
+      # decode independently and were never meant to be concatenated. kserve's
+      # test_grpc_server.py carries three such tables of expected gRPC
+      # `raw_output_contents` (`["mpnZQDMzM0CamZlAMzOzPwAAwECamVlAAACQQM3MzD8=",
+      # "BgAAAAIAAAAEAAAAAQAAAAYAAAADAAAABAAAAAEAAAA=", ...]`), and serialized
+      # protobuf/tensor fixtures, certificate tables and key vectors all have
+      # the same shape. The cost is a fragment list whose pieces were each
+      # padded separately; the reconstruction those feed is unpadded far more
+      # often than a fixture table is, because padding mid-stream is exactly
+      # what a splitter has to avoid.
+      - regex: '={1,2}["'']\s*,\s*["''][A-Za-z0-9+/]{16,}={1,2}["'']'
       # An export or method list, not a payload. A 16-character base64 run
       # encodes 12 bytes and averages ~2.5 digits (16 x 10/64), so a pair of
       # tokens carrying at most one digit each and no `+`/`/` is word-like
@@ -47,13 +67,36 @@ traits:
       # litellm, `["E2BSandboxBackend", "E2BSandboxSession"]` in bernstein,
       # COM tables like ["EnumConnectionPoints","FindConnectionPoint"] in
       # pywin32.
-      # The digit allowance is a short *run*, not a single digit: API and SDK
-      # identifiers embed version and protocol numbers (`Route53ResolverClient`
-      # in localstack, `S3`, `EC2`, `IPv6`, `Base64`, `SHA256`), and a one-digit
-      # bound let every one of them through. A real Base64 run of 16+ chars
-      # averages ~2.5 digits *scattered*; requiring letters, one contiguous
-      # digit run, then letters is identifier shape, not payload shape.
-      - regex: '["''][A-Za-z]*[0-9]{0,3}[A-Za-z]*["'']\s*,\s*["''][A-Za-z]*[0-9]{0,3}[A-Za-z]*'
+      # The digit allowance is a *run* embedded between letters, not scattered
+      # digits: API and SDK identifiers embed version and protocol numbers
+      # (`Route53ResolverClient` in localstack, `S3`, `EC2`, `IPv6`, `Base64`,
+      # `SHA256`), and record-shaped test fixtures embed whole dates and
+      # serials — pandas' fixed-width-file test carries
+      # `['xxyyzz20100101PIE', 'xxyyzz20100101GUM', ...]` (6-char id + 8-digit
+      # date + 3-char code). A real Base64 run of 16+ chars scatters its
+      # ~2.5 digits; a contiguous 9-digit run inside 16 characters has a
+      # ~1e-7 chance. Letters, one digit run up to 8, letters is token shape,
+      # not payload shape.
+      - regex: '["''][A-Za-z]*[0-9]{0,8}[A-Za-z]*["'']\s*,\s*["''][A-Za-z]*[0-9]{0,8}[A-Za-z]*'
+      # The same export/class list, but with more than one digit run per token,
+      # which the single-run filter above cannot express. Model class names
+      # carry a family number *and* a revision, so the digits come in bursts:
+      # transformers 4.52.3 matched on
+      # `__all__ = ["Speech2Text2ForCausalLM", "Speech2Text2PreTrainedModel"]`,
+      # `_no_split_modules = ["M2M100EncoderLayer", "M2M100DecoderLayer"]`,
+      # `["SeamlessM4Tv2EncoderLayer", "SeamlessM4Tv2DecoderLayer"]` and
+      # `["FlaxWav2Vec2ForCTC", "FlaxWav2Vec2ForPreTraining", ...]`.
+      #
+      # Rather than count digit runs, key on the English word buried in every
+      # such identifier — six consecutive lowercase letters ("ncoder",
+      # "eamless", "raining", "okenizer") — while requiring *both* elements to
+      # be pure alphanumeric, which no Base64 blob carrying `+`, `/` or `=`
+      # can be. One word anywhere in the pair is enough: `FlaxWav2Vec2ForCTC`
+      # has no six-letter run of its own and is identified by the company it
+      # keeps. Base64 draws lowercase 26 times in 64, so a six-long run costs
+      # about 2.5% of genuine unpadded, alphanumeric-only fragment pairs.
+      - regex: '["''][A-Za-z0-9]{16,}["'']\s*,\s*["''][A-Za-z0-9]*[a-z]{6}'
+      - regex: '["''][A-Za-z0-9]*[a-z]{6}[A-Za-z0-9]*["'']\s*,\s*["''][A-Za-z0-9]{16,}["'']'
       # Slash-separated CamelCase labels, not payload. `/` is in the Base64
       # alphabet, so taxonomy/category paths qualify as "fragments" on
       # character class alone -- youtube-dl's theplatform extractor carries

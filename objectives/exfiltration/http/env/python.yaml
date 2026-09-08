@@ -1,0 +1,64 @@
+# Whole-environment exfiltration over HTTP, the PyPI credential-theft shape.
+#
+# `for _, value in environ.items(): s += value` collects every environment
+# entry -- CI tokens, cloud keys, database URLs -- without naming any of them,
+# base64 wraps it so the request looks opaque in a proxy log, and a single GET
+# ships it. The 2022 `ctx` PyPI takeover is the canonical example, and the same
+# three steps recur across PyPI and npm stealers because they need no knowledge
+# of which secrets the victim happens to hold.
+#
+# Selecting *named* variables is ordinary configuration; sweeping all of them
+# into one encoded blob addressed to a remote host is not.
+defaults:
+  platforms: [unix, windows]
+  for: [python]
+  attack: T1552.001
+  mbc: E1552
+
+composite_rules:
+  - id: python-environment-encoded-http-exfil
+    desc: Encodes whole environment to a remote host
+    crit: hostile
+    conf: 0.95
+    scope: file
+    all:
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+      - id: micro-behaviors/communications/http/request/client::request-python
+      # The sweep itself, not merely a walk over `os.environ`: the loop has to
+      # pile every value into one accumulator. A file that iterates the
+      # environment to pick out named entries -- `urllib.request` scanning for
+      # `*_proxy`, argument parsers, config loaders -- also encodes base64 and
+      # issues requests for unrelated reasons, so the loop alone is not the
+      # exfiltration shape.
+      - id: micro-behaviors/os/env/vars/enumeration::environ-items-loop-string-accumulate
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/harness/runtime/
+
+  # Secrets pasted into the URL itself. A GET whose path is built by
+  # concatenating credential-bearing environment values needs no request body,
+  # no encoder and no POST -- the whole theft is one line, and it survives in
+  # any web-server access log the operator controls. ctx 0.1.2/0.2.2 sent
+  # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY plus the machine name this way.
+  # Keyed on the shape, so a different host or a different secret still fires.
+  - id: python-credential-env-url-path-exfil
+    desc: Credential env values sent in a URL path
+    crit: hostile
+    conf: 0.96
+    attack: T1552.001,T1041
+    # "The whole theft is one line" (see comment above) -- bind the three legs
+    # to the same statement/local block. Without this, a large legitimate
+    # program that reads its OWN api-key env var in one function and, a
+    # thousand lines away, builds an unrelated URL by concatenation for its
+    # own first-party API elsewhere, coincidentally satisfies all three legs.
+    near_bytes: 300
+    all:
+      - id: micro-behaviors/communications/http/url/build::python-url-literal-concatenation
+      - id: micro-behaviors/communications/http/request/client::request-python
+    any:
+      - id: micro-behaviors/os/env/vars/credentials::python-aws-secret-access-key-env-read
+      - id: micro-behaviors/os/env/vars/credentials::python-aws-secret-access-key-environ-read
+      - id: micro-behaviors/os/env/vars/credentials::python-environ-credential-keyword-filter
+    unless:
+      - id: metadata/package/testing/presence/harness/
+      - id: metadata/package/testing/harness/runtime/

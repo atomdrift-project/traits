@@ -336,7 +336,11 @@ traits:
     for: [javascript, shell, html]
     if:
       type: text
-      regex: '[\[\]()!+]{200,}'
+      # A run of empty regexp capture groups is punctuation-heavy but is not
+      # JSFuck. Requiring a bracket/coercion operator within the first match
+      # position retains real JSFuck while rejecting parenthesis-only stress
+      # tests.
+      regex: '[!+\[][\[\]()!+]{199,}'
   - id: whitespace-hiding
     desc: JavaScript contains a long inline whitespace run
     crit: notable
@@ -495,6 +499,38 @@ composite_rules:
       # `xor-modulo-key-loop` never fires and only this one reports).
       - id: encrypted-string-table-hides-imports
 
+  # obfuscator.io with `controlFlowFlattening` turned off. The preset above
+  # requires the while/switch state machine, which is optional in the tool and
+  # off by default -- so a payload that only mangles names, rotates the string
+  # table and inflates every numeric literal into an arithmetic expression
+  # topped out at notable, with no single finding above it. That is the exact
+  # configuration the 2024 polyfill.io injection shipped (87 KB, every literal
+  # behind a `_0x` accessor). Three independent obfuscator transforms on one
+  # file is not a minifier and not hand-written code.
+  - id: obfuscator-mangled-rotated-numeric-preset
+    desc: Obfuscator mangles, rotates and inflates numbers
+    crit: suspicious
+    conf: 0.93
+    mbc: B0032
+    attack: T1027.002
+    all:
+      - id: any-name-mangling
+      - id: push-shift-bracket-pattern
+      - id: objectives/anti-static/obfuscation/encoding/arithmetic::js-arithmetic-array-init
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+      - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
+      - id: metadata/build/minifier::intentional-javascript-obfuscator-build
+      - id: metadata/build/minifier::intentional-obfuscator-dist-artifact
+      - id: metadata/build/minifier::intentional-obfuscator-release-artifact
+      - id: well-known/lib/data/akshare::akshare-financial-data-library
+      # Canonical-report guard, same intent the sibling presets carry: one
+      # obfuscator invocation must not surface as several ids in one directory,
+      # and both of these establish strictly more than this composite does.
+      - id: full-anti-static-obfuscator-preset
+      - id: encrypted-string-table-hides-imports
+
   # A distinct fact from "this file is obfuscator output": the string table is
   # ENCRYPTED (the repeating-key keystream is obfuscator.io's rc4
   # stringArrayEncoding, not the plain base64 variant) AND require() targets are
@@ -604,7 +640,7 @@ composite_rules:
     mbc: B0032
     attack: T1027.002
     all:
-      - id: micro-behaviors/data/encode/rc4::js-rc4-implementation
+      - id: micro-behaviors/crypto/symmetric/stream::js-rc4-implementation
       - id: micro-behaviors/data/encode/payload::large-encoded-blob-literal
       - id: objectives/anti-static/obfuscation/encoding/arithmetic::js-arithmetic-array-init
     unless:
@@ -740,7 +776,6 @@ composite_rules:
     mbc: B0032
     any:
       - id: packer-eval-pattern
-      - id: jsfuck-pattern
       - id: global-buffer-access
       - id: jsjiami-watermark
   - id: jsjiami-hex-obfuscation
@@ -839,12 +874,16 @@ composite_rules:
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: metadata/package/testing/harness/runtime::obfuscated-mocked-network-test-harness
-  - id: obfuscated-eval-npm-trojan
-    desc: Obfuscated eval in JS bundle
-    crit: hostile
+  # This combination establishes layered anti-static transformation, not a
+  # supply-chain trojan: there is no package/lifecycle boundary, network stage,
+  # or hostile payload in any leg. Install-hook composites may reference this
+  # signal and add the missing supply-chain context.
+  - id: name-mangled-concealed-runtime
+    desc: Name mangling with concealed runtime content
+    crit: suspicious
     conf: 0.95
-    attack: T1195.002
-    mbc: B0024
+    attack: T1027.002
+    mbc: B0032
     all:
       - id: any-name-mangling
     any:
@@ -856,6 +895,7 @@ composite_rules:
       - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: metadata/file/format/structured::sourcemap-context
+      - id: objectives/anti-static/pack/detect::dean-edwards
   # Whitespace-hidden obfuscated eval
   - id: whitespace-hidden-eval
     desc: Obfuscated code hidden behind whitespace padding

@@ -1223,6 +1223,26 @@ composite_rules:
   - id: has-preinstall
   - id: has-postinstall
   - id: has-install
+# Member-based sibling of the allowlist check above: older packages predate the
+# `files` allowlist convention, so the DLL member is present without a matching
+# allowlist entry (eslint-config-prettier 8.x/9.x class).
+- id: install-hook-ships-dll-member
+  desc: Install hook package ships a DLL member
+  crit: suspicious
+  conf: 0.92
+  attack: "T1195.002"
+  scope: archive
+  for: [package.json, npm, tar, archives]
+  all:
+  - id: metadata/package/files/binary::npm-package-with-dll
+  any:
+  - id: has-preinstall
+  - id: has-postinstall
+  - id: has-install
+  unless:
+  # electron-winstaller's install hook only selects the host 7z arch; the
+  # vendored toolchain DLLs are the package's normal shape, not a payload.
+  - id: well-known/lib/development/electron-winstaller::electron-winstaller-tool-context
   # Notify-based pingback composite
 - id: notify-pingback-install
   desc: Install hook runs notify.js pingback script
@@ -1250,6 +1270,30 @@ composite_rules:
   unless:
   - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
   - id: metadata/package/files/package-json::files-list-init-js
+# Dead-hook staging: a lifecycle hook runs a conventional companion loader
+# (`node install.js`, ...) while the published archive omits that member — the
+# hook names a payload that is not there to run. Covers every hook key and
+# loader name the companion atoms recognize, plus the existing init.js atom.
+# Suspicious only — with the payload absent there is no hostile behavior to
+# detect, and a dangling hook alone can be a packaging bug.
+- id: install-hook-missing-companion-loader
+  desc: Install hook references a missing companion loader
+  crit: suspicious
+  conf: 0.97
+  attack: "T1195.002"
+  scope: outer
+  for: [package.json, npm, tar, archives]
+  # The hook and the files list must come from the SAME manifest (the
+  # pairing is file-scoped): outer scope pools every vendored package.json
+  # in an application bundle, and a vendor-pruned hook (ssh2 in VSCodium,
+  # whose install.js is stripped at build time) would otherwise borrow an
+  # unrelated package's files list and read as dead-hook staging.
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/hook-file::companion-loader-hook-with-files-list
+  unless:
+  - id: objectives/supply-chain/install-hook/scripts/hook-file::hook-script-filename
+  - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
+  - id: metadata/package/files/package-json::files-list-companion-loader
 - id: tiny-postinstall-missing-init-js-loader
   desc: Tiny package ships dead postinstall init.js loader
   crit: hostile
@@ -1306,11 +1350,13 @@ composite_rules:
   attack: "T1195.002"
   all:
   - id: preinstall-runs-node-local-script
-  - id: objectives/supply-chain/install-hook/package/manifest::npm-version-inflated-90plus
+  - id: metadata/package/quality/version-sentinel::npm-version-inflated-major
   - id: metadata/package/quality/empty::npm-empty-author
 - id: preinstall-metadata-only-inflated-package
   desc: preinstall hook in sparse package with inflated version metadata
-  crit: hostile
+  # A sparse manifest with an unusual version can be a probe or internal
+  # package. Keep it suspicious until the hook's code proves hostile behavior.
+  crit: suspicious
   conf: 0.96
   attack: "T1195.002"
   all:
@@ -1527,3 +1573,21 @@ composite_rules:
   - id: objectives/supply-chain/install-hook/dropper/native-loader::preinstall-runs-bundled-executable
   - id: metadata/binary/anomaly/section-header::elf-no-section-headers
   - id: metadata/binary/anomaly/format::elf-entry-in-last-segment
+  # A self-targeting worm hook whose runner is absent from the archive:
+  # the worm config in a preinstall hook is unambiguous malice on its own,
+  # and the missing companion proves the runner was stripped — takedown
+  # remnant or stripped-carrier reconstruction — rather than a complete
+  # payload. Silent on complete payloads, where the companion is present
+  # and only the worm-config finding fires. Legs stay inside objectives/
+  # (tier policy bars objectives/ from referencing well-known/).
+- id: worm-preinstall-stripped-runner
+  desc: Worm preinstall hook missing its runner
+  crit: hostile
+  conf: 0.96
+  attack: T1195.002
+  for: [npm, package.json, tar, archives]
+  scope: archive
+  all:
+  - id: objectives/supply-chain/hidden-payload/worm::install-hook-self-targeting-worm-env
+  - id: has-preinstall
+  - id: install-hook-missing-companion-loader

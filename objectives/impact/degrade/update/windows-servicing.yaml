@@ -56,6 +56,85 @@ traits:
       type: text
       regex: '(?i)\b(stop|config|delete|disable)\s+"?bits\b'
 
+  # cmd.exe and batch takedown loops name the services in a FOR set —
+  # `for %i in (wuauserv UsoSvc uhssvc WaaSMedicSvc) do (net stop %i & sc
+  # config %i start= disabled ...)` — so the names sit together in script
+  # text but never inside an extracted string literal. Two distinct servicing
+  # service names in one command are the same evidence the string-literal
+  # atoms above capture from compiled code.
+  - id: windows-update-services-command-text
+    desc: Repeats Windows servicing service names
+    crit: component
+    conf: 0.92
+    for: [batch, powershell, javascript, python]
+    if:
+      type: text
+      regex: '(?i)(wuauserv|usosvc|uhssvc|waasmedicsvc).{0,40}(wuauserv|usosvc|uhssvc|waasmedicsvc)'
+
+  # The FOR-set enumerating the servicing services so a stop/disable body can
+  # run once per service — the command-shape half of the loop evidence above.
+  # `%%i` in batch scripts, `%i` on the interactive command line.
+  - id: windows-update-services-for-set
+    desc: Loop iterates over Windows servicing services
+    crit: component
+    conf: 0.94
+    for: [batch, powershell]
+    if:
+      type: text
+      regex: '(?i)\bfor\s+%{1,2}[a-z]\s+in\s*\([^)]{0,100}(wuauserv|usosvc|uhssvc|waasmedicsvc)'
+
+  # PowerShell spells the same takedown as a service list on one stop cmdlet:
+  # `Stop-Service -Name wuauserv, UsoSvc, WaaSMedicSvc -Force`.
+  - id: windows-update-services-stop-list
+    desc: Stop command lists Windows servicing services
+    crit: component
+    conf: 0.92
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)(stop-service|net\s+stop|sc\s+stop)[^\r\n]{0,60}(wuauserv|usosvc|uhssvc|waasmedicsvc)'
+
+  - id: windows-update-policy-registry-path
+    desc: Windows Update machine-policy registry path
+    crit: notable
+    conf: 0.98
+    if:
+      type: text
+      regex: '(?i)(HKLM\\+)?SOFTWARE\\+Policies\\+Microsoft\\+Windows\\+WindowsUpdate(\\+AU)?\b'
+
+  - id: no-auto-update-policy-value
+    desc: Automatic-update disable policy value
+    crit: component
+    conf: 0.97
+    if:
+      type: text
+      word: NoAutoUpdate
+
+  - id: block-update-internet-policy-value
+    desc: Update-service connection block policy
+    crit: component
+    conf: 0.99
+    if:
+      type: text
+      word: DoNotConnectToWindowsUpdateInternetLocations
+
+  - id: disable-update-access-policy-value
+    desc: Windows Update access-disable policy value
+    crit: component
+    conf: 0.99
+    if:
+      type: text
+      word: DisableWindowsUpdateAccess
+
+  - id: windows-update-scheduled-task-path
+    desc: Windows Update or repair scheduled-task path
+    crit: notable
+    conf: 0.98
+    for: [scripts, binaries, source]
+    if:
+      type: text
+      regex: '(?i)\\Microsoft\\Windows\\(WindowsUpdate|UpdateOrchestrator|WaaSMedic)\\'
+
 composite_rules:
   - id: windows-update-service-targeting
     desc: Names multiple Windows servicing services
@@ -67,6 +146,9 @@ composite_rules:
       - id: update-medic-service-name
       - id: delivery-optimization-service-command
       - id: bits-transfer-service-command
+      - id: windows-update-services-command-text
+      - id: windows-update-services-for-set
+      - id: windows-update-services-stop-list
     needs: 2
 
   # Disabling - not merely stopping - the servicing stack is the "no repair"
@@ -85,6 +167,47 @@ composite_rules:
     unless:
       - id: metadata/file/string/identity::microsoft-activation-script-benign-context
 
+  - id: windows-update-policy-lockout
+    desc: Writes multiple policies that block Windows Update
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: windows-update-policy-registry-path
+      - id: windows-update-policy-write
+    any:
+      - id: no-auto-update-policy-value
+      - id: block-update-internet-policy-value
+      - id: disable-update-access-policy-value
+    needs: 2
+
+  - id: windows-update-policy-write
+    desc: Writes a Windows Update policy value
+    crit: notable
+    conf: 0.94
+    any:
+      - id: micro-behaviors/os/registry/manipulate::reg-exe-add-command
+      - id: micro-behaviors/os/registry/access::registry-set-value-api
+      - id: micro-behaviors/os/registry/access::registry-set-value-source
+      - id: micro-behaviors/os/registry/access::registry-managed-set-value-source
+      - id: micro-behaviors/os/registry/write/property::powershell-registry-property-write
+
+  - id: windows-update-task-disable
+    desc: Disables a Windows Update or repair scheduled task
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: windows-update-scheduled-task-path
+      - id: micro-behaviors/os/autorun/control::schtasks-disable-command
+
+  - id: windows-update-multi-control-lockout
+    desc: Disables Windows Update services, policies, and repair tasks
+    crit: hostile
+    conf: 0.995
+    all:
+      - id: windows-update-servicing-teardown
+      - id: windows-update-policy-lockout
+      - id: windows-update-task-disable
+
   # Servicing stack disabled *and* security software torn down in the same file:
   # the host is left unable to detect a later payload or to repair itself.
   - id: security-teardown-with-update-lockout
@@ -94,6 +217,7 @@ composite_rules:
     all:
       - id: windows-update-servicing-teardown
     any:
+      - id: objectives/evasion/anti-av/platform/defender::defender-broad-path-and-binary-extension-exclusions
       - id: objectives/impact/degrade/edr/targeting::security-product-install-path
       - id: objectives/impact/degrade/edr/teardown::unlocker-driven-security-product-deletion
       - id: objectives/impact/degrade/edr/teardown::edr-target-indicators

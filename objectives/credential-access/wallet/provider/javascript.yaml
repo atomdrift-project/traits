@@ -1,3 +1,10 @@
+# NOTE on matcher type: these were written as `string_literal`, which reads
+# only the parser's extracted string constants. A wallet drainer injected into
+# a multi-megabyte minified bundle -- the lottie-player 2024 compromise, 3.2 MB
+# -- is exactly the case where that index comes back without them, so every
+# rule in this file went silent on the artifacts it exists to catch. The RPC
+# method names and ERC-20 selectors below are unambiguous tokens that never
+# occur in ordinary prose, so `text` costs no precision and sees the whole file.
 defaults:
   platforms: [windows, unix]
   for:
@@ -11,7 +18,7 @@ traits:
     crit: notable
     conf: 0.6
     if:
-      type: string_literal
+      type: text
       substr: window.ethereum
     unless:
       - id: well-known/lib/web/nextjs::next-server-build-path
@@ -21,14 +28,14 @@ traits:
     crit: notable
     conf: 0.6
     if:
-      type: string_literal
+      type: text
       regex: window\[['"]ethereum['"]\]
   - id: ethereum-request-call
     desc: ethereum.request() call
     crit: notable
     conf: 0.6
     if:
-      type: string_literal
+      type: text
       regex: ethereum\.request\s*\(
   - id: request-bracket-call
     desc: '["request"]() call pattern'
@@ -37,36 +44,19 @@ traits:
     if:
       type: string_literal
       regex: \['"]request['"]\]\s*\(
-  - id: eth-request-accounts-method
-    desc: eth_requestAccounts method
-    crit: notable
-    conf: 0.6
-    if:
-      type: string_literal
-      substr: eth_requestAccounts
-    unless:
-      - id: well-known/lib/web/nextjs::next-server-build-path
-      - id: well-known/lib/cloud/supabase::auth-js-web3-module
-  - id: eth-accounts-method
-    desc: eth_accounts method
-    crit: notable
-    conf: 0.5
-    if:
-      type: string_literal
-      substr: eth_accounts
   - id: erc20-approve
     desc: ERC-20 token approve function selector
     conf: 0.85
     crit: notable
     if:
-      type: string_literal
+      type: text
       substr: '0x095ea7b3'
   - id: erc20-transfer
     desc: ERC-20 token transfer function selector
     crit: notable
     conf: 0.8
     if:
-      type: string_literal
+      type: text
       substr: '0xa9059cbb'
     unless:
   - id: erc20-transferFrom
@@ -74,8 +64,12 @@ traits:
     conf: 0.85
     crit: notable
     if:
-      type: string_literal
+      type: text
       substr: '0x23b872dd'
+  # The verbs a drain actually uses. `wallet-transaction-method` previously
+  # knew only the ERC-20 call selectors, so a drainer that works entirely
+  # through provider RPC -- ask for a signature, then submit the transfer --
+  # satisfied none of its legs.
   - id: function-drain
     desc: Wallet draining function name marker
     crit: suspicious
@@ -216,13 +210,6 @@ composite_rules:
     any:
       - id: ethereum-provider
       - id: ethereum-request
-  - id: eth-request-accounts
-    desc: Request wallet accounts (eth_requestAccounts)
-    crit: notable
-    conf: 0.85
-    any:
-      - id: eth-request-accounts-method
-      - id: eth-accounts-method
   - id: wallet-transaction-method
     desc: Wallet transaction methods
     crit: notable
@@ -291,3 +278,25 @@ composite_rules:
       - id: ethereum-provider-or-request
       - id: wallet-transaction-method
       - id: drainer-indicator
+
+  # An obfuscated controller riding along with a wallet SDK.
+  #
+  # A dApp bundles wagmi/viem/WalletConnect and performs the full signing flow;
+  # that is the neutral provider RPC flow. What no honest bundle carries is a
+  # *custom string-table
+  # obfuscator* wrapped around that SDK, with every string in the injected
+  # portion unreadable. The trojanized @lottiefiles/lottie-player builds
+  # (2024) were a wagmi+viem bundle plus ~99KB of obfuscated drain logic
+  # appended past the library code.
+  #
+  # Neither leg alone convicts: obfuscated bundles exist, and wallet flows
+  # exist. Together they describe code that talks to a user's wallet and hides
+  # what it says.
+  - id: obfuscated-wallet-signing-bundle
+    desc: Obfuscated bundle drives a wallet signing flow
+    crit: hostile
+    conf: 0.95
+    attack: T1027,T1657
+    all:
+      - id: micro-behaviors/communications/ipc/rpc::wallet-provider-full-signing-flow
+      - id: objectives/anti-static/obfuscation/obfuscator/index-shift::custom-string-table-obfuscator

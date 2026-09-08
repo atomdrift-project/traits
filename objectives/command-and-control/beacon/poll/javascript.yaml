@@ -1,0 +1,62 @@
+# Script-implant polling loop: register, take a session token, sleep a
+# server-supplied interval plus jitter, ask for work, repeat.
+#
+# Two structural pieces of that loop generalise past any one family:
+#
+#   * The registration reply arrives as an HTTP *error* status. Both Node.js
+#     implants in the Mirage Kitten coding-challenge campaign answer /beacon
+#     and /api/rabbit/checkin with 400 and carry the session token in the error
+#     body, so a proxy log, a NetFlow summary and a triage analyst all read the
+#     exchange as a failed request. The 400 comparison itself is already an
+#     atom (communications/http/response-code); what is detected here is the
+#     token read sitting next to it. 401/403 are deliberately out of scope --
+#     an auth error followed by a token read is the ordinary OAuth refresh
+#     path, and matching it would fire on every API client.
+#
+#   * The sleep is a server-controlled interval plus a random jitter. Ordinary
+#     polling clients hard-code their cadence or back off on failure; taking
+#     both the period and a randomisation window from the response is beacon
+#     traffic shaping, done to break the fixed-period signature a network
+#     sensor keys on.
+#
+# ATT&CK: T1071.001 (Web Protocols), T1029 (Scheduled Transfer)
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1071.001
+  mbc: B0030
+composite_rules:
+  - id: error-status-registration-token
+    desc: Takes a session token from a 400 response
+    crit: suspicious
+    conf: 0.9
+    near_bytes: 512
+    all:
+      - id: micro-behaviors/communications/http/response-code::http-400-response
+      - id: micro-behaviors/communications/http/auth::socket-session-id-member
+
+  - id: error-status-registration-beacon
+    desc: Registers over HTTP, treating a 4xx as success
+    crit: hostile
+    conf: 0.94
+    attack: T1071.001,T1029
+    all:
+      - id: error-status-registration-token
+      - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+    any:
+      - id: micro-behaviors/time/schedule/interval::jittered-poll-interval
+      - id: micro-behaviors/time/schedule/interval::jittered-timeout-delay
+
+  - id: jittered-task-polling-beacon
+    desc: Polls for tasks on a jittered server-set schedule
+    crit: hostile
+    conf: 0.93
+    attack: T1071.001,T1029
+    all:
+      - id: micro-behaviors/time/schedule/interval::jittered-poll-interval
+      - id: micro-behaviors/time/schedule/interval::jittered-timeout-delay
+      - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+    any:
+      - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
+      - id: micro-behaviors/process/create/system::js-execfile-call
+      - id: micro-behaviors/process/create/exec::node-execfile-reference

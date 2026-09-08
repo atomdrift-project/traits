@@ -1,0 +1,66 @@
+# A dependency that points at the project's own repository.
+#
+# This may be a legitimate sibling package in a monorepo. In an attack, the
+# shape can instead keep a payload outside the published tarball: the manifest
+# gains one line, code lives at a repository commit, and npm fetches it
+# separately. Treat the shape as suspicious context, not proof of masquerading.
+#
+# opensearch-js 3.8.0 (May 2026) is the worked example. The whole injection was
+#   "optionalDependencies": {
+#     "@opensearch/setup": "github:opensearch-project/opensearch-js#d446803f..."
+#   }
+# against a manifest declaring
+#   "repository": { "url": "https://github.com/opensearch-project/opensearch-js.git" }
+# The dead-drop rule under objectives/supply-chain/hidden-payload/git-deaddrop
+# reads the same line as a lone scoped optional dependency on an unversioned
+# commit, and stops there. This rule reads the part that one does not: the
+# commit is in *this* repository, which is what lets the entry pass for a
+# first-party setup step in a lockfile or an `npm ls`.
+#
+# The two facts fail independently. A variant that adds a second optional
+# dependency, or pins a tag instead of a commit, drops out of the dead-drop
+# shape and stays here; one that points at a foreign repository drops out of
+# here and stays there.
+defaults:
+  platforms: [unix, windows]
+  for: [package.json]
+  attack: T1195.002,T1036
+  mbc: E1195
+
+traits:
+  # Mini Shai-Hulud used a scoped `setup` package name to make an injected
+  # payload dependency look like ordinary first-party bootstrap code in npm
+  # output and lockfiles. The name alone is only a masquerade fragment; the
+  # git-deaddrop composite supplies the external-payload and repack evidence.
+  - id: scoped-setup-dependency-name
+    desc: Scoped setup dependency name
+    crit: component
+    conf: 0.95
+    if:
+      type: text
+      regex: '"@[a-z0-9][\w.-]{0,38}/setup"\s*:'
+
+  - id: self-referential-git-dependency
+    desc: Depends on its own repository
+    crit: notable
+    conf: 0.9
+    # Computed by comparing the owner/repo of every git-resolved dependency
+    # against the owner/repo the manifest claims to ship from, folded so that
+    # `github:o/r#sha` and `https://github.com/o/r.git` compare equal. Absent
+    # rather than zero when the manifest claims no repository or declares no
+    # git dependency -- there is then nothing to agree or disagree about.
+    if:
+      type: metrics
+      field: consistency.self_referential_git_dependency
+      min: 1
+
+composite_rules:
+  - id: first-party-scoped-repository-dependency
+    desc: Scoped VCS dependency points to the package repository
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: self-referential-git-dependency
+      # The dependency KEY is a registry scope while the VALUE is a raw VCS
+      # ref: the entry reads as org code and resolves as arbitrary content.
+      - id: objectives/supply-chain/hidden-payload/git-deaddrop::scoped-name-vcs-dependency

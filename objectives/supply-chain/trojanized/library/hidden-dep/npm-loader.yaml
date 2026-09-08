@@ -200,27 +200,6 @@ traits:
     type: text
     regex: '\brequire\(["''][^./"''][^"'']{1,50}["'']\);?\s*\w+\.from_str\(\s*\)'
 
-# Generic import-time sidecar: try { require("./sidecar") } catch (_) {}
-# without the from_str naming used by the lint-builder family. The public
-# entry stays clean while a sibling module runs at load time.
-- id: try-require-empty-catch-text
-  desc: Try-wrapped require with empty catch text
-  crit: component
-  conf: 0.97
-  for: [javascript, typescript]
-  size_max: 65536
-  if:
-    type: text
-    regex: 'try\s*\{[\s\S]{0,200}require\s*\(.{0,80}\)[\s\S]{0,60}\}\s*catch\s*\(.{0,40}\)\s*\{\s*\}'
-  unless:
-  - type: text
-    substr: from_str
-  downgrade:
-    any:
-    - id: metadata/package/testing/
-    - type: basename
-      regex: '(?i)\.(spec|test)\.[jt]s$'
-
 # A copied dotenv implementation with an added first statement in
 # configDotenv(). The method call is deliberately name-agnostic about the
 # imported package; the separate scoped-config import leg below establishes
@@ -235,17 +214,6 @@ traits:
     regex: 'function\s+configDotenv[^{]{0,120}\{\s*[A-Za-z_$]\w*\.loadConfig\(\s*\);?'
 
 composite_rules:
-- id: swallowed-side-effect-require-stub
-  desc: Local side-effect require executes with swallowed failure
-  crit: component
-  conf: 0.97
-  for: [javascript, typescript]
-  near_lines: 3
-  all:
-  - id: try-require-empty-catch-text
-  - id: micro-behaviors/process/create/load/local::cjs-caught-local-require
-  - id: micro-behaviors/data/control-flow/error-handling::empty-named-catch-text
-
 # Dotenv's public configuration routine should begin by resolving its own .env
 # path. A clone that instead enters a separately published scoped config module
 # before doing any library work has grafted a side-effect dependency onto the
@@ -263,9 +231,6 @@ composite_rules:
   unless:
   - id: metadata/package/testing/
 
-# The same stub as the per-campaign rules below, with the payload package name
-# removed from the evidence.
-#
 # Every other hostile rule in this file needs the dependency spelled out --
 # lint-builder, wime-zle, levex-refa, parket-slot, four-sdk-aes-ipheriv. That
 # list can only ever describe campaigns that have already been caught: the
@@ -286,19 +251,12 @@ composite_rules:
 #
 # An ordinary optional dependency fails this: it binds the module to an
 # outer-scope variable and uses it later, or falls back to an alternative in
-# the catch, rather than discarding the result and staying silent.
-- id: import-time-swallowed-sidecar-loader
-  desc: Import-time concealed side-effect sidecar require
-  crit: suspicious
-  conf: 0.98
-  for: [javascript, typescript, archives]
-  scope: archive
-  all:
-  - id: swallowed-side-effect-require-stub
-  unless:
-  - id: metadata/package/testing/
-  - id: metadata/package/testing/presence/fixture::test-filename-pattern
-
+# the catch, rather than discarding the result and staying silent. Without the
+# from_str leg, a bare try/require/empty-catch is common defensive coding
+# (Angular CLI's postinstall analytics prompt has exactly this shape) and
+# lives as a neutral capability at
+# micro-behaviors/process/create/load/local::caught-local-require-swallowed-catch
+# instead of asserting concealment intent on its own.
 - id: from-str-import-time-loader-stub
   desc: Import-time from_str loader swallows results
   crit: hostile
@@ -309,7 +267,7 @@ composite_rules:
   all:
   - id: micro-behaviors/data/string/conversion::from-str-method-call
   - id: micro-behaviors/data/control-flow/error-handling::from-str-empty-catch
-  - id: micro-behaviors/os/module/load::cjs-require-in-try-fallback
+  - id: micro-behaviors/os/module/load::cjs-require-in-try
   # The result must go nowhere. Either the call takes no argument (so it cannot
   # be converting anything) or its promise is drained by no-op handlers. Without
   # this leg the rule convicts a genuine Rust/wasm binding that happens to sit
@@ -339,7 +297,7 @@ composite_rules:
   conf: 0.96
   for: [javascript, typescript]
   all:
-  - id: micro-behaviors/os/module/load::cjs-require-in-try-fallback
+  - id: micro-behaviors/os/module/load::cjs-require-in-try
   - id: micro-behaviors/process/create/shell/bridge::execsync-in-catch-handler
   - id: micro-behaviors/os/module/load::cjs-require-in-catch-fallback
   - id: objectives/supply-chain/install-hook/scripts/dynamic-install::runtime-npm-install-comp
@@ -422,6 +380,7 @@ composite_rules:
   all:
       - id: metadata/package/dependencies/manifest::npm-phantom-runtime-dependency
   any:
+  - id: objectives/supply-chain/trojanized/hidden-dependency::lessload-dependency
   - id: assertcoreutils-dependency
   - id: four-sdk-aes-ipheriv-dependency
   - id: wime-zle-dependency
@@ -520,7 +479,7 @@ composite_rules:
   - id: micro-behaviors/data/control-flow/error-handling::from-str-empty-catch
   any:
   - id: noop-loader-promises
-  - id: micro-behaviors/os/module/load::cjs-require-in-try-fallback
+  - id: micro-behaviors/os/module/load::cjs-require-in-try
   - id: objectives/supply-chain/install-hook/init::top-level-require-method-call
 
 - id: slot-hidden-dependency-loader
@@ -582,3 +541,22 @@ composite_rules:
   - id: origdebug-swapped-require
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::for-try-parseint-array-rotate
   - id: micro-behaviors/crypto/symmetric/xor/loop::xor-modulo-key-loop
+
+# Mini Shai-Hulud republished the genuine OpenSearch client runtime unchanged
+# and altered only package.json: an innocuous scoped `setup` alias points npm
+# outside the registry to a fixed payload commit. Product identity plus the
+# lone optional commit dependency catches the injected-loader technique across
+# malicious versions and commit hashes without treating ordinary VCS deps as
+# trojanization.
+- id: opensearch-client-scoped-setup-deaddrop
+  desc: Trojanized OpenSearch client injects setup dead-drop
+  crit: hostile
+  conf: 0.99
+  for: [npm]
+  scope: archive
+  all:
+  - id: well-known/lib/cloud/opensearch-js::package-manifest-name
+  - id: objectives/supply-chain/hidden-payload/git-deaddrop::npm-optional-scoped-commit-vcs
+  - id: objectives/evasion/masquerade/dependency::scoped-setup-dependency-name
+  unless:
+  - id: well-known/tool/detection/threat-intel/

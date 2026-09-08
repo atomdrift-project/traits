@@ -42,8 +42,6 @@ traits:
     # between the echo and the redirect.
     regex: '(?m)(^|[;&|]) *(echo|cat)[^\n]{0,800}[>]+[^\n]{0,100}authorized_keys'
   unless:
-  - id: objectives/persistence/login/ssh/backdoor/
-  - id: objectives/persistence/login/ssh/backdoor/
   - type: text
     substr: machine.communicate
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
@@ -62,7 +60,7 @@ traits:
   for: [shell, javascript, typescript]
   if:
     type: text
-    regex: '(?s)(?m)(^|[;&|]) *echo\s+.{0,800}>>\s*[^ \n]{0,100}authorized_keys\b'
+    regex: '(?s)(?m)(^|[;&|]) *echo\s+[^\n]{0,800}>>\s*[^ \n]{0,100}authorized_keys\b'
   unless:
   - id: metadata/package/testing/
   - id: metadata/build/ci/
@@ -89,7 +87,6 @@ traits:
   - id: well-known/tool/sysadmin/virtualization::lima-virtualization-tool
   - type: basename
     exact: limactl.exe
-  - id: objectives/persistence/login/ssh/backdoor/
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
   - id: well-known/tool/sysadmin/automatedlab/
   - id: well-known/app/development/vscode/
@@ -110,7 +107,6 @@ traits:
     type: text
     regex: mkdir.{0,30}\.ssh
   unless:
-  - id: objectives/persistence/login/ssh/backdoor/
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
   - id: well-known/tool/sysadmin/automatedlab/
   - id: well-known/app/network/dropbear::source-tree
@@ -130,7 +126,6 @@ traits:
     type: text
     regex: chmod\s+[0-9]+.{0,30}\.ssh
   unless:
-  - id: objectives/persistence/login/ssh/backdoor/
   - id: well-known/tool/sysadmin/automatedlab/
   - id: well-known/app/network/dropbear::source-tree
 - id: chmod-ssh-go-eq
@@ -153,6 +148,11 @@ traits:
   - id: well-known/tool/development/cross-platform-actions::cross-platform-actions-context
   - type: text
     substr: tmate-io/tmate/releases
+  # GitHub Actions that install the triggering user's published SSH keys use
+  # Octokit's explicit public-key endpoint; this is user-authorized runner
+  # setup, not an attacker-supplied authorized_keys backdoor.
+  - type: text
+    substr: listPublicKeysForUser
 - id: js-authorized-keys-short-variable-append
   desc: Node writes short authorized_keys var
   crit: suspicious
@@ -166,6 +166,8 @@ traits:
   - id: well-known/tool/development/cross-platform-actions::cross-platform-actions-context
   - type: text
     substr: tmate-io/tmate/releases
+  - type: text
+    substr: listPublicKeysForUser
 - id: js-authorized-keys-resolve-path
   desc: Node resolve/join of authorized_keys path
   crit: component
@@ -298,7 +300,6 @@ composite_rules:
   - id: authorized-keys-append
   - id: authorized-keys-shell-append
   unless:
-  - id: objectives/persistence/login/ssh/backdoor/
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
 - id: locked-authorized-key-history-cover
   desc: Plants and locks an SSH key while clearing shell history
@@ -342,7 +343,6 @@ composite_rules:
   - id: chmod-ssh-go-eq
   - id: chmod-ssh-dir
   unless:
-  - id: objectives/persistence/login/ssh/backdoor/
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
 - id: js-ssh-backdoor
   desc: JavaScript SSH key backdoor
@@ -400,6 +400,24 @@ composite_rules:
   unless:
   - id: metadata/package/testing/harness/runtime/
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
+- id: js-remote-response-authorized-keys-backdoor
+  desc: Node appends remote data to authorized_keys
+  crit: hostile
+  conf: 0.98
+  mbc: E1098
+  for: [javascript, typescript]
+  near_bytes: 1200
+  all:
+  - id: micro-behaviors/communications/http/get::axios-get-call
+  - id: micro-behaviors/communications/http/response::axios-response-data-access
+  - id: micro-behaviors/fs/write/file/direct::append-file-sync
+  - id: js-authorized-keys-resolve-path
+  - id: js-unix-ssh-home-path
+  unless:
+  - id: metadata/package/testing/
+  - id: metadata/build/recognized-contexts::benign-build-tooling-context
+  - id: well-known/app/development/vscode/
+  - id: well-known/app/development/qtcreator/
 - id: js-cross-platform-ssh-backdoor
   desc: Cross-platform JavaScript SSH backdoor
   crit: hostile
@@ -428,16 +446,6 @@ composite_rules:
   - id: swift-authkeys-path
   - id: swift-backdoor-key-comment
   - id: micro-behaviors/crypto/asymmetric/ssh::hardcoded-public-key
-- id: ssh-key-dir-write
-  desc: SSH public key with write to .ssh directory
-  crit: hostile
-  conf: 0.92
-  mbc: E1098
-  all:
-  - id: authorized-keys-append
-  - id: micro-behaviors/crypto/asymmetric/ssh::hardcoded-public-key
-  unless:
-  - id: objectives/persistence/login/ssh/backdoor/
 - id: ssh-persistence-setup
   desc: SSH authorized_keys access setup
   crit: notable

@@ -201,6 +201,8 @@ traits:
     # embedded outside .text, so search the complete PE image.
     pattern: '65 48 8B 52 60 48 8B 52 18 48 8B 52 20 48 8B 72 50 [0-16] 48 31 C0 AC 3C 61 7C ?? 2C 20 [0-8] 41 C1 C9 0D [0-8] 41 01 C1'
     offset_range: [0, null]
+  unless:
+  - id: metadata/package/testing/corpus::concatenated-pe-poc-corpus
 - id: teb-peb-access
   desc: Reads the 32-bit Windows TEB self pointer
   crit: component
@@ -328,7 +330,13 @@ traits:
   if:
     type: hex
     section: .text
-    pattern: 48 8b ?? 18 00 00 00 48 8b ?? 20 00 00 00
+    # Canonical walk: mov rax, gs:[60h] (PEB), then the PEB->Ldr load (+0x18)
+    # and the Ldr module-list head load (+0x20). The two field loads alone are
+    # ordinary struct access -- Rust std's Windows TLS accessor reads gs:[58h]
+    # followed by +0x18/+0x20 in exactly this shape -- so the PEB read is
+    # required before the LDR-walk claim, matching the x86 sibling
+    # peb-ldr-list-access-x86 which also pins the PEB segment read.
+    pattern: 65 48 8b 04 25 60 00 00 00 [0-32] 48 8b ?? 18 00 00 00 [0-8] 48 8b ?? 20 00 00 00
   unless:
   # Rust Node-API addons commonly carry this byte sequence in generated or
   # runtime support code; the addon export is a stronger framework identity
@@ -359,7 +367,7 @@ traits:
   for: [pe]
   if:
     type: metrics
-    field: pe.api_hashing_indicator_count
+    field: pe.api_hash_resolver_request_count
     min: 2
   unless:
   - id: metadata/binary/framework/
@@ -374,7 +382,7 @@ traits:
   for: [pe]
   if:
     type: metrics
-    field: pe.api_hashing_indicator_count
+    field: pe.api_hash_resolver_request_count
     min: 1
   unless:
   - id: metadata/binary/framework/
@@ -561,6 +569,11 @@ composite_rules:
   # timestamp from a build hash, so a stock MinGW, Cygwin or Go PE satisfies
   # both structural legs with nothing random about it.
   - id: metadata/lang/compiler/native::gnu-or-go-toolchain-pe
+  # MSVC /Brepro also replaces the COFF timestamp with a uniformly distributed
+  # content hash. Rust Node-API builds commonly combine that marker with
+  # compiler-owned .fptable/_RDATA sections and VirtualProtect in the runtime;
+  # none of those legs then represents attacker-randomized layout.
+  - id: metadata/build/reproducible::pe-reproducible-build
   - id: well-known/lib/crypto/herumi-mcl::known-nonrandom-pe-layout
   - id: well-known/lib/media/chromium-angle/
   - id: well-known/lib/development/directx-compiler/
@@ -740,12 +753,28 @@ composite_rules:
   - id: importless-x86-custom-export-hash-resolver
   - id: pe-api-hashing-indicator
   - id: fnv1a-x64-api-resolution
+# Resolving APIs by hash exists to keep the names OUT of the import table, so a
+# binary that imports scores of functions by name is not concealing anything --
+# whatever the rotate constant is doing there, it is not hiding imports.
+# Microsoft's `signtool.exe` (shipped in electron-winstaller's vendor tree)
+# walks PE headers because signing is its job, and imports 195 functions.
 - id: hash-based-obfuscation
   desc: Hash-based import obfuscation
   crit: suspicious
   conf: 0.85
   for: [pe, dll]
   size_max: 1048576
+  unless:
+  # A Wine builtin DLL reimplements the Windows system DLL whose name it
+  # carries: Wine's bcrypt and powrprof walk PE headers because that is what
+  # the API they provide does.
+  - id: well-known/lib/platform/wine::wine-builtin-dll-marker
+  # Threshold lowered from >80 imports to 30+: the argument is the same and it
+  # has to reach ordinary small libraries too. Tellico bundles zlib1.dll (86
+  # exports, 50 imports) and psl-5.dll (22 exports, 65 imports), whose own
+  # string hashing supplies the multiply constant while the MSVC CRT's
+  # image-header check supplies the PE-walk leg.
+  - id: metadata/binary/metrics/threshold::many-imports-30
   all:
   - id: pe-export-walk-primitive
   any:
@@ -756,8 +785,6 @@ composite_rules:
   - id: djb2-multiply-31
   - id: loadlibrarya-ror13-hash
   - id: getprocaddress-ror13-hash
-  unless:
-  - id: objectives/anti-static/obfuscation/imports/
 - id: fnv1a-api-resolution
   desc: FNV1a hash-based API resolution
   crit: suspicious
@@ -866,7 +893,6 @@ composite_rules:
   downgrade:
     any:
     - id: metadata/library/automation/
-    - id: objectives/anti-static/obfuscation/imports/
     - id: well-known/lib/runtime/glib/
 - id: djb2-api-resolution
   desc: DJB2 hash-based API resolution
@@ -998,6 +1024,20 @@ composite_rules:
   unless:
   - id: metadata/binary/metrics/structural::many-imports
   - id: metadata/binary/framework/
+- id: pe-image-magic-check
+  desc: Checks a loaded image's MZ or PE magic
+  crit: component
+  conf: 0.9
+  for: [pe, dll]
+  any:
+  - id: mz-magic-check
+  - id: pe-signature-check
+
+# The "multiplicative hash resolver" in the name was never required: the legs
+# were a PEB read, a PE header walk and an MZ/PE magic check, which is what any
+# code that parses a loaded module looks like -- ClassIn's `SkizzeHidKit.dll`
+# walks its own image and carries no hash constant at all. The resolver half is
+# now a leg, so the finding describes what it says it describes.
 - id: pe-walk-hash-resolver-x64
   desc: Generic PEB+PE walk with multiplicative hash resolver (x64)
   crit: suspicious
@@ -1009,11 +1049,16 @@ composite_rules:
   all:
   - id: micro-behaviors/os/env/access::peb-access-x64
   - id: pe-header-walk-x64
+  - id: pe-image-magic-check
+  # The multiply/rotate atoms ARE the resolver. `djb2-hash-constant` is left
+  # out on purpose: it is the four bytes `05 15 00 00` appearing once anywhere
+  # in .text, which a half-megabyte DLL reaches by accident.
   any:
-  - id: mz-magic-check
-  - id: pe-signature-check
+  - id: djb2-multiply-33
+  - id: djb2-multiply-31
+  - id: ror13-hash-seed
+  - id: ror14-hash-seed
   unless:
-  - id: objectives/anti-static/obfuscation/imports/
   - id: well-known/lib/media/chromium-angle/
   - id: well-known/lib/runtime/electron/
   - id: well-known/lib/platform/jna::native-dispatch-library

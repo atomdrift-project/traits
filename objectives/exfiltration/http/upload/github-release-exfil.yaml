@@ -19,9 +19,13 @@ composite_rules:
     desc: GitHub repo contents exfiltration workflow
     crit: hostile
     conf: 0.97
+    # Use the canonical create-and-write capability rather than requiring its
+    # two older API-specific leaves. Direct REST implementations and obfuscated
+    # clients often retain the request fields and contents endpoint while
+    # hiding the original helper names; the harvested-token leg supplies the
+    # exfiltration intent that the neutral GitHub workflow lacks on its own.
     all:
-      - id: micro-behaviors/communications/http/services/github::github-create-repo
-      - id: micro-behaviors/communications/http/services/github::github-create-or-update-file-contents
+      - id: micro-behaviors/communications/http/services/github::github-create-repo-and-contents-write
     any:
       - id: objectives/credential-access/api-harvest/token::github-token-pattern-harvest
       - id: objectives/credential-access/env/secrets/source-control::node-git-token
@@ -43,7 +47,7 @@ composite_rules:
       - id: objectives/exfiltration/http/upload::hybrid-encrypt-exfil
     any:
       - id: micro-behaviors/data/archive/create/tar::tar-create
-      - id: objectives/collection/archive/compress::tar-current-dir
+      - id: micro-behaviors/data/archive/create/tar::tar-current-dir
   - id: github-release-credential-fallback
     desc: Harvested credentials uploaded as a GitHub release asset
     crit: hostile
@@ -88,3 +92,24 @@ composite_rules:
       - id: objectives/exfiltration/stealer/credential/env::python-environ-json-requests-exfil
       - id: objectives/credential-access/env/secrets/filtered-access::js-secret-keyword-list
       - id: objectives/supply-chain/credential-theft/env::python-bulk-secret-env-harvest
+
+  # Attacker-owned repository as the drop point: the payload creates a repo
+  # under the victim's own account with a stolen token, then pushes the
+  # harvested material into it Base64-encoded. The environment block and the
+  # host profile are what separate this from a publishing integration.
+  - id: github-repo-harvested-env-exfil
+    desc: Harvested environment pushed to a GitHub repo
+    crit: hostile
+    conf: 0.97
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/services/github::github-create-repo
+      - id: micro-behaviors/os/env/access::node-process-env-object-field
+      - id: micro-behaviors/data/encode/base64::node-buffer-base64-encode
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+      - id: micro-behaviors/fs/path/sensitive/credentials::npmrc-credentials
+      - id: objectives/credential-access/env/secrets/source-control::github-token-var
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: metadata/package/testing/presence/manifest::test-fixtures
