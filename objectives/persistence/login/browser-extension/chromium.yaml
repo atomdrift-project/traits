@@ -116,15 +116,15 @@ traits:
   if:
     type: text
     regex: 'Secure[[:space:]]+Preferences'
-- id: chromium-secure-prefs-hash-reset
-  desc: Resets encrypted preference hash
+- id: chromium-encrypted-hash-removal-call
+  desc: Calls encrypted hash removal helper
   crit: suspicious
   conf: 0.97
   attack: T1562.001,T1176
-  for: [scripts, source, data, pe, dll, elf]
+  for: [scripts, source]
   if:
     type: text
-    regex: '(?i)\b(remove_encrypted_hash|clear_encrypted_hash|reset_encrypted_hash)\s*\('
+    regex: '(?i)\b(remove|clear|reset)_?encrypted_?hash(es)?\s*\('
 - id: chromium-native-messaging-host-value
   desc: Native Messaging key names host manifest
   crit: notable
@@ -146,6 +146,19 @@ traits:
     type: text
     regex: '(?i)\b(start|CreateProcessW|CreateProcessA)\b[^\r\n]{0,80}\b(chrome|msedge)\.exe\b'
 composite_rules:
+- id: chromium-secure-prefs-encrypted-hash-removal
+  desc: Removes Chromium encrypted hash integrity
+  crit: suspicious
+  conf: 0.97
+  attack: T1562.001,T1176
+  for: [scripts, source]
+  all:
+  - id: micro-behaviors/fs/path/sensitive/browser::chromium-secure-prefs-encrypted-hash
+  any:
+  - id: chromium-encrypted-hash-removal-call
+  - id: micro-behaviors/data/manipulation::recursive-named-key-removal-function
+  near_bytes: 8192
+
 - id: chromium-secure-prefs-hmac-tamper
   desc: Recalculates Chromium preference MACs with a user SID
   crit: hostile
@@ -168,11 +181,30 @@ composite_rules:
   # forgery, not a general HMAC utility.
   all:
   - id: micro-behaviors/crypto/hash/hmac::chromium-preference-mac-seed
-  - id: micro-behaviors/fs/path/sensitive/browser::chromium-secure-preferences-file
-  any:
   - id: micro-behaviors/fs/path/sensitive/browser::chromium-secure-prefs-mac-fields
-  - id: micro-behaviors/fs/path/sensitive/browser::chromium-developer-mode-pref-path
-  - id: micro-behaviors/fs/path/sensitive/browser::chromium-profile-secure-preferences-name
+  - id: micro-behaviors/fs/path/sensitive/browser::chromium-profile-secure-preferences-path
+
+# Newer Chromium hijackers no longer need to embed the legacy public MAC seed.
+# They can recover key material from the installed browser's resources.pak and
+# use it to sign a forged Secure Preferences document. Requiring the resource
+# pack, the protected file, MAC fields, and a real HMAC API keeps this focused
+# on offline integrity forgery rather than ordinary browser configuration.
+- id: chromium-resources-pak-secure-prefs-forgery
+  desc: Chromium resource pack Secure Preferences forgery
+  crit: hostile
+  conf: 0.99
+  attack: T1176,T1562.001
+  for: [scripts, source, binaries, data]
+  all:
+  - id: micro-behaviors/fs/path/application/browser::chromium-resources-pak-file
+  - id: micro-behaviors/fs/path/sensitive/browser::chromium-secure-preferences-file
+  - id: micro-behaviors/fs/path/sensitive/browser::chromium-secure-prefs-mac-fields
+  any:
+  - id: micro-behaviors/crypto/hash/hmac::hmac-api-reference
+  - id: micro-behaviors/crypto/hash/hmac::hmac-named-algorithm-api
+  needs: 1
+  unless:
+  - id: well-known/app/browser/
 
 - id: chromium-secure-prefs-integrity-reset
   desc: Resets Chromium Secure Preferences integrity state
@@ -183,7 +215,7 @@ composite_rules:
   all:
   - id: micro-behaviors/fs/path/sensitive/browser::chromium-profile-secure-preferences-path
   - id: micro-behaviors/fs/path/sensitive/browser::chromium-secure-prefs-mac-fields
-  - id: chromium-secure-prefs-hash-reset
+  - id: chromium-secure-prefs-encrypted-hash-removal
 
 - id: chromium-native-messaging-host-registration
   desc: Chromium Native Messaging Host registry persistence

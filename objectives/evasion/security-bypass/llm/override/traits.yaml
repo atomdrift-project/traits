@@ -21,6 +21,51 @@ traits:
   - id: well-known/tool/detection/clawker::prompt-injection-incident-context
   - id: well-known/tool/offensive/bughunter::bughunter-security-guide-context
 
+- id: llm-superseded-source-claim
+  desc: Marks summary source as superseded
+  crit: component
+  conf: 0.9
+  for: [documents, markdown, text, html]
+  if:
+    type: text
+    regex: '(?i)\b(superseded|obsolete|outdated) (draft|message|email|document|content)\b'
+
+- id: llm-summary-prohibition-directive
+  desc: Prohibits summarizing prior content
+  crit: notable
+  conf: 0.92
+  for: [documents, markdown, text, html]
+  if:
+    type: text
+    regex: '(?i)\b(must not|do not) be summari[sz]ed\b'
+
+- id: llm-summary-replacement-directive
+  desc: Directs summary toward replacement content
+  crit: notable
+  conf: 0.92
+  for: [documents, markdown, text, html]
+  if:
+    type: text
+    regex: '(?i)\bsummari[sz]e (the )?(authoritative|final|replacement) \w+'
+
+- id: llm-suppress-notice-mention
+  desc: Suppresses mention of a prompt notice
+  crit: notable
+  conf: 0.92
+  for: [documents, markdown, text, html]
+  if:
+    type: text
+    regex: '(?i)\bdo not mention (this|the) (notice|instruction|directive)\b'
+
+- id: llm-suppress-prior-source-reference
+  desc: Suppresses reference to prior source
+  crit: notable
+  conf: 0.92
+  for: [documents, markdown, text, html]
+  if:
+    type: text
+    regex: '(?i)\b(do not )?refer to (the )?(draft|message|text|content) (above|earlier)\b'
+
 - id: llm-ignore-prior-instructions-line
   desc: Standalone ignore-prior instruction
   crit: notable
@@ -310,7 +355,7 @@ traits:
 
 - id: pdf-output-agrees-presented-filing
   desc: PDF prompt makes output agree with filing
-  crit: notable
+  crit: suspicious
   conf: 0.96
   for: [pdf]
   if:
@@ -321,7 +366,7 @@ traits:
 
 - id: pdf-response-aligns-with-document
   desc: PDF prompt aligns response with document
-  crit: notable
+  crit: suspicious
   conf: 0.94
   for: [pdf]
   if:
@@ -332,7 +377,7 @@ traits:
 
 - id: pdf-output-favors-supplied-position
   desc: PDF prompt favors supplied position
-  crit: notable
+  crit: suspicious
   conf: 0.94
   for: [pdf]
   if:
@@ -524,28 +569,36 @@ traits:
     case_insensitive: true
   count_max: 1011739
 
+# The object has to be the *fact of being* an AI. With `you are` optional these
+# matched any UI string about hiding an assistant: VS Code's "Learn How to Hide
+# AI Features" command title and Kibana's ai_assistant_visibility settings panel.
 - id: llm-hide-ai-identity--rx-38
-  desc: Regex component marker
+  desc: Instruction to never reveal being an AI
   crit: component
   conf: 0.9
   if:
     type: text
-    regex: '\b(never reveal|hide) (you are )?(an? )?(AI|bot)\b'
+    regex: '\b(never reveal|hide) (that )?you(.re| are) (an? )?(AI|bot)\b'
     case_insensitive: true
   count_max: 1011740
 
 - id: llm-hide-ai-identity--rx-39
-  desc: Regex component marker
+  desc: Instruction to conceal being an AI
   crit: component
   conf: 0.9
   if:
     type: text
-    regex: '\b(conceal|mask) (you are )?(an? )?(AI|bot)\b'
+    regex: '\b(conceal|mask) (that )?you(.re| are) (an? )?(AI|bot)\b'
     case_insensitive: true
   count_max: 1011741
 
+# Instruction phrasing only; the LLM-prompt context that makes it an override
+# attempt comes from the `llm-human-impersonation` composite. On its own the
+# phrase is ordinary prose -- identity-provider documentation explains that a
+# delegated service account "can impersonate admin user" (Elastic's
+# search-connectors Google Drive/Workspace help text says exactly that).
 - id: llm-human-impersonation--rx-40
-  desc: Regex component marker
+  desc: Impersonate-a-human phrasing
   crit: component
   conf: 0.88
   if:
@@ -555,7 +608,7 @@ traits:
   count_max: 1011742
 
 - id: llm-human-impersonation--rx-41
-  desc: Regex component marker
+  desc: Impersonate-an-admin phrasing
   crit: component
   conf: 0.88
   if:
@@ -676,6 +729,31 @@ traits:
     - id: well-known/tool/development/go-toolchain::go-toolchain-source-path
 
 composite_rules:
+- id: llm-summary-content-replacement-directive
+  desc: Prompt substitutes summary source
+  crit: suspicious
+  conf: 0.96
+  near_bytes: 500
+  all:
+  - id: llm-superseded-source-claim
+  - id: llm-summary-prohibition-directive
+  - id: llm-summary-replacement-directive
+  unless:
+  - id: well-known/tool/detection/llm-scanner/
+  - id: well-known/tool/detection/security-scanner/
+
+- id: llm-summary-source-suppression-directive
+  desc: Prompt hides replaced summary source
+  crit: suspicious
+  conf: 0.95
+  near_bytes: 240
+  all:
+  - id: llm-suppress-notice-mention
+  - id: llm-suppress-prior-source-reference
+  unless:
+  - id: well-known/tool/detection/llm-scanner/
+  - id: well-known/tool/detection/security-scanner/
+
 # Preserve the stable reference used by stronger override composites while
 # distinguishing standalone document directives from source-code literals.
 - id: llm-ignore-prior-instructions
@@ -787,6 +865,7 @@ composite_rules:
   - id: metadata/package/quality/benign-context::injection-defense-spec-context
   - id: metadata/package/quality/benign-context::untrusted-content-boundary-context
   - id: metadata/package/quality/benign-context::prompt-injection-negative-control-context
+  - id: metadata/package/quality/llm::repair-prompt-context
 
 # Reseller-style jailbreak wrapper: ignore-prior paired with an unconditional
 # "limit your output in any way" strip (Kriminal system prompt shape).
@@ -824,6 +903,8 @@ composite_rules:
   - id: llm-safety-bypass--rx-36
   - id: llm-safety-bypass--rx-37
   unless:
+  # Provider SDKs document their harm-block threshold enum with exactly this wording.
+  - id: metadata/library/ai::llm-provider-safety-setting-api
   - id: well-known/tool/detection/llm-scanner/
 
 - id: llm-jailbreak-payload
@@ -862,11 +943,16 @@ composite_rules:
   - id: llm-hide-ai-identity--rx-39
   unless:
   - id: well-known/tool/detection/llm-scanner/
+  - id: well-known/app/browser/mozilla-firefox::firefox-runtime-tree-path
+  - id: well-known/app/browser/mozilla-firefox::firefox-known-source-module-context
 
 - id: llm-human-impersonation
   desc: Human impersonation prompt
   crit: suspicious
   conf: 0.88
+  near_lines: 12
+  all:
+  - id: micro-behaviors/data/llm::prompt-marker
   any:
   - id: llm-human-impersonation--rx-40
   - id: llm-human-impersonation--rx-41

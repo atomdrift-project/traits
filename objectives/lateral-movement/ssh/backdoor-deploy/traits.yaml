@@ -16,8 +16,8 @@ traits:
     basename: true
     exact: vcluster-qa
 - id: ssh-permit-root
-  desc: PermitRootLogin configuration
-  crit: suspicious
+  desc: Reference to PermitRootLogin configuration
+  crit: notable
   conf: 0.8
   for: [elf, shell, github-actions]
   if:
@@ -33,41 +33,12 @@ traits:
   unless:
   - type: text
     regex: 'PermitRootLogin[\s\\]+(no|prohibit-password|without-password)'
-  - id: objectives/lateral-movement/ssh/backdoor-deploy::sshd-enabled-root-login-token
-  - id: objectives/lateral-movement/ssh/backdoor-deploy::sshd-disabled-root-login-token
+  - id: micro-behaviors/os/service/remote::sshd-root-login-enabled
+  - id: micro-behaviors/os/service/remote::sshd-root-login-disabled
   - id: well-known/tool/sysadmin/alpine-packages::alpine-ansible-core-package
   - id: metadata/file/profile/identity::ansible-python-package-path
   - type: text
     substr: install_pip
-# The separator class accepts a backslash as well as whitespace: a shell script
-# that rewrites sshd_config writes the directive as `PermitRootLogin\ yes`
-# inside an unquoted sed expression, and a `\s+` separator missed every one of
-# those. The escaped spelling is the common one in container entrypoints and in
-# real backdoor droppers alike, so both value classifiers must see it.
-- id: sshd-disabled-root-login-token
-  desc: SSH disabled root-login token
-  crit: component
-  conf: 0.9
-  for: [shell]
-  if:
-    type: text
-    regex: 'PermitRootLogin[\s\\]+(no|prohibit-password|without-password)'
-- id: sshd-enabled-root-login-token
-  desc: SSH enabled root-login token
-  crit: notable
-  conf: 0.9
-  # github-actions included for the same reason as the authorized_keys atoms:
-  # a workflow step appending `PermitRootLogin yes` to sshd_config is the CI
-  # spelling of this, and it was invisible.
-  for: [shell, github-actions]
-  if:
-    type: text
-    regex: 'PermitRootLogin[\s\\]+yes'
-  unless:
-  - type: text
-    substr: install_pip
-  - id: metadata/file/profile/identity::ansible-python-package-path
-  - id: well-known/app/network/openssh/
 - id: vm-image-build-context--rx-2
   desc: VM image build script context
   crit: notable
@@ -203,21 +174,6 @@ composite_rules:
   all:
   - id: objectives/persistence/login/ssh/backdoor::hardcoded-root-authorized-key
   - id: micro-behaviors/os/package-manager/install::apt-install-cmd
-- id: ssh-config-modification
-  desc: SSH daemon configuration modification
-  crit: suspicious
-  conf: 0.85
-  attack: T1021.004
-  needs: 2
-  any:
-  - id: micro-behaviors/os/service/config::sshd-config-path
-  - id: micro-behaviors/os/service/control::sshd-restart-command
-  - id: micro-behaviors/os/service/remote::sshd-config-test-command
-  - id: ssh-permit-root
-  - id: micro-behaviors/os/service/remote::ssh-password-auth-enabled
-  unless:
-  - id: micro-behaviors/os/service/remote::sshd-container-foreground-start
-  - id: well-known/tool/sysadmin/automatedlab/
 - id: ssh-backdoor-installation
   desc: SSH backdoor installation
   crit: hostile
@@ -234,7 +190,10 @@ composite_rules:
   # original legs matched no malicious sample at all, so requiring the append
   # costs no detection.
   all:
-  - id: ssh-config-modification
+  # A path plus a permissive setting is ordinary provisioning. Require the
+  # existing atom that proves the daemon configuration is actually edited;
+  # the embedded key and authorized_keys append below supply backdoor intent.
+  - id: micro-behaviors/os/service/remote::sshd-config-sed-edit
   - id: micro-behaviors/fs/path/sensitive/credentials::ssh-authorized-keys
   # Naming the file is configuration; appending to it is deployment. The atom
   # already exists in the ssh key micro-behaviours, so reuse it.
@@ -251,8 +210,8 @@ composite_rules:
   near_lines: 4
   all:
   - id: micro-behaviors/os/service/remote::sshd-config-sed-edit
-  - id: sshd-disabled-root-login-token
-  - id: sshd-enabled-root-login-token
+  - id: micro-behaviors/os/service/remote::sshd-root-login-disabled
+  - id: micro-behaviors/os/service/remote::sshd-root-login-enabled
   - id: micro-behaviors/os/service/config::sshd-config-path
   unless:
   # The same container carve-out the sed leg carries: MegaLinter's entrypoint

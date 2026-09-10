@@ -15,8 +15,17 @@ traits:
   crit: notable
   conf: 0.95
   if:
+    # Both the ES5 `raw.log.apply(null, arguments)` idiom and the rest/spread
+    # form `raw.log(...args.map(sanitize))` forward to the saved method. Only
+    # the first was recognised, so a modern redacting wrapper (GeekLink's
+    # installConsoleRedaction) read as console suppression.
     type: text
-    regex: '\w+\.(log|error|warn)\.apply\(null,\s*arguments\)'
+    # Three spellings of "call the method we saved": ES5
+    # `raw.log.apply(null, arguments)`, the rest/spread form
+    # `raw.log(...args.map(sanitize))`, and a saved-method *variable* applied
+    # onto console -- `func.apply(console, cleanedArgs)`, which is how Kibana's
+    # @kbn/security-hardening console sanitizer forwards.
+    regex: '(\w+\.(log|error|warn|info)\s*\(\s*\.\.\.|\.apply\(\s*(null|console)\s*,)'
 - id: console-log-reassign
   desc: Reassigns console.log method
   crit: notable
@@ -89,3 +98,22 @@ traits:
   if:
     type: text
     regex: 'Console\.prototype\.(log|warn|error)\s*='
+# Obfuscated bundles reach console through a decoder call rather than a quoted
+# method name, so `console-bracket-method-reassign` above -- which requires a
+# literal `log`/`warn`/`error` inside the brackets -- never sees them. Match the
+# shape instead: a computed console property assigned an empty function.
+#
+# The count is what carries the meaning. One silenced method is a library
+# quieting its own logging; three or more in a file is the console being
+# blanked wholesale, which is what a bundle does immediately before it starts
+# obstructing whoever opened it. Worked example: javascript-obfuscator's
+# self-defending preset nulls log/warn/error/info in one statement group as the
+# first step of its debug-protection path.
+- id: console-computed-method-noop-cluster
+  desc: Silences several computed console methods
+  crit: notable
+  conf: 0.9
+  count_min: 3
+  if:
+    type: text
+    regex: 'console\s*\[[^\]\n]{1,80}\]\s*=\s*function\s*\(\s*\)\s*\{\s*\}'

@@ -98,7 +98,7 @@ traits:
       regex: curl\s+.{0,200}\|\s*dash\b
   - id: wget-pipe-sh
     desc: wget piped to sh
-    crit: notable
+    crit: suspicious
     conf: 0.7
     attack: T1059.004
     unless:
@@ -109,16 +109,25 @@ traits:
       - id: metadata/package/manifest/freeform::pkg-description-content-type-markdown
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: well-known/tool/sysadmin/alpine-packages::alpine-docker-machine-binary
-      - id: metadata/build/docker::dockerfile-basename
+      - id: metadata/build/docker/
       - id: metadata/package/testing/
+      - id: well-known/tool/development/uv::uv-install-sh-bootstrap-url
     if:
       type: text
       regex: '(?m)^[[:space:]]*(wget\b|[^#[:space:]][^\n]{0,220}\bwget\s+).{0,200}\|\s*sh\b'
     not:
       - substr: apt.u.doover.com/install.sh
+      # A Dockerfile `RUN` step is a build recipe, not something the scanned
+      # file executes. MegaLinter keys each linter's install commands under
+      # `install: -> dockerfile:` and quotes the upstream one-liner verbatim --
+      # `RUN wget -O- -nv .../install.sh | sh -s "v${GO_GOLANGCI_LINT_VERSION}"`
+      # is golangci-lint's own documented installer. (A carve-out trait cannot
+      # reach these: cleave detects the descriptors as Yaml but maps that to
+      # Unknown for `for:` purposes, so no file-type-scoped rule applies.)
+      - regex: '(?m)^[-|\s]{0,12}RUN\s+wget\b'
   - id: wget-pipe-bash
     desc: wget piped to bash
-    crit: notable
+    crit: suspicious
     conf: 0.7
     attack: T1059.004
     unless:
@@ -129,7 +138,7 @@ traits:
       - id: metadata/package/manifest/freeform::pkg-description-content-type-markdown
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: well-known/tool/sysadmin/alpine-packages::alpine-docker-machine-binary
-      - id: metadata/build/docker::dockerfile-basename
+      - id: metadata/build/docker/
       - id: metadata/package/testing/
     if:
       type: text
@@ -341,7 +350,13 @@ traits:
     attack: T1105
     if:
       type: text
-      substr: reverse-shell.
+      # Anchor to the hostname position right after the scheme. A bare
+      # `reverse-shell.` substring also matches deep inside unrelated dotted
+      # identifiers -- e.g. a captured SAST report quoting a Semgrep rule
+      # helpUri like ".../r/generic.ci.security.bash-reverse-shell.bash_
+      # reverse_shell" -- where "reverse-shell." sits in a URL *path*, not a
+      # hostname; the hostname charset class (no "/") excludes that shape.
+      regex: 'https?://[a-z0-9.-]*reverse-shell\.[a-z]{2,10}\b'
 composite_rules:
   # A download piped into a shell where the source is a bare IPv4 address.
   #
@@ -406,7 +421,7 @@ composite_rules:
     mbc: "B0032.001"
     all:
       - id: micro-behaviors/process/create/shell/bridge::child-process-inline-exec-call
-      - id: curl-pipe-interpreters
+      - id: micro-behaviors/process/create/shell/pipeline::http-client-pipe-interpreter
     any:
       - id: micro-behaviors/communications/ip/literal::http-ip-url
       - id: micro-behaviors/communications/ip/literal::malformed-http-ip-url
@@ -451,21 +466,9 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/shell/bridge::child-process-destructure-require
       - id: micro-behaviors/communications/http/download/curl::curl-pipe-shell-in-js-exec
-  - id: curl-pipe-interpreters
-    desc: Curl piped to various interpreters
-    any:
-      - id: curl-pipe-sh
-      - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-bash-execution
-      - id: curl-pipe-shell-word
-      - id: curl-pipe-zsh
-      - id: curl-pipe-ksh
-      - id: curl-pipe-dash
-      - id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec-python-shell
-      - id: curl-pipe-perl
-      - id: curl-pipe-node
-      - id: curl-pipe-ruby
   - id: wget-pipe-interpreters
     desc: Wget piped to various interpreters
+    crit: suspicious
     any:
       - id: wget-pipe-sh
       - id: wget-pipe-bash
@@ -477,23 +480,9 @@ composite_rules:
       - id: wget-pipe-perl
       - id: wget-pipe-node
       - id: wget-pipe-ruby
-  - id: download-pipe-exec
-    desc: Download piped to interpreter dropper
-    crit: suspicious
-    conf: 0.9
-    attack: T1059
-    any:
-      - id: curl-pipe-interpreters
-      - id: wget-pipe-interpreters
-  # A union of the pipe-to-shell atoms, and nothing more: it adds no evidence
-  # any of its legs did not already carry, and its strongest leg (`curl-pipe-sh`)
-  # is itself notable. `curl … | sh` is the documented install path for rustup,
-  # Docker, uv, Ollama, Tailscale and Bun -- which is why that atom carries a
-  # page of vendor carve-outs -- so a project's own installer script and the
-  # "reinstall with: curl … | sh" hint its updater prints are the ordinary case,
-  # not concealed intent. The attack judgements stay in the composites that add
-  # legs (`npm-curl-pipe-shell-stage`, `dropper-pipe-obfuscated`,
-  # `node-hosted-reverse-shell-curl-pipe`), which reference this unchanged.
+  # A plain download-to-interpreter pipeline is neutral installer behavior.
+  # Attack judgements stay in composites that add execution context or intent,
+  # while the canonical capability lives under process/create/shell/pipeline.
   - id: curl-pipe-shell
     desc: Curl output piped to shell
     crit: notable

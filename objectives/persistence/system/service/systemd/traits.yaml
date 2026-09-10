@@ -360,9 +360,14 @@ traits:
   crit: component
   conf: 0.7
   if:
+    # `/opt` dropped: the FHS reserves it for add-on application packages, so
+    # a vendor unit running `/opt/<product>/bin/...` is the documented layout,
+    # not an unusual location (agent-glovebox's own sweep scheduler unit runs
+    # /opt/agent-glovebox/.github/scheduler/dispatch-sweeps.sh). /home, /root
+    # and /etc remain unusual places to run a system service binary from.
     type: value
     path: "service.exec_start"
-    regex: "^/(home|root|opt|etc)/"
+    regex: "^/(home|root|etc)/"
 
 # The %h/~/$HOME macro forms resolve to the same home-relative location that the
 # absolute /home/<user>/ rule above already treats as unusual. A user unit whose
@@ -378,6 +383,12 @@ traits:
     type: value
     path: "service.exec_start"
     regex: '^(%h|~|\$\{?HOME\}?)/\.[a-z]{3,8}/'
+  unless:
+  - type: value
+    path: "service.exec_start"
+    # ~/.local/bin is the standard per-user executable location used by
+    # ordinary user services installed with pipx and similar tools.
+    regex: '^(%h|~|\$\{?HOME\}?)/\.local/bin/'
 
 - id: exec-stop-userwritable-path
   desc: ExecStop from user writable path
@@ -420,17 +431,6 @@ traits:
     path: "service.exec_stop"
     regex: "^/casaOS/server/shell/"
 
-- id: comment-exists
-  desc: Systemd unit comment exists
-  crit: baseline
-  for: [systemd-service]
-  count_min: 2
-  if:
-    type: text
-    regex: '^\s*#[ a-zA-Z0-9]{3,}'
-  unless:
-  - id: well-known/app/system/drivers/
-
 - id: systemd-forking-no-deps
   desc: Forking service with no dependencies
   for: [systemd]
@@ -447,15 +447,6 @@ traits:
   - id: metadata/package/testing/harness/unit/
   - id: metadata/package/testing/
   - id: well-known/app/utility/kpango-dotfiles::kpango-dotfiles-source-path
-
-- id: default-deps-no
-  desc: Service DefaultDependencies=no
-  for: [systemd]
-  crit: notable
-  if:
-    type: value
-    path: "service.default_dependencies"
-    exact: "no"
 
 composite_rules:
 - id: exec-start-unexpected-path
@@ -737,10 +728,10 @@ composite_rules:
   any:
   - id: micro-behaviors/os/service/config::unit-description-exists
   - id: micro-behaviors/os/service/config::documentation-exists
-  - id: comment-exists
+  - id: metadata/file/policy/config/services::systemd-unit-comment-lines
   - id: micro-behaviors/os/service/dependency::after-exists
-  - id: micro-behaviors/os/service/unit-field::condition-exists
-  - id: micro-behaviors/os/service/unit-field::standard-output-exists
+  unless:
+  - id: metadata/package/testing/presence/fixture::test-artifact-context
 # The rule claimed a unit was undocumented and uncommented while checking
 # neither: the only positive leg is `ExecStart=`. systemd's own
 # `systemd-ask-password@.service` and `systemd-journalctl@.service` carry a
@@ -749,14 +740,14 @@ composite_rules:
 # now actually required.
 - id: systemd-no-docs-or-comments
   desc: Systemd unit is undocumented and lacks comments
-  crit: suspicious
+  crit: notable
   conf: 0.7
   for: [systemd]
   all:
   - id: micro-behaviors/os/service/config::exec-start
   unless:
   - id: micro-behaviors/os/service/config::documentation-exists
-  - id: comment-exists
+  - id: metadata/file/policy/config/services::systemd-unit-comment-lines
   # Was this rule's own directory. A unit that declares dependencies or an
   # environment is a real unit, which is the exemption this reached for.
   - id: systemd-has-dependency-or-env
@@ -769,16 +760,16 @@ composite_rules:
   - id: micro-behaviors/os/service/config::install-wanted-by-exists
   - id: micro-behaviors/os/service/dependency
   - id: micro-behaviors/os/service/config::service-type-minimal
-  - id: default-deps-no
   - id: micro-behaviors/os/service/environment::service-environment-exists
+  unless:
+  - id: metadata/package/testing/presence/fixture::test-artifact-context
 
 - id: systemd-suspicious-service-file
-  desc: Suspiciously minimal or obfuscated systemd service
-  crit: suspicious
+  desc: Minimal or unusual systemd service structure
+  crit: notable
   conf: 0.9
   any:
   - id: exec-start-dangerous-path
-  - id: systemd-no-docs-or-comments
   - id: systemd-forking-no-deps
 - id: hidden-temp-systemd-persistence
   desc: Hidden temp payload systemd persistence

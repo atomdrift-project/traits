@@ -163,7 +163,7 @@ traits:
 
 **Field override:** List fields such as `for` and `platforms` must resolve to concrete supported values. Do not use `[none]`; the validator requires every trait and composite to target at least one file type.
 
-**File types:** `elf`, `macho`, `pe`, `dll`, `so`, `dylib`, `pyc`, `dex`, `wasm`, `beam`, `shell`, `batch`, `jcl`, `python`, `javascript`, `typescript`, `rust`, `java`, `class`, `ruby`, `c`, `cpp`, `go`, `csharp`, `php`, `perl`, `powershell`, `lua`, `swift`, `objectivec`, `groovy`, `kotlin`, `scala`, `zig`, `elixir`, `vbs`, `html`, `applescript`, `package.json`, `package-lock.json`, `json`, `chrome-manifest`, `vsix-manifest`, `cargo.toml`, `pyproject.toml`, `github-actions`, `composer.json`, `plist`, `ipa`, `rtf`, `lnk`, `jpeg`, `png`, `pkginfo`, `pickle`, `pdf`, `oledoc`, `msi`, `ooxml`, `iso`, `registry`, `systemd-service`, `desktop-entry`, `zip`, `tar`, `npm`, `whl`, `python-sdist`, `egg`, `gem`, `nupkg`, `crate`, `conda`, `deb`, `rpm`, `apk`, `jar`, `crx`, `xpi`, `vsix`, `chm`, `static-lib` (a `.a` Unix static library — native object code; scanned as a binary blob, in the `binaries` group).
+**File types:** `elf`, `macho`, `pe`, `dll`, `so`, `dylib`, `pyc`, `dex`, `wasm`, `beam`, `shell`, `batch`, `jcl`, `python`, `javascript`, `typescript`, `rust`, `java`, `class`, `ruby`, `c`, `cpp`, `go`, `csharp`, `php`, `perl`, `powershell`, `lua`, `swift`, `objectivec`, `groovy`, `kotlin`, `scala`, `zig`, `elixir`, `vbs`, `html`, `applescript`, `package.json`, `package-lock.json`, `json`, `chrome-manifest`, `vsix-manifest`, `cargo.toml`, `pyproject.toml`, `github-actions`, `composer.json`, `plist`, `ipa`, `rtf`, `lnk`, `jpeg`, `png`, `pkginfo`, `pickle`, `pdf`, `oledoc`, `msi`, `ooxml`, `iso`, `registry`, `systemd-service`, `desktop-entry`, `pbxproj` (an Xcode `project.pbxproj`; its build phases and settings are parsed to `pbxproj.scripts[]` / `pbxproj.build_settings[]`), `cmake` (`CMakeLists.txt`, `*.cmake`), `zip`, `tar`, `npm`, `whl`, `python-sdist`, `egg`, `gem`, `nupkg`, `crate`, `conda`, `deb`, `rpm`, `apk`, `jar`, `crx`, `xpi`, `vsix`, `chm`, `static-lib` (a `.a` Unix static library — native object code; scanned as a binary blob, in the `binaries` group).
 
 **Aliases** (resolved to the canonical type):
 
@@ -186,6 +186,7 @@ traits:
 | `scripts` | `shell`, `batch`, `jcl`, `python`, `javascript`, `ruby`, `php`, `perl`, `lua`, `powershell`, `applescript`, `vbs` |
 | `source` | `typescript`, `rust`, `java`, `c`, `cpp`, `go`, `csharp`, `swift`, `objectivec`, `groovy`, `kotlin`, `scala`, `zig`, `elixir` |
 | `manifests` | `package.json`, `chrome-manifest`, `vsix-manifest`, `cargo.toml`, `pyproject.toml`, `github-actions`, `composer.json`, `pkginfo`, `plist`, `lnk`, `systemd-service`, `desktop-entry` |
+| `build` | `makefile`, `cmake`, `pbxproj`, `dockerfile` — executable build logic (a Make recipe, a CMake `execute_process`, an Xcode build phase, a Dockerfile `RUN`), as opposed to the declarative metadata in `manifests`. Overlaps it on `dockerfile`, which is both |
 | `documents` | `pdf`, `rtf`, `html`, `oledoc`, `ooxml` |
 | `media` | `jpeg`, `png` |
 | `data` | `json`, `ipa`, `text`, opaque `data` |
@@ -703,6 +704,15 @@ The `encoded` type searches decoded/encoded strings with an optional encoding fi
 | Omit `encoding:` | Search **all** encoded strings | `type: encoded, substr: "eval"` |
 | Single string | Search single encoding type | `encoding: base64` |
 | Array | Search multiple types (OR) | `encoding: [base64, hex]` |
+| `+`-joined chain | Require these encodings, in this order | `encoding: base64+base64` |
+
+A `+` names a **chain** rather than one encoding, matched as a consecutive run
+of links: `base64+base64` is a payload wrapped twice, `xor+base64` is XOR over
+base64. A bare `base64` still matches any chain containing base64, so use the
+chain form when the *stacking* is the signal — one encoding carries binary
+safely through a text channel, while a second carries nothing further and
+exists only so the first layer reads as data rather than as a command. The
+spelling matches how a chain is rendered in evidence (`encoding_chain:xor+base64`).
 
 ### Examples
 

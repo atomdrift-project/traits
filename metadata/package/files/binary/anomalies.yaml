@@ -5,6 +5,21 @@ defaults:
     - android
     - ios
 traits:
+  # A distribution archive whose name carries an OS/arch tag is a
+  # platform-specific build, so shipping that platform's executables is the
+  # point of it -- `heroku-v11.9.0-c5fbf4b-win32-x64.tar.xz` bundles node.exe
+  # and its DLLs beside the CLI's npm tree. The anomaly these rules look for is
+  # a *portable* script package that has no reason to carry a Windows binary.
+  - id: platform-tagged-distribution-archive
+    desc: Archive name carries an OS/arch build tag
+    crit: baseline
+    conf: 0.9
+    platforms: [windows, unix]
+    for: [tar, zip, npm, whl]
+    if:
+      type: basename
+      regex: '(win32|windows|darwin|linux)[._-](x64|x86_64|arm64|amd64|ia32)'
+
   - id: benign-brackets-helper-exe
     desc: Brackets app helper executable
     crit: component
@@ -74,6 +89,20 @@ traits:
     if:
       type: path
       regex: '(?i)(^|[/\\])node-gyp[/\\].*setup\.py$'
+  # The same vendored Chromium gyp setup.py also ships under other parent
+  # directory names -- nw-gyp (NW.js's node-gyp fork) keeps it at gyp/setup.py
+  # at its package root, not nested under a node-gyp/ path. Match on the
+  # setup.py's own distinctive, unchanged content instead of a parent
+  # directory name so any vendoring layout is covered.
+  - id: gyp-vendored-setup-py-content
+    desc: Vendored Chromium gyp setup.py content
+    crit: component
+    conf: 0.97
+    platforms: [windows, unix]
+    for: [python]
+    if:
+      type: text
+      substr: "description='Generate Your Projects'"
 composite_rules:
   # Known-benign Windows binaries that projects legitimately bundle: a
   # portable Python runtime, the busybox-w32 utilities, and the pywin32
@@ -178,8 +207,12 @@ composite_rules:
       # dependency that ships a prebuilt Windows .exe/.dll (also common)
       # pools the two into a false "Python package with bundled EXE" --
       # npm's own 6.9.2 tarball does this via node-gyp's setup.py and
-      # term-size's vendored windows/term-size.exe.
-      - id: well-known/tool/development/dev-cli/node-gyp::vendored-path
+      # term-size's vendored windows/term-size.exe. Matched on the vendored
+      # setup.py's own content rather than a node_modules/node-gyp/ path so
+      # it also covers nw-gyp (NW.js's node-gyp fork), whose release tarball
+      # carries the identical gyp/setup.py at its package root alongside a
+      # legitimately bundled portable clang/lld-link Windows toolchain.
+      - id: gyp-vendored-setup-py-content
     all:
       - id: metadata/package/files/included::setup-py-basename
     any:
@@ -206,6 +239,7 @@ composite_rules:
     unless:
       - id: metadata/build/manifest::nuspec-file
       - id: node-gyp-setup-py-path
+      - id: gyp-vendored-setup-py-content
       - id: benign-portable-python-runtime-exe
       - id: well-known/app/ai/gateway/textgen::textgen-portable-archive-context
       - id: metadata/build/archive::source-archive-member
@@ -231,6 +265,8 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     unless:
+      # A platform-tagged build ships that platform binaries by definition.
+      - id: platform-tagged-distribution-archive
       - id: well-known/app/ai/gateway/textgen::textgen-portable-archive-context
       - id: well-known/game/doom-ascii::pip-doom-distribution-context
       - id: well-known/game/doom-ascii::pip-doom-archive-basename
@@ -249,10 +285,12 @@ composite_rules:
       - id: metadata/package/files/included::png-extension-basename
       - id: metadata/package/files/included::ico-extension-basename
   - id: script-package-with-windows-binary
-    desc: Script-based package contains Windows binary (highly suspicious)
+    desc: npm or Python package ships a Windows PE
     crit: suspicious
     conf: 0.9
     unless:
+      # A platform-tagged build ships that platform binaries by definition.
+      - id: platform-tagged-distribution-archive
       - id: well-known/app/ai/gateway/textgen::textgen-portable-archive-context
       - id: well-known/game/doom-ascii::pip-doom-distribution-context
       - id: well-known/game/doom-ascii::pip-doom-archive-basename

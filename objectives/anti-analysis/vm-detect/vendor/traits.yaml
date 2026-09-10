@@ -30,7 +30,7 @@ traits:
     exact: KVM
 - id: vendor-kvm-repeat
   desc: KVMKVMKVM hypervisor signature
-  crit: component
+  crit: notable
   conf: 0.7
   if:
     type: text
@@ -50,7 +50,7 @@ traits:
     - id: well-known/lib/platform/gopsutil::gopsutil-library-context
 - id: vendor-virtualbox
   desc: VirtualBox hypervisor vendor string
-  crit: component
+  crit: notable
   conf: 0.6
   if:
     type: text
@@ -58,6 +58,8 @@ traits:
     # than a standalone product/vendor reference.
     regex: '(^|[^a-z0-9-])virtualbox\b'
     case_insensitive: true
+  unless:
+  - id: well-known/app/infrastructure/virtualbox::gentoo-recipe-virtualbox-context
   downgrade:
     any:
     - type: text
@@ -97,6 +99,7 @@ traits:
   - type: text
     exact: SYSTEM\ControlSet001\Services\VBoxGuest
   - id: metadata/package/manifest/compat::virtualbox-platform-component
+  - id: well-known/app/infrastructure/virtualbox::gentoo-recipe-virtualbox-context
 - id: vendor-hyperv-dash--rx-1
   desc: Regex component marker
   crit: component
@@ -553,6 +556,7 @@ traits:
   - id: well-known/tool/sysadmin/cubesandbox::cubesandbox-source-path
   - id: well-known/app/infrastructure/xen::xen-hypervisor-context
   - id: well-known/app/infrastructure/open-vm-tools/
+  - id: well-known/app/infrastructure/vmware-tools/
   - id: well-known/tool/development/qemu::qemu-system-emulator
   - id: well-known/lib/platform/rust-kvm::kvm-ioctls-runtime
   - id: well-known/lib/core/raw-cpuid/
@@ -686,20 +690,27 @@ composite_rules:
   any:
   - id: vendor-virtualbox
   - id: vendor-vbox-short
+  unless:
+  # A distro packaging recipe that names VirtualBox is packaging content,
+  # not an environment probe.
+  - id: well-known/app/infrastructure/virtualbox::gentoo-recipe-virtualbox-context
 - id: vendor-hyperv
   desc: Hyper-V hypervisor vendor string
   crit: notable
   conf: 0.7
+  # Only the Hyper-V-specific strings may satisfy this trait. It previously
+  # also accepted `hypervisor-vendor` (the union of every vendor atom,
+  # including this one), so a bare "VirtualBox"/"KVM"/"QEMU" mention was
+  # reported as a Hyper-V vendor string.
   any:
   - id: vendor-hyperv-dash
   - id: vendor-microsoft-hv
-  - id: hypervisor-vendor
   unless:
   - id: well-known/app/infrastructure/systemd::container-runtime-component-basename
   - id: well-known/lib/ai/ggml::ggml-native-debugger-helper-context
 - id: file-check
-  desc: Checks for VM-specific files
-  crit: suspicious
+  desc: References VM guest artifact paths
+  crit: notable
   conf: 0.85
   any:
   - id: file-vbox-guest
@@ -709,6 +720,15 @@ composite_rules:
   - id: file-vmtoolsd
   - id: file-qemu-ga
   - id: micro-behaviors/fs/path/device/storage::dev-vda
+  unless:
+  # IObit CareScan inventories hardware and drivers, so it names hypervisor guest-tool files as things to report.
+  - id: well-known/app/system/iobit::iobit-signed-component-context
+  # Hypervisor guest components inspect their own installed files as part of
+  # normal discovery and upgrades; they are the environment, not an evader.
+  - id: well-known/app/infrastructure/
+  downgrade:
+    any:
+    - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 - id: mac-prefix
   desc: Checks for VM MAC address
   crit: suspicious
@@ -722,6 +742,10 @@ composite_rules:
   # contains, which is backwards for the emulator itself.
   unless:
   - id: well-known/tool/development/qemu/
+  # SEGGER's J-Link probe software documents its MAC-address config option
+  # with a "Sample: macaddr = 00:0C:29:..." help string; the OUI is
+  # incidental example text, not a runtime VM fingerprint comparison.
+  - id: well-known/tool/reverse-engineering/segger-jlink::segger-jlink-identity
   any:
   - id: mac-vmware-1
   - id: mac-vmware-2
@@ -734,6 +758,7 @@ composite_rules:
   desc: Multiple VM detection techniques (evasion)
   crit: suspicious
   conf: 0.95
+  scope: leaf
   needs: 3
   any:
   - id: micro-behaviors/os/virtualization/hypervisor::vmware-vendor-name
@@ -751,22 +776,13 @@ composite_rules:
   # with zero VM strings. The "detect VM then exit" pairing lives in
   # vm-detect/registry::bios-vm-check-and-exit.
   unless:
+  - id: virtualization-reporting-context
+  # The binary IS the virtualization product, so the vendor strings are its own
+  # identity rather than a probe for someone else's. (These two are `baseline`
+  # identity markers, which an exception composite may not take as members.)
   - id: metadata/package/manifest/compat::virtualbox-platform-component
-  - id: well-known/app/system/iobit::iobit-signed-component-context
-  # systeminformation is a published hardware/OS information library; its
-  # cross-platform VM/container probes are inventory functionality, not
-  # anti-analysis evasion.
-  - id: well-known/lib/core/systeminformation/
-  # `systemd-detect-virt` is a documented systemd feature: it reports which
-  # hypervisor or container the host runs under, so systemd's shared library --
-  # and every NSS/PAM module linked against it -- ships the full vendor table
-  # (KVM, QEMU, Oracle/VirtualBox, VMware, Xen, Bochs, Parallels, bhyve) and
-  # reads DMI/SMBIOS to match it. Reporting the answer is the opposite of
-  # hiding from it.
-  - id: well-known/lib/native/systemd::systemd-native-library-context
-  # AI-agent observability tools fingerprint the runtime (docker/VM) for telemetry.
-  - id: well-known/tool/detection/ai-guardrail/
-  # lshw/gtk-lshw carry VMware/VirtualBox/QEMU/Xen vendor strings in their benign
+  - id: well-known/tool/development/qemu::qemu-system-emulator
+  # lshw/gtk-lshw carry the VMware/VirtualBox/QEMU/Xen strings in their benign
   # OUI hardware-vendor table, not as VM-detection logic.
   - id: lshw-hardware-lister-oui-table
   downgrade:
@@ -826,3 +842,26 @@ composite_rules:
   - id: vendor-hyperv-dash-cond-3--inline-17221
   - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
   - id: metadata/binary/vendor::microsoft-corp-versioninfo
+
+# Most of the carve-outs `comprehensive-evasion` needs say the same thing, so
+# say it once here rather than listing every product separately.
+#
+# Reading the hypervisor vendor and REPORTING it is the whole feature:
+# `systemd-detect-virt` names the hypervisor for the operator (so systemd's
+# shared library, and every NSS/PAM module linked against it, ships the full
+# KVM/QEMU/VirtualBox/VMware/Xen/Bochs/Parallels/bhyve table and reads
+# DMI/SMBIOS to match it); systeminformation, envinfo and SIW put the same
+# answer in a diagnostics report; AI-agent observability tools fingerprint the
+# runtime for telemetry. None of them branch away from the answer, which is
+# what evasion means.
+- id: virtualization-reporting-context
+  desc: Tool reports host virtualization as output
+  crit: exception
+  conf: 0.95
+  any:
+  - id: well-known/lib/core/systeminformation/
+  - id: well-known/lib/native/systemd::systemd-native-library-context
+  - id: well-known/tool/detection/ai-guardrail/
+  - id: well-known/tool/development/dev-cli/envinfo/
+  - id: well-known/app/utility/siw::siw-family-identity
+  - id: well-known/app/system/iobit::iobit-signed-component-context

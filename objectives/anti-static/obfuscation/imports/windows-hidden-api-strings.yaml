@@ -1,3 +1,7 @@
+# Wine (and ReactOS, and the genuine Windows system DLLs) ship the whole native
+# memory/thread API surface as strings because ntdll/kernelbase/wow64 IMPLEMENT
+# it. The cluster is only anti-static evidence in a binary that resolves those
+# names instead of exporting them.
 defaults:
   platforms: [windows]
   for: [pe]
@@ -6,22 +10,28 @@ defaults:
 composite_rules:
   - id: native-memory-api-cluster-without-allocate
     desc: Native memory API cluster without allocate
-    crit: component
+    crit: suspicious
     conf: 0.84
     all:
       - id: micro-behaviors/os/syscall/raw::nt-write-ssn
       - id: micro-behaviors/mem/create/shared::nt-map-view-section-api-string
       - id: micro-behaviors/os/syscall/raw::nt-protect-ssn
       - id: micro-behaviors/os/syscall/raw::nt-create-thread-ssn
+    unless:
+      - id: well-known/app/system/reactos::system-component
+      - id: metadata/binary/vendor::windows-system-implementer-dll
   - id: native-memory-api-cluster-without-write
     desc: Native memory API cluster without write
-    crit: component
+    crit: suspicious
     conf: 0.84
     all:
       - id: micro-behaviors/mem/alloc/virtual::nt-allocate-virtual-memory-api
       - id: micro-behaviors/mem/create/shared::nt-map-view-section-api-string
       - id: micro-behaviors/os/syscall/raw::nt-protect-ssn
       - id: micro-behaviors/os/syscall/raw::nt-create-thread-ssn
+    unless:
+      - id: well-known/app/system/reactos::system-component
+      - id: metadata/binary/vendor::windows-system-implementer-dll
 
   - id: unsigned-api-resolver-anti-debug-loader
     desc: Unsigned loader resolves APIs while checking for debuggers
@@ -29,41 +39,61 @@ composite_rules:
     conf: 0.96
     attack: T1027.007,T1622
     all:
-      - id: metadata/binary/layout::pe-no-signature-record
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
       - id: micro-behaviors/os/api-resolution/manual::custom-api-resolver-logic
       - id: micro-behaviors/dylib/load/runtime::load-library-ex-w
       - id: micro-behaviors/os/module/load::get-proc-address-import
       - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+    any:
+      # The legs above are the CRT plumbing of any unsigned MSVC-linked
+      # binary (IsDebuggerPresent is the fail-fast import; LoadLibraryExW,
+      # GetProcAddress, GetModuleHandleEx and api-ms-* names are runtime
+      # initialization). Require resolution evidence with hostile weight:
+      # hashed API tables, native memory/thread APIs, code-referenced
+      # allocation, or remote threads.
+      - id: additive-hash-table-multiple-apis
+      - id: micro-behaviors/mem/alloc/virtual::nt-allocate-virtual-memory-api
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-string-text-section
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
     unless:
       - id: metadata/signed/platform/
       - id: well-known/tool/reverse-engineering/
   - id: native-memory-api-cluster-without-map
     desc: Native memory API cluster without map
-    crit: component
+    crit: suspicious
     conf: 0.84
     all:
       - id: micro-behaviors/mem/alloc/virtual::nt-allocate-virtual-memory-api
       - id: micro-behaviors/os/syscall/raw::nt-write-ssn
       - id: micro-behaviors/os/syscall/raw::nt-protect-ssn
       - id: micro-behaviors/os/syscall/raw::nt-create-thread-ssn
+    unless:
+      - id: well-known/app/system/reactos::system-component
+      - id: metadata/binary/vendor::windows-system-implementer-dll
   - id: native-memory-api-cluster-without-protect
     desc: Native memory API cluster without protect
-    crit: component
+    crit: suspicious
     conf: 0.84
     all:
       - id: micro-behaviors/mem/alloc/virtual::nt-allocate-virtual-memory-api
       - id: micro-behaviors/os/syscall/raw::nt-write-ssn
       - id: micro-behaviors/mem/create/shared::nt-map-view-section-api-string
       - id: micro-behaviors/os/syscall/raw::nt-create-thread-ssn
+    unless:
+      - id: well-known/app/system/reactos::system-component
+      - id: metadata/binary/vendor::windows-system-implementer-dll
   - id: native-memory-api-cluster-without-create
     desc: Native memory API cluster without create
-    crit: component
+    crit: suspicious
     conf: 0.84
     all:
       - id: micro-behaviors/mem/alloc/virtual::nt-allocate-virtual-memory-api
       - id: micro-behaviors/os/syscall/raw::nt-write-ssn
       - id: micro-behaviors/mem/create/shared::nt-map-view-section-api-string
       - id: micro-behaviors/os/syscall/raw::nt-protect-ssn
+    unless:
+      - id: well-known/app/system/reactos::system-component
+      - id: metadata/binary/vendor::windows-system-implementer-dll
   - id: native-memory-api-string-cluster
     desc: Native memory API string cluster
     crit: suspicious
@@ -75,6 +105,9 @@ composite_rules:
       - id: native-memory-api-cluster-without-map
       - id: native-memory-api-cluster-without-protect
       - id: native-memory-api-cluster-without-create
+    unless:
+      - id: well-known/app/system/reactos::system-component
+      - id: metadata/binary/vendor::windows-system-implementer-dll
   - id: hidden-loader-api-string-cluster
     desc: Concealed loader API string cluster
     crit: suspicious
