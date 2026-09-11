@@ -259,6 +259,7 @@ defaults:
   - `external_ip`: Only match if evidence contains a valid external IPv4 (rejects RFC1918, loopback, reserved).
   - `valid_ip`: Only match if evidence contains a structurally valid IPv4 of any range (octets 0–255, no leading zeros, exactly four parts) — includes private/loopback. Use this to confirm an IP *literal* of any kind and to reject malformed dotted-decimal runs (e.g. SVG path coordinates `022.617.46.402`) that a bare `\d{1,3}` regex would accept.
   - `bitcoin_addr`: Only match if evidence contains a valid Bitcoin address (P2PKH, P2SH, or SegWit) with a valid checksum.
+  - `base64`: Require the entire matched span to be compatible with canonical standard or URL-safe Base64, padded or unpadded. Checks length, padding placement and unused trailing bits; rejects mixed alphabets and ignores ASCII space/tab/CR/LF. Does not allocate a decoded buffer. Compatibility is not proof of encoding intent, executable content, or hostility: even ordinary words can be valid Base64. Anchor the pattern when validating an entire literal, and use separate length/context constraints.
 - **Symbol normalization:** Leading underscores are stripped from both loaded symbols and `exact`/`substr` patterns for cross-platform portability (macOS `_malloc`, glibc `__libc_start_main` both match `exact: "malloc"` / `exact: "libc_start_main"`). Regex patterns are not normalized.
 - **Symbol family shortcuts:** use `type: import`, `type: export`, or `type: function` when you know the family. They are clearer spellings for `type: symbol` with `kind: import/export/function`. Keep `type: symbol` for cross-family searches or `kind: forward` PE re-export rules. When `kind: forward`, the pattern is tested against both the export name *and* the forward target (`KERNEL32.LoadLibraryA`).
 
@@ -304,7 +305,7 @@ structured fact.
 | Type | Purpose | Fields |
 |------|---------|--------|
 | `tree-sitter` | Live tree-sitter query (escape hatch) | `kind`/`node`, `exact`/`substr`/`regex`/`query` (S-expression). `ast` is a serde alias. |
-| `syscall` | Direct syscalls | `name`, `number`, `arch` (all optional, OR within field, AND across fields) |
+| `syscall` | Direct syscalls | `name`, `number`, `arch`, `args` (optional; OR within name/number/arch, AND across fields and argument predicates) |
 | `section` | Binary sections | `exact`, `substr`, `regex`, `word`, `case_insensitive`, `length_min`, `length_max`, `entropy_min`, `entropy_max`, `readable`, `writable`, `executable`, `compare_to` (reference section for both ratio checks; default: "total" for size), `size_ratio_min`, `size_ratio_max`, `entropy_ratio_min`, `entropy_ratio_max` |
 | `metrics` | Code metrics | `field` (e.g., `identifiers.avg_entropy`, `binary.text_to_file_ratio`, `binary.string_count`, `elf.e_machine`, `pe.dos_stub_zeroed`, `consistency.cert_org_pdb_mismatch`), `min`, `max`, `min_size`, `max_size` |
 | `yara` | YARA rule | `source` |
@@ -328,6 +329,33 @@ The `syscall` type filters are all optional. Within each field (name, number, ar
     type: syscall
     number: [59]
     arch: ["x86_64"]
+```
+
+For Linux x86-64 and AArch64 ELF files, resolved syscall numbers are retained
+with per-instruction file offsets, including numbers without a known name
+(`unknown`). Use `number` with `arch` for those records. `count_min` counts
+matching instruction sites, not runtime invocations. Imported wrappers remain
+available through import/symbol matching. Flat payloads are not decoded as ELF.
+
+Recovery is conservative and is not full control-flow or memory analysis.
+x86-64 tracks immediate loads, register copies, and zeroing; stack-loaded or
+computed values may remain unknown. AArch64 currently resolves unshifted
+64-bit MOVZ loads and clears constants across unrecognized instructions.
+
+`args` predicates must all match the same syscall record. `index` is zero-based;
+`value` requires equality and `mask` requires all specified bits to be set.
+Unresolved arguments never satisfy a predicate. For example:
+
+```yaml
+- id: header-write
+  if:
+    type: syscall
+    name: [pwrite64]
+    args:
+      - index: 2
+        value: 64
+      - index: 3
+        value: 0
 ```
 
 ### Structural Condition Examples

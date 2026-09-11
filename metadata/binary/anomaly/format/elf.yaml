@@ -83,6 +83,103 @@ traits:
     # final firmware-facing load segment; this is part of that ABI layout.
     unless:
       - id: well-known/tool/sysadmin/syslinux/
+  - id: elf-entry-in-nonstandard-section
+    desc: ELF entry in an unusually named section
+    # Entry resolves into a section outside the toolchain code-section set
+    # (`.attack`, a random appended name). Benign entries land in `.text`
+    # (occasionally `.init`/`.plt`); an entry elsewhere is the redirection
+    # tell shared by note-cavity, EPO, and appending infectors.
+    crit: notable
+    conf: 0.9
+    if:
+      type: value
+      path: elf.entry_section
+      regex: '.+'
+      not:
+        - regex: '^\.?(text|rdata|data|bss|rodata|idata|edata|pdata|xdata|tls|reloc|rsrc|debug|init|fini|plt|got|got\.plt|plt\.got|plt\.sec|dynamic|dynsym|dynstr|symtab|strtab|shstrtab|interp|note|hash|gnu\.hash|gnu\.version|gnu\.version_r|gnu\.version_d|eh_frame|eh_frame_hdr|comment|ARM\.exidx|ARM\.extab|ARM\.attributes|init_array|fini_array|preinit_array|ctors|dtors|tbss|tdata|tm_clone_table|data\.rel\.ro|got\.plt\.sec|stab|stabstr|drectve|didat|__text|__data|__bss|__cstring|__const|__objc_classlist|__objc_classrefs|__objc_data|__objc_classname|__objc_const|__objc_methname|__objc_methtype|__objc_selrefs|__objc_imageinfo|__la_symbol_ptr|__nl_symbol_ptr|__got|__stubs|__stub_helper|__cfstring|__unwind_info|__eh_frame|__info_plist|__swift5_proto|__swift5_types|__swift5_fieldmd|__swift5_typeref|__swift5_reflstr|__swift5_assocty|__swift5_capture|__swift5_builtin|__swift5_acfuncs|__swift5_mpenum|__llvm_covmap|__llvm_covfun|__llvm_prf_cnts|__llvm_prf_data|__llvm_prf_names|__llvm_prf_vnds)$'
+    unless:
+      - id: metadata/binary/vendor/
+      - id: metadata/file/extension/identity::linux-firmware-blob-basename
+      - id: well-known/tool/sysadmin/syslinux/
+  - id: elf-executable-segment-graft
+    desc: ELF has multiple executable load segments
+    # Modern toolchains emit exactly one executable PT_LOAD (`-z
+    # separate-code`); a second is a grafted R+X segment beside the real
+    # text — the note-cavity / appended-parasite tell. Also fires for an
+    # EPO infector that leaves the entry in `.text`.
+    crit: notable
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        import "elf"
+        rule elf_multiple_executable_load_segments {
+          condition:
+            for 2 segment in elf.segments: (
+              segment.type == elf.PT_LOAD and (segment.flags & elf.PF_X) != 0
+            )
+        }
+    unless:
+      - id: metadata/binary/vendor/
+      - id: metadata/file/extension/identity::linux-firmware-blob-basename
+  - id: elf-note-uncovered
+    desc: ELF note section lacks a note segment
+    # A loaded (SHF_ALLOC) note section reachable through no PT_NOTE /
+    # PT_GNU_PROPERTY header. A note-cavity infector produces this by
+    # repurposing the note's program header — but so do benign cross /
+    # non-GNU toolchains (Go-on-OpenBSD leaves `.note.gnu.build-id`
+    # between the Go and openbsd PT_NOTEs, covered by neither). Ambiguous
+    # alone, so a component: it earns intent only inside the note-cavity
+    # composite, beside the grafted exec segment and redirected entry.
+    crit: component
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        import "elf"
+        rule elf_uncovered_allocated_note_section {
+          condition:
+            elf.segments.len() > 0 and for any section in elf.sections: (
+              section.type == elf.SHT_NOTE and section.size > 0 and
+              (section.flags & 2) != 0 and
+              not for any segment in elf.segments: (
+                (segment.type == elf.PT_NOTE or
+                 segment.type == elf.PT_GNU_PROPERTY) and
+                section.offset >= segment.offset and
+                section.size <= segment.file_size and
+                section.offset - segment.offset <= segment.file_size - section.size
+              )
+            )
+        }
+  - id: elf-build-id-uncovered
+    desc: ELF build-id note lacks a note segment
+    # The GNU build-id note is present in the section table but reachable
+    # through no note program header — the kernel/coredump/debuginfod path
+    # sees no ID while the section still carries it. Strong corroboration
+    # for note-cavity infection ("identity retained, execution
+    # redirected"), but benign Go/OpenBSD/cross layouts also strand the
+    # build-id note, so it is a component, not a standalone anomaly.
+    crit: component
+    conf: 0.92
+    if:
+      type: yara
+      source: |
+        import "elf"
+        rule elf_uncovered_build_id_note_section {
+          condition:
+            elf.segments.len() > 0 and for any section in elf.sections: (
+              section.type == elf.SHT_NOTE and
+              section.name == ".note.gnu.build-id" and section.size > 0 and
+              (section.flags & 2) != 0 and
+              not for any segment in elf.segments: (
+                (segment.type == elf.PT_NOTE or
+                 segment.type == elf.PT_GNU_PROPERTY) and
+                section.offset >= segment.offset and
+                section.size <= segment.file_size and
+                section.offset - segment.offset <= segment.file_size - section.size
+              )
+            )
+        }
   - id: elf-single-program-header
     desc: ELF uses a single program header
     crit: notable
