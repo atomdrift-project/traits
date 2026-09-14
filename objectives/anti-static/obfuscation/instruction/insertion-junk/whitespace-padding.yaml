@@ -1,0 +1,82 @@
+# Leading-whitespace padding in source files.
+#
+# A payload is spliced into an otherwise legitimate source file on a single
+# line preceded by hundreds of space/tab columns. `git diff`, GitHub's diff
+# view, and most editors then render an apparently blank line, and a reviewer
+# never scrolls right far enough to see the code.
+#
+# Observed in the July 2026 AsyncAPI compromise (Miasma RAT dropper): an
+# obfuscator.io payload was prepended to `index.js` of @asyncapi/specs and to
+# `validator.js` / `utils.js` of the generator monorepo behind 880-1205 leading
+# spaces. The sibling technique on the *inside* of a line is already covered by
+# objectives/anti-static/obfuscation/obfuscator/js-obfuscator::whitespace-hiding,
+# but its `text.max_ws_run` metric ignores line-leading runs and
+# measured 1 on every one of those files, so the leading form needs its own
+# matcher.
+#
+# Threshold: deeply nested, hand-maintained Python data literals can exceed 180
+# leading columns. At 500 columns the matcher remains well below the 880-1205
+# columns used by the observed concealed payloads while excluding legitimate
+# nested source formatting.
+# HTML documents can be heuristically typed as JavaScript when fetched from a
+# URL ending in a script-like path. Their indented markup is document layout,
+# not hidden source, so the atomic matcher excludes the HTML identity facts.
+defaults:
+  crit: suspicious
+  attack: T1027
+  mbc: B0032
+  platforms: [linux, macos, windows]
+  for: [scripts, typescript]
+
+traits:
+  # Go permits whitespace between many adjacent syntax tokens. An extreme
+  # inline run can therefore push executable code beyond the normal editor or
+  # diff viewport while preserving valid syntax. At 500 columns this is well
+  # beyond normal alignment, even in formatted or generated source.
+  - id: go-extreme-inline-whitespace-run
+    desc: Extreme inline whitespace padding in Go source
+    conf: 0.95
+    for: [go]
+    size_max: 1048576
+    if:
+      type: text
+      regex: '[ \t]{500,}\S[^\n]{0,900}'
+    not:
+      # Padding that leads straight into a trailing lint-suppression comment
+      # (e.g. a long inline test fixture followed by `//nolint`) hides
+      # nothing -- there is no code after the run, just a comment to EOL.
+      - regex: '^[ \t]+//[^\n]{0,900}$'
+
+composite_rules:
+  - id: leading-whitespace-padded-line
+    desc: Extreme leading whitespace hides source code
+    conf: 0.9
+    all:
+      - id: metadata/file/padding::extreme-leading-whitespace-long-line
+    unless:
+      # A minified filename changes the interpretation of this shape: fixed
+      # width wrapping can align a continuation hundreds of columns inward.
+      - id: metadata/build/minifier::js-min-or-map-basename
+      - id: metadata/package/documentation/page::static-html-shell
+      - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
+      - id: well-known/lib/development/eslint::eslint-package-context
+      - id: metadata/build/recognized-contexts::known-source-tree-context
+
+  # The padding hides *that* something was inserted; the obfuscator legs
+  # establish that what sits on that line is a machine-generated payload rather
+  # than a long generated data line. Neither half has a legitimate joint use in
+  # hand-maintained source.
+  - id: whitespace-padded-obfuscator-payload
+    desc: Whitespace padding conceals obfuscated source
+    conf: 0.93
+    attack: T1027.002
+    mbc: B0024
+    all:
+      - id: leading-whitespace-padded-line
+    any:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::any-name-mangling
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::permutation-obfuscation
+    needs: 1
+    unless:
+      - id: objectives/command-and-control/dropper/delivery/blockchain::obfuscated-etherhiding-hex-stage-dropper

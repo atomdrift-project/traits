@@ -88,8 +88,7 @@ traits:
         exact: windowsPtyAgent.js
       - type: basename
         exact: publish.js
-      - type: text
-        substr: require('../common')
+      - id: metadata/package/testing/harness/runtime::node-common-require
     if:
       type: symbol
       exact: execSync
@@ -175,6 +174,14 @@ traits:
     if:
       type: text
       regex: 'execFileSync\s*\(\s*[\w.$]{1,40}\s*,\s*\[\s*[\w.$]{1,40}\s*[,\]]'
+  - id: js-execfilesync-var-program-forwarded-argv
+    desc: execFileSync forwards argv to variable program
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'execFileSync\s*\(\s*[\w.$]{1,80}\s*,\s*process\.argv\.slice\(\s*2\s*\)'
   - id: js-execfile-bash
     desc: Node execFile launches bash process
     crit: notable
@@ -187,7 +194,7 @@ traits:
       regex: "execFile\\)?\\(\\s*['\"`]bash['\"`]"
   - id: js-function-bash-first-arg
     desc: JavaScript call receives Bash argument
-    crit: component
+    crit: notable
     conf: 0.84
     mbc: "C0017"
     attack: "T1059.004"
@@ -341,12 +348,25 @@ traits:
       type: text
       regex: '\bBun\.(spawn|spawnSync|exec|execSync)\b'
 
-  # `exec("echo '<b64>' | base64 --decode | bash")` -- the command string
-  # carries its own payload and pipes it straight into a shell, so nothing
-  # readable ever reaches the source. The cross-platform spelling
-  # (`base64 --decode 2>/dev/null || base64 -D`) is the macOS/Linux form.
-  - id: js-exec-decode-pipe-shell-command
-    desc: Exec runs a decode-and-pipe shell command
+  # A runtime value interpolated immediately before a Base64 decoder is a
+  # shell transport shape, not evidence that a static payload was hidden from
+  # review. Agent/sandbox replay tools use this to carry arbitrary recorded
+  # actions across a shell boundary without quoting them. Combine it with the
+  # nearby JavaScript Base64 encoder below to suppress only that round trip.
+  - id: js-runtime-base64-shell-interpolation
+    desc: Interpolates runtime Base64 into shell pipeline
+    crit: notable
+    conf: 0.96
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\$\{[A-Za-z_$][\w$]*\}\s*\|\s*base64\s+--?d\s*\|\s*(ba)?sh\b'
+
+  # A JavaScript string containing a decode-into-shell pipeline. The matcher
+  # does not establish that child_process.exec is called, so execution-aware
+  # objective composites add their own child-process leg.
+  - id: js-decode-pipe-shell-command
+    desc: JavaScript contains decode-to-shell pipeline
     crit: suspicious
     conf: 0.94
     attack: T1059.007,T1140
@@ -370,6 +390,16 @@ traits:
       type: text
       regex: 'base64 --?d[^\n]{0,60}\|\s*\(?(ba)?sh'
 composite_rules:
+  - id: runtime-base64-shell-transport
+    desc: Runtime Base64 value transported through shell
+    crit: exception
+    conf: 0.96
+    for: [javascript, typescript]
+    near_bytes: 256
+    all:
+      - id: js-runtime-base64-shell-interpolation
+      - id: micro-behaviors/data/encode/base64::tostring-base64
+
   - id: js-exec
     desc: Executes a command through Node.js child_process exec
     crit: notable
@@ -410,7 +440,7 @@ composite_rules:
     conf: 0.85
     near_lines: 25
     all:
-      - id: micro-behaviors/fs/write/file/direct::js-file-write
+      - id: micro-behaviors/fs/write/file/full::js-file-write
       - id: child-process-require
     any:
       - id: js-exec
@@ -421,7 +451,7 @@ composite_rules:
       - id: micro-behaviors/process/create/shell/build::npm-install-ignore-scripts
     downgrade:
       any:
-        - id: metadata/library/prettier
+        - id: well-known/lib/development/prettier
         - id: metadata/package/documentation/
         - id: micro-behaviors/process/interpreter/vm/
   - id: js-sync-child-process-api
@@ -440,3 +470,4 @@ composite_rules:
     any:
       - id: js-execfilesync-var-program-join-arg
       - id: js-execfilesync-var-program-var-arg
+      - id: js-execfilesync-var-program-forwarded-argv

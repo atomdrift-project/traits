@@ -8,8 +8,10 @@ A three-tier taxonomy following [MBC (Malware Behavior Catalog)](https://github.
 |------|---------|-------------------|----------------|
 | **Capabilities** (`micro-behaviors/`) | Observable mechanics — what code *can do* | component → baseline → notable → suspicious | [Micro-objectives](https://github.com/MBCProject/mbc-markdown/tree/master/micro-behaviors) |
 | **Objectives** (`objectives/`) | Attacker goals — why code *likely wants* to do something | component → baseline → notable → suspicious → hostile | [Objectives](https://github.com/MBCProject/mbc-markdown#malware-objective-descriptions) |
-| **Known Entities** (`well-known/`) | Specific well-known malware, unwanted software, and tool/app/library signatures | component → baseline → suspicious → hostile | [Corpus](https://github.com/MBCProject/mbc-markdown/tree/master/xample-malware) |
-| **Metadata** (`metadata/`) | Neutral file-structure properties — what a file *is* | component → baseline (occasionally suspicious) | — |
+| **Known Entities** (`well-known/`) | Specific well-known malware, unwanted software, and tool/app/library signatures | component → baseline → notable → suspicious → hostile | [Corpus](https://github.com/MBCProject/mbc-markdown/tree/master/xample-malware) |
+| **Metadata** (`metadata/`) | Neutral file-structure properties — what a file *is* | component → baseline → notable → suspicious (rare) | — |
+
+**`metadata/` reaches `notable` when the fact identifies something rather than merely measuring it.** The tier is neutral about *intent*, not about *significance*: a file-structure property that establishes provenance — a signer, a toolchain or compiler, a declared import, a referenced library or runtime — is precisely what the `notable` definition below calls "program identity, and signing information", and an analyst wants it surfaced in a version diff. (This is a criticality rule, not a placement licence: a fingerprint saying a file *is* a named piece of software still belongs in `well-known/` — see [Metadata (`metadata/`)](#metadata-metadata).) Reserve `baseline` for properties that are near-universal **within the trait's own `for:` scope** (`USER32.dll` in a Windows GUI PE, `BSJB` in a .NET assembly); a property that most files of that type do not have is not baseline. `hostile` remains the real tier prohibition — `objectives/` and `well-known/` only.
 
 Organize atomic traits by what they detect, not by what composite they serve — atomics and the composites that reference them often live in completely different directories. See [Matcher Defines Identity](#matcher-defines-identity) for the full rule and the placement-over-criticality guidance.
 
@@ -22,7 +24,7 @@ Traits rarely seen in legitimate software that have well-defined objectives belo
 | **exception** | Benign-context composite: a known-good pattern assembled from `notable` traits that, when it matches, suppresses or downgrades a host detection. Referenced only from `unless:`/`downgrade:`. Assembly-only — never emitted to JSON, the CLI, the web UI, or differential analysis. See [Exception composites](#exception-composites-crit-exception). | Composites only; any tier |
 | **component** | Evidence too weak or incomplete to express a clear standalone observation (e.g., the string fragment `&cc=` or one half of a protocol marker). Reserve this for fragments that only acquire meaning when combined with other evidence. Being referenced by a composite does **not** make a trait a component. | Any tier |
 | **baseline** | Common functionality; doesn't indicate program purpose (e.g., `mmap`, `stdio`, `read`). Always present in JSON, the web UI, and differential analysis. | Any tier |
-| **notable** | Expresses a clear behavior, purpose, or identity that could interest a security engineer during differential analysis (e.g., `socket`, HTTP requests, network-library imports, `exec`, `eval`). If an appeared/disappeared atomic finding would help an analyst understand what changed, it should be at least notable—even when the behavior is benign. This includes communications, code execution, crypto, encoding/decoding, privilege operations, sensitive file access, registry access, persistence, program identity, and signing information. | `micro-behaviors/`, `objectives/`, `well-known/` |
+| **notable** | Expresses a clear behavior, purpose, or identity that could interest a security engineer during differential analysis (e.g., `socket`, HTTP requests, network-library imports, `exec`, `eval`). If an appeared/disappeared atomic finding would help an analyst understand what changed, it should be at least notable—even when the behavior is benign. This includes communications, code execution, crypto, encoding/decoding, privilege operations, sensitive file access, registry access, persistence, program identity, and signing information. | Any tier |
 | **suspicious** | Rarely legitimate; indicates possible malicious intent. | `micro-behaviors/`, `objectives/`, `well-known/`, `metadata/` (rare) |
 | **hostile** | Clear attack pattern; no legitimate use. Requires precision >= 3.5. | `objectives/`, `well-known/` only — **never** `micro-behaviors/` |
 
@@ -71,7 +73,18 @@ The ML pipeline extracts features from **subdirectory path + criticality**, not 
 - **Prefer concise, meaningful names.** Short directory names are easier to scan and produce cleaner ML features: use `exec`, `poll`, `proxy`, `shell`, `reflect`, or `stage` when they are clear in context. Do not shorten names so far that humans lose the technique meaning.
 - **Avoid marker buckets.** Do not use `marker/` or `markers/` as directory names; name the behavior or technique being indicated instead.
 - **Every subdirectory must add precision over the path that leads to it.** A child directory has to answer "the parent's concept, but *which kind / how / in what form?*" — if it merely restates the parent (a synonym) or means "everything else here," it earns no place in the tree. Test: read the full path left-to-right; each segment should narrow the set further. `process/create/shell/invoke/` fails — *invoking* a shell **is** *creating* a shell process, so `invoke` is a synonym for `create`, not a refinement; in practice it had become the catch-all bucket (everything that wasn't one of the precise siblings `batch/`, `encoded/`, `injection/`, `interactive/`…), which is why it bloated past the size cap. Contrast its siblings, which each genuinely refine "create a shell" (*via a batch file*, *with an encoded command*, *by injection*). A segment that you can't finish the sentence "…the parent, specifically the **___** kind" for is either a synonym (drop it / merge up) or a grab-bag (split it into the precise techniques it actually contains). Verb-vs-verb synonyms (`create`/`invoke`/`spawn`/`exec`/`run`) are the most common offenders.
+- **A bare `any:` composite shares its legs' criticality.** A composite that is nothing but an `any:` list — no `all:`/`unless:`/`not:`/`downgrade:`/`needs:`/size/scope, and a `for:`/`platforms:` identical to its legs — fires exactly where its legs fire, on whichever one matched. Ranking it above them makes the reported tier depend on which leg happened to hit, so the same evidence in the same file surfaces at two different levels. Either raise the legs to the composite's `crit:`, or add the filtering that earns the higher tier (`needs: 2`, a second `all:` leg, a size band). This bites most often on library-identity rules: if each marker independently identifies the library, every marker is `notable` and so is the roll-up — put the criticality once, in `defaults:`.
+
 - **Criticality assignment affects ML directly.** A trait bumped from `notable` to `suspicious` changes which feature it contributes to. Assign criticality based on the trait's actual detection confidence, not to manipulate features.
+- **Never name a directory for a verdict.** `legitimate/`, `benign/`, `known-good/`,
+  `safe/`, `trusted/`, `whitelist/` and friends are rejected: a directory names what
+  its traits *search for*, whether the answer is alarming is `crit:`, and a
+  benign-context suppressor belongs in the directory for the thing it detects.
+  `os/service/legitimate/` held `uv publish` markers and `curl | sh` installer
+  shapes -- neither a service nor a judgment a reader could act on; they now sit in
+  `os/package-manager/publish/` and `os/package-manager/installer-script/`.
+
+- **Name the level the model can see.** The feature keeps three directory levels after the tier, so the segment that carries the distinction has to sit at or above level 3. A tree like `fs/path/sensitive/private-key/` puts the real discriminator at level 4, where it is aggregated away: every child of `sensitive/` — SSH keys, cookies, `/etc/passwd`, an iMessage database — collapses into the single feature `fs/path/sensitive`, teaching the model that reading someone's notes and reading their private key are the same event. Promote the discriminating axis instead (`fs/path/private-key/`, `fs/path/password-store/`), and express the secondary axis — *whose* credential it is — in the **filename** (`ssh.yaml`, `browser.yaml`), which costs nothing because filenames are never part of trait IDs. A grouping word that only re-states its parent (`sensitive/credentials/`) fails the precision test above *and* spends the last visible level; drop it and let the type take that slot.
 - **The 3-level depth limit** means `objectives/anti-static/obfuscation/string/encoding/` extracts as `anti-static/obfuscation/string` — the `encoding/` level is aggregated into `string/`. Plan directory depth accordingly, and avoid unnecessary intermediate directories (e.g., prefer `obfuscation/syntax/` over `obfuscation/source/syntax/`).
 
 ## Core Principles
@@ -114,7 +127,13 @@ All tiers follow: `TIER/CATEGORY/BEHAVIOR/METHOD/platform.yaml`
 - **`objectives/`**: `objectives/OBJECTIVE/BEHAVIOR/METHOD/` with technique-based directories and per-platform or per-ecosystem YAML files. Add sub-method directories when a method has many variants (e.g., string obfuscation techniques). Avoid platform, language, ecosystem, file-type, and family names as directories unless they are the technique being detected.
 - **`micro-behaviors/`**: `micro-behaviors/CATEGORY/BEHAVIOR/METHOD/` (e.g., `crypto/symmetric/aes/ruby.yaml`, not `crypto/symmetric/aes.yaml`). If no specific method applies, group by syscall, protocol, or logical grouping. Composite traits may reference directory names to match related rules.
 - **`well-known/malware/` and `well-known/unwanted/`**: Organize by recognized family or named entity, not by a generic behavior, delivery method, or bundle of traits. Malware may retain a broad class before its family (`well-known/malware/backdoor/bpfdoor/`); unwanted software normally uses the family directly (`well-known/unwanted/gameograf/`). Do not use generic buckets such as `newtab-wallpaper-adware/` or `vpn-leadgen/`. Put generic unwanted or abusive behavior under the best-fitting `objectives/` hierarchy, then let each named family rule reference that objective. If no objective fits, add a behavior-based objective or document the taxonomy gap rather than filing intent-bearing behavior under `micro-behaviors/`.
-- **Directory names** should be short, readable, and semantically useful. Prefer `exec` over `command-execution`, `poll` over `polling-command`, and `reflect` over `reflective-loader` when the parent path supplies enough context. Keep longer names when the shorter form would be ambiguous. Catch-all layers such as `core/`, `common/`, `general/`, `misc/`, and `other/` are not techniques and are forbidden: split their contents by the behavior each child actually detects.
+- **Directory names** should be short, readable, and semantically useful. Prefer `exec` over `command-execution`, `poll` over `polling-command`, and `reflect` over `reflective-loader` when the parent path supplies enough context. Keep longer names when the shorter form would be ambiguous. A directory segment must name a SUBJECT — the thing the traits beneath it are about. Three kinds of word fail that and are rejected by the validator:
+
+  - **Catch-alls** (`core/`, `common/`, `general/`, `misc/`, `other/`) mean "everything else", so they never make you answer what a trait is about — which is the same question that reveals whether it belongs in the tier at all. Split by the behavior each child actually detects.
+  - **Judgments** (`anomaly/`, `quality/`, `suspicious/`, `notable/`) assert a verdict instead of naming a subject. The fact belongs with the thing it describes, and *how unusual it is* belongs in `crit:` — which already carries exactly that, at the level the ML pipeline reads. `metadata/binary/anomaly/provenance::pe-zero-timestamp` is `baseline` and `…::pe-far-future-timestamp` is `notable`: the degree is already expressed, so the directory is restating it and spending a visible level to do so.
+  - **Forms** (`metrics/`, `threshold/`, `scoring/`, `pattern/`, `indicators/`) describe the shape of the rule rather than its subject. Everything in `metadata/` is measured; put the count with the part it counts and let the threshold live in the trait name (`few-basic-blocks`, not `metrics/threshold/`).
+
+Adjectives fail for the same reason as judgments: `sparse/`, `dense/`, `structural/` partition by value, not by subject, so they separate facts that belong together (`few-basic-blocks` from the other code measurements) and spend the last ML-visible level saying nothing.
 
 ### Directory & Evolution Guidelines
 
@@ -254,6 +273,8 @@ micro-behaviors/
 │   ├── email/             #   Email (SMTP, MAPI, MIME, NNTP)            C0012
 │   ├── icmp/              #   ICMP (ping, traceroute)                   C0014
 │   ├── ipc/               #   IPC (pipes, DDE, XPC, WCF, IRC)          C0003
+│   ├── rpc/               #   Remote procedure-call protocols
+│   ├── mcp/               #   Model Context Protocol (stdio and HTTP)
 │   ├── ftp/               #   FTP client/upload                         C0004
 │   ├── ssh/               #   SSH client/connect
 │   ├── ip/                #   IP addressing (parse, resolve, embedded)
@@ -304,6 +325,19 @@ micro-behaviors/
 │   ├── encode/            #   Encoding (base64, hex, URL, XOR, rot13, custom)  C0026
 │   ├── decode/            #   Decoding (base64, hex, buffer)                   C0053
 │   ├── compress/          #   Compression (zip, gzip, zlib)                    C0024
+│   │   ├── aplib/         #   aPLib compression/decompression
+│   │   ├── brotli/         #   Brotli compression/decompression
+│   │   ├── bzip2/          #   BZip2 compression/decompression
+│   │   ├── gzip/           #   Gzip compression/decompression
+│   │   ├── lz4/            #   LZ4 compression/decompression
+│   │   ├── lzma/           #   LZMA/XZ compression/decompression
+│   │   ├── combined/       #   Rules spanning multiple compression algorithms
+│   │   ├── stream/         #   Algorithm-neutral compression streams
+│   │   ├── zip/            #   ZIP compression
+│   │   ├── zlib/            #   zlib/deflate compression/decompression
+│   │   └── zstd/            #   Zstandard compression/decompression
+│   ├── decompress/        #   Decompression of encoded/compressed data
+│   │   └── combined/       #   Rules spanning multiple decompression algorithms
 │   ├── archive/           #   Archive operations (tar, zip extraction)
 │   ├── serialize/         #   Serialization (JSON, YAML, pickle, protobuf)
 │   ├── format/            #   Format patterns in content (MZ header, PDF, HTML)
@@ -360,7 +394,18 @@ micro-behaviors/
 │   ├── path/              #   Path references and construction
 │   │   ├── config/        #     Config paths (accounts, groups, sudoers)
 │   │   ├── device/        #     Device paths (storage, terminal)
-│   │   ├── sensitive/     #     Sensitive paths (SSH keys, wallets, credentials)
+│   │   ├── private-key/   #     Private key material (SSH, TLS, keystores, DPAPI)
+│   │   ├── public-key/    #     authorized_keys / known_hosts (access grant, not a secret)
+│   │   ├── password-store/#     Password databases (browser logins, keychain, vaults)
+│   │   ├── token/         #     OAuth / API / session token files
+│   │   ├── secret-config/ #     Config that carries secrets (.env, .npmrc, kube/docker)
+│   │   ├── wallet/        #     Cryptocurrency wallets and seed phrases
+│   │   ├── cookie/        #     Cookie jars
+│   │   ├── account-db/    #     System account databases (/etc/passwd, shadow, SAM)
+│   │   ├── credential-filename/ # Filename itself marks it secret (auth.json, secrets.*)
+│   │   ├── credential/    #     Cross-family umbrellas ("any credential path") + guards
+│   │   ├── app-data/      #     Application data/profile dirs (bulk content, not a secret)
+│   │   ├── personal/      #     Messages, notes, contacts, history -- not credentials
 │   │   └── temp/          #     Temporary paths
 │   ├── pipe/              #   Named pipes (FIFO)
 │   ├── proc/              #   /proc filesystem access
@@ -415,12 +460,51 @@ micro-behaviors/
 │   ├── autorun/           #   Autorun keyword/scheduled task patterns
 │   ├── bpf/               #   BPF/eBPF operations
 │   ├── callback/          #   OS callback mechanisms
-│   ├── clipboard/         #   Clipboard access (OS IPC)
+│   ├── clipboard/         #   Clipboard (OS IPC), split by what the code
+│   │   │                  #   does to it -- reading someone's clipboard and
+│   │   │                  #   replacing it are different threats, and the
+│   │   │                  #   feature stops at this level.
+│   │   ├── read/          #     Pulls clipboard contents out          T1115
+│   │   ├── write/         #     Puts contents in, clears, or replaces
+│   │   │                  #     them (the clipper/hijack shape)
+│   │   ├── monitor/       #     Watches for changes over time
+│   │   └── reference/     #     Names the clipboard API without
+│   │                      #     performing an operation
 │   ├── com/               #   Windows COM/OLE
 │   ├── compat/            #   OS compatibility layers
 │   ├── console/           #   Console I/O (C0033)
 │   ├── container/         #   Container runtime detection
-│   ├── env/               #   Environment variables (C0034)
+│   ├── env/               #   Environment variables (C0034). Which variable
+│   │   │                  #   is named is the discriminator, so the topic sits
+│   │   │                  #   at this level -- it used to live under a `vars/`
+│   │   │                  #   grouping word, where all 14 topics collapsed into
+│   │   │                  #   the single feature `os/env/vars`.
+│   │   ├── credentials/   #     Secret-bearing variables               T1552.001
+│   │   ├── ai-provider/   #     AI SDK configuration variables
+│   │   ├── package-manager/ #   npm/node ecosystem variables
+│   │   ├── runtime/       #     Language/runtime tuning knobs (NODE_OPTIONS,
+│   │   │                  #     OMP_NUM_THREADS, MallocStackLogging)
+│   │   ├── ci-credentials/ #    CI-issued secrets
+│   │   ├── cicd/          #     CI/CD runner variables
+│   │   ├── cloud/         #     Cloud-provider variables
+│   │   ├── system-info/   #     Host/system description variables
+│   │   ├── user-info/     #     User identity variables
+│   │   ├── user-paths/    #     Per-user path variables
+│   │   ├── platform/      #     Platform/arch variables
+│   │   ├── ssh/           #     SSH agent/auth variables
+│   │   ├── editor/        #     EDITOR/VISUAL and friends
+│   │   ├── pipeline/      #     Pipeline plumbing variables
+│   │   ├── modify/        #     Setting, clearing or injecting a variable
+│   │   │
+│   │   │                  #   The operation axis, alongside the topics above:
+│   │   ├── read/          #     Querying a variable (os.Getenv, System.getenv,
+│   │   │                  #     process.env, getenv)
+│   │   ├── enumeration/   #     Walking the whole environment
+│   │   ├── block/         #     Windows environment-block APIs that allocate
+│   │   │                  #     and release the block itself
+│   │   ├── dump/          #     Dumping the environment wholesale
+│   │   ├── config/        #     Env-driven configuration
+│   │   └── check/         #     Guarding on a variable's value
 │   ├── event/             #   OS event mechanisms
 │   ├── exception/         #   Exception/error handling
 │   ├── firewall/          #   Firewall tool references (iptables, nft, ufw, firewalld)
@@ -450,7 +534,26 @@ micro-behaviors/
 │   │                      #       Neutral: banking and DRM apps check these too;
 │   │                      #       evasion intent → objectives/anti-analysis/
 │   │                      #       environment-detect/
-│   ├── service/           #   System service management
+│   ├── recovery/          #   OS recovery points (SRSetRestorePoint). Creating
+│   │                      #     one is neutral; removing them is
+│   │                      #     objectives/impact/degrade/system/recovery/.
+│   ├── service/           #   System service management, split by the verb --
+│   │   │                  #   the verb is the discriminator and the feature
+│   │   │                  #   stops at this level, so each is a sibling rather
+│   │   │                  #   than a child of control/.
+│   │   ├── create/        #     Registering a new service
+│   │   ├── start/         #     Starting or restarting one
+│   │   ├── stop/          #     Stopping one
+│   │   ├── delete/        #     Removing one
+│   │   ├── configure/     #     Changing start type or config
+│   │   ├── query/         #     Reading status or config
+│   │   ├── dispatch/      #     A program acting AS a service (control
+│   │   │                  #     dispatcher, status handler)
+│   │   ├── control/       #     Generic service-manager interaction that
+│   │   │                  #     names no particular verb (OpenSCManager,
+│   │   │                  #     ControlService, bare systemctl/launchctl)
+│   │   └── user-session/  #     Per-user service management (systemd user
+│   │                      #     units, launchd agents, loginctl linger)
 │   ├── signal/            #   Signal handling
 │   ├── stdio/             #   Standard I/O operations
 │   ├── syscall/           #   Direct syscall invocation
@@ -1017,22 +1120,61 @@ well-known/
 ├── lib/                   # Widely recognized libraries/frameworks/runtimes
 │   ├── ai/                #   AI, machine-learning, and inference libraries
 │   ├── cloud/             #   Cloud-provider and platform SDKs
-│   ├── core/              #   General-purpose application support libraries
+│   ├── concurrency/       #   Async control flow, promises, queues, pooling
 │   ├── crypto/            #   Cryptography, identity, and authentication libraries
 │   ├── data/              #   Databases, dataframes, ORM, and storage clients
+│   ├── datetime/          #   Date, time, calendar, and astronomical libraries
 │   ├── development/       #   Compilers, testing, linting, and build libraries
 │   ├── format/            #   Parsers, schemas, archives, and serialization
 │   ├── media/             #   Audio, video, image, font, and codec libraries
 │   ├── network/           #   Protocol, transport, and network client libraries
+│   ├── observability/     #   Logging, error tracking, APM, and session replay
 │   ├── platform/          #   OS, desktop, mobile, and platform integration
 │   ├── runtime/           #   Language runtimes, engines, FFI, and bindings
+│   ├── stdlib/            #   Standard-library extensions, polyfills, shims
+│   ├── testing/           #   Test frameworks, assertion and fixture libraries
 │   ├── native/            #   Native systems, libc, allocators, and kernel support
 │   ├── ui/                #   UI components, editors, and frontend libraries
+│   ├── vendor-sdk/        #   Single-vendor product and service SDKs
 │   └── web/               #   Web and application frameworks
-│                          # Do not add narrow package-specific allowlists here.
-│                          # Prefer improving the generic behavioral rule unless
-│                          # the software is well known enough to be useful across
-│                          # many samples and analysts.
+│                          #
+│                          # `stdlib/` replaced `core/`, which was banned as a
+│                          # catch-all. It is not "small utilities": the test is
+│                          # that the library extends or polyfills the language's
+│                          # OWN standard library -- collections (lodash), type
+│                          # predicates (is-what), compat shims (six, es6-shim).
+│                          # A library with a subject of its own goes to that
+│                          # subject's category, never here.
+│                          #
+│                          # `vendor-sdk/` is for a single vendor's product or
+│                          # service SDK, where the name identifies the vendor
+│                          # rather than a technique. Cross-vendor cloud SDKs
+│                          # stay in `cloud/`.
+│                          #
+│                          # Every library sits in a FUNCTION bucket above. There is
+│                          # no `core/`, `common/` or `misc/`: a catch-all never makes
+│                          # you answer "what does this library do", which is the
+│                          # question that also surfaces whether it belongs here at
+│                          # all. If you cannot name the function, that is the signal
+│                          # to stop, not to invent a bucket.
+│                          #
+│                          # ENTRY BAR — `well-known/` is for "specific, broadly
+│                          # recognizable software identities". Before adding a
+│                          # library, both must hold:
+│                          #   1. an analyst would recognize the name unprompted, and
+│                          #   2. it appears across many samples, so the rule earns
+│                          #      its keep beyond the one file that prompted it.
+│                          # A directory whose whole content is a package-name match
+│                          # is an allowlist, not an identity. Two rules and a name is
+│                          # the shape that gives it away.
+│                          #
+│                          # If a narrow package keeps false-positiving, the fix is
+│                          # one of: tighten the matcher that fired (usually right),
+│                          # or a `crit: exception` benign-context composite, which
+│                          # may live anywhere and is the sanctioned home. Adding an
+│                          # obscure package here to silence one sample trades a
+│                          # false positive for a permanent maintenance burden and
+│                          # teaches the model a name it will never see again.
 ├── malware/               # Malware family signatures
 │   ├── backdoor/          #   Passive remote access — shell, tunnel, implant
 │   │                      #     Waits for attacker commands. Simpler than a RAT.
@@ -1090,6 +1232,8 @@ well-known/
     ├── development/       #   IDEs and developer tools (JetBrains)
     ├── detection/         #   Security detection tools (cleave's own stng)
     ├── forensics/         #   Memory, disk, and incident-forensics tools
+    ├── media/             #   Media acquisition/conversion (yt-dlp, gallery-dl)
+    ├── packaging/         #   Package/version managers, installer builders
     ├── offensive/         #   Pentesting/red-team tools + game cheat frameworks
     ├── reverse-engineering/#  RE tools (IDA, OllyDbg, Scylla, LordPE)
     └── sysadmin/          #   Admin tools, system libraries, VCS
@@ -1106,45 +1250,84 @@ File-level properties with no behavioral implication. Describes *what a file is*
 - OS/platform vendor traits go under `vendor/`
 - Specific apps, dual-use products, tools, games, and library/framework/runtime fingerprints go under `well-known/{app,dual-use,tool,game,lib}/`, not `metadata/`
 - **Distinguish a tool's *output* from the tool's *identity*.** "This code was bundled/minified/transpiled" is a build-transform fact → `metadata/build/<function>/` (group by function: `bundler/`, `minifier/`, `transpiler/`). "This file *is* webpack / PuTTY / Wireshark" is a named-software fingerprint → `well-known/`. Putting a software identity in `metadata/` is the same *matcher-defines-identity* violation as mislabeling a generic capability.
-- **Avoid grab-bag directories.** A directory must name one coherent concept that is meaningful as an ML path feature. If a dir accretes unrelated kinds of traits — e.g. the former `package/tooling/` held build-output (`webpack-bundled`), software identities (`tool-identity-putty`), *and* project-hygiene facts (`has-eslint-config`) all at once — the path feature becomes noise and analysts can't reason about it. Split each kind to its proper home (`build/`, `well-known/`, `package/quality/`) and delete the grab-bag. Vague names (`tooling`, `context`, `misc`, `helpers`) are a smell that this has happened.
+- **Avoid grab-bag directories.** A directory must name one coherent concept that is meaningful as an ML path feature. If a dir accretes unrelated kinds of traits — e.g. the former `package/tooling/` held build-output (`webpack-bundled`), software identities (`tool-identity-putty`), *and* project-hygiene facts (`has-eslint-config`) all at once — the path feature becomes noise and analysts can't reason about it. Split each kind to its proper home (`build/`, `well-known/`, and the `package/` subdirectory for the subject) and delete the grab-bag. Vague names (`tooling`, `context`, `misc`, `helpers`) are a smell that this has happened.
+
+  The former `metadata/library/` tree held ~1,030 rules across ~68 directories and mixed several different concepts: library fingerprints that duplicated `well-known/lib/`, plain capability markers wearing a library's directory name, named offensive tools, CI fingerprints, and vague structural leaves. That migration is complete: `metadata/library/` is now closed and empty. Because a directory reference is an ML path feature, each migrated matcher was placed according to what it actually finds; never recreate the old bucket or move a whole directory on the strength of its name.
 - New top-level subdirectories require updating both TAXONOMY.md and `ALLOWED_METADATA` in `src/capabilities/validation/directory_whitelist.rs`
 - **Max depth:** 3 levels within `metadata/` (ML pipeline limit)
-- **Max leaf size:** No leaf directory should exceed 80 traits
+- **Max leaf size:** No leaf directory should exceed 75 traits
 - **Max fan-out:** No directory should have more than 150 immediate subdirectories. Past that the level is a flat list rather than a taxonomy — group the entries under an intermediate layer (ecosystem, vendor, family) so each level stays browsable.
-- **Prefer technology-neutral subdirectory names.** Technology names belong in filenames, not directory names, unless needed to stay under the 80-trait limit at depth 3.
+- **Prefer technology-neutral subdirectory names.** Technology names belong in filenames, not directory names, unless needed to stay under the 75-trait limit at depth 3.
+- **One level, one question.** Every child of a directory must answer the *same* question about its parent. A level that mixes axes gives some traits two valid homes at once, and the duplicate pair is then created by the taxonomy rather than by an author: it is not a mistake anyone can avoid.
+
+  The test is to name the question out loud and check that every sibling answers it. `micro-behaviors/fs/path/` should answer *what does this path point at* — a credential, a cookie, a config file, a log, a cache. Siblings like `application/`, `package-manager/`, `os/` and `webserver/` answer a different question, *whose is it*, and siblings like `basename/`, `construct/` and `traversal/` answer a third, *what is being done with it*. With all three present, "an application's config file path" is a genuine member of `config/`, of `application/config/`, and arguably of `basename/` — which is exactly how `fs/path/config/app/` and `fs/path/application/config/` both came to exist, holding the same subject (`editor-extensions` on one side, `vscode` on the other).
+
+  Pick the axis that distinguishes *behavior*, because that is what the directory feature feeds to the ML pipeline. Reading a credential path is a different act from reading a cache path, so the resource kind is the axis; Chrome's cookie path and Firefox's are the same act, so the owner is not. The losing axes move into the filename, exactly as platform and language already do: `config/app/vscode.yaml`, never `application/config/vscode.yaml`.
+
+- **A trigger is not an objective.** Independent dimensions must not be multiplied into a path. A rule about a payload carries three facts that vary freely: what it *does* (fetch, stage, execute), what *sets it off* (an install hook, a git hook, a `.lnk`, a fake update), and where it *came from* (npm, PyPI, an RPM). Give each its own directory level and the tree has to enumerate every objective under every trigger.
+
+  That is what `objectives/supply-chain/install-hook/` is. An install hook is a trigger, so the level forced a second copy of the objective tree beneath it — `dropper/`, `credential/`, `config-write/`, `database/`, `registry/` — while `objectives/command-and-control/dropper/` independently grew `lifecycle/` and `package/`, which are install-hook subjects. Both now hold a `bun/`. Neither copy is wrong; the path shape made them inevitable, and they will keep diverging.
+
+  The behavior owns the directory, because that is the feature the ML pipeline reads. The channel is a filename, as for any other ecosystem. The trigger is a *referenced trait*: `metadata/package/scripts/lifecycle::install-hooks` is a fact about the package, and a composite that wants "install hook downloads and executes" names it as a leg rather than moving house to sit under it.
+
+  The diagnostic: if a directory level names *when* or *how* something runs rather than *what is achieved*, every objective underneath it is a duplicate waiting to be written.
+
+
 
 ```
 metadata/
 ├── arch/                  # CPU architecture (x86, ARM, MIPS, IoT)
-├── binary/                # Binary internals (requires binary parsing)
-│   ├── anomaly/           #   Structural violations (format, timestamp, layout)
-│   ├── debug/             #   Debug symbols (PDB, DWARF)
-│   ├── framework/         #   Language-runtime / application-framework IDENTITY only
-│   │                      #     (.NET/CLR, Java, Flutter, VB6, MFC, Electron, Node-API
-│   │                      #     native addons, macOS app frameworks). Answers "what
-│   │                      #     runtime/framework was this binary built on or embeds."
-│   │                      #     NOT packers/protectors (ASProtect, UPX) → anti-static/pack/.
-│   │                      #     NOT specific apps/components (Windows Media Player, BITS)
-│   │                      #       → well-known/app/ or metadata/vendor/.
-│   │                      #     NOT generic structure facts ("is a binary") → file/ or layout/.
-│   │                      #     NOT UI-framework USAGE (tkinter, WinForms) → micro-behaviors/ui/framework/.
-│   │                      #     NOT the compiler/toolchain that produced it → metadata/lang/.
-│   ├── installer/         #   Installer framework detection
-│   │   ├── database/      #     Database-based (MSI, WiX)
-│   │   ├── script/        #     Script-based (NSIS, Inno Setup)
-│   │   └── sfx/           #     Self-extracting (7zip, WinRAR, IExpress)
+├── binary/                # Binary internals (requires binary parsing).
+│   │                      #
+│   │                      #   ONE ORGANIZING AXIS: the anatomy of the format. Each child
+│   │                      #   names a PART of the binary (header, sections, symbol
+│   │                      #   tables, resources, …) and holds facts ABOUT that part.
+│   │                      #
+│   │                      #   The rule that settles every placement question here:
+│   │                      #   **a directory holds facts about a part of the format,
+│   │                      #   never facts about what the contents of that part MEAN.**
+│   │                      #     "the import table has three entries"  → symbols/
+│   │                      #     "it imports GetProcAddress"           → micro-behaviors/
+│   │                      #     "its exports impersonate version.dll" → objectives/ (sideload)
+│   │                      #     "those exports are libcurl's ABI"     → well-known/lib/
+│   │                      #
+│   │                      #   Two axes that are NOT directories here, because they are
+│   │                      #   things a trait SAYS rather than parts of the artifact:
+│   │                      #     - measurement ("metrics") — every fact here is measured;
+│   │                      #       put the count with the part it counts and let the
+│   │                      #       threshold live in the trait name.
+│   │                      #     - judgment ("anomaly") — malformedness is a fact about
+│   │                      #       the part; `crit:` carries how unusual it is.
+│   │                      #   Adjectives (`sparse/`, `dense/`, `threshold/`, `structural/`)
+│   │                      #   fail the precision test above: they partition by value, not
+│   │                      #   by subject, and spend the last ML-visible level on nothing.
+│   ├── header/            #   Machine, characteristics, timestamps, entry point,
+│   │                      #     malformed/contradictory header fields
+│   ├── section/           #   Sections: names, count, size, entropy, permissions,
+│   │                      #     alignment, sparsity. Section *content* patterns are
+│   │                      #     behavior → objectives/, or capability → micro-behaviors/
+│   ├── symbols/           #   Shape of the import/export/symbol tables: counts, ordinal-
+│   │                      #     only imports, stripped tables, export-name statistics.
+│   │                      #     A NAMED api/symbol is a capability → micro-behaviors/
+│   ├── code/              #   The code itself: basic blocks, functions, complexity,
+│   │                      #     code size and density
 │   ├── instruction/       #   Instruction-level patterns (indirect calls, CPUID)
-│   ├── layout/            #   File-level structure (overlay, embedded, bundles)
-│   ├── linking/           #   Runtime linking and dynamic resolution
-│   ├── metrics/           #   Structural measurements (import/export/function
-│   │                      #     counts, entropy, ratios, size thresholds)
-│   ├── resource/          #   Embedded resource analysis
-│   ├── section/           #   Section analysis (neutral size/entropy/layout)
-│   │   ├── metrics/       #     Section entropy, ratios, layout, custom names
-│   │   └── names/         #     Section name detection
-│   │                      #   (no content/ — section *content* patterns describe
-│   │                      #    behavior → objectives/, or capability → micro-behaviors/)
-│   └── symbols/           #   Import/export symbol analysis
+│   ├── resource/          #   Embedded resources
+│   ├── linking/           #   Dynamic dependencies, RPATH/RUNPATH, delay-load
+│   ├── debug/             #   Debug directories and symbol files (PDB, DWARF)
+│   ├── layout/            #   Whole-file structure: overlay, embedded payloads, bundles
+│   └── provenance/        #   Build origin: toolchain and compiler-helper markers,
+│                          #     source-tree and VCS idents
+│   #
+│   # Routed OUT of metadata/binary/, because identity is not a format property:
+│   #   installer/  → well-known/  (Inno Setup, NSIS, WiX, InstallShield, 7-Zip SFX
+│   #                 are named products; the *fact* that a file is self-extracting
+│   #                 is layout/)
+│   #   framework/  → well-known/lib/ for the runtime's identity; keep only the
+│   #                 format-level consequence (e.g. "PE carries a CLR header")
+│   #   vendor/     → metadata/vendor/ (already the sanctioned home for OS/platform
+│   #                 vendors) or well-known/ for products
+│   #   signing/    → metadata/signed/   license/ → provenance/   toolchain/ → provenance/
 ├── build/                 # How an artifact was BUILT or TRANSFORMED — never *who* the
 │   │                      #   tool is. Group by transform FUNCTION, not by specific tool:
 │   │                      #   the directory is an ML feature, so `bundler/` is one dense
@@ -1175,7 +1358,8 @@ metadata/
 │   ├── format/            #   Text/data format identification (JSON, makefile)
 │   ├── invisible-unicode/ #   Invisible Unicode text properties
 │   ├── magic/             #   Magic byte signatures
-│   ├── metrics/           #   Text/file-level measurements
+│   │                      #   (no metrics/ — a measurement is not a subject; file text
+│   │                      #    shape belongs with profile/, entropy with the thing measured)
 │   ├── policy/            #   Policy/config text identities
 │   ├── profile/           #   Text profile and wrapper shapes
 │   └── string/            #   Neutral string identities
@@ -1186,7 +1370,8 @@ metadata/
 │                          #   masquerade/stowaway INTENT lives in objectives/
 ├── hardening/             # Security hardening features (sandbox, seccomp, pledge)
 ├── image/                 # Image-specific neutral measurements
-│   └── metrics/           #   Pixel/channel/statistical image measurements
+│                          #   (no metrics/ — pixel and channel statistics belong with the
+│                          #    image property they measure)
 │                          #   File identity remains under file/{magic,extension}
 ├── media/                 # Media-container structure, shared across carriers
 │   ├── container/         #   Container identity and structural consistency
@@ -1204,14 +1389,24 @@ metadata/
 │   │   └── systems/       #     Systems language compilers (Go, Rust)
 │   ├── embedded/          #   Embedded language detection
 │   ├── encoded/           #   Encoded strings (unicode, wide)
+│   ├── generated/         #   Emitted by a code generator, not hand-written
 │   ├── javascript-features/ # JavaScript language features
 │   ├── scripted/          #   Scripted language detection (VBScript, Lua, Perl)
-│   └── ...                #   go-build, linking, optimization, security, shebang, source, version
-├── library/               # Legacy neutral library/framework context
-│   ├── data/              #   Data/infrastructure libraries
-│   ├── runtime/           #   Runtime/framework libraries
-│   └── (neutral package/library context; known-library fingerprints → well-known/lib/)
-├── package/               # Package ecosystem metadata & project quality
+│   ├── source/            #   Which language a source file is written in
+│   ├── upstream/          #   Part of a recognized upstream tree (Wine, ReactOS, Linux)
+│   └── ...                #   go-build, linking, optimization, security, shebang, version
+├── library/               # DEPRECATED — closed to new entries, migrating out.
+│   │                      #   A named library/framework/runtime is a fingerprint, so it
+│   │                      #   belongs in well-known/lib/ by the rule above; nothing here
+│   │                      #   is a neutral file-structure property. Do not add traits.
+│   │                      #   Migrate existing entries by what each matcher finds:
+│   │                      #     library/framework/runtime identity → well-known/lib/<function>/
+│   │                      #     a neutral capability (screenshot, download, symbol lookup)
+│   │                      #       → micro-behaviors/<category>/
+│   │                      #     intent-bearing behaviour → objectives/
+│   │                      #     build/transform output (bundled, minified) → metadata/build/
+│   │                      #   `library` leaves ALLOWED_METADATA once the last entry is gone.
+├── package/               # Package ecosystem metadata and project-hygiene facts
 │   ├── config/            #   Configuration file detection
 │   ├── contributors/      #   Contributor metadata
 │   ├── dependencies/      #   Dependency analysis
@@ -1224,9 +1419,27 @@ metadata/
 │   ├── maintainers/       #   Maintainer counts
 │   ├── manager/           #   Package-manager fingerprints (homebrew, composer) — the
 │   │                      #     distribution tool, distinct from the build transform (build/)
-│   ├── manifest/          #   Package manifest fields (name, author, repository, engines)
-│   ├── metrics/           #   Code metrics
-│   ├── quality/           #   Quality signals
+│   ├── name/              #   Manifest name field  (each manifest field is its own
+│   ├── description/       #   Manifest description field   leaf, at the ML-visible
+│   ├── repository/        #   Manifest repository field    level -- there is no
+│   ├── author/            #   Manifest author field        `manifest/` container:
+│   ├── entrypoint/        #   Declared entry point         keywords/, license/,
+│   ├── runtime/           #   Declared runtime/engines     scripts/ and dependencies/
+│   ├── ...                #   homepage, version, vendor,   are manifest fields too,
+│   │                      #     publishing, workspace, …   so the level separated
+│   │                      #     nothing while spending the last visible segment.
+│   │                      #   Package metadata that is NOT a manifest field is read from
+│   │                      #     the package's contents or layout instead: files/,
+│   │                      #     documentation/, testing/, integrity/, scaffold/, tooling/.
+│   │                      #   (no metrics/ — a measurement is not a subject)
+│   │                      #   (no quality/ — a judgment, not a subject: whose quality, by
+│   │                      #    what standard? Its contents belong with the field or subject
+│   │                      #    they describe — manifest-field completeness -> manifest/,
+│   │                      #    version values -> versioning/, checksum manifests ->
+│   │                      #    integrity/, logging -> logging/, error handling ->
+│   │                      #    error-handling/ — and its benign-context suppressors are not
+│   │                      #    metadata at all: named software -> well-known/, the
+│   │                      #    suppressor itself -> a `crit: exception` composite)
 │   ├── scripts/           #   Package scripts
 │   ├── testing/           #   Testing detection
 │   │   ├── compiled/      #     Compiled-language frameworks
@@ -1285,12 +1498,12 @@ When placing a new metadata trait, use this tiebreaker table. Each row names the
 | `binary/` | `file/` | Does it require parsing binary headers (PE/ELF/Mach-O)? → `binary/`. Observable from filename/magic/size alone? → `file/` |
 | `binary/` | `document/` | Does it require a binary parser? → `binary/`. Does it require a document parser (OLE, OOXML, PDF objects)? → `document/` |
 | `binary/` | `lang/` | Is it about the binary's structure (sections, imports, metrics)? → `binary/`. Is it about what language/compiler produced it? → `lang/` |
-| `binary/metrics/` | `binary/anomaly/` | Is the measurement neutral (could be normal)? → `metrics/`. Does it inherently indicate malformation or tampering? → `anomaly/` |
+| `binary/<part>/` | `crit:` | Both a neutral measurement and a malformation are facts about the same part of the format, so both live with that part (`header/`, `section/`, `code/`, `symbols/`). How unusual the value is goes in `crit:` — `baseline` for a zero timestamp, `notable` for a far-future one — not in a `metrics/` vs `anomaly/` directory choice |
 | `document/` | `file/` | Does it require parsing document internals (OLE streams, OOXML parts, PDF objects)? → `document/`. Observable from header/extension alone? → `file/` |
 | `build/` | `lang/` | Is it about build orchestration (cmake, docker, CI/CD)? → `build/`. Is it about the language toolchain (gcc, rustc, delphi)? → `lang/` |
 | `metadata/build/` | `well-known/` | Is it the **output/shape a tool left in the file** (this code was *bundled*, *minified*, *transpiled*)? → `metadata/build/<function>`. Is it the **named tool/software being identified** (this *is* PuTTY / Wireshark / the webpack package)? → `well-known/{app,dual-use,tool,lib}/`. The transform is a metadata fact; the identity is a fingerprint. A named-software fingerprint in `metadata/` is the "matcher defines identity" violation. |
-| `metadata/build/` | `metadata/package/quality/` | Is it evidence of a build/transform tool's output (bundled, minified, autotools-generated)? → `build/`. Is it a project-hygiene/maturity fact (has ESLint/Prettier/TS config, has docs, has tests)? → `package/quality/` |
-| `package/` | `library/` | Is it about ecosystem-level metadata (fields, scripts, quality, testing)? → `package/`. Is it neutral library context retained for metadata use? → `library/`. Is it identifying a specific library/framework/runtime? → `well-known/lib/` |
+| `metadata/build/` | `metadata/package/` | Is it evidence of a build/transform tool's output (bundled, minified, autotools-generated)? → `build/`. Is it a project-hygiene fact? → the `metadata/package/` subdirectory for that subject (`documentation/`, `testing/`, `config/`, `logging/`, `error-handling/`) — there is no `quality/` bucket |
+| `package/` | `well-known/lib/` | Is it about ecosystem-level metadata (fields, scripts, quality, testing)? → `package/`. Is it identifying a specific library/framework/runtime? → `well-known/lib/`. There is no third answer: `metadata/library/` is deprecated and closed, so never route a trait there |
 | `package/` | `permission/` | Is it ordinary package metadata (name, dependencies, files, scripts, quality)? → `package/`. Is it declared authority or extension API surface (browser/IDE extension permissions, host access, OAuth scopes, content scripts)? → `permission/` |
 | `signed/` | `vendor/` | Is it about the cryptographic signature chain or entitlements? → `signed/`. Is it identifying an OS/platform vendor by strings/resources/patterns? → `vendor/` |
 | `vendor/` | `well-known/app/`, `well-known/dual-use/`, or `well-known/tool/` | Is it an OS/platform vendor or system userland marker (Apple, Microsoft, NetBSD, GNU/FSF)? → `vendor/`. Is it a specific well-known application or suite? → `well-known/app/`. Is its legitimate abuse-relevant function the reason analysts need the identity? → `well-known/dual-use/`. Is it a professional analyst/admin/developer tool? → `well-known/tool/` |

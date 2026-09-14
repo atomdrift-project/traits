@@ -1,4 +1,5 @@
 defaults:
+  crit: hostile
   platforms: [windows]
   for: [pe]
   attack: T1554.001
@@ -11,7 +12,6 @@ composite_rules:
   # a binary read, and repeated output writes without relying on family strings.
   - id: vb6-pcode-executable-record-rewrite
     desc: VB6 p-code enumerates and rewrites executable file records
-    crit: hostile
     conf: 0.99
     attack: T1083,T1554
     all:
@@ -20,21 +20,44 @@ composite_rules:
       - id: micro-behaviors/data/string/runtime::vb6-ordinal-right-char-helper
       - id: micro-behaviors/fs/path/extension::utf16-exe-suffix-token
       - id: micro-behaviors/fs/path/check::vb6-ordinal-rtcgetfileattr
-      - id: micro-behaviors/fs/file/read::vb6-pcode-binary-record-read
-      - id: micro-behaviors/fs/file/write/record::vb6-pcode-repeated-binary-record-write
+      - id: micro-behaviors/fs/read/file/handle::vb6-pcode-binary-record-read
+      - id: micro-behaviors/fs/write/file/handle::vb6-pcode-repeated-binary-record-write
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
 
+  # Native-code VB6 builds expose Get/Put and Dir through named MSVBVM60
+  # imports rather than the ordinal and p-code byte sequences above. Repeated
+  # embedded PE images plus a complete enumerate/read/write/attribute chain is
+  # the self-appending infection shape; signed products and installers are
+  # excluded because they may legitimately bundle several executable images.
+  - id: vb6-named-runtime-repeated-pe-infector
+    desc: VB6 runtime enumerates and rewrites repeated PE host images
+    conf: 0.99
+    attack: T1083,T1554
+    all:
+      - id: metadata/binary/framework::vb6-application-framework
+      - id: metadata/binary/layout/embedded::repeated-standard-pe-images
+      - id: metadata/binary/layout/ratio::overlay-over-90pct
+      - id: metadata/binary/layout/overlay::large-overlay-1mb
+      - id: micro-behaviors/fs/directory/readdir::vb6-rtcdir
+      - id: micro-behaviors/fs/read/file/handle::vb6-record-file-read
+      - id: micro-behaviors/fs/write/file/handle::vb6-binary-file-write
+      - id: micro-behaviors/fs/file/attributes::vb6-set-file-attributes
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/script/
+      - id: metadata/binary/installer/sfx/
+
   - id: packed-vb6-host-binder
     desc: Packed VB6 file-attribute binder around host sections
-    crit: hostile
     conf: 0.97
     all:
       - id: objectives/anti-static/pack/upx::single-bookend-renamed-upx-loader
       - id: metadata/binary/framework::vb6-application-framework
       - id: micro-behaviors/fs/file/attributes::vb6-set-file-attributes
-      - id: metadata/binary/section/metrics::six-plus-writable-sections
+      - id: metadata/binary/section/permission::six-plus-writable-sections
     unless:
       - id: metadata/signed/trust-level::signer-evidence-present
 
@@ -43,13 +66,12 @@ composite_rules:
   # ASPack layout keeps this separate from ordinary VB6 file utilities.
   - id: packed-pe-file-infector-autorun
     desc: Packed PE file infector with Autorun propagation
-    crit: hostile
     conf: 0.99
     attack: T1554,T1091
     all:
       - id: micro-behaviors/data/source/function/names::file-infection-handler-name
       - id: micro-behaviors/fs/path/config/autorun::autorun-shell-directive
-      - id: metadata/binary/layout::pe-embedded
+      - id: metadata/binary/layout/embedded::pe-embedded
       - id: objectives/anti-static/pack/detect::aspack-marker
     unless:
       - id: metadata/signed/platform/

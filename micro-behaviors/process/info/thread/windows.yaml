@@ -6,6 +6,39 @@ defaults:
   crit: baseline
   conf: 0.9
 traits:
+- id: suspend-thread-api
+  desc: Source calls SuspendThread
+  crit: notable
+  conf: 0.92
+  for: [c, cpp, csharp, go, rust, powershell, python]
+  if:
+    type: symbol
+    kind: call
+    exact: SuspendThread
+- id: csharp-set-thread-context-reference
+  desc: Redirects thread to payload entrypoint
+  crit: notable
+  conf: 0.9
+  for: [csharp]
+  if:
+    type: symbol
+    exact: SetThreadContext
+- id: csharp-get-thread-context-reference
+  desc: Reads thread context for entrypoint pivot
+  crit: notable
+  conf: 0.9
+  for: [csharp]
+  if:
+    type: symbol
+    exact: GetThreadContext
+- id: csharp-thread-context-references
+  desc: Resumes hollowed thread to run payload
+  crit: notable
+  conf: 0.88
+  for: [csharp]
+  if:
+    type: symbol
+    exact: ResumeThread
 - id: get-current-thread-id
   desc: Get current thread ID
   if:
@@ -44,6 +77,12 @@ traits:
     type: text
     word: "GetThreadContext"
   unless:
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: csharp-get-thread-context-reference
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: micro-behaviors/process/info/thread::get-thread-context-import
   - id: metadata/package/testing/presence/harness::c-source-test-directory
   - id: metadata/package/testing/presence/harness::c-source-test-file
 - id: set-thread-context
@@ -56,8 +95,40 @@ traits:
     type: text
     word: "SetThreadContext"
   unless:
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: csharp-set-thread-context-reference
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: micro-behaviors/process/info/thread::set-thread-context-import
   - id: metadata/package/testing/presence/harness::c-source-test-directory
   - id: metadata/package/testing/presence/harness::c-source-test-file
+- id: get-thread-context-import
+  desc: Imports the Windows thread-context read API
+  crit: notable
+  conf: 0.95
+  if:
+    type: import
+    exact: GetThreadContext
+  downgrade:
+    any:
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: metadata/lang/runtime::go-runtime-marker
+    - id: metadata/lang/compiler/systems::go-pe-symtab
+    - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
+- id: set-thread-context-import
+  desc: Imports Windows thread-context write API
+  crit: notable
+  conf: 0.95
+  if:
+    type: import
+    exact: SetThreadContext
+  downgrade:
+    any:
+    - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
+    - id: metadata/lang/runtime::go-runtime-marker
+    - id: metadata/lang/compiler/systems::go-pe-symtab
+    - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
 - id: thread-context-api-reference-get
   desc: GetThreadContext API name reference
   crit: notable
@@ -67,7 +138,8 @@ traits:
     type: text
     regex: '(?i)\bGetThreadContext\b'
   unless:
-  - id: metadata/lang/compiled::go-runtime-marker
+  - id: get-thread-context-import
+  - id: metadata/lang/runtime::go-runtime-marker
   - id: metadata/lang/compiler/systems::go-pe-symtab
 - id: thread-context-api-reference-set
   desc: SetThreadContext API name reference
@@ -78,11 +150,12 @@ traits:
     type: text
     regex: '(?i)\bSetThreadContext\b'
   unless:
-  - id: metadata/lang/compiled::go-runtime-marker
+  - id: set-thread-context-import
+  - id: metadata/lang/runtime::go-runtime-marker
   - id: metadata/lang/compiler/systems::go-pe-symtab
 - id: hardware-breakpoint-register-field
   desc: Hardware breakpoint register field
-  crit: component
+  crit: notable
   conf: 0.9
   for: [c, cpp]
   if:
@@ -94,20 +167,22 @@ traits:
   conf: 0.9
   for: [c, cpp]
   downgrade:
+    # One reference, not six spellings of it: the debugpy directory already
+    # carries the basename, source-path and package-text markers that were
+    # inlined here (`attach.cpp` moved into its attach-helper trait), so the
+    # extra legs only restated it.
     any:
-    - id: well-known/tool/development/debugpy
-    - id: well-known/tool/development/debugpy::package-path-marker
-    - type: basename
-      regex: '(?i)(debugpy|pydevd|attach\.cpp)'
-    - type: text
-      regex: debugpy
-    - type: text
-      regex: pydevd_attach_to_process
-    - type: text
-      regex: pydevd
+    - id: well-known/tool/development/debug/debugpy
   if:
     type: text
     word: "SuspendThread"
+  unless:
+    # The symbol records the API being used; this also sees the name sitting in
+    # data. Standing down there keeps one use from counting twice.
+    - id: suspend-thread-api
+    # The symbol records the API being used; this also sees the name sitting in
+    # data. Standing down there keeps one use from counting twice.
+    - id: suspend-thread-import
 - id: suspend-thread-import
   desc: Suspend a Windows thread via imported API
   crit: notable
@@ -117,30 +192,28 @@ traits:
     type: import
     exact: "SuspendThread"
   unless:
-  - id: metadata/lang/compiled::go-runtime-marker
+  - id: metadata/lang/runtime::go-runtime-marker
   - id: metadata/lang/compiler/systems::go-pe-symtab
 - id: resume-thread
-  desc: Windows ResumeThread API name reference
+  desc: ResumeThread named, not imported
   crit: notable
   conf: 0.9
   for: [pe, dll, c, cpp, powershell, batch, vbs, javascript]
   downgrade:
+    # One reference, not six spellings of it: the debugpy directory already
+    # carries the basename, source-path and package-text markers that were
+    # inlined here (`attach.cpp` moved into its attach-helper trait), so the
+    # extra legs only restated it.
     any:
-    - id: well-known/tool/development/debugpy
-    - id: well-known/tool/development/debugpy::package-path-marker
-    - type: basename
-      regex: '(?i)(debugpy|pydevd|attach\.cpp)'
-    - type: text
-      regex: debugpy
-    - type: text
-      regex: pydevd_attach_to_process
-    - type: text
-      regex: pydevd
+    - id: well-known/tool/development/debug/debugpy
   if:
     type: text
     word: "ResumeThread"
   unless:
-  - id: metadata/lang/compiled::go-runtime-marker
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: resume-thread-import
+  - id: metadata/lang/runtime::go-runtime-marker
   - id: metadata/lang/compiler/systems::go-pe-symtab
   - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
 
@@ -153,7 +226,13 @@ traits:
     type: text
     word: ResumeThread
   unless:
-  - id: metadata/lang/compiled::go-runtime-marker
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: csharp-thread-context-references
+  # The symbol records the API being used; this also sees the name sitting in
+  # data. Standing down there keeps one use from counting twice.
+  - id: resume-thread-import
+  - id: metadata/lang/runtime::go-runtime-marker
   - id: metadata/lang/compiler/systems::go-pe-symtab
 
 composite_rules:
@@ -165,8 +244,8 @@ composite_rules:
   all:
   - id: micro-behaviors/process/enumerate/snapshot::create-toolhelp32-snapshot
   - id: suspend-thread-import
-  - id: micro-behaviors/process/inject/runtime/call::get-thread-context-dup
-  - id: micro-behaviors/process/info/thread::resume-thread-dup
+  - id: get-thread-context-import
+  - id: micro-behaviors/process/info/thread::resume-thread-import
 - id: thread-context-api-pair
   desc: Paired thread context API names
   crit: notable

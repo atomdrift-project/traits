@@ -11,31 +11,12 @@ defaults:
 traits:
   - id: no-path-traversal-members
     desc: Archive has no path traversal members
-    crit: component
+    crit: baseline
     for: [zip, tar, archive]
     if:
       type: metrics
       field: archive.path_traversal_count
       max: 0
-
-  - id: malformed-zip-without-traversal-tokens
-    desc: Malformed ZIP lacks traversal path tokens
-    crit: component
-    for: [zip]
-    unless:
-      # Preserve the hostile finding whenever any parent component exists,
-      # even if it occurs in an unreadable header or member body.
-      - type: raw
-        substr: ".."
-      # An absolute or drive-rooted local-header filename is also traversal.
-      - type: hex
-        pattern: "50 4B 03 04 [26] (2F|5C)"
-      - type: hex
-        pattern: "50 4B 03 04 [26] ?? 3A (2F|5C)"
-    if:
-      type: metrics
-      field: parse.error_count
-      min: 1
 
   # A published archive is a build output: every member is something the build
   # put there on purpose, with a real extension.  A `.tmp` member survived
@@ -66,7 +47,7 @@ traits:
   # patching, and appending a file after the build all produce this.
   - id: mtime-outlier-member
     desc: Member mtime differs from the archive
-    crit: component
+    crit: baseline
     if:
       type: value
       path: archive.timing.mtime_outlier_members[*]
@@ -85,6 +66,15 @@ traits:
       path: archive.members[*].path
       regex: '(?i)(^|/)[^/]+\.app/Contents/(MacOS|Frameworks|Resources|_CodeSignature)/'
 
+  - id: nested-native-library-member
+    desc: Archive has a nested native library member
+    crit: notable
+    conf: 0.98
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: '(?i)(^|/)[^/]+/[^/]+/[^/]+\.(dll|dylib|jnilib|so)$'
+
   # A textual `.pt`/`.ckpt` reference only says code knows about model files.
   # This archive-level fact establishes that checkpoint bytes are actually
   # shipped as package data, which hidden-payload rules can correlate with an
@@ -96,4 +86,6 @@ traits:
     if:
       type: value
       path: archive.members[*].path
-      regex: '(?i)(^|/)[^/]{1,160}\.(ckpt|pt|pth)$'
+      # `.pth` is ambiguous with Python's site-path configuration files and
+      # cannot identify a checkpoint from an archive member name alone.
+      regex: '(?i)(^|/)[^/]{1,160}\.(ckpt|pt)$'

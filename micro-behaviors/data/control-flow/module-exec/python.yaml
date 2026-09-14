@@ -4,19 +4,18 @@
 # execute bare function calls on import. Useful for differential analysis
 # when comparing package versions for supply-chain compromise.
 defaults:
+  crit: notable
   platforms: [windows, unix]
   for: [python]
 traits:
   - id: python-bootstrap-relative-import
     desc: Imports a private bootstrap module
-    crit: notable
     conf: 0.9
     if:
       type: text
       substr: 'from . import _bootstrap'
   - id: python-bootstrap-native-loader-call
     desc: Calls a native bootstrap loader
-    crit: notable
     conf: 0.95
     if:
       type: symbol
@@ -24,7 +23,6 @@ traits:
       exact: _bootstrap.ensure_native_loaded
   - id: module-level-bare-call
     desc: Multiple bare function calls at module scope
-    crit: notable
     conf: 0.8
     if:
       type: text
@@ -34,26 +32,28 @@ traits:
       - regex: '\n(print|logging\.)\w*\('
     count_min: 2
     unless:
-      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
 
   - id: module-level-side-effect-call
     desc: Python module-level function call
-    crit: notable
     conf: 0.82
     if:
       type: tree-sitter
       language: python
       # Anchor the expression to the module body.  A text regex also matches
       # calls nested inside methods after source normalization removes their
-      # indentation.
+      # indentation. setuptools.setup(...) is declarative package metadata;
+      # exclude only that callee so neighboring install-hook calls remain.
       query: |
         (module
           (expression_statement
-            (call) @call))
+            (call
+              function: (_) @callee) @call)
+          (#not-match? @callee "(^|\\.)setup$"))
     # The captured call itself identifies these normal framework/runtime
     # initializers, so filter them here rather than suppressing the whole file.
     not:
@@ -101,7 +101,6 @@ traits:
 
   - id: guarded-module-level-side-effect-call
     desc: Import-time call under a platform guard
-    crit: notable
     conf: 0.8
     # The same import-time execution as `module-level-side-effect-call`, one
     # level deeper. A payload that only wants to run on one operating system
@@ -133,7 +132,6 @@ traits:
 
   - id: module-level-raise
     desc: Python module aborts during import
-    crit: notable
     conf: 0.95
     if:
       type: tree-sitter
@@ -146,7 +144,6 @@ traits:
 
   - id: try-wrapped-module-call
     desc: Import-time call silenced by try/except
-    crit: notable
     conf: 0.75
     if:
       type: text
@@ -155,7 +152,6 @@ traits:
 composite_rules:
   - id: python-import-time-native-bootstrap
     desc: Import-time native bootstrap call
-    crit: notable
     conf: 0.95
     near_lines: 12
     all:
@@ -164,7 +160,6 @@ composite_rules:
 
   - id: module-level-execution
     desc: Code runs when the module is imported
-    crit: notable
     conf: 0.85
     # Either shape of import-time execution. Rules that care about "this runs
     # on import" should require this rather than the bare-call atom, so a

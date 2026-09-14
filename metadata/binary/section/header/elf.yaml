@@ -1,0 +1,56 @@
+defaults:
+  crit: notable
+  platforms: [linux, android]
+  for: [elf]
+  conf: 0.95
+
+traits:
+  - id: elf64-zero-section-header-offset
+    desc: ELF64 section header offset is zero
+    if:
+      type: hex
+      offset: 0
+      pattern: "7F 45 4C 46 02 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 00 00 00 00 00 00 00 00"
+  - id: elf32-zero-section-header-offset
+    desc: ELF32 section header offset is zero
+    if:
+      type: hex
+      offset: 0
+      pattern: "7F 45 4C 46 01 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 00 00 00 00"
+
+  # Validate the table extent directly. A non-zero e_shoff plus a parser
+  # failure does not imply truncation: protected binaries can keep a fully
+  # backed table whose intentionally malformed names defeat strict parsers.
+  - id: elf-unreachable-section-header-table
+    desc: ELF section header table extends past file
+    conf: 0.98
+    if:
+      type: yara
+      source: |
+        rule elf_unreachable_section_header_table {
+          condition:
+            uint32(0) == 0x464c457f and
+            (
+              (
+                uint8(4) == 1 and
+                uint32(0x20) > 0 and uint16(0x2e) == 40 and
+                uint16(0x30) > 0 and
+                uint32(0x20) + uint16(0x30) * 40 > filesize
+              ) or (
+                uint8(4) == 2 and
+                uint32(0x2c) == 0 and
+                uint32(0x28) > 0 and uint16(0x3a) == 64 and
+                uint16(0x3c) > 0 and
+                uint32(0x28) + uint16(0x3c) * 64 > filesize
+              )
+            )
+        }
+
+composite_rules:
+  - id: elf-no-section-headers
+    desc: ELF binary without section headers
+    any:
+      - id: elf64-zero-section-header-offset
+      - id: elf32-zero-section-header-offset
+    unless:
+      - id: objectives/anti-static/pack/detect::upx-packer-string

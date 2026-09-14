@@ -33,10 +33,10 @@ Before placing a trait in `objectives/` or `well-known/`, ask: **would this fire
 | Pattern | Wrong Tier | Correct Tier | Why |
 |---------|-----------|--------------|-----|
 | Binary has many exports | `objectives/evasion/` | `metadata/binary/symbols/` | Neutral structural property |
-| Binary has high entropy | `objectives/anti-static/` | `metadata/binary/metrics/` | Neutral measurement |
-| Binary has low complexity | `objectives/anti-static/` | `metadata/binary/metrics/` | Normal for most binaries |
-| ELF64 class marker | `objectives/anti-static/pack/` | `metadata/binary/metrics/` | Every 64-bit ELF has this |
-| CLI help/usage text | `objectives/anti-static/` | `metadata/binary/metrics/` | Normal binary property |
+| Binary has high entropy | `objectives/anti-static/` | `metadata/binary/section/` | Neutral measurement, filed with the part measured |
+| Binary has low complexity | `objectives/anti-static/` | `metadata/binary/code/` | Normal for most binaries |
+| ELF64 class marker | `objectives/anti-static/pack/` | `metadata/binary/header/` | Every 64-bit ELF has this |
+| CLI help/usage text | `objectives/anti-static/` | `micro-behaviors/ui/help/` | Help text is a user-interface behavior, not file metadata |
 | HTTP Content-Type header | `objectives/c2/` | `micro-behaviors/communications/http/` | Neutral protocol element |
 | SOCKS protocol string | `objectives/c2/backdoor/` | `micro-behaviors/communications/proxy/` | Neutral protocol |
 | `$HOME` env var | `objectives/discovery/` | `micro-behaviors/os/env/` | Universal env var |
@@ -102,7 +102,7 @@ Aim for every atomic trait to represent a strong, precise signal in its own righ
 
 For example, aliased forms of `urllib.request.urlopen`, a full `requests.post` call, or a network-library import remain notable if each independently proves HTTP-client behavior. In contrast, `&cc=`, a lone family-specific word fragment, or half of a split encoded marker may be components because none communicates a clear behavior alone.
 
-**HOSTILE composites require precision ≥ 3.5**, else downgraded. See [PRECISION.md](./PRECISION.md) for the calculation algorithm and authoring guidelines.
+**HOSTILE composites require precision ≥ 3.5**, else downgraded. The score is computed by the engine, not configured here; to see a rule's score and the terms that produced it, run `cleave test-rules --rules <dir::id> <file>` and read the `Precision:` / `Precision detail:` lines.
 
 ### Exception composites
 
@@ -438,6 +438,8 @@ format, use a `metrics` check against the numeric header field:
 
 ### Hex Pattern Syntax
 
+**Concrete-byte floor:** an unpinned hex pattern needs **≥3 concrete bytes** — full bytes (`5C`), nibble wildcards (`4?`), and alternations (`(5C|5D)`, one per token) all count; `??` and gaps (`[N]`) do not. Shorter patterns are rejected by `cleave validate` at authoring time and never match at runtime. Pin the search space to go shorter: `offset`/`offset_range`, or `section` + `section_offset`/`section_offset_range` (or a small `size_max`). `cleave test-match --type hex` explains a floor rejection as a warning line instead of a bare NOT MATCHED.
+
 | Token | Description | Example |
 |-------|-------------|---------|
 | `XX` | Literal byte (hex) | `7F 45 4C 46` |
@@ -520,6 +522,7 @@ when the projection genuinely doesn't carry what you need.
 
 ```yaml
 arg:
+  index: 1          # optional zero-based position; omitted means any argument
   kind: number       # string | number | identifier | bool | template | <shape>
   value: 511         # numeric value (kind=number)
   radix: 8           # source-written radix: 2/8/10/16. With value, both must match.
@@ -532,6 +535,11 @@ The filter matches if **at least one** arg in the call's arg list satisfies all
 specified fields. `kind: number, value: 511, radix: 8` matches `chmod(_,
 0o777)` but not `chmod(_, 511)` — the source-written radix discriminates
 deliberate octal mode bits from incidentally-computed integers.
+
+For value relationships beyond a literal call argument, `arg.from` selects an
+originating call and explicit library transfers. See [SOURCE_ANALYSIS.md](SOURCE_ANALYSIS.md)
+for the shared flow contract and YAML examples. Use direct argument
+matching when sufficient; provenance is for actual relationships, not proximity.
 
 **Picking between `type: symbol` and `type: tree-sitter`:** `type: symbol`
 covers nearly every call-matching need. It runs against the precomputed symbol
@@ -913,6 +921,49 @@ composite_rules:
 | `not:` | Filter matched strings (list of `exact`/`substr`/`regex`) |
 | `unless:` | Skip if condition matches (trait refs or inline conditions) |
 | `downgrade:` | Reduce criticality by one level if condition matches |
+
+### Suppressor scope
+
+**`unless:` and `downgrade:` both resolve within the file the rule matched in.**
+A suppressor sees the findings of that file and nothing else, so a rule's
+behavior can be read off the rule itself.
+
+A `downgrade:` may opt into a wider scope with a block-level `scope:`, using the
+same values as composite `scope:` (`archive`, `outer`, `package`):
+
+```yaml
+    downgrade:
+      scope: archive          # see findings from anywhere in the same archive
+      any:
+        - id: metadata/signed/platform/
+```
+
+Reach for it only when the wider evidence is genuinely about this file — a
+signed installer whose signature covers the members it carries is the motivating
+case. Without it, a directory reference such as
+`metadata/package/testing/presence/harness/` (126 traits, any one of which
+fires) let a vendored `tests/` tree four directories deep silence a rule in
+completely unrelated first-party code, with nothing in the rule text hinting
+that could happen.
+
+`unless:` has no scope key: it is always file-scoped. If you need a
+container-level fact to suppress a rule outright, reference it from a
+`downgrade:` with `scope: archive`, or gate the rule on an
+[exception composite](#exception-composites).
+
+**Downgrades de-emphasize, they never delete.** A finding demoted into
+`baseline`/`component` by its own `downgrade:` is exempt from the low-tier strip
+that drops unreferenced low-tier findings, so it stays in the JSON, the web UI
+and diffs at its reduced tier. Use `unless:` when you actually want the finding
+gone.
+
+**Budget for crossing into `baseline`.** `baseline` means "functionality nearly
+every program has", which is a claim about the *matcher*, not the context — a
+behavior does not become universal because of where it sits. A rule declared
+`notable` may therefore carry at most **4 direct** `downgrade:` entries and **8**
+once aggregator/directory references expand (`broad-notable-downgrade`).
+`suspicious`/`hostile` downgrades are uncapped: they land on `notable`/`suspicious`
+and say nothing false about the matcher.
 
 **Proximity (composites only):** `near_bytes: N`, `near_lines: N` - require evidence from different conditions to fall within a single span of N bytes/lines. Uses a sliding window: the check passes when any contiguous window of size N contains evidence from enough distinct conditions (all conditions for `all:`, `needs` conditions for `any:`).
 

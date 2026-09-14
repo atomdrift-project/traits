@@ -16,7 +16,7 @@ traits:
 
   - id: vb6-runtime-dll-reference
     desc: MSVBVM60.DLL runtime reference
-    crit: component
+    crit: notable
     conf: 0.98
     for: [pe, dll]
     platforms: [windows]
@@ -135,12 +135,10 @@ traits:
       # markers that incorrectly blanked LoadLibrary on every unsigned PE.
       - id: metadata/signed/platform/
       - id: metadata/signed/developer/
-      - id: metadata/binary/section/names::upx-section
-      - type: text
-        substr: clangd
-      - type: text
-        substr: clang
-      - id: well-known/lib/runtime/electron::electron-enable-logging-env
+      - id: metadata/binary/section/label::upx-section
+      - id: well-known/tool/development/toolchain/llvm::clangd-name
+      - id: well-known/tool/development/toolchain/llvm::clang-name
+      - id: well-known/lib/runtime/scripted/electron::electron-enable-logging-env
     downgrade:
       any:
         # A large import table lowers the novelty of this API, but should not
@@ -163,12 +161,15 @@ traits:
       type: text
       word: LoadLibraryA
     unless:
+      # The symbol records the API being used; this also sees the name sitting in
+      # data. Standing down there keeps one use from counting twice.
+      - id: load-library-a
       - type: symbol
         exact: LoadLibraryA
       - id: metadata/package/testing/corpus::concatenated-pe-poc-corpus
   - id: msi-embedded-load-library-a
     desc: MSI embedded LoadLibraryA reference
-    crit: component
+    crit: notable
     conf: 0.9
     attack: T1574.002
     for:
@@ -179,6 +180,10 @@ traits:
     if:
       type: text
       substr: LoadLibraryA
+    unless:
+      # The symbol records the API being used; this also sees the name sitting in
+      # data. Standing down there keeps one use from counting twice.
+      - id: load-library-a
   - id: load-library-w
     desc: LoadLibraryW API reference
     crit: notable
@@ -194,17 +199,17 @@ traits:
       type: symbol
       exact: LoadLibraryW
     unless:
-      - id: metadata/binary/metrics/structural::many-imports
-      - id: metadata/binary/metrics/structural::many-functions
+      - id: metadata/binary/symbols/count::many-imports
+      - id: metadata/binary/code/complexity::many-functions
       - id: metadata/binary/installer/family/
       - id: metadata/signed/platform::microsoft-windows
       # Go's Windows syscall runtime imports LoadLibraryW even when the
       # program never performs dynamic library loading itself.
-      - id: metadata/lang/compiled::go-runtime-marker
+      - id: metadata/lang/runtime::go-runtime-marker
       - id: metadata/lang/compiler/systems::go-pe-symtab
       - type: basename
         exact: WebView2Loader.dll
-      - id: well-known/lib/runtime/electron::electron-enable-logging-env
+      - id: well-known/lib/runtime/scripted/electron::electron-enable-logging-env
   - id: load-library-w-rust-text
     desc: Rust source LoadLibraryW API reference
     crit: notable
@@ -215,6 +220,10 @@ traits:
     if:
       type: text
       word: LoadLibraryW
+    unless:
+    # The symbol records the API being used; this also sees the name sitting in
+    # data. Standing down there keeps one use from counting twice.
+    - id: load-library-w
   - id: load-library-ex
     desc: Extended dynamic library loading
     crit: notable
@@ -268,7 +277,7 @@ traits:
       type: symbol
       exact: LoadLibraryExW
     unless:
-      - id: metadata/binary/metrics/structural::many-imports
+      - id: metadata/binary/symbols/count::many-imports
       - id: metadata/binary/framework::electron-desktop-runtime
       - id: metadata/binary/installer/family/
       - id: metadata/binary/installer/script/
@@ -295,7 +304,7 @@ traits:
     downgrade:
       any:
         - id: metadata/signed/platform/
-        - id: metadata/binary/metrics/structural::many-exports
+        - id: metadata/binary/symbols/count::many-exports
   - id: dlclose
     desc: Dynamic library unload
     crit: notable
@@ -382,11 +391,11 @@ traits:
       kind: call
       exact: ctypes.CDLL
     unless:
-      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
   - id: cdll-paren
     desc: CDLL( call pattern
     crit: notable
@@ -399,13 +408,13 @@ traits:
       kind: call
       exact: CDLL
     unless:
-      - id: metadata/lang/source::linux-kernel-secondary-tree-path
+      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/source::linux-kernel-primary-tree-path
+      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
   - id: loadlibrary-keyword
-    desc: LoadLibrary keyword
+    desc: LoadLibrary named as a string, not called
     crit: notable
     conf: 0.6
     for:
@@ -413,6 +422,10 @@ traits:
     if:
       type: string_literal
       word: LoadLibrary
+    unless:
+      # A name reached through a string is the reflective spelling; where the
+      # direct form is already recorded, this would be the same call twice.
+      - id: load-library
   - id: python-file-dunder
     desc: __file__ variable
     crit: baseline
@@ -448,8 +461,8 @@ traits:
     for:
       - ruby
     if:
-      type: string_literal
-      regex: \.dlopen\(
+      type: text
+      substr: '.dlopen('
   - id: java-loadclass
     desc: Java runtime class loading
     crit: suspicious
@@ -463,7 +476,7 @@ traits:
       substr: loadReplacementClass
   - id: webkit-framework
     desc: WebKit framework linked
-    crit: baseline
+    crit: notable
     conf: 0.9
     for:
       - macho
@@ -598,9 +611,6 @@ composite_rules:
       any:
         - id: metadata/binary/vendor/
         - id: metadata/signed/platform::apple
-        - id: micro-behaviors/dylib/library/family/
-        - id: micro-behaviors/dylib/library/family/
-        - id: micro-behaviors/dylib/library/family/
         - id: micro-behaviors/dylib/library/family/
         - id: micro-behaviors/dylib/library/libc/
   - id: ctypes-cdll
