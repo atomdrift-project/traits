@@ -8,29 +8,80 @@
 # (/tmp/.x, /var/tmp/.x, /dev/shm/.x, ~/.x, $HOME/.x). Per-destination atoms
 # keep individual regexes short and machine-grouped.
 defaults:
-  for: [scripts, source, manifests, html, xml, dockerfile, package-lock.json]
+  # Command-bearing types: matched text is what the file runs. Groovy is
+  # here (Gradle/Jenkins) as command text; C-family source is not — quoted
+  # pipelines are inert until chmod-hidden-stage-source sees system/exec.
+  for: [scripts, manifests, html, xml, dockerfile, package-lock.json, groovy]
   platforms: [linux, macos, windows]
   attack: T1105
   mbc: B0024
 
+traits:
+  - id: workflow-hidden-download-stage
+    desc: Workflow downloads hidden script stage
+    crit: notable
+    conf: 0.94
+    for: [github-actions]
+    unless:
+      - id: metadata/build/ci/github-actions::action-testdata-path
+    if:
+      type: text
+      regex: '\bcurl\b[^\n]{0,120}-o\s+/tmp/\.'
+
+  - id: c-include-directive
+    desc: C-family include directive
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?m)^#include\s'
+
 composite_rules:
-  - id: fetch-output-hidden-stage
-    desc: fetch writes hidden stage path
-    crit: component
-    conf: 0.92
-    # Structured script parsers can attribute a command token and a path inside
-    # the same string literal to nearby logical lines rather than one line.
-    near_lines: 3
-    all:
-      - id: micro-behaviors/fs/path/location::hidden-writable-path
-    any:
-      - id: micro-behaviors/communications/http/download/cli::fetch-output-hidden-path-script
-      - id: micro-behaviors/communications/http/download/cli::fetch-output-hidden-path-structured
-      - id: micro-behaviors/communications/http/download/curl::curl-hidden-tmp-output-file
+  # Public face of the arming shape, split by evidence class: in
+  # command-bearing formats (scripts, manifests, CI, Dockerfiles) the matched
+  # text IS the command the file runs; in C-family source a quoted pipeline
+  # is inert data until an execution primitive consumes it, so the source
+  # child additionally requires one. Detection fixtures and recovered
+  # command notes carry the strings without the primitive.
   - id: chmod-hidden-stage
     desc: chmod makes a hidden writable stage executable
     crit: suspicious
     conf: 0.94
+    for: [scripts, manifests, html, xml, dockerfile, package-lock.json, groovy, c, cpp, objc]
+    # Public face: command-container for scripts/manifests, source sibling when
+    # C-family also holds an execution primitive. Both legs are named so this
+    # roll-up is not a bare any: of one.
+    any:
+      - id: chmod-hidden-stage-command-container
+      - id: chmod-hidden-stage-source
+
+  - id: chmod-hidden-stage-command-container
+    desc: chmod arms hidden stage in command file
+    crit: suspicious
+    conf: 0.94
+    # groovy sits here rather than with compiled source: .gradle build
+    # scripts and Jenkinsfiles are command-bearing the way shell is.
+    any:
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-hidden-tmp-executable
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-hidden-shm-executable
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-hidden-home-executable
+    unless:
+      # C/C++ source: quoted chmod lines are data. The source sibling requires
+      # an execution primitive before this arming shape is claimed.
+      - id: c-include-directive
+      - id: well-known/app/ai/knowledge/animica::rag-documentation-context
+      - id: metadata/build/archive::source-archive-member
+      - id: metadata/build/vcs::vcs-ssh-wrapper-context
+      - id: metadata/package/testing/presence/harness::test-directory
+
+  - id: chmod-hidden-stage-source
+    desc: C source chmods a hidden writable stage
+    crit: suspicious
+    conf: 0.94
+    # objc dropped: `c-source-command-execution` is declared for c/cpp only.
+    for: [c, cpp]
+    all:
+      - id: micro-behaviors/process/create/shell/native::c-source-command-execution
     any:
       - id: micro-behaviors/fs/chmod/executable/mode::chmod-hidden-tmp-executable
       - id: micro-behaviors/fs/chmod/executable/mode::chmod-hidden-shm-executable
@@ -41,15 +92,15 @@ composite_rules:
       - id: metadata/build/vcs::vcs-ssh-wrapper-context
       - id: metadata/package/testing/presence/harness::test-directory
 
-  # ---- Three hostile pairings, so a complete chain lights up 3 findings ----
+  # These older pairings still require separate relationship/precision review.
   - id: stealth-fetch-hidden-stage
     desc: fetch then chmod hidden stage
     crit: hostile
     conf: 0.97
     near_lines: 20
     all:
-      - id: fetch-output-hidden-stage
-      - id: chmod-hidden-stage
+      - id: micro-behaviors/communications/http/download/cli::hidden-output-download-context
+      - id: chmod-hidden-stage-command-container
     unless:
       - id: metadata/package/testing/presence/harness::test-directory
   - id: hidden-stage-chmod-execute
@@ -58,7 +109,7 @@ composite_rules:
     conf: 0.98
     near_lines: 3
     all:
-      - id: chmod-hidden-stage
+      - id: chmod-hidden-stage-command-container
     any:
       - id: micro-behaviors/process/create/local-exec/
       - id: micro-behaviors/process/create/shell/spawn::shell-execution-shm
@@ -70,30 +121,27 @@ composite_rules:
     near_lines: 20
     all:
       - id: micro-behaviors/communications/http/url/external-ip::curl-external-ip-request
-      - id: chmod-hidden-stage
-  - id: quiet-fetch-hidden-stage
-    desc: Quiet download writes hidden stage
+      - id: chmod-hidden-stage-command-container
+  - id: hidden-download-shell-execution
+    desc: Downloads and runs a hidden temporary script
     crit: hostile
     conf: 0.97
-    near_lines: 1
+    platforms: [unix]
+    near_bytes: 0
     all:
-      # A hidden path and a quiet downloader are only a stage when the
-      # downloader actually writes to that path.  Requiring this component
-      # prevents adjacent Dockerfile setup (for example ~/.parallel followed
-      # by a normal tool download) from becoming a dropper finding.
-      - id: fetch-output-hidden-stage
-    any:
-      # fetch-output-hidden-stage already proves an output-writing downloader;
-      # this component extends flag detection to embedded command contexts.
-      - id: micro-behaviors/communications/http/download/curl::curl-silent-fail-flags-text
-      - id: micro-behaviors/communications/http/download/curl::curl-silent-fail-flags-embedded-text
-      - id: micro-behaviors/communications/http/download/curl::curl-silent
-      - id: micro-behaviors/communications/http/download/cli::wget-q-flag
+      - id: micro-behaviors/communications/http/download/curl::shell-curl-hidden-output
+      - id: micro-behaviors/process/create/script/file::shell-downloaded-file-invocation
+  - id: workflow-hidden-download-shell-execution
+    desc: Workflow downloads and runs hidden script
+    crit: hostile
+    conf: 0.97
+    for: [github-actions]
     unless:
-      - id: well-known/lib/ai/huggingface::sandbox-server-bootstrap
-      - id: well-known/tool/development/editor/vscode/
-      - id: metadata/build/archive::source-archive-member
-      - id: well-known/tool/sysadmin/atuin::atuin-install-script-path
+      - id: metadata/build/ci/github-actions::action-testdata-path
+    near_bytes: 512
+    all:
+      - id: workflow-hidden-download-stage
+      - id: micro-behaviors/process/create/shell/target::shell-exec-script-path
   - id: manifest-fetch-chmod-hidden-stage
     desc: Manifest downloads and arms hidden stage
     crit: hostile
@@ -137,8 +185,8 @@ composite_rules:
     for: [vbs, package-lock.json, plist]
     near_lines: 3
     all:
-      - id: fetch-output-hidden-stage
-      - id: chmod-hidden-stage
+      - id: micro-behaviors/communications/http/download/cli::hidden-output-download-context
+      - id: chmod-hidden-stage-command-container
       - id: micro-behaviors/process/create/local-exec::structured-hidden-tmp-background-exec
   - id: dockerfile-fetch-hidden-stage-output
     desc: Dockerfile fetch writes hidden stage
@@ -153,6 +201,9 @@ composite_rules:
       - id: micro-behaviors/communications/http/download/cli::fetch-output-flag-structured-file
     unless:
       - id: metadata/build/archive::source-archive-member
+  # shell-plus-x is a shell-AST symbol match and can never fire on a
+  # Dockerfile's RUN-line text; chmod-make-executable is the text-regex
+  # sibling meant for exactly this cross-format reuse.
   - id: dockerfile-chmod-hidden-stage
     desc: Dockerfile chmod arms hidden stage
     crit: hostile
@@ -160,7 +211,7 @@ composite_rules:
     for: [dockerfile]
     near_lines: 1
     all:
-      - id: micro-behaviors/fs/chmod/executable/mode::shell-plus-x
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-make-executable
       - id: micro-behaviors/fs/path/temp::tmp-hidden-file
     unless:
       - id: metadata/build/archive::source-archive-member

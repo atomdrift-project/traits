@@ -2,7 +2,7 @@
 # benign packages. The matcher only examines the member path extension; it
 # does not claim that the member was executed or that its contents are text.
 defaults:
-  platforms: [unix, windows]
+  platforms: [unix, windows, android]
   for: [zip, tar]
 traits:
   - id: archive-member-text-like-name
@@ -44,10 +44,7 @@ traits:
       field: archive.duplicate_member_count
       min: 1
 
-  # `archive.security.encrypted_count` is a container-agnostic metric -- cleave
-  # reports it for ZIP, 7z and anything else whose members carry an encryption
-  # flag -- so the observation belongs here, in the format-neutral member
-  # directory, rather than under any one format.
+  # One archive-wide fact, read from the parsed member table.
   #
   # It used to exist twice, once as `zip::zip-encrypted-entry` and once as
   # `7z::7z-encrypted-entry`, with identical matchers differing only in `for:`.
@@ -55,11 +52,47 @@ traits:
   # same archive: one fact became two ML features, and a password-protected ZIP
   # was reported as "7z archive contains encrypted content". Whether the members
   # are worth hiding is for the composites that reference this to decide.
+  #
+  # Back on `archive.security.encrypted_count` after a spell reading
+  # `archive.members[*].encrypted`.
+  #
+  # The member flag was adopted because the metric used to be absent for 7z,
+  # which encrypts through the folder's coder chain rather than a per-entry
+  # header bit. filefacts now computes the count for 7z as well, and the member
+  # flag turned out to be the worse of the two: it matches under `test-rules`
+  # but is not among the member fields the scan path exposes as value facts, so
+  # a password-protected 7z produced nothing during an actual analysis and the
+  # thirteen rules referencing this trait stayed unreachable for exactly the
+  # format the switch was meant to fix. Verify this one with `analyze`, not
+  # `test-rules`.
+  # How much of the archive is encrypted, as opposed to whether any of it is.
+  # `for:` does not gate a metrics trait to a container, so the name is
+  # deliberately container-neutral: the APK- and ZIP-named versions this
+  # replaces announced "APK contains multiple encrypted archive members" over a
+  # password-protected 7z. The composites that want a container supply one as a
+  # separate leg. A `2..4` band used to sit beside this; it overlapped this one
+  # and reported "a few" and "several" of the same members in the same
+  # analysis, so the presence trait below covers the low end on its own.
+  - id: archive-encrypted-member-cluster
+    desc: Archive has several encrypted members
+    crit: notable
+    conf: 0.94
+    for: [zip, 7z]
+    if:
+      type: metrics
+      field: archive.security.encrypted_count
+      min: 3
+
   - id: archive-encrypted-member
     desc: Archive contains an encrypted member
     crit: notable
     conf: 0.9
-    for: [zip, tar, 7z, rar, archives]
+    # zip and 7z are the formats filefacts emits the count for. tar is dropped
+    # because tar has no encryption of any kind -- its extractor hardcodes the
+    # flag to false -- and an encrypted tarball is the whole stream through gpg
+    # or openssl, which leaves no member listing to read. RAR carries per-entry
+    # encryption but filefacts does not emit the count for it yet.
+    for: [zip, 7z]
     if:
       type: metrics
       field: archive.security.encrypted_count

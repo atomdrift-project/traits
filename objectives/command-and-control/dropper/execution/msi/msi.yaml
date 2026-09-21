@@ -38,16 +38,20 @@ traits:
   conf: 0.9
   if:
     type: text
-    substr: .vbs
-    case_insensitive: true
+    # A bare ".vbs" substring also matches validation-schema tokens such as
+    # the ICE listing "ice08.vbsice09.vbs..." in WiX's darice.cub, which names
+    # validator scripts rather than staging a payload. Require a token
+    # boundary so only real stage filename references match.
+    regex: (?i)\.vbs\b
 - id: embedded-ps1-stage
   desc: MSI references PS1 stage
   crit: suspicious
   conf: 0.9
   if:
     type: text
-    substr: .ps1
-    case_insensitive: true
+    # Symmetric with embedded-vbs-stage: schema-concatenated tokens must not
+    # read as staged payloads.
+    regex: (?i)\.ps1\b
 - id: wscript-vbs-file-vbscript
   desc: MSI runs VBS through WScript
   crit: suspicious
@@ -163,6 +167,8 @@ traits:
   if:
     type: text
     substr: Rfc2898DeriveBytes
+# Qualified type reference only: bare GZipStream matches .NET metadata tokens in
+# shipped third-party libraries (e.g. gRPC transport compression), not stager code.
 - id: msi-gzip-decompress-stage
   desc: MSI contains GZip stage decompressor
   crit: suspicious
@@ -170,7 +176,7 @@ traits:
   attack: T1027
   if:
     type: text
-    regex: (?i)System\.IO\.Compression\.GZipStream|GZipStream
+    regex: (?i)(System\.)?IO\.Compression\.GZipStream
 - id: msi-reflective-assembly-load
   desc: MSI embeds reflective assembly load
   crit: suspicious
@@ -306,11 +312,19 @@ traits:
           uint32(0) == 0xe011cfd0 and $version and $cryptbase
       }
 composite_rules:
+# Downgraded to suspicious: two of the four legs are universal MSI structure.
+# Every MSI has an installation-database title and an OLE security flag, and
+# the File table's `short|long` alias is how MSI has always stored names -- WiX
+# generates one per file with a random 8.3 stem. What is left is "an MSI that
+# mentions powershell.exe", which is also every Tauri/WiX bundle: the Pake
+# builds ship `InvokeBootstrapper` + `powershell.exe -NoProfile` as their
+# standard bootstrapper custom action.
 - id: msi-powershell-table-implant
   desc: MSI table combines PowerShell and renamed file targets
-  crit: hostile
+  crit: suspicious
   conf: 0.97
   attack: T1059.001,T1218.007,T1036.007
+  for: [msi]
   all:
   - id: metadata/package/files/msi::msi-installation-database-title
   - id: metadata/binary/installer/database::msi-file-table-source-target-alias
@@ -321,6 +335,7 @@ composite_rules:
   crit: hostile
   conf: 0.99
   attack: "T1059.003,T1059.005,T1564.003"
+  for: [oledoc]
   all:
   - id: micro-behaviors/process/create/shell/wsh::msi-wscript-shell-run-call
   - id: micro-behaviors/process/create/shell/wsh::msi-hidden-programdata-batch-arguments
@@ -393,6 +408,7 @@ composite_rules:
   desc: MSI dropper with Run persistence
   crit: hostile
   conf: 0.98
+  for: [oledoc]
   all:
   - id: msi-vbs-powershell-chain
   - id: micro-behaviors/os/registry/keys::currentversion-run
@@ -443,6 +459,7 @@ composite_rules:
   crit: hostile
   conf: 0.99
   attack: T1059.001
+  for: [oledoc]
   all:
   - id: metadata/package/files/msi::msi-installation-database-title
   - id: micro-behaviors/process/create/shell/wsh::msi-wscript-shell-run-call
@@ -453,6 +470,7 @@ composite_rules:
   crit: hostile
   conf: 0.99
   attack: "T1059.001,T1059.005,T1564.003,T1195.002"
+  for: [oledoc]
   all:
   - id: metadata/package/files/msi::msi-installation-database-title
   - id: micro-behaviors/process/create/shell/wsh::msi-wscript-shell-run-call
@@ -464,6 +482,7 @@ composite_rules:
   desc: Advanced Installer PowerShell payload loader
   crit: hostile
   conf: 0.99
+  for: [oledoc]
   all:
   - id: metadata/binary/installer/builder::ai-powershell-launcher-dll-raw
   - id: metadata/binary/installer/builder::ai-custom-action-dll-raw
@@ -477,6 +496,7 @@ composite_rules:
   desc: MSI disables Defender and persists loader
   crit: hostile
   conf: 0.99
+  for: [oledoc]
   all:
   - id: metadata/binary/installer/builder::ai-powershell-launcher-dll-raw
   - id: msi-webclient-payload-download
@@ -512,6 +532,7 @@ composite_rules:
   crit: hostile
   conf: 0.99
   attack: T1562.001
+  for: [oledoc]
   all:
   - id: metadata/binary/installer/builder::ai-powershell-launcher-dll-raw
   - id: msi-defender-exclusion-powershell
@@ -536,9 +557,9 @@ composite_rules:
   all:
   - id: metadata/binary/installer/database::python-msi-library
   - id: msi-generated-ca-dll
-  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: micro-behaviors/process/create/embedded::msi-embedded-create-process-a
   - id: micro-behaviors/process/inject/runtime/thread-context::msi-embedded-set-thread-context
-  - id: micro-behaviors/process/inject/runtime/call::write-process-memory-source
+  - id: micro-behaviors/process/inject/runtime/call::msi-embedded-write-process-memory
   - id: micro-behaviors/mem/protect/modify::msi-embedded-virtual-alloc-ex
   any:
   - id: micro-behaviors/process/inject/runtime/thread-context::msi-embedded-get-thread-context
@@ -559,6 +580,7 @@ composite_rules:
   desc: exe2msi wrapper stages WinRAR SFX
   crit: suspicious
   conf: 0.97
+  for: [oledoc]
   all:
   - id: metadata/binary/installer/database::exe2msi-wrapper-package
   - id: metadata/binary/installer/sfx::winrar-sfx-silent-setup-script
@@ -576,28 +598,22 @@ composite_rules:
   crit: hostile
   conf: 0.99
   attack: T1055.012
+  for: [oledoc]
   all:
   - id: msi-custom-action-hollowing-dropper
   - id: micro-behaviors/data/embedded/payload/resource::msi-embedded-resource-loader-apis
   - id: micro-behaviors/dylib/load/runtime::msi-embedded-load-library-a
   - id: micro-behaviors/dylib/lookup::msi-embedded-get-proc-address
-- id: msi-encoded-powershell-bypass-marker
-  desc: MSI combines encoded payload and bypass marker
-  crit: hostile
-  conf: 0.98
-  attack: T1059.001,T1027
-  all:
-  - id: metadata/file/encoded::base64
-  - id: micro-behaviors/process/create/shell/lang::powershell-keyword
 - id: msi-hidden-script-downloader
   desc: MSI hides policy-bypassed PowerShell that downloads a script
   crit: hostile
   conf: 0.99
   attack: T1059.001,T1105,T1027,T1564.003,T1195.002
+  for: [oledoc]
   all:
   - id: metadata/package/files/msi::ole2-installer-kind
   - id: objectives/command-and-control/dropper/delivery/execute-download::powershell-hidden-bypass-encoded-command
-  - id: micro-behaviors/communications/http/lib/invoke-webrequest::webclient-downloadstring
+  - id: objectives/command-and-control/dropper/execution/msi::msi-webclient-payload-download
 # A build engine renamed as an innocuous application is installed with a
 # project file below LocalAppData and invoked directly from the MSI action
 # table.  This is MSBuild proxy execution rather than a normal build command.
@@ -607,6 +623,7 @@ composite_rules:
   conf: 0.99
   attack: T1127.001
   scope: file
+  for: [oledoc]
   all:
   - id: metadata/binary/installer/custom-action::msi-renamed-msbuild-project-runner
   - id: metadata/binary/installer/custom-action::msi-csproj-file-table-alias

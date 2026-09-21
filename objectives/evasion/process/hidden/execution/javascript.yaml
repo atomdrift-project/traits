@@ -34,6 +34,21 @@ traits:
       type: text
       regex: '(?i)\bwindow\.(moveTo\s*\([^\)\n]{0,80}-\d+|resizeTo\s*\(\s*(0|1)\s*,\s*(0|1))'
 
+  - id: js-global-error-suppression
+    desc: Script swallows every runtime error
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows, unix]
+    for: [javascript, html, vbs, text, data, mp3]
+    if:
+      # `window.onerror = function(){ return true }` -- returning true tells
+      # the browser the error was handled, so nothing is reported and nothing
+      # stops. A page that means to handle errors logs them or reports them
+      # somewhere; one that means not to be watched while it fails its way
+      # through a decode loop does exactly this.
+      type: text
+      regex: '(?i)\bwindow\.onerror\s*=\s*function[^)]{0,20}\)\s*\{\s*return\s+true'
+
 composite_rules:
   - id: hidden-hta-window
     desc: HTA window hides or minimizes
@@ -48,20 +63,23 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: "T1027,T1059.007,T1140,T1564.003"
-    for: [javascript, html, vbs, mp3]
+    # hta-hex-xor-string-decoder requires the HTML-only hta-application-element
+    # marker, so this can only ever fire on html; js-eval-variable-text is a
+    # tree-sitter javascript query and cannot join it on the same node, so the
+    # combined hidden-window + hex-xor-decode + large-base64-string evidence
+    # stands on its own here.
+    for: [html]
     all:
-      - id: metadata/file/format/markup::hta-application-element
       - id: objectives/evasion/process/hidden/execution::hidden-hta-window
       - id: objectives/command-and-control/dropper/execution/exec-download::hta-hex-xor-string-decoder
       - id: micro-behaviors/data/encode/base64::large-string-assignment
-      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-variable-text
 
   - id: offscreen-hta-obfuscated-wmi-loader
     desc: Off-screen HTA launches an obfuscated hidden WMI command
     crit: hostile
     conf: 0.995
     attack: "T1027.002,T1047,T1059.007,T1564.003"
-    for: [javascript, html]
+    for: [javascript]
     all:
       - id: metadata/file/format/markup::hta-application-element
       - id: hta-offscreen-resize
@@ -73,7 +91,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1027,T1053.005,T1218.005,T1564.003
-    for: [html, vbs, mp3]
+    for: [vbs, mp3]
     all:
       - id: hidden-hta-window
       - id: micro-behaviors/os/autorun/scheduled::register-task-definition
@@ -83,19 +101,38 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/wsh::vbs-createobject-variable-arg
       - id: objectives/command-and-control/dropper/execution/wsh-reconstruct::vbs-hex-fragment-accumulator
 
-  # GuardDog: Silent process execution
-  - id: detached-hidden-process-execution
-    desc: Detached Node.js child process with its Windows console hidden
-    crit: suspicious
-    conf: 0.85
-    attack: "T1564"
+  # The loader that never declares itself an HTA.
+  #
+  # `hidden-hta-encoded-loader` above requires an `<hta:application>` element
+  # and the window attributes that come with it. This family ships none: the
+  # file is a Creative Commons MP3 with markup appended, so cleave identifies
+  # it as audio, and the hiding is done from script -- `window.moveTo(-1,0)`
+  # puts the window off-screen and `window.onerror` returning true keeps it
+  # quiet -- with the real body a hex-pair decode into `eval`, buried in
+  # element four hundred of five hundred and thirty-seven junk script blocks.
+  #
+  # Scoped by content, not by name, which is the point: none of the three
+  # facts depends on the file being called `.hta`, so the same page delivered
+  # as `.html`, `.svg` or padded with a different media type reads the same.
+  - id: offscreen-silenced-decoder-page
+    desc: Off-screen page silences errors and decodes
+    crit: hostile
+    conf: 0.96
+    attack: T1027,T1059.007,T1140,T1564.003
+    for: [javascript, html, text, data, mp3]
     all:
-      - id: micro-behaviors/process/create/flags::detached-process
-      - id: micro-behaviors/process/create/spawn::windowshide-option
-    downgrade:
-      # Legitimate use in background tasks
-      any:
-        - id: metadata/package/testing/
-        - id: metadata/signed/platform/
-    unless:
-      - id: well-known/app/ai/coding-agent/qwen-code::qwen-code-bundle-text
+      - id: hta-offscreen-resize
+      - id: js-global-error-suppression
+      - id: micro-behaviors/data/decode/hex::js-hex-charcode-decoder
+
+  - id: media-eval-offscreen-silence
+    desc: Media eval with off-screen error silence
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1059.007,T1140,T1564.003
+    for: [mp3]
+    all:
+      - id: micro-behaviors/data/embedded/payload/media::dynamic-eval-in-media
+      - id: hta-offscreen-resize
+      - id: js-global-error-suppression
+

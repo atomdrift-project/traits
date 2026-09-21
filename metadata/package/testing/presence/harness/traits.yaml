@@ -160,17 +160,59 @@ traits:
   if:
     type: text
     regex: '(^|\n)\s*expect\s+(0|E[A-Z]+)\s+'
+# The media-typed sibling of `test-directory-path` below. That trait's `for:`
+# list is code and data types, so it never sees the deliberately-malformed
+# assets a test suite ships -- Django's tests/mail/attachments/file_txt.png is
+# a text file with a .png name, which IS the fixture. The separator class is
+# also wider here: .NET test projects namespace their trees with dots
+# (chocolatey.tests.integration/context/...) rather than slashes.
+- id: media-asset-test-path
+  desc: Media asset under a test tree
+  crit: baseline
+  conf: 0.95
+  for: [media]
+  if:
+    type: path
+    # `qa` for the same corpus the code-typed sibling below covers: LibreOffice
+    # keeps its graphic-filter fuzz corpus at vcl/qa/cppunit/graphicfilter/data/
+    # -- CVE- and EDB-named images that are deliberately malformed, which is
+    # exactly what a graphics importer test suite is for.
+    regex: '(^|[/.])(tests?|testing|spec|e2e|fixtures?|testdata|qa)[\\/.]'
 - id: test-directory-path
   desc: File is in common test directory
   crit: baseline
-  for: [binaries, scripts, source, data, text, markdown, manifests, npm, whl, gem, tar, tar.gz, shell, makefile, python, ruby, go, rust, c, cpp, javascript, typescript, xls, zip, oledoc]
+  # Document formats belong here too. An office-suite source tree keeps a
+  # corpus of documents whose whole purpose is to exercise the importer:
+  # LibreOffice's sw/qa/core/data/docm/ and sc/qa/extras/testdocuments/ hold
+  # macro-bearing and deliberately malformed files by design. `xls` and
+  # `oledoc` were already listed; `docx` and `rtf` were not, so half the
+  # corpus never matched.
+  # `pdf`, `html` and `vbs` for the same reason `docx`/`rtf` were added: an
+  # office suite's qa corpus is documents. LibreOffice keeps signature
+  # fixtures in xmlsecurity/qa/unit/signing/data/*.pdf, layout fixtures in
+  # sw/qa/extras/layout/data/*.html, and the VBA streams cleave extracts out
+  # of sc/qa/extras/testdocuments/*.xls are typed `vbs`.
+  for: [binaries, scripts, source, data, text, markdown, manifests, npm, whl, gem, tar, tar.gz, shell, makefile, python, ruby, go, rust, c, cpp, javascript, typescript, xls, zip, oledoc, docx, rtf, gz, pdf, html, vbs, pptx, ppsx]
   if:
     type: path
     # `(^|/)` not just `[\\/]`: an archive member path is relative, so a package
     # whose test tree sits at the root -- pyjks ships `tests/expected/*.py` --
     # has no separator before `tests` and never matched. Archive member paths
     # use forward slashes, so the leading alternative need not cover `\\`.
-    regex: '(^|/)(tests?|testing|spec|e2e|winetests|redteam|fstest|qa)[\\/]'
+    #
+    # Case-insensitive: .NET, Java and C++ trees capitalise the component.
+    # dotnet-roslyn keeps its compiler test corpus in
+    # src/Compilers/VisualBasic/Test/, which this never matched, so files whose
+    # whole purpose is to be malformed VB -- TooLongNameTests.vb tests
+    # over-long identifiers -- scored as obfuscation.
+    case_insensitive: true
+    # `testsuite` is the conventional name for a vendored conformance corpus:
+    # wabt ships WebAssembly's spec suite as wabt/third_party/testsuite/*.wast,
+    # whose float literals are deliberately enormous identifiers, and those
+    # scored as script padding and as deep-AST obfuscation.
+    # `winetests`/`fstest` factored into the shared `test` stem to stay inside
+    # the 64-char path-regex cap once `testsuite` was added.
+    regex: '(^|/)((wine|fs)?test(s|suite|ing)?|spec|e2e|redteam|qa)[\\/]'
   unless:
     # A compiled JVM class always carries its *package* path, so a `spec`/`test`
     # segment there names a Java package (com/spec/Foo.class), not a test tree.
@@ -179,6 +221,23 @@ traits:
     # binary-test-directory, neither of which accepts `spec`.
     - type: path
       regex: '\.class(!!|$)'
+# The .NET convention: a test project is `<Name>Tests/` or `<Name>.Tests/`,
+# not a bare `tests/` component, so the sibling matchers here never saw it.
+# mRemoteNG keeps its suite in mRemoteNGTests/, whose nUnitForms/bin/ holds
+# the NUnitForms GUI-testing libraries -- which import BlockInput because
+# driving a UI under test is what they do, and ship placeholder VERSIONINFO.
+#
+# Case-SENSITIVE on purpose: the capital T is what separates `FooTests/` from
+# `latest/` and `contests/`, which a case-insensitive suffix match would
+# swallow. A bare lowercase `tests/` is already covered by
+# test-directory-path above.
+- id: dotnet-test-project-directory-path
+  desc: File in a .NET test project directory
+  crit: baseline
+  for: [binaries, scripts, source, data, manifests, csharp, pe, nupkg]
+  if:
+    type: path
+    regex: '[A-Za-z0-9._-]Tests?[\\/]'
 - id: unittests-directory-path
   desc: File is in a unittests directory
   crit: baseline
@@ -202,7 +261,12 @@ traits:
   if:
     type: path
     basename: true
-    regex: _spec\.|\.spec\.|\.test\.
+    # `^testdata\.` added: the conventional fixture basename, which sits
+    # beside the `.spec.` files rather than in a `tests/` directory.
+    # test-directory-path cannot reach it -- its regex wants a `spec/`
+    # component and Bitwarden's fixtures live in `spec-data/`, and that regex
+    # is already at the 64-char cap.
+    regex: _spec\.|\.spec\.|\.test\.|^testdata\.
   unless:
   - id: metadata/file/format/browser-extension::web-extension-root-manifest
   - type: path
@@ -296,6 +360,32 @@ traits:
     type: path
     # Include the common `e2e-tests` spelling used by integration suites.
     regex: "[\\\\/](tests?|testing|testdata|fixtures?|e2e-tests)[\\\\/]"
+# An office suite's qa corpus is documents that are hostile on purpose.
+# LibreOffice ships chart2/qa/extras/data/pptx/ decks whose external chart
+# reference *is* the bug under test, and sd/qa/unit/data/pptx/fail/ files named
+# for the CVE they reproduce. Both findings come from the office analyzer
+# rather than a trait, so an `unless:` on a rule cannot reach them; the
+# `builtin-<slugified finding id>` hook is how a builtin finding is given one.
+- id: builtin-objectives-execution-interpreter-template-injection
+  desc: Built-in template injection hook
+  crit: suspicious
+  conf: 1.0
+  for: [ooxml, docx, pptx, ppsx, xls, oledoc, rtf]
+  if:
+    type: basename
+    exact: __cleave_builtin_template_injection_hook__
+  unless:
+    - id: test-directory-path
+- id: builtin-metadata-format-clsid-dangerous-clsid
+  desc: Built-in dangerous CLSID hook
+  crit: suspicious
+  conf: 1.0
+  for: [ooxml, docx, pptx, ppsx, xls, oledoc, rtf]
+  if:
+    type: basename
+    exact: __cleave_builtin_dangerous_clsid_hook__
+  unless:
+    - id: test-directory-path
 - id: builtin-anti-analysis-malformed-elf-header
   desc: Built-in malformed ELF finding hook
   crit: suspicious
@@ -451,6 +541,51 @@ traits:
   if:
     type: text
     substr: "allow: ['GET', 'POST'"
+# A macro module named Test*.vbs/.bas/.cls, by the same naming convention as
+# the `_test.py` / `Tests.php` trait below.
+#
+# This exists because `test-directory-path` cannot reach these files. cleave
+# extracts a document's VBA streams as their own nodes, and an atomic
+# `type: path` matcher sees only the member-relative tail -- for
+# `...!!sc/qa/extras/testdocuments/MiscControlTests.xls!!vba/TestMacros.vbs`
+# that tail is `vba/TestMacros.vbs`, with the `qa/` component two levels up
+# and invisible. The .xls node itself does carry test-directory-path; its
+# extracted stream does not.
+#
+# Acquitting on a basename is weaker than acquitting on content, and an
+# attacker can name a macro TestMacros.vbs. It is bounded by the reasoning the
+# repo already applies to `_test.py`: the name is the framework's convention,
+# and the rule it clears is a co-occurrence count, not a payload decoder.
+# A benchmark corpus is input data, not program behavior -- the same argument
+# as `test-directory-path` one directory over. JS engines vendor whole real
+# programs to benchmark against: SpiderMonkey ships Google's Octane suite at
+# `js/src/octane/`, whose `typescript-input.js` is a copy of the TypeScript
+# compiler. That compiler's IO layer supports Windows Script Host, so the
+# benchmark input contains ActiveXObject and ADODB.Stream -- and scored as
+# stream-write, self-delete and ActiveX abuse in Firefox ESR 140.10 and
+# 140.12. `octane/zlib-data.js` and WebKit's ARES-6 `benchmark.js` did the
+# same for numeric-string encoding.
+- id: benchmark-corpus-path
+  desc: File under a benchmark corpus directory
+  crit: baseline
+  conf: 0.9
+  # `type: path` caps at 4 file types; the consumers are JS rules.
+  for: [javascript, typescript]
+  if:
+    type: path
+    dirname: true
+    case_insensitive: true
+    regex: '(^|/)(bench(mark)?s?|octane|performancetests)([\\/]|$)'
+
+- id: macro-test-module-basename
+  desc: Test macro module basename
+  crit: baseline
+  conf: 0.9
+  for: [vbs]
+  if:
+    type: basename
+    regex: '(?i)^test\w{0,40}\.(vbs|bas|cls)$'
+
 - id: python-php-test-basename-suffix
   desc: Python/PHP test filename suffix
   crit: baseline
@@ -562,3 +697,19 @@ composite_rules:
   any:
   - id: metadata/package/testing/presence/fixture::definitelytyped-types-helper-package
   - id: metadata/package/testing/presence/fixture::definitelytyped-private-test-package
+# Per-language markers that a source file is test code: the Go/C test filename
+# and directory conventions, and the two Python test-framework imports. Kept
+# apart from `test-directory`, which answers the path/filename question alone
+# and already subsumes `python-test-file`.
+- id: language-test-source-marker
+  desc: Go, C or Python test source marker
+  crit: baseline
+  conf: 0.9
+  for: [go, c, cpp, python]
+  any:
+  - id: go-test-main
+  - id: go-test-file
+  - id: c-source-test-directory
+  - id: c-source-test-file
+  - id: unittest-module
+  - id: pytest-module

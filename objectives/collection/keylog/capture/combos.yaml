@@ -44,25 +44,6 @@ composite_rules:
       - id: micro-behaviors/fs/path/library::hidden-library-caches
       - id: micro-behaviors/fs/path/temp::tmp-hidden-file
   # Keylogger with structured data output
-  - id: structured-keylogger
-    desc: Keylogger with structured timestamped output
-    crit: hostile
-    conf: 0.95
-    needs: 2
-    any:
-      - id: objectives/collection/keylog/capture::keylog-filename-pattern
-      - id: objectives/collection/keylog/capture::clipboard-capture-pattern
-      - id: objectives/collection/keylog/capture::mouse-state-tracking
-
-  # --- Windows surveillance-suite (RAT/spyware) composites ---
-  # The keylogger composites above require file-stealer extras (SQLite, drive
-  # enumeration, self-delete). A surveillance RAT that captures keystrokes +
-  # screen + clipboard and exfiltrates over the network does not look like a
-  # file stealer, so it slipped through at notable. These composites anchor on
-  # the covert-capture core (window-title keystroke logging + GDI screen
-  # capture) and pair it with a distinct fourth facet. The unless guards exempt
-  # signed components and identified applications that legitimately import
-  # these APIs.
   - id: windows-surveillance-benign-context
     desc: Known benign Windows surveillance context
     crit: exception
@@ -204,3 +185,62 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: metadata/binary/framework/
       - id: metadata/binary/installer/
+
+  # A key-name table next to a remote-process write primitive.
+  #
+  # The keylogging composites above all require SetWindowsHookEx. This family
+  # does not import it -- the evidence is the other half of a keylogger, the
+  # printable labels it substitutes for keys that have no character: the
+  # strings `BACKSPACE`, `CAPSLOCK`, `NUMLOCK`, `PRINTSCREEN`. A program keeps
+  # that table for one reason, which is to write a readable transcript of
+  # someone else's typing.
+  #
+  # On its own the table is only notable -- a keyboard-remapping utility has
+  # the same words. What settles it is the company it keeps: the ability to
+  # allocate and write memory inside another process, and a reference to
+  # SeDebugPrivilege, which is what that write needs when the target belongs
+  # to a different user. Surveillance software that says what it is does not
+  # need to get there through another process's address space.
+  - id: keylog-labels-with-remote-process-write
+    desc: Key-label table with remote process writes
+    crit: hostile
+    conf: 0.95
+    platforms: [windows]
+    for: [pe, dll]
+    attack: T1056.001,T1055
+    all:
+      - id: micro-behaviors/process/inject/runtime/call::remote-process-memory-api-cluster
+      - id: objectives/evasion/anti-av/syscall::sedebug-privilege-ref
+      # The table, not one word: `keystroke-capture-string` already requires a
+      # lock-key label and an action-key label together, because `BACKSPACE`
+      # alone appears in any program that names a key.
+      - id: micro-behaviors/hardware/input/keyboard/label::keystroke-capture-string
+    # Named exemptions, not whole directories. The first draft exempted
+    # `well-known/tool/sysadmin/` and `well-known/tool/reverse-engineering/`,
+    # which silently cleared this entire family: the droppers are WinRAR SFX
+    # stubs whose icons were edited with Resource Hacker, so they carry both a
+    # `winrar-component` marker and Resource Hacker's own strings. A directory
+    # `unless:` over a tool tree exempts every carrier that merely bundles the
+    # tool -- including the one the attacker used to build the carrier.
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/vendor/
+      - id: objectives/collection/keylog/capture::known-gui-runtime-input-exception
+      # A compiled AutoIt script carries the whole AutoIt runtime: the Send-key
+      # label table, the remote-process memory APIs, and the SeDebugPrivilege
+      # string are present regardless of what the script does.
+      - id: metadata/lang/compiled::autoit-compiled-script
+      - id: well-known/tool/reverse-engineering/pe-explorer/
+      # The stock AutoIt3 interpreter. It exposes the whole Win32 surface to
+      # scripts -- Send()/key-label tables, _WinAPI_WriteProcessMemory and
+      # SeDebugPrivilege all live in the runtime whatever a script does -- so
+      # scoop's autoit-v3.zip scored hostile on AutoIt3.exe and AutoIt3_x64.exe.
+      # Keyed on the *leaf signer*, deliberately, not on the AutoIt tool tree:
+      # a compiled AutoIt payload is the interpreter with a script appended and
+      # does not carry AutoIt Consulting's Authenticode leaf, so this exempts the
+      # genuine unmodified interpreter without exempting AutoIt-built droppers --
+      # the carrier problem the note above describes.
+      - id: metadata/signed/leaf::autoit-consulting-ltd
+      - id: well-known/tool/sysadmin/iobit-unlocker/
+      - id: well-known/dual-use/remote-admin/
+

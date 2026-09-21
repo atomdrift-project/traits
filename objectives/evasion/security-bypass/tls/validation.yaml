@@ -7,9 +7,38 @@ defaults:
   crit: notable
   attack: T1553
 traits:
+# Installing a callback is neutral -- certificate *pinning*, a private-CA trust
+# policy and an interactive "do you trust this certificate?" prompt all assign
+# one, exactly as a bypass does. This file already says as much about the Java
+# side ("A custom X509TrustManager is neutral"); the four .NET siblings below
+# never got the same treatment and sat at suspicious on the assignment alone.
+# MonoDevelop's MonoDevelop.Core/Runtime.cs installs a callback that returns
+# true only for `SslPolicyErrors.None` and otherwise prompts the user, and
+# scored suspicious twice for it.
+#
+# These two match the bypass itself: a callback whose entire body is an
+# unconditional true. Bitwarden's MailKitSmtpMailDeliveryService.cs
+# (`= (s, c, h, e) => true;`) is the canonical first form.
+- id: dotnet-cert-callback-lambda-accepts-all
+  desc: .NET SSL callback always returns true
+  crit: suspicious
+  conf: 0.95
+  for: [csharp, source]
+  if:
+    type: text
+    regex: 'ServerCertificateValidationCallback\s*\+?=\s*\([^)]{0,60}\)\s*=>\s*true'
+- id: dotnet-cert-callback-delegate-accepts-all
+  desc: .NET SSL callback body returns true only
+  crit: suspicious
+  conf: 0.95
+  for: [csharp, source]
+  if:
+    type: text
+    regex: 'ServerCertificateValidationCallback[^{]{0,100}\{\s*return\s+true\s*;\s*\}'
+
 - id: dotnet-cert-callback-delegate
   desc: .NET SSL cert validation callback suppressed
-  crit: suspicious
+  crit: notable
   conf: 0.9
   for: [csharp, source]
   if:
@@ -17,7 +46,7 @@ traits:
     regex: ServerCertificateValidationCallback\s*=\s*delegate
 - id: dotnet-cert-callback-arrow
   desc: .NET SSL callback arrow assignment
-  crit: suspicious
+  crit: notable
   conf: 0.85
   for: [csharp, source]
   if:
@@ -25,7 +54,7 @@ traits:
     regex: 'ServerCertificateValidationCallback\s*\+?=\s*[A-Za-z_][\w.]*\s*=>'
 - id: dotnet-cert-callback-anonymous
   desc: .NET SSL callback anonymous assignment
-  crit: suspicious
+  crit: notable
   conf: 0.85
   for: [csharp, source]
   if:
@@ -33,7 +62,7 @@ traits:
     regex: 'ServerCertificateValidationCallback\s*\+?=\s*(\(|delegate\b|new\b)'
 - id: dotnet-cert-callback-method-ref
   desc: .NET SSL callback method assignment
-  crit: suspicious
+  crit: notable
   conf: 0.85
   for: [csharp, source]
   # Require a method-reference RHS. A bare `[+=]` also matched the windows-rs
@@ -163,15 +192,18 @@ traits:
   desc: JVM trust manager uses trust-all naming
   crit: component
   conf: 0.92
-  for: [java, class, jar, zip]
+  for: [java, class]
   if:
     type: text
-    regex: '(?i)(trust|accept)[-_]?all'
+    # Same token-boundary requirement as java-trust-all-type-name above:
+    # JavaMail's opt-in isTrustAllHosts / trustAllHosts / setTrustAllHosts
+    # API names are not trust-all manager types.
+    regex: '(?i)(^|[^A-Za-z])(trust|accept)[-_]?all([^A-Za-z]|$)'
 - id: java-inert-trustmanager-text
   desc: JVM trust manager uses insecure naming
   crit: notable
   conf: 0.92
-  for: [java, class, jar, zip]
+  for: [java, class]
   if:
     type: text
     regex: '(?i)(insecure|null|dummy)[-_]?trustmanager'
@@ -179,7 +211,7 @@ traits:
   desc: JVM SSL context named for disabled validation
   crit: notable
   conf: 0.95
-  for: [java, class, jar, zip]
+  for: [java, class]
   if:
     type: text
     regex: '(?i)SSLContext[-_]?(No[-_]?Validation|No[-_]?Verify)'
@@ -251,7 +283,7 @@ composite_rules:
     # capability marker; keep the exact class-level TLS findings separate.
     crit: suspicious
     conf: 0.99
-    for: [jar, zip]
+    for: [jar, zip, class]
     scope: archive
     attack: T1041,T1105,T1573
     all:
@@ -320,7 +352,7 @@ composite_rules:
       - id: powershell-cert-validation-callback-accept-all
       - id: micro-behaviors/communications/http/client/managed::downloadstring
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-      - id: micro-behaviors/process/interpreter/eval/direct::embedded-powershell-iex
+      - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
     near_lines: 80
   - id: tls-bypass-ip-target
     desc: Python TLS validation off for hardcoded IP
@@ -337,7 +369,7 @@ composite_rules:
     desc: Java trust-all TLS manager configuration
     crit: suspicious
     conf: 0.96
-    for: [java, class, jar, zip]
+    for: [class, jar, zip]
     # Do not combine an SSLContext.init call in one class with a permissive
     # trust-manager name from another class in the same package or JAR.
     scope: leaf
@@ -355,17 +387,24 @@ composite_rules:
     # ignoreSslErrors custom-request path; its class is bundled library code,
     # not sample-specific TLS bypass logic.
     - id: well-known/lib/ui/pywebview::android-client-class
-    - id: well-known/lib/runtime/managed/openjdk::source-archive-path
     - id: well-known/app/media/cloudstream::cloudstream-apk
-    - id: well-known/lib/runtime/managed/netty::insecure-trust-manager-utility
     - id: well-known/app/system/maestro::android-test-app-path
     - id: metadata/package/testing/presence/harness::example-directory
     # Yonyou MCP server disables TLS validation for internal dev-community HTTPS.
     - id: well-known/tool/development/vscode-extension/yonbip-devtool::yonyou-mcp-jar-path
-    # Apache HttpClient ships TrustAllStrategy as a documented TLS helper.
-    - id: well-known/lib/runtime/managed/apache-httpclient::apache-httpclient-library-context
     # jsoup ships optional insecure TLS helpers for HTML scraping.
     - id: well-known/lib/web/jsoup::jsoup-library-context
+    # The shared semantic behind four separate carve-outs that used to be
+    # listed here one by one: a managed-runtime library that ships a
+    # documented opt-in trust-all helper is implementing the option its
+    # callers ask for, not disabling validation on its own account. OpenJDK's
+    # source tree, Netty's InsecureTrustManagerFactory, Apache HttpClient's
+    # TrustAllStrategy and Quarkus' TLS registry are all that shape; the last
+    # had an identity that said exactly this but reached only the sibling rule
+    # `java-trust-all-x509trustmanager`. The directory's other members are
+    # narrow runtime-binary identities (libjvm.so, coreclr, mono exports), so
+    # the reference does not widen past libraries.
+    - id: well-known/lib/runtime/managed/
   # Ruby Net::HTTP with VERIFY_NONE, write fetched bytes, then Process.spawn —
   # catches SleeperGem-style and other TLS-blind remote loaders.
   - id: ruby-tls-bypass-download-exec

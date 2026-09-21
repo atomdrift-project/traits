@@ -13,11 +13,16 @@ traits:
       exact: Invoke-WebRequest
     unless:
       - id: well-known/tool/detection/owasp-modsecurity-crs::owasp-crs-powershell-catalog-context
+  # `batch` and `text` alongside `pe`: a batch script that runs
+  # `powershell -command "Invoke-WebRequest ..."` is PowerShell content in a
+  # `.bat`, and the cmdlet name means the same thing wherever it is written.
+  # Scoped to powershell alone, none of these atoms could see the batch
+  # droppers that invoke it -- which is most of them.
   - id: iwr-name-pe
     desc: Binary references Invoke-WebRequest
     crit: notable
     conf: 0.86
-    for: [pe]
+    for: [pe, batch, text]
     if:
       type: text
       word: Invoke-WebRequest
@@ -49,7 +54,7 @@ traits:
     desc: Invoke-WebRequest URI parameter
     crit: notable
     conf: 0.82
-    for: [powershell, pe]
+    for: [powershell, pe, batch, text]
     if:
       type: text
       substr: "Invoke-WebRequest -Uri"
@@ -147,7 +152,7 @@ traits:
       path: lnk.arguments
       regex: '(?i)(^|[\s;&|(\[])irm\s*\('
   - id: irm-bare-domain
-    desc: Invoke-RestMethod to bare domain
+    desc: PowerShell web request omits the URL scheme
     crit: notable
     conf: 0.92
     size_min: 1
@@ -155,6 +160,47 @@ traits:
       type: text
       regex: '\b(irm|Invoke-RestMethod)\s+[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\b'
       case_insensitive: true
+  - id: iwr-bare-domain
+    desc: Invoke-WebRequest uses a protocol-less host/path
+    crit: notable
+    conf: 0.92
+    size_min: 1
+    if:
+      type: text
+      regex: '\b(iwr|Invoke-WebRequest)\s+[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\b'
+      case_insensitive: true
+  - id: irm-jsdelivr-github-cdn-path
+    desc: PowerShell fetches from jsDelivr CDN
+    crit: notable
+    conf: 0.94
+    attack: T1105
+    for: [powershell, batch]
+    if:
+      type: text
+      # GitHub-backed jsDelivr routes are legitimate distribution paths, but
+      # a PowerShell downloader can use them as a disposable staging surface.
+      # Keep this as an infrastructure atom; the fetch-and-evaluate objective
+      # supplies the intent. The scheme is optional because PowerShell accepts
+      # a bare host/path as the argument to Invoke-RestMethod.
+      regex: '(?i)\b(irm|iwr)\s+(https?://)?cdn\.jsdelivr\.net/gh/\d{6,}/[A-Za-z0-9_-]{3,}'
+  - id: irm-jsonkeeper-path
+    desc: PowerShell fetches JSONKeeper-hosted content
+    crit: notable
+    conf: 0.94
+    attack: T1105
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\b(irm|iwr)\s+(https?://)?jsonkeeper\.com/[A-Za-z0-9_-]{4,}'
+  - id: irm-github-gist-path
+    desc: PowerShell fetches content from a GitHub Gist
+    crit: notable
+    conf: 0.94
+    attack: T1105
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)\b(irm|iwr)\s+(https?://)?gist\.github\.com/[\w.-]{1,40}/[a-f0-9]{8,}'
   - id: webclient-download
     desc: System.Net.WebClient Download* call
     crit: notable
@@ -263,6 +309,7 @@ traits:
       regex: (?is)WebClient\)?\.Download\w+.{0,240}\bStart-Process\b
       case_insensitive: true
     unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
       - id: well-known/app/communication/thunderbird::firefox-source-tree-path
       - id: metadata/lang/source::yara-rule-source
       - id: metadata/build/recognized-contexts::sysmanage-prerequisite-installer-context
@@ -316,7 +363,7 @@ composite_rules:
     desc: Invoke-WebRequest cmdlet (iwr/wget/curl alias)
     crit: notable
     conf: 0.8
-    for: [powershell, pe]
+    for: [powershell, pe, batch, text]
     any:
       - id: iwr-name
       - id: iwr-name-pe
@@ -327,7 +374,7 @@ composite_rules:
     unless:
       - id: well-known/tool/detection/owasp-modsecurity-crs::owasp-crs-powershell-catalog-context
   - id: invoke-restmethod
-    desc: Invoke-RestMethod cmdlet (irm alias)
+    desc: PowerShell performs an Invoke-RestMethod request (irm alias)
     crit: notable
     conf: 0.8
     any:
@@ -335,7 +382,7 @@ composite_rules:
       - id: irm-alias
       - id: irm-bare-domain
   - id: request-powershell
-    desc: Performs HTTP request
+    desc: PowerShell performs an HTTP request
     crit: notable
     conf: 0.9
     for: [powershell, pe]

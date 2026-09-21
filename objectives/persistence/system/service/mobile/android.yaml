@@ -55,6 +55,7 @@ composite_rules:
     desc: Android boot JobService persistence
     crit: suspicious
     conf: 0.94
+    for: [apk, zip, xml, dex]
     all:
       - id: micro-behaviors/os/service/daemon::android-job-service
       - id: micro-behaviors/os/service/daemon::android-background-service-names
@@ -66,6 +67,7 @@ composite_rules:
     desc: Android boot foreground battery persistence
     crit: suspicious
     conf: 0.96
+    for: [apk, zip, xml, dex]
     all:
       - id: micro-behaviors/os/service/daemon::android-boot-completed-action
       - id: micro-behaviors/os/service/daemon::android-foreground-service-permission
@@ -76,6 +78,7 @@ composite_rules:
       - id: objectives/command-and-control/dropper/staged-loader::cleartext-traffic-enabled
 
   - id: android-tasker-boot-foreground-persistence
+    for: [android_apk, xml]
     desc: Android Tasker boot foreground persistence
     crit: suspicious
     conf: 0.93
@@ -89,6 +92,7 @@ composite_rules:
     desc: Android Fox boot service heartbeat persistence
     crit: hostile
     conf: 0.95
+    for: [apk, zip, xml, dex]
     all:
       - id: micro-behaviors/os/service/daemon::android-fox-component-names
       - id: micro-behaviors/os/service/daemon::android-fox-start-persistence
@@ -103,23 +107,37 @@ composite_rules:
     crit: hostile
     conf: 0.96
     attack: "T1631, T1624.001"
-    for: [apk, zip]
+    for: [android_apk, xml, java, kotlin, tar]
     all:
       - id: micro-behaviors/os/package-manager/sideload::android-request-install-packages-permission
       - id: micro-behaviors/os/service/daemon::android-boot-completed-permission
       - id: micro-behaviors/os/service/daemon::android-foreground-service-permission-text
+      # Same reasoning as android-install-boot-loader below: the three `all:`
+      # legs are permission declarations, and FOREGROUND_SERVICE is held by any
+      # app with a persistent notification, so the third adds no evidence the
+      # first two lacked. The `for: [apk, zip]` gate the note above relies on
+      # does not hold at archive scope -- Telegram's source tarball matched on
+      # its AndroidManifest.xml. Require the app to drive the installer.
+      - id: micro-behaviors/os/package-manager/sideload::package-installer-driven
     unless:
       - id: well-known/tool/development/mobile/termux/
 
+  # Both `all:` legs are manifest *permission declarations*, and a hostile
+  # verdict cannot rest on two of those: an app that ships its own updates
+  # holds REQUEST_INSTALL_PACKAGES, and one that restores notifications after a
+  # reboot holds RECEIVE_BOOT_COMPLETED. Telegram for Android declares both, in
+  # its release and debug manifests. The third leg requires the app to actually
+  # drive the installer, which is the part a dropper cannot do without.
   - id: android-install-boot-loader
     desc: Android install boot loader
     crit: hostile
     conf: 0.95
     attack: "T1631, T1624.001"
-    for: [apk, zip]
+    for: [android_apk, xml, java, kotlin, tar]
     all:
       - id: micro-behaviors/os/package-manager/sideload::android-request-install-packages-permission
       - id: micro-behaviors/os/service/daemon::android-boot-completed-permission
+      - id: micro-behaviors/os/package-manager/sideload::package-installer-driven
     unless:
       - id: well-known/tool/development/mobile/termux/
 
@@ -136,12 +154,24 @@ composite_rules:
     desc: Android Fox WorkManager persistence
     crit: hostile
     conf: 0.95
+    for: [apk, zip, xml, dex]
     all:
       - id: micro-behaviors/os/service/daemon::android-fox-component-names
       - id: micro-behaviors/os/service/daemon::android-job-service
       - id: micro-behaviors/time/schedule/interval::android-scheduled-pending-intent
 
+  - id: android-fox-icon-suppression
+    desc: Fox persistence hides its launcher component
+    crit: hostile
+    conf: 0.95
+    for: [apk, zip, xml, dex]
+    all:
+      - id: micro-behaviors/os/service/daemon::android-fox-component-names
+      - id: objectives/evasion/process/hidden/launcher::android-set-component-enabled-setting-reference
+      - id: micro-behaviors/os/service/daemon::android-job-service
+
   - id: android-source-battery-exemption-control
+    for: [android_apk, java, kotlin, package.json, xml]
     desc: Android source battery exemption control
     crit: suspicious
     conf: 0.94
@@ -157,3 +187,52 @@ composite_rules:
       - id: well-known/tool/development/mobile/termux/
       - id: well-known/app/communication/sms-forwarder::smsforwarder-source-battery-context
       - id: well-known/app/media/spotiflyer::spotiflyer-source-package
+
+  # An ADB-shell daemon can survive removal of its user-facing app, reinstall
+  # the staged APK with all runtime permissions, and restore its Accessibility
+  # binding directly through secure settings. The base mechanism is suspicious
+  # because device-management and test tooling can hold comparable authority;
+  # a remotely tasked self-enrolled Wireless ADB shell makes it an attack.
+  - id: android-adb-accessibility-app-restoration
+    desc: ADB restores an APK and Accessibility service
+    crit: suspicious
+    conf: 0.995
+    for: [source, binaries]
+    attack: T1548,T1631,T1624.001
+    all:
+      - id: micro-behaviors/communications/socket/tcp::adb-shell-apk-reinstall-auto-grant
+      - id: micro-behaviors/os/privilege/elevation::android-shell-accessibility-settings-enable
+
+  - id: android-wireless-adb-self-restoring-app
+    desc: Wireless ADB agent restores its controlled app
+    crit: hostile
+    conf: 0.999
+    for: [java, kotlin, apk, zip, dex]
+    attack: T1548,T1631,T1624.001
+    all:
+      - id: objectives/command-and-control/remote-command/control::android-wireless-adb-c2-shell
+      - id: android-adb-accessibility-app-restoration
+
+  # Doze and App Standby are the platform's answer to background components
+  # that never stop running.  An agent holding an ADB shell can write itself
+  # into the device-idle whitelist, which no app can do for itself, and its
+  # services then survive the power manager indefinitely.
+  - id: android-adb-doze-exemption-persistence
+    desc: ADB exempts the agent's package from Doze
+    crit: suspicious
+    conf: 0.96
+    for: [java, kotlin, apk, zip, dex]
+    attack: T1624.001
+    all:
+      - id: micro-behaviors/communications/socket/tcp::adb-shell-doze-whitelist-add
+      - id: micro-behaviors/communications/socket/tcp::android-adb-shell-command-service-request
+
+  - id: android-wireless-adb-doze-exempt-agent
+    desc: Wireless ADB agent exempts itself from Doze
+    crit: hostile
+    conf: 0.995
+    for: [java, kotlin, apk, zip, dex]
+    attack: T1624.001,T1548
+    all:
+      - id: objectives/command-and-control/remote-command/control::android-wireless-adb-c2-shell
+      - id: micro-behaviors/communications/socket/tcp::adb-shell-doze-whitelist-add

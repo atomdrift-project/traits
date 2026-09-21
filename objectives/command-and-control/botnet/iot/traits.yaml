@@ -350,6 +350,7 @@ composite_rules:
   - id: micro-behaviors/fs/path/device/special::watchdog-device
   needs: 2
 - id: huawei-hg532-upnp-exploit
+  for: [elf]
   desc: Huawei HG532 UPnP exploit delivery
   crit: hostile
   conf: 0.98
@@ -366,6 +367,7 @@ composite_rules:
     any:
     - id: huawei-upnp-marker
 - id: huawei-hg532-upnp-exploit-marked
+  for: [elf]
   desc: Huawei HG532 exploit with campaign marker
   crit: hostile
   conf: 0.99
@@ -388,11 +390,13 @@ composite_rules:
   platforms:
   - linux
   for: [elf]
+  # encoded-downloader-pattern is scoped to script types: its own
+  # `encoded-http-url` leg never covered elf, so requiring it here made this
+  # rule dead. encoded-download-tools is the elf-capable half, and its
+  # `wget|curl https?://` regexes already carry the URL requirement that
+  # encoded-http-url contributed.
   all:
   - id: huawei-upnp-digest-auth
-  - id: objectives/anti-static/obfuscation/encoding/content::encoded-downloader-pattern
-  any:
-  - id: objectives/anti-static/obfuscation/encoding/content::encoded-wget-http
   - id: objectives/anti-static/obfuscation/encoding/content::encoded-download-tools
 - id: ssdp-covert-iot-bot
   desc: SSDP reflection IoT bot with covert C2 markers
@@ -842,6 +846,22 @@ composite_rules:
 # sit here at notable. It asserted nothing beyond the neutral capability
 # atoms it wrapped, and reported every curl in a shell script under
 # botnet/iot. Its one consumer now takes the union directly as an `any:`.
+# `near_bytes` because the two legs were unbound across an entire binary.
+# `process-self-exe-path` is a bare `substr: /proc/self/exe` at conf 0.66, and
+# referencing that path is simply how a relocatable program finds itself --
+# Rust's `std::env::current_exe()` puts the string in every Rust binary. Paired
+# with "has any network send" it convicted 18 benign samples in one sweep:
+# the musl dynamic loader (ld-musl-x86_64.so.1), libaudit, perl, dirmngr, and
+# the whole container stack (runc, containerd, containerd-shim, docker,
+# docker-buildx, buildkitd, buildctl, ctr, nerdctl).
+#
+# Propagation means reading the executable's CONTENTS and sending them, so the
+# read and the send belong to one routine. A Mirai-class loader is a small
+# statically-linked binary where both sit in the same region; perl and
+# containerd are megabytes apart. NOTE: the false-positive side is measured,
+# the true-positive side is reasoned -- /var/tmp/triage/mislabeled-bad is a
+# false-NEGATIVE corpus and cannot confirm the rule still catches real
+# propagation. Re-measure against a Mirai/Kinsing corpus when one is available.
 - id: self-propagate
   desc: Read own executable for propagation
   crit: suspicious
@@ -850,13 +870,16 @@ composite_rules:
   attack: T1105
   platforms:
   - linux
+  near_bytes: 4096
   all:
-  - id: micro-behaviors/fs/proc/exe::process-self-exe
+  - id: micro-behaviors/fs/proc/exe::process-self-exe-path
   any:
   - id: micro-behaviors/communications/socket/send/
   - id: micro-behaviors/communications/ftp/download/tftp::command
   - id: micro-behaviors/communications/http/download/curl/
   needs: 1
+  unless:
+  - id: micro-behaviors/fs/proc/exe::proc-mount-check-self-exe
 - id: mirai-variant
   desc: Mirai-like IoT botnet (credential brute-force targeting)
   crit: suspicious
@@ -916,7 +939,7 @@ composite_rules:
   - id: objectives/lateral-movement/brute-force/iot-creds::mirai-credential-access
   - id: objectives/command-and-control/botnet/iot::telnet-target
   - id: micro-behaviors/communications/http/download/busybox::busybox-wget-http-reference
-  - id: micro-behaviors/fs/chmod/executable/dangerous::shell-777
+  - id: micro-behaviors/fs/chmod/executable/dangerous::busybox-chmod-plus-x
   unless:
   - id: metadata/package/testing/
   - id: metadata/build/autotools::autoconf-generated-script
@@ -936,6 +959,7 @@ composite_rules:
   - id: micro-behaviors/fs/chmod/executable/dangerous::busybox-chmod-plus-x
   - id: micro-behaviors/fs/chmod/executable/dangerous::shell-777
 - id: raw-ip-arch-protocol-dropper
+  for: [shell]
   desc: Raw-IP multi-architecture protocol payload loader
   crit: hostile
   conf: 0.99
@@ -988,9 +1012,11 @@ composite_rules:
   attack: T1105
   platforms:
   - linux
+  # mprotect-rwx-syscall is not typed for shell.
+  for: [elf]
   all:
-  - id: micro-behaviors/fs/proc/exe::process-self-exe
-  - id: micro-behaviors/mem/protect/modify::repeated-07-byte-constant
+  - id: micro-behaviors/fs/proc/exe::process-self-exe-path
+  - id: micro-behaviors/mem/protect/modify::mprotect-rwx-syscall
   - id: objectives/evasion/process/injection/shellcode::register-transfer
 - id: telnet-target
   desc: Telnet service targeting
@@ -1239,8 +1265,10 @@ composite_rules:
   conf: 0.99
   attack: T1071.004
   mbc: B0030
-  platforms: [linux]
-  for: [elf]
+  platforms:
+  - linux
+  for:
+  - elf
   all:
   - id: metadata/arch/iot::sparc-raw-header
   - id: metadata/binary/linking/static::elf-needed-libs-zero
@@ -1248,15 +1276,16 @@ composite_rules:
   - id: micro-behaviors/fs/path/config/system::config-resolv
   - id: micro-behaviors/fs/proc/info/path::self-oom-adjustment-paths
   - id: objectives/command-and-control/infrastructure/domain/malicious::connectivity-accesscam-dns-query
-
 - id: static-superh-dns-c2-oom-iot-bot
   desc: Static SuperH IoT bot with DNS bootstrap and OOM protection
   crit: hostile
   conf: 0.99
   attack: T1071.004
   mbc: B0030
-  platforms: [linux]
-  for: [elf]
+  platforms:
+  - linux
+  for:
+  - elf
   all:
   - id: metadata/arch/iot::superh
   - id: metadata/binary/linking/static::elf-needed-libs-zero
@@ -1264,7 +1293,6 @@ composite_rules:
   - id: micro-behaviors/fs/path/config/system::config-resolv
   - id: micro-behaviors/fs/proc/info/path::self-oom-adjustment-paths
   - id: objectives/command-and-control/infrastructure/domain/malicious::connectivity-accesscam-dns-query
-
 - id: static-arm-oabi-dns-c2-oom-bot
   desc: Static ARM bot with OABI DNS C2 and OOM protection
   crit: hostile

@@ -43,6 +43,44 @@ traits:
     if:
       type: text
       regex: '(?i)set\s+[A-Z0-9_!]{4,}\s*=\s*''?https?://.{1,60}\.Ps1''?'
+  - id: batch-powershell-web-download
+    desc: Batch PowerShell downloads from the web
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)powershell(\.exe)?\s+-command.{0,20}Invoke-WebRequest\b[^\r\n]{0,200}https?://'
+    unless:
+      # Fetching nuget.exe from Microsoft's own CDN is how a .cmd bootstraps
+      # the NuGet CLI before restore; PowerToys' cmdpal NugetWrapper.cmd is
+      # the canonical form. The URL is the whole exemption -- the shape
+      # (download an exe to TEMP and run it) is identical to a dropper's.
+      - id: metadata/package/manager::nuget-org-bootstrap-url
+  # Notable for the same reason as `batch-start-executable-payload` below:
+  # unzipping with PowerShell is what a build script or an app's tool
+  # bootstrapper does. WinMerge 2.16.56 ships two -- Plugins/Commands/
+  # DownloadFiles.bat and Plugins/Commands/Java/java.bat -- that fetch an
+  # optional plugin dependency and expand it into %APPDATA%\WinMerge\Commands.
+  # The dropper claim belongs to `batch-webrequest-archive-executable-dropper`,
+  # which pairs this with the download and the launch.
+  - id: batch-powershell-archive-extract
+    desc: Batch invokes PowerShell to extract an archive
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\bpowershell(\.exe)?\s+-command\s+["'']?\s*Expand-Archive\b'
+  # Notable, not suspicious: `start whatever.exe` is what a .bat file is for --
+  # portable-app launchers, build scripts and game wrappers all end on one.
+  # The dropper claim belongs to the composite below, which pairs this with the
+  # download and the extract.
+  - id: batch-start-executable-payload
+    desc: Batch launches an executable payload
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)^\s*start\s+("[^"]{0,64}"\s+)?[^\r\n]{0,160}\.exe\b'
 
 composite_rules:
   - id: short-envvar-powershell-downloadstring
@@ -55,3 +93,11 @@ composite_rules:
       - id: short-env-downloadstring
       - id: short-env-iex
       - id: batch-ps1-url-assignment
+  - id: batch-webrequest-archive-executable-dropper
+    desc: Batch downloads, extracts, and launches an executable payload
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: batch-powershell-web-download
+      - id: batch-powershell-archive-extract
+      - id: batch-start-executable-payload

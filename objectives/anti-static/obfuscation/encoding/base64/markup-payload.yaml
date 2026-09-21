@@ -1,0 +1,45 @@
+# Base64 whose *decoded* content is markup or script source.
+#
+# Base64 hides what a reviewer would otherwise read at a glance, and the first
+# four base64 characters are a fixed function of the first three decoded bytes,
+# so the payload's opening tag survives the encoding: `PHNj` is `<sc`, `PGlmcmFt`
+# is `<ifram`, `PD9waH` is `<?ph`, `PGh0bW` is `<htm`. Matching those prefixes
+# reads the payload type without decoding, works the same in a manifest field, a
+# data: URI, a config value or a source literal, and is language-agnostic --
+# whatever writes the blob, the encoded tag looks identical.
+#
+# `<svg` (`PHN2`) is deliberately absent: inlining SVG icons as
+# `data:image/svg+xml;base64,...` is routine in stylesheets and frontend
+# bundles, so it would fire on ordinary asset pipelines.
+#
+# Suspicious rather than hostile on its own -- base64 HTML has legitimate homes
+# in email templating and test fixtures. Composites that know *where* the blob
+# sits supply the intent.
+defaults:
+  platforms: [unix, windows]
+  for: [scripts, source]
+  attack: T1027
+
+traits:
+  - id: base64-markup-payload-prefix
+    desc: Base64 blob decodes to markup or script
+    crit: suspicious
+    conf: 0.9
+    mbc: C0026
+    if:
+      type: text
+      regex: '(base64,|["''])(PHNj|PGlmcmFt|PD9waH|PGh0bW)'
+    unless:
+      - id: metadata/package/testing/presence/harness::go-test-file
+      # Sanitiser and HTML-extractor test suites embed the encoded payload
+      # they assert is stripped; Chatwoot's emailQuoteExtractor.spec.js
+      # carries a base64 `<script>alert(1)</script>` for exactly that.
+      - id: metadata/package/testing/presence/scripted::dot-spec-filename
+      # Same benign context under the `.test.*` naming convention (e.g. a
+      # sanitizer regression corpus in `sanitize-output-corpus.test.mjs`).
+      - id: metadata/package/testing/presence/harness::spec-test-filename
+      # Same reasoning, stated by directory rather than by filename: Swagger
+      # UI's vendored suite keeps its encoded fixtures in
+      # swagger-ui/test/unit/core/utils.js, which the `.spec.js` carve-out
+      # above does not reach. Seven paperclip* crates vendor that tree.
+      - id: metadata/package/testing/presence/harness::test-directory-path

@@ -11,10 +11,15 @@ traits:
     conf: 0.95
     if:
       # A member named `exec` is common in protocol libraries (for example
-      # Net::HTTP request objects). Match a Ruby process-replacement call at
-      # statement scope, including the explicit Kernel form.
-      type: text
-      regex: '(^|[;\n])[ \t]*(Kernel\.|Process\.)?exec\s*(\(|\s)'
+      # Net::HTTP request objects). Match actual Ruby process-replacement
+      # calls, including Kernel: semicolons in quoted examples are not calls.
+      type: tree-sitter
+      query: |
+        (call !receiver method: (identifier) @method
+          (#eq? @method "exec"))
+        (call receiver: (constant) @receiver method: (identifier) @method
+          (#match? @receiver "^(Kernel|Process)$")
+          (#eq? @method "exec"))
     # Database drivers (ruby-pg) expose Connection#exec for SQL — those are
     # not process replacement. Exclude common SQL statement forms.
     not:
@@ -33,8 +38,19 @@ traits:
     desc: Ruby system shell interpreter
     conf: 0.86
     if:
+      # Ruby calls `system` with and without parentheses, and the paren-less
+      # `system "sh installer.sh"` form is the more common of the two. The
+      # opening paren or quote is what keeps prose ("the system shell") out.
       type: text
-      regex: '\bsystem\s*\(.{0,80}(\bsh\b|bash|zsh|shell)'
+      # `\bsh\b` also matched the `.sh` FILE EXTENSION, so running a script
+      # read as invoking the sh interpreter: Homebrew's boolector.rb does
+      # `system "./configure.sh", "-fPIC"` inside a checksummed
+      # `resource(...).stage do`, the canonical vendored-dependency idiom, and
+      # that scored hostile via formula-resource-installer-exec. Requiring a
+      # separator (space, slash or quote) before the interpreter name keeps
+      # `system "sh installer.sh"` and `system "/bin/sh", "-c"` while dropping
+      # `./configure.sh` and `./bootstrap.sh`.
+      regex: '\bsystem\s*[("'']([^\n]{0,80}[\s/"''])?(sh|bash|zsh|shell)\b'
   - id: ruby-popen
     desc: popen pipes to/from command
     conf: 0.92
@@ -78,7 +94,7 @@ composite_rules:
     conf: 0.7
     any:
       - id: micro-behaviors/process/create/shell/open3::capture-command
-      - id: micro-behaviors/process/create/system::ruby-system
+      - id: micro-behaviors/process/create/system::system-process-call
       - id: ruby-subshell-command
       - id: ruby-popen
   - id: ruby-system-shell-command

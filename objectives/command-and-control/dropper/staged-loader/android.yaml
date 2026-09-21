@@ -124,6 +124,56 @@ composite_rules:
       - id: micro-behaviors/process/create/loader::reflective-classloader-patch
       - id: micro-behaviors/process/create/loader::hidden-dex-write
 
+  # The same objective as `staged-dex-loader` reached a different way, which is
+  # why that rule does not cover these: it requires the classic
+  # BaseDexClassLoader / dexElements / pathList patching triad, and this variant
+  # never touches dexElements. It copies a payload out of the APK's own assets
+  # into the app's private files directory and then swaps the thread context
+  # classloader to pick it up, with setAccessible() clearing the way.
+  #
+  # Reading assets, writing to getFilesDir() and using a ClassLoader are each
+  # ordinary on their own -- plugin hosts and dynamic-feature apps do all three.
+  # What is not ordinary is doing them together *and* reaching through
+  # reflection to defeat member visibility while re-pointing the loader: a
+  # legitimate dynamic-feature app uses the framework's own APIs and has no
+  # reason to bypass access checks to install its code path.
+  # The `any:` group is what makes the claim checkable. Every `all:` leg is a
+  # plain substring hit in the merged DEX -- `getAssets`, `getFilesDir`,
+  # `Ljava/io/FileOutputStream;`, `setContextClassLoader`, `Ljava/lang/ClassLoader;`
+  # and `setAccessible` -- and a DEX pools the strings of the app *and every
+  # bundled library* into one sorted table, so co-presence says nothing about
+  # whether one class does all six (and byte proximity is meaningless there).
+  # Gson or Retrofit supplies `setAccessible`, any library supplies the rest.
+  # Eleven of the corpus's Android samples matched on that alone: Mullvad VPN,
+  # NewPipe, RustDesk, shadowsocks-android, SD Maid SE and friends -- none of
+  # which referenced a single dynamic-code-loading API. "Swaps the classloader
+  # to pick the payload up" requires a class that can load a DEX; if none of
+  # these is present, no staged code can be loaded and the objective is unmet.
+  - id: asset-staged-context-classloader-loader
+    for: [apk, zip, dex]
+    desc: APK stages an asset and swaps the classloader
+    crit: hostile
+    conf: 0.97
+    mbc: "B0030"
+    all:
+      - id: micro-behaviors/process/create/loader::dalvik-get-assets-call
+      - id: micro-behaviors/process/create/loader::dalvik-get-files-dir-call
+      - id: micro-behaviors/process/create/loader::dalvik-file-output-stream-class
+      - id: micro-behaviors/process/create/loader::android-context-classloader-setter
+      - id: micro-behaviors/process/create/loader::dalvik-classloader-descriptor
+      - id: micro-behaviors/process/create/loader::reflective-access-bypass
+      - id: micro-behaviors/process/create/loader::dynamic-dex-loading-api
+
+  - id: android-staged-classloader-socket
+    desc: Staged classloader implant opens a socket
+    crit: hostile
+    conf: 0.96
+    scope: outer
+    for: [apk, zip, dex]
+    all:
+      - id: asset-staged-context-classloader-loader
+      - id: micro-behaviors/communications/socket/create::java-socket-bytecode-reference
+
   - id: obfuscated-push-control-manifest
     desc: Obfuscated manifest with push control hooks
     crit: suspicious
@@ -170,6 +220,7 @@ composite_rules:
       - id: objectives/command-and-control/dropper/staging/archive::apk-opaque-extensionless-asset
 
   - id: encoded-android-native-stage-loader
+    for: [android_apk, zip, elf]
     desc: Encoded Android loader with native stage writer
     crit: hostile
     conf: 0.995
@@ -179,6 +230,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
 
   - id: encoded-delimited-native-stage-loader
+    for: [android_apk, zip, elf]
     desc: Delimited encoded Android loader with native stage writer
     crit: hostile
     conf: 0.995
@@ -188,6 +240,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
 
   - id: encoded-hqjgwjslwxj-native-stage-loader
+    for: [android_apk, zip, elf]
     desc: Delimited encoded Android loader with native stage writer
     crit: hostile
     conf: 0.995
@@ -197,6 +250,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/payload/encrypted::elf-encrypted-dropper
 
   - id: android-native-encrypted-stage-writer
+    for: [android_apk, zip, elf]
     desc: Android native library writes encrypted stage payload
     crit: hostile
     conf: 0.995
@@ -239,7 +293,73 @@ composite_rules:
         - id: metadata/package/files/mobile-package::apk-face-landmarker-model
     needs: 2
 
+  # If an encrypted member prevents archive expansion, the outer APK still
+  # exposes the loader carrier shape. Keep this as an archive-level fallback;
+  # the DEX-specific composites above remain the stronger behavioral findings.
+  - id: android-encrypted-opaque-loader-carrier
+    desc: APK hides a loader behind encrypted and opaque archive members
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1406
+    all:
+      - id: micro-behaviors/data/archive/member::archive-encrypted-member
+      - id: objectives/anti-static/pack/archive::apk-large-member-set
+      - id: objectives/command-and-control/dropper/delivery/download::android-opaque-asset-bundle
+
+  - id: android-in-memory-dex-startup-loader
+    desc: Android startup loader executes an asset-backed in-memory DEX
+    crit: hostile
+    conf: 0.995
+    attack: T1027,T1129,T1406
+    for: [apk, zip, dex]
+    all:
+      - id: micro-behaviors/process/create/loader::android-in-memory-asset-dex-loader
+      - id: micro-behaviors/process/create/loader::android-application-classloader-hijack
+
+  - id: android-xapk-staged-classloader-bundle
+    desc: XAPK split bundle stages a classloader payload
+    crit: hostile
+    conf: 0.97
+    attack: T1406,T1129
+    for: [zip]
+    scope: outer
+    all:
+      - id: metadata/package/files/mobile-package::archive-android-apk-member
+      - id: metadata/package/files/mobile-package::archive-android-config-split-apk
+      - id: asset-staged-context-classloader-loader
+
+  - id: android-asset-classloader-private-stage
+    desc: Android stages a private asset then swaps the classloader
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1129,T1406
+    for: [apk, zip, dex]
+    all:
+      - id: asset-staged-context-classloader-loader
+      - id: micro-behaviors/process/create/loader::android-private-asset-payload-stager
+
+  - id: android-in-memory-dex-private-stage
+    desc: Android loader stages a compressed asset payload before DEX execution
+    crit: hostile
+    conf: 0.995
+    attack: T1027,T1129,T1406
+    for: [apk, zip, dex]
+    all:
+      - id: micro-behaviors/process/create/loader::android-in-memory-asset-dex-loader
+      - id: micro-behaviors/process/create/loader::android-private-asset-payload-stager
+
+  - id: android-reflective-dex-bootstrap-hijack
+    desc: Android reflectively replaces the application classloader with staged code
+    crit: hostile
+    conf: 0.995
+    attack: T1129,T1406
+    for: [apk, zip, dex]
+    all:
+      - id: micro-behaviors/process/create/loader::android-application-classloader-hijack
+      - id: micro-behaviors/process/create/loader::android-private-asset-payload-stager
+
   - id: android-opaque-loader-control-surface
+    for: [android_apk, zip, xml]
     desc: Hidden Android loader with install and storage control
     crit: hostile
     conf: 0.995

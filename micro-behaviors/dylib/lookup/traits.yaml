@@ -60,15 +60,20 @@ traits:
       exact: dladdr
   - id: get-proc-address
     desc: Windows GetProcAddress symbol
-    crit: notable
+    crit: component
     conf: 0.95
     attack: T1574.002
     platforms:
       - windows
+    # class/pyc already establish string_literal reads a format's constant
+    # pool, not just source ASTs; a PE that dynamically resolves this API by
+    # name (ini-driven-plugin-loader) carries the same literal.
     for:
       - scripts
       - class
       - pyc
+      - pe
+      - dll
     if:
       type: string_literal
       exact: GetProcAddress
@@ -81,7 +86,7 @@ traits:
       - id: micro-behaviors/os/module/load::get-proc-address-import
   - id: get-proc-address-source
     desc: Windows GetProcAddress in source
-    crit: notable
+    crit: component
     conf: 0.95
     attack: T1574.002
     platforms:
@@ -115,7 +120,7 @@ traits:
       - id: micro-behaviors/os/module/load::get-proc-address-import
   - id: msi-embedded-get-proc-address
     desc: MSI embedded GetProcAddress reference
-    crit: notable
+    crit: component
     conf: 0.9
     attack: T1574.002
     for:
@@ -187,7 +192,46 @@ traits:
     if:
       type: text
       word: RTLD_NEXT
+  # VB6 source declaring the runtime's own late-bound dispatcher. Legitimate
+  # VB code uses `Declare ... Lib "kernel32"`; reaching for DllFunctionCall
+  # resolves APIs from names built at runtime, leaving no Declare to read.
+  - id: vb-dll-function-call-declare
+    desc: VB source declares DllFunctionCall thunk
+    crit: suspicious
+    conf: 0.92
+    platforms: [windows]
+    for: [vbs]
+    if:
+      type: text
+      regex: '(?i)Declare\s+(Function|Sub)\s+DllFunctionCall\b'
+  - id: vb-runtime-copy-bytes-alias
+    desc: VB aliases the runtime raw memory copier
+    crit: notable
+    conf: 0.9
+    platforms: [windows]
+    for: [vbs]
+    if:
+      type: text
+      substr: __vbaCopyBytes
+
 composite_rules:
+  - id: get-proc-address-textual-reference
+    desc: GetProcAddress named as text, not imported
+    crit: notable
+    conf: 0.95
+    attack: T1574.002
+    platforms:
+      - windows
+    for: [scripts, class, pyc, pe, dll, c, cpp, oledoc, ole]
+    any:
+      - id: get-proc-address
+      - id: get-proc-address-source
+      - id: msi-embedded-get-proc-address
+    unless:
+      # The symbol records the API being used; this also sees the name sitting in
+      # data. Standing down there keeps one use from counting twice.
+      - id: micro-behaviors/os/module/load::get-proc-address-source-call
+      - id: micro-behaviors/os/module/load::get-proc-address-import
   - id: source-library-resolver-identifier
     desc: Source names library resolver operation
     crit: notable
@@ -211,6 +255,7 @@ composite_rules:
       - id: vb6-dll-function-call-symbol
       - id: vb6-dll-function-call-ordinal
   - id: vb6-runtime-api-dispatch
+    for: [pe]
     desc: VB6 runtime API dispatch
     crit: notable
     conf: 0.95

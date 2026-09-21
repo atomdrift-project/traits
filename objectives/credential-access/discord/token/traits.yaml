@@ -71,7 +71,11 @@ traits:
     conf: 0.92
     if:
       type: text
-      regex: '(?i)last_message_id|users/@me/guilds|/messages/'
+      # `/messages/` alone is any app's message route: it convicted Next.js's
+      # own error-documentation URLs (https://nextjs.org/docs/messages/...)
+      # inside an ordinary dashboard bundle.  Anchor it to the Discord channel
+      # API shape instead.
+      regex: '(?i)last_message_id|users/@me/guilds|channels/\d+/messages'
   - id: regex-standard
     desc: Discord token-shaped string
     crit: notable
@@ -218,7 +222,7 @@ traits:
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   # get-tokens-fn relocated to
-  # objectives/credential-access/theft/keywords::get-tokens-fn — `getTokens(`
+  # micro-behaviors/data/parse/vocabulary::token-getter-call — `getTokens(`
   # is a generic function name, not Discord-specific. The composites below
   # reference it cross-tier alongside Discord/storage context.
   - id: clerk-token-bridge
@@ -302,13 +306,18 @@ traits:
     desc: Java Discord client loot table
     crit: suspicious
     conf: 0.96
-    for: [class, java_class, jar, zip]
+    for: [class, java_class]
     if:
       type: text
       exact: DISCORD_CLIENTS
+  # `GcmBlockCipher` is just BouncyCastle's AES-GCM class name, so this is
+  # "the app uses authenticated encryption". mRemoteNG -- a remote-connections
+  # manager whose whole job is storing credentials safely -- matched it twice.
+  # The Discord-stealer verdict is the composite above, which also requires the
+  # DQW separator and DPAPI unprotect.
   - id: bouncy-castle-gcm-cipher
     desc: "BouncyCastle GCM block cipher for decrypt"
-    crit: suspicious
+    crit: notable
     conf: 0.85
     for: [csharp]
     if:
@@ -444,7 +453,7 @@ composite_rules:
       - python
     near_bytes: 1200
     all:
-      - id: objectives/credential-access/theft/keywords::get-tokens-fn
+      - id: micro-behaviors/data/parse/vocabulary::token-getter-call
     any:
       - id: discord-path
       - id: micro-behaviors/communications/http/oauth::discord-api-users-me-url
@@ -458,6 +467,8 @@ composite_rules:
     crit: suspicious
     conf: 0.95
     mbc: B0030
+    # theft/keywords::token is not typed for elf, macho, or pe.
+    for: [javascript, typescript, python]
     all:
       - id: discord-path
       - id: objectives/credential-access/theft/keywords::token
@@ -525,7 +536,7 @@ composite_rules:
       - id: micro-behaviors/fs/path/app-data::javascript-appdata-directory-reference
       - id: micro-behaviors/process/user/query::os-homedir-call
     any:
-      - id: objectives/credential-access/theft/keywords::get-tokens-fn
+      - id: micro-behaviors/data/parse/vocabulary::token-getter-call
       - id: micro-behaviors/communications/http/services/discord::domain-regex
   - id: discord-token-dpapi-decrypt
     desc: Discord token DPAPI+AES-GCM decryption (Chromium format)
@@ -601,8 +612,11 @@ composite_rules:
     desc: Discord token validation via /users/@me API
     crit: suspicious
     conf: 0.88
+    # auth-header is not typed for macho or javascript/typescript; the
+    # structured map-entry equivalent covers python/javascript/pe/elf instead.
+    for: [typescript, python, pe, elf]
     all:
-      - id: micro-behaviors/communications/http/authorization-header::auth-header
+      - id: micro-behaviors/communications/http/authorization-header::authorization-header-map-entry
       - id: discord-users-me-api
     any:
       - id: token-regex-source
@@ -629,9 +643,13 @@ composite_rules:
     crit: hostile
     conf: 0.96
     mbc: B0030
+    # winhttp-request-flow is a native symbol-table check (`for: [pe, dll, c,
+    # cpp]`) -- WinHTTP is a native Windows API a JS/TS node never exposes, so
+    # 'typescript' was never reachable here regardless of the auth-header leg.
+    for: [pe]
     all:
       - id: micro-behaviors/communications/http/oauth::discord-users-me-path
-      - id: micro-behaviors/communications/http/authorization-header::auth-header
+      - id: micro-behaviors/communications/http/authorization-header::authorization-header-map-entry
       - id: micro-behaviors/communications/http/client/winhttp::winhttp-request-flow
     any:
       - id: micro-behaviors/communications/http/services/discord::user-channels-endpoint
@@ -644,6 +662,8 @@ composite_rules:
     crit: suspicious
     conf: 0.97
     mbc: B0030
+    # messaging-service-token-key is not typed for elf, macho, or pe.
+    for: [javascript, typescript, python]
     all:
       - id: nova-discord-window-class
       - id: nova-discord-tool-marker
@@ -734,7 +754,7 @@ composite_rules:
     conf: 0.99
     mbc: B0030
     attack: T1539,T1528
-    for: [xpi, crx, zip]
+    for: [xpi, crx, zip, javascript, chrome-manifest]
     scope: archive
     all:
       - id: micro-behaviors/data/db/web-storage::browser-storage-token-key-read

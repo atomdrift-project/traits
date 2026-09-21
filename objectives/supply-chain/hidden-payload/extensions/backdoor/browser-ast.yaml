@@ -54,7 +54,9 @@ traits:
     substr: responseHeaders
 - id: dnr-request-headers-marker
   desc: DNR request headers marker
-  crit: notable
+  # `requestHeaders` is also a normal SDK configuration field.  It becomes
+  # meaningful DNR evidence only when the full header-rule composite matches.
+  crit: component
   conf: 0.86
   if:
     type: text
@@ -66,13 +68,36 @@ traits:
   if:
     type: text
     substr: modifyHeaders
-- id: dnr-websocket-marker
-  desc: DNR WebSocket marker
-  crit: notable
-  conf: 0.86
+- id: firefox-legacy-process-loader
+  desc: Firefox legacy component launches process
+  crit: suspicious
+  conf: 0.96
   if:
     type: text
-    substr: websocket
+    regex: 'Components\.classes[\s\S]{0,500}(nsIProcess|process\.run)'
+
+- id: firefox-profile-gated-bootstrap
+  desc: Firefox bootstrap checks a hidden cache gate
+  crit: suspicious
+  conf: 0.96
+  if:
+    type: text
+    regex: 'FileUtils\.getFile[\s\S]{0,260}\.cache[\s\S]{0,260}(exists|process\.run)'
+
+# Naming the file is not reading it. `cookies.sqlite` appears in the browser's
+# own profile-management code, in every backup tool's file list, and in
+# documentation -- LibreWolf Portable matched twice on a plain list of profile
+# filenames ("cookies.sqlite", "cookies.sqlite-wal"). This is the same shape as
+# the `Upgrade` leg noted below, which was moved for the same reason. The
+# theft verdict is `xpi-startup-cookie-upload` (hostile), which pairs this with
+# the startup hook and the upload.
+- id: extension-cookie-database-reference
+  desc: Extension references a browser cookie database
+  crit: notable
+  conf: 0.92
+  if:
+    type: text
+    regex: '(?i)cookies?\.sqlite'
 
 # The bare `substr: Upgrade` leg moved to
 # micro-behaviors/communications/http/websocket::upgrade-header-name-literal and
@@ -80,6 +105,72 @@ traits:
 # "Upgrade with npm i -g ..." hint, changelog and docs page, labelling them
 # extension-backdoor evidence; DNR rules name the header as a string literal.
 composite_rules:
+- id: extension-history-http-exfil
+  desc: Extension uploads browser history on startup
+  crit: hostile
+  conf: 0.99
+  attack: T1555,T1041,T1176
+  for: [crx, xpi, zip, javascript]
+  scope: archive
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+  - id: micro-behaviors/data/db/access::history-search
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+- id: extension-dnr-external-redirect
+  desc: Extension installs an external URL redirect rule
+  crit: hostile
+  conf: 0.98
+  attack: T1189,T1176
+  for: [crx, xpi, zip, javascript]
+  scope: archive
+  all:
+  - id: objectives/supply-chain/hidden-payload/extensions/backdoor::dnr-declarative-net-request-marker
+  - id: micro-behaviors/process/hook/webextension::chrome-dnr-update-dynamic-rules
+  - id: micro-behaviors/communications/http/dynamic::dnr-redirect-action
+  - id: micro-behaviors/communications/http/dynamic::dnr-external-url-target
+
+- id: extension-executable-download-abuse
+  desc: Extension downloads a remote executable
+  crit: hostile
+  conf: 0.99
+  attack: T1105,T1176
+  for: [scripts, '!jcl', chrome-manifest, crx, xpi, zip]
+  scope: archive
+  all:
+  - id: metadata/permission/download::permission-downloads
+  - id: micro-behaviors/communications/http/download/webextension::chrome-downloads-download
+  - id: micro-behaviors/communications/http/download/url::executable-url-reference-a
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+# The handler and the eval have to be in the SAME script: a backdoor is one
+# listener that evaluates what it was sent. Archive-scoped, the three JS legs
+# only had to exist somewhere in the extension, so any bundled library
+# containing eval() completed the set. WhaScale 7.4.3.68 -- a WhatsApp
+# automation extension -- declares externally_connectable and has
+# onMessageExternal in background.js, a file with ZERO eval() calls, and
+# scored hostile on an eval from an unrelated bundle.
+- id: extension-external-message-eval-handler
+  desc: External message handler evaluates payload
+  crit: notable
+  conf: 0.98
+  scope: file
+  all:
+  - id: micro-behaviors/communications/ipc/message::chrome-runtime-on-message-external
+  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
+
+- id: extension-external-eval-backdoor
+  desc: Extension accepts external messages for eval
+  crit: hostile
+  conf: 0.99
+  attack: T1059,T1176
+  for: [crx, xpi, zip, chrome-manifest, javascript]
+  scope: archive
+  all:
+  - id: metadata/permission/manifest::externally-connectable
+  - id: extension-external-message-eval-handler
+
 - id: extension-remote-tab-backdoor
   desc: Extension opens tabs from C2 response
   crit: suspicious
@@ -126,6 +217,207 @@ composite_rules:
   any:
   - id: micro-behaviors/communications/http/header/cors::dnr-wildcard-cors-response
   - id: dnr-websocket-permit
+
+- id: xpi-webrequest-external-redirect
+  desc: Firefox extension redirects matching web requests externally
+  crit: hostile
+  conf: 0.99
+  for: [xpi, javascript, chrome-manifest]
+  scope: archive
+  attack: T1189,T1176
+  all:
+  - id: micro-behaviors/process/hook/webextension::webrequest-block-or-redirect
+  - id: micro-behaviors/communications/http/redirect::redirect-url-object-field
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  - id: metadata/permission/network::web-request-blocking
+  unless:
+  # Blocking onBeforeRequest, returning {redirectUrl: ...}, declaring
+  # webRequestBlocking and shipping remote URLs *is* a content blocker -- the
+  # redirects point at neutered local stubs and the remote URLs are filter-list
+  # subscriptions. uBlock Origin (cjpalhdlnbpafiamejdnhcphjbkeiagm) scored
+  # hostile on this, as did its Edge build. Keyed on the known extension IDs in
+  # content-blocker/, which come from the signing key and cannot be forged by
+  # content alone.
+  - id: well-known/app/browser-extension/content-blocker/
+
+- id: xpi-installed-proxy-pac-hijack
+  desc: Extension install applies a remote proxy PAC
+  crit: hostile
+  conf: 0.99
+  for: [xpi, javascript, chrome-manifest]
+  scope: archive
+  attack: T1090,T1176
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+  - id: micro-behaviors/os/network/webextension::chrome-proxy-settings-set
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  - id: metadata/permission/extension-api::permission-proxy
+
+# The name is the contract: an onStartup handler that reads the extension's
+# own storage and ships it out. The legs previously stopped at "has an
+# onStartup listener" + "posts somewhere" + "mentions a remote host", with
+# nothing matching *storage* at all, pooled across the whole archive. That
+# convicts any extension with a startup hook and a backend: a cap.guru
+# captcha solver (onStartup preloads config at bg.js:300, the POST at :410 is
+# the solving API) and an unblocked-games extension doing stock GA4
+# measurement-protocol telemetry both scored hostile on it.
+#
+# So: require the storage read the description claims, and drop to per-file
+# evaluation so an onStartup hook in update.js and an analytics POST in a
+# bundled vendor module cannot compose. `near_bytes` is not an option on the
+# archive node -- member evidence there no longer carries a resolvable
+# offset, so only one leg is placeable and any window rejects a true
+# positive too.
+- id: xpi-startup-storage-upload
+  desc: Extension uploads startup storage to a remote host
+  crit: hostile
+  conf: 0.98
+  # Evaluated per JavaScript member, not on the archive node. Every leg is a
+  # JS-level call, so the file default is what binds them; `for: [archives]`
+  # with `scope: archive` was what let them pool across unrelated scripts, and
+  # `scope: file` cannot replace it -- a file-scoped composite is not
+  # evaluated at container level at all, so the rule would never fire.
+  #
+  # Per-file alone is still not enough: cap.guru's bg.js holds all four legs
+  # 700 lines apart (onStartup preloading config at :300, the captcha-solving
+  # POST at :410). The exfil this rule names is one handler -- read the bag,
+  # ship the bag -- so bound it. Proximity only became usable once the rule
+  # left the archive node, where member evidence carries no resolvable offset.
+  near_bytes: 1024
+  attack: T1041,T1176
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+  - id: micro-behaviors/data/db/web-storage::chrome-storage-area-get
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  any:
+  - id: micro-behaviors/data/serialize/json::json-stringify-identifier
+  - id: micro-behaviors/communications/http/request/payload::fetch-post-json-body
+
+# The same startup-exfil shape aimed at the browser's password manager rather
+# than the extension's own storage. Split from `xpi-startup-storage-upload`
+# because the subject is different -- `browser.logins` is every saved
+# credential in the profile, not the extension's key/value bag -- and because
+# that rule now has to match the storage read its name promises.
+- id: xpi-startup-logins-upload
+  desc: Extension uploads saved browser logins
+  crit: hostile
+  conf: 0.98
+  # Same one-handler bound as its storage sibling above.
+  near_bytes: 1024
+  attack: T1555.003,T1041,T1176
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+  - id: micro-behaviors/os/security/keychain::webextension-logins-get-all
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  any:
+  - id: micro-behaviors/data/serialize/json::json-stringify-identifier
+  - id: micro-behaviors/communications/http/request/payload::fetch-post-json-body
+
+- id: xpi-startup-cookie-upload
+  desc: Extension uploads a browser cookie database
+  crit: hostile
+  conf: 0.99
+  for: [xpi, javascript]
+  scope: archive
+  attack: T1555.003,T1041,T1176
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+  - id: extension-cookie-database-reference
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+# The read and the upload have to be in the SAME script. Archive-scoped, the
+# three JS legs only had to exist somewhere in the extension, so declaring the
+# cookies permission and having a backend was enough -- which is every
+# cashback, affiliate and SaaS extension there is. Cuponomia (cashback), DSers
+# (the official AliExpress dropshipping helper) and Sprouts (email outreach)
+# all scored hostile on it.
+- id: extension-cookie-read-upload-handler
+  desc: Script reads all cookies and posts them out
+  crit: notable
+  conf: 0.98
+  scope: file
+  all:
+  # Unscoped: `getAll({})` is the whole profile. The scoped form is what every
+  # legitimate cookie-using extension calls.
+  - id: micro-behaviors/communications/http/cookies::chrome-cookies-get-all-unscoped
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+- id: extension-cookie-api-exfil
+  desc: Extension reads browser cookies and posts them
+  crit: hostile
+  conf: 0.99
+  for: [crx, xpi, chrome-manifest, javascript]
+  scope: archive
+  attack: T1539,T1041,T1176
+  all:
+  - id: metadata/permission/cookie::permission-cookies
+  - id: extension-cookie-read-upload-handler
+
+- id: xpi-content-form-beacon-exfil
+  desc: Extension sends form data from matched pages to a remote host
+  crit: hostile
+  conf: 0.99
+  for: [xpi, chrome-manifest, javascript]
+  scope: archive
+  attack: T1056.002,T1041,T1176
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::content-script-url-match-pattern
+  - id: micro-behaviors/communications/http/request/beacon::browser-send-beacon
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  - id: metadata/permission/manifest::permission-all-urls
+
+- id: xpi-omnibox-beacon-exfil
+  desc: Extension sends omnibox input to a remote host
+  crit: hostile
+  conf: 0.99
+  for: [xpi, javascript]
+  scope: archive
+  attack: T1056.001,T1041,T1176
+  all:
+  - id: micro-behaviors/communications/http/request/beacon::browser-send-beacon
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  - id: micro-behaviors/browser-extension/action::omnibox-input-change-listener
+
+- id: xpi-install-fingerprint-c2
+  desc: Extension install fingerprint beacon
+  crit: hostile
+  conf: 0.98
+  for: [xpi, javascript, html]
+  scope: archive
+  attack: T1176,T1071.001
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+  - id: micro-behaviors/communications/http/request/client::js-fetch-call
+  - id: micro-behaviors/communications/http/user-agent::useragent-appended-to-url
+  - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+
+- id: xpi-startup-fingerprint-dns-beacon
+  desc: Extension fragments browser fingerprint into image hostnames
+  crit: hostile
+  conf: 0.99
+  for: [xpi, javascript, html]
+  scope: archive
+  attack: T1041,T1176
+  all:
+  - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-startup
+  - id: micro-behaviors/communications/http/client/resource::browser-image-http-beacon
+  - id: micro-behaviors/os/sysinfo/platform/browser::browser-screen-dimensions-read
+  - id: micro-behaviors/os/sysinfo/platform/browser::navigator-language
+
+- id: xpi-legacy-bootstrap-cache-loader
+  desc: Firefox bootstrap runs a hidden cached process
+  crit: hostile
+  conf: 0.99
+  for: [xpi, javascript]
+  scope: archive
+  attack: T1059.004,T1176
+  all:
+  - id: firefox-legacy-process-loader
+  - id: firefox-profile-gated-bootstrap
 - id: dnr-websocket-permit
   desc: DNR permits broad WebSocket traffic
   crit: notable
@@ -135,5 +427,5 @@ composite_rules:
   - id: dnr-response-headers-marker
   - id: dnr-request-headers-marker
   - id: dnr-modify-headers-marker
-  - id: dnr-websocket-marker
+  - id: micro-behaviors/communications/http/websocket::websocket-lower
   - id: micro-behaviors/communications/http/websocket::upgrade-header-name-literal

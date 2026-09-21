@@ -626,12 +626,6 @@ composite_rules:
   - id: micro-behaviors/crypto/hash/blake2b::libsodium-blake2b
   - id: micro-behaviors/crypto/kdf/algorithm::password-kdf-library-exports
   - id: well-known/lib/media/webp::libwebp-version-info
-- id: recognized-unsigned-microsoft-import-heavy-marker
-  desc: Recognized unsigned Microsoft binary with many imports
-  crit: component
-  all:
-  - id: metadata/binary/vendor::microsoft-corp-versioninfo
-  - id: metadata/binary/symbols/count::many-imports
 - id: recognized-pe-walk-resolver-marker
   desc: Recognized PE walk resolver marker
   crit: component
@@ -725,6 +719,7 @@ composite_rules:
   - id: metadata/binary/installer/family/
   - id: metadata/binary/framework/
 - id: api-hash-resolution
+  for: [pe]
   desc: Dynamic API resolution via ROR13 hashing
   crit: hostile
   conf: 0.95
@@ -802,6 +797,9 @@ composite_rules:
   unless:
   - id: metadata/binary/symbols/count::many-imports
   - id: metadata/binary/framework/
+  # Chromium's base/hash ships an FNV1a implementation, and the engine's own
+  # PE/module walking is ordinary loader work, not hash-based API resolution.
+  - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
 - id: fnv1a-custom-seed-api-resolution
   desc: Custom-seed FNV API resolution
   crit: suspicious
@@ -980,6 +978,7 @@ composite_rules:
   unless:
   - id: metadata/binary/framework/
 - id: dynamic-api-resolution-peb
+  for: [pe]
   desc: Detects dynamic API resolution via PEB traversal
   all:
   - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
@@ -1183,6 +1182,13 @@ composite_rules:
   - id: micro-behaviors/process/debug/detect::is-debugger-present-import
   - id: metadata/binary/resource/size::minimal-resources
   unless:
+  # A prebuilt Node native addon is an unsigned, resource-free DLL whose
+  # MSVC CRT startup reads the PEB, hashes delay-load names and calls
+  # IsDebuggerPresent -- every leg of this rule, from the runtime rather than
+  # the addon. bufferutil, utf-8-validate and leveldown ship win32-ia32
+  # prebuilds in any npm tree.
+  - id: metadata/binary/framework::node-module-register-export
+  - id: metadata/binary/framework::node-api-addon-export
   - id: metadata/signed/platform/
   - id: metadata/binary/framework::dotnet-assembly
   - id: metadata/lang/compiler/aot/
@@ -1210,6 +1216,13 @@ composite_rules:
     - id: well-known/game/
     - id: metadata/binary/framework/
     - id: well-known/lib/ui/
+    # A hash-concealed loader hides its imports; a binary with a normal
+    # import table (Qt/Chromium-scale GUI libraries routinely exceed this)
+    # is not concealing APIs even when it hashes, polls input, and queries
+    # hardware. Matches the sibling ror14-api-resolution exclusion and the
+    # query-performance-counter leg's own suppression.
+    - id: metadata/binary/symbols/count::many-imports
+    - id: well-known/app/storage/syncback::syncback-backup-benign-context
 
 # This cluster deliberately does not suppress certificate-bearing files:
 # abused or stolen signing certificates must not turn off detection. The

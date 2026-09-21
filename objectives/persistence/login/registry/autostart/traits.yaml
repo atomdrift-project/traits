@@ -55,22 +55,16 @@ traits:
       - id: well-known/app/utility/siw::siw-family-identity
   - id: set-itemproperty-run
     desc: Set-ItemProperty Run
+    for: [python, javascript, vbs, pe, c, cpp]
     if:
       type: text
       regex: Set-ItemProperty.{0,50}Run
   - id: new-itemproperty-run
     desc: New-ItemProperty Run
+    for: [python, javascript, vbs, pe, c, cpp]
     if:
       type: text
       regex: '(?i)New-ItemProperty.{0,120}CurrentVersion\\Run\b'
-  - id: powershell-newitemproperty-regpath
-    desc: New-ItemProperty writes RegPath variable
-    crit: notable
-    conf: 0.95
-    for: [powershell]
-    if:
-      type: text
-      regex: '(?i)New-ItemProperty\s+-Path\s+\$RegPath'
   - id: powershell-appdata-exe-target
     desc: PowerShell builds an AppData executable path
     crit: notable
@@ -81,6 +75,7 @@ traits:
       regex: '(?i)\$TargetPath\s*=\s*Join-Path\s+\$env:APPDATA.{1,160}\.exe'
   - id: reg-add-run
     desc: reg add Run
+    for: [python, javascript, vbs, pe, c, cpp]
     if:
       type: text
       regex: (?i)reg\s+add.{0,80}\\Run\b
@@ -236,8 +231,31 @@ traits:
       type: encoded
       encoding: base64
       substr: 'CreateObject("WScript.Shell")'
+  - id: run-key-persistence-status
+    desc: Native Run-key persistence status message
+    crit: notable
+    conf: 0.92
+    for: [pe, dll]
+    if:
+      type: text
+      regex: '(?i)\bpersisted\s+via\s+run\s+key\s*\('
 composite_rules:
+  - id: unsigned-native-run-key-persistence-status
+    desc: Unsigned PE reports Run-key persistence
+    crit: hostile
+    conf: 0.98
+    attack: T1547.001,T1112
+    for: [pe, dll]
+    all:
+      - id: run-key-persistence-status
+      - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
+      - id: micro-behaviors/process/create/api-system::native-import
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
   - id: embedded-run-key-execution-impact-carrier
+    for: [pe]
     desc: Run-key PE carrier with embedded payload and impact/injection APIs
     crit: hostile
     conf: 0.99
@@ -254,6 +272,7 @@ composite_rules:
       - id: metadata/binary/installer/family/
 
   - id: malformed-embedded-pe-run-key-persistence
+    for: [pe]
     desc: Malformed PE carrier with Run and RunOnce persistence
     crit: hostile
     conf: 0.99
@@ -267,15 +286,21 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
 
+  # The Run key path, the New-ItemProperty call and the written value are three
+  # separate reads: a script may name the Run key in a string it never writes
+  # to, or write a preference through a path variable that holds some other
+  # key. Requiring the written value to be an executable path is what makes
+  # this an autostart entry rather than either half on its own.
   - id: powershell-run-path-variable-write
-    desc: PowerShell writes a variable-backed Run key
+    desc: PowerShell writes an executable into a variable-backed Run key
     crit: suspicious
     conf: 0.96
     for: [powershell]
     near_lines: 20
     all:
       - id: micro-behaviors/os/registry/keys::currentversion-run
-      - id: powershell-newitemproperty-regpath
+      - id: micro-behaviors/os/registry/write/property::powershell-new-itemproperty-variable-path
+      - id: micro-behaviors/os/registry/keys::registry-powershell-executable
   - id: common-persistence-keys
     desc: References one or more Windows autostart registry paths
     crit: component
@@ -293,6 +318,9 @@ composite_rules:
       - id: set-itemproperty-run
       - id: new-itemproperty-run
       - id: reg-add-run
+      - id: micro-behaviors/os/registry/write/run-key::powershell-reg-add-run-key
+      - id: micro-behaviors/os/registry/write/run-key::powershell-literal-run-key-property
+      - id: micro-behaviors/os/registry/write/run-key::powershell-assigned-run-key-property
   - id: quoted-programdata-exe-run-command
     desc: Quoted ProgramData executable Run command
     crit: component
@@ -327,7 +355,7 @@ composite_rules:
       - id: metadata/binary/installer/family/
       - id: metadata/signed/platform/
   - id: unsigned-microsoft-run-key-persistence
-    desc: Unsigned Microsoft-claim PE carries Run-key persistence
+    desc: Unsigned PE claims Microsoft with Run-key APIs
     crit: hostile
     conf: 0.96
     for: [pe, dll]
@@ -335,9 +363,11 @@ composite_rules:
     all:
       - id: objectives/evasion/masquerade/trust::unsigned-pe-microsoft-version-claim
       - id: currentversion-run-key-path
+    # A Run-key string and a claimed vendor do not establish a writer.
     any:
-      - id: micro-behaviors/os/registry/access::reg-open-key-ex-a-symbol
-      - id: objectives/persistence/login/registry/autostart::currentversion-run-key-path
+      - id: micro-behaviors/os/registry/access::registry-set-value-api
+      - id: micro-behaviors/os/registry/access::reg-set-value-ex-text
+      - id: micro-behaviors/os/registry/access::xor-registry-value-write-api
     unless:
       - id: metadata/binary/installer/family/
       - id: metadata/signed/platform/
@@ -345,6 +375,7 @@ composite_rules:
       - id: well-known/lib/platform/microsoft-wow64::microsoft-wow64-system-context
       - id: well-known/app/system/windows-migration::mighost-binary-identity
   - id: iexpress-autoit-registry-persistence
+    for: [pe]
     desc: IExpress AutoIt payload writes registry persistence
     crit: hostile
     conf: 0.99

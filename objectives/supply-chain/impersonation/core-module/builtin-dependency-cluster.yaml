@@ -31,13 +31,13 @@ composite_rules:
     conf: 0.9
     needs: 2
     any:
-      - id: metadata/package/dependencies/named::npm-dep-child-process
-      - id: metadata/package/dependencies/named::npm-dep-fs-security-stub
-      - id: metadata/package/dependencies/named::npm-dep-os-core-name
-      - id: metadata/package/dependencies/named::npm-dep-crypto-core-name
-      - id: metadata/package/dependencies/named::npm-dep-https-core-name
-      - id: metadata/package/dependencies/named::npm-dep-dns-core-name
-      - id: metadata/package/dependencies/named::npm-dep-net-core-name
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-child-process
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-fs-security-stub
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-os-core-name
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-crypto-core-name
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-https-core-name
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-dns-core-name
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-net-core-name
 
   # The single-squat spelling of the cluster above. Two builtins is a pattern;
   # one named `child_process` with a chosen version range is a delivery: the
@@ -48,10 +48,43 @@ composite_rules:
   #
   # Worked example: the trojanized `@0xobelisk/sui-cli@0.5.10` republish, where
   # `child_process: ^1.0.2` was the only change from the legitimate release.
+  #
+  # Downgraded to suspicious: the worked example does not hold up. The ordinary
+  # @0xobelisk/sui-cli releases carry `child_process: ^1.0.2` too -- 1.0.5 and
+  # 1.0.6, published three days apart in January 2025 and both clean -- so the
+  # dependency is the project's own long-standing mistake and cannot by itself
+  # separate a trojanized republish from a normal one. A manifest fact with no
+  # accompanying behavior is not a hostile verdict; the composites that pair
+  # this with an install hook or a concealed import are.
   - id: public-package-ships-builtin-squat-dependency
     desc: Published package depends on builtin-name squat
-    crit: hostile
+    crit: suspicious
     conf: 0.95
     all:
-      - id: metadata/package/dependencies/named::npm-dep-child-process
+      - id: metadata/package/dependencies/manifest/identity::npm-dep-child-process
       - id: metadata/package/publishing::npm-public-publish-access
+
+  # A published package that installs the builtin-name squat, carries runtime
+  # dependencies its code never imports, and imports process execution
+  # through the shadowed builtin name. Each leg alone has innocent readings
+  # (a legacy dep mistake, build-time leftovers, a CLI that shells out to a
+  # toolchain), but the three together are the carrier shape: the manifest
+  # fetches an unrelated tree under a trusted name plus packages nothing
+  # references, while the shipped code runs shell commands.
+  #
+  # Worked example: the trojanized @0xobelisk/sui-cli@0.5.10 publish, which
+  # declares child_process ^1.0.2, leaves ejs/glob/prettier unimported, and
+  # execSyncs `sui move build` out of its bin entrypoint.
+  - id: public-squat-phantom-exec-carrier
+    desc: Published squat carrier runs shell commands with unused dependencies
+    crit: hostile
+    conf: 0.9
+    # Names the members it mixes: the squat-dependency and phantom-dependency
+    # legs come from package.json, the execSync leg from a javascript member.
+    for: [npm, tar, zip, package.json, javascript, typescript]
+    scope: archive
+    attack: "T1195.002,T1059.007"
+    all:
+      - id: public-package-ships-builtin-squat-dependency
+      - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
+      - id: micro-behaviors/process/create/shell/bridge::execsync-esm-import

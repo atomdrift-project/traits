@@ -41,6 +41,8 @@ traits:
   if:
     type: text
     regex: '(\\x65\\x76\\x61\\x6[cC]|\\x65\\x78\\x65\\x63|\\x73\\x79\\x73\\x74\\x65\\x6d)'
+  unless:
+  - id: well-known/tool/detection/security-scanner::devdome-malware-scanner-source-context
 - id: hpack-dangerous-php
   desc: Hpack hex PHP danger keywords
   crit: suspicious
@@ -100,14 +102,50 @@ traits:
   if:
     type: text
     regex: 'file_get_contents\([^)]{0,120}\.(jpg|jpeg|png).{0,240}(start|end)'
+- id: php-reads-php-script-file
+  desc: PHP reads a .php script file
+  crit: component
+  conf: 0.9
+  attack: T1027
+  if:
+    type: text
+    regex: 'file\s*\([^)]{0,120}\.php[^)]{0,40}\)'
+- id: php-implode-substr-base64-decode
+  desc: PHP reassembles Base64 via substr/implode
+  crit: suspicious
+  conf: 0.94
+  attack: T1027
+  if:
+    type: text
+    regex: 'implode\s*\([\s\S]{0,240}substr\s*\([\s\S]{0,240}base64_decode\s*\('
+# A substr whose start offset is read out of an array of numbers. The carrier
+# file holds several payloads end to end and the loader keeps their boundaries
+# in a table, so one dropped .php can serve the stage, the shell and the
+# fallback depending on which index it is asked for.
+- id: php-offset-table-substr
+  desc: substr offsets read from a number table
+  crit: notable
+  conf: 0.93
+  attack: T1027
+  if:
+    type: text
+    regex: 'substr\s*\(\s*\$\w{1,20}\s*,\s*\$\w{1,20}\[\d'
 composite_rules:
+- id: php-carrier-file-offset-payload-loader
+  desc: Loader slices payloads from a carrier script
+  crit: hostile
+  conf: 0.96
+  attack: T1027,T1505.003
+  all:
+    - id: php-file-fragment-payload-output
+    - id: php-offset-table-substr
 - id: php-stego-image-eval-backdoor
   desc: PHP decodes image-marked payload then evals loader
   crit: hostile
   conf: 0.99
   attack: T1505.003,T1027,T1059.006
   scope: outer
-  for: [archives, php]
+  for: [zip, php]
   all:
     - id: php-rot13-double-base64-gzinflate-chain
     - id: objectives/anti-static/obfuscation/eval/loader::php-eval-named-loader-call
@@ -117,11 +155,21 @@ composite_rules:
   conf: 0.99
   attack: T1505.003,T1027,T1195.002
   scope: archive
-  for: [archives, php]
+  for: [zip, php, jpeg]
   all:
     - id: metadata/image/trailing::jpeg-large-appended-data
     - id: php-rot13-double-base64-gzinflate-chain
     - id: objectives/anti-static/obfuscation/eval/loader::php-eval-named-loader-call
+- id: php-file-fragment-payload-output
+  desc: PHP decodes and emits a payload extracted from a script file
+  crit: suspicious
+  conf: 0.97
+  attack: T1027,T1505.003
+  near_lines: 40
+  all:
+    - id: php-reads-php-script-file
+    - id: php-implode-substr-base64-decode
+    - id: micro-behaviors/os/stdio::php-echo-statement
 - id: encoded-dangerous-php-base64
   desc: Base64 encoded PHP danger keywords
   crit: suspicious

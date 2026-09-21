@@ -19,8 +19,8 @@ composite_rules:
     crit: exception
     conf: 0.97
     all:
-      - id: metadata/package/dependencies/manifest::has-optional-deps
-      - id: metadata/package/dependencies/manifest::platform-optional-native-deps
+      - id: metadata/package/dependencies/manifest/presence::has-optional-deps
+      - id: metadata/package/dependencies/manifest/name-form::platform-optional-native-deps
       - id: metadata/package/runtime::has-platform-restrictions
       - id: objectives/supply-chain/install-hook/scripts/hook-file::postinstall-runs-companion-loader
 
@@ -87,7 +87,7 @@ composite_rules:
     all:
       - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
     any:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-install
+      - id: metadata/package/scripts/lifecycle::has-install-script
       - id: metadata/package/entrypoint::has-exports-field
       - id: metadata/package/testing/presence/manifest::pkg-test-script-field
   - id: preinstall-only-package-surface
@@ -112,7 +112,7 @@ composite_rules:
     conf: 0.97
     all:
       - id: tiny-preinstall-only-package
-      - id: metadata/package/dependencies/manifest::npm-no-deps-at-all
+      - id: metadata/package/dependencies/manifest/presence::npm-no-deps-at-all
       - id: objectives/supply-chain/hidden-payload/staging::no-build-script
   - id: manifest-only-preinstall-recon-exfil
     desc: Manifest-only preinstall package exfils host identity
@@ -137,7 +137,7 @@ composite_rules:
     any:
       - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
       - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-install
+      - id: metadata/package/scripts/lifecycle::has-install-script
     needs: 1
 
   # Same reasoning one step further out: a package that ships none of the
@@ -156,7 +156,7 @@ composite_rules:
     crit: hostile
     conf: 0.95
     mbc: "B0024"
-    for: [npm, tar, archives]
+    for: [npm, tar, package.json]
     scope: archive
     all:
       - id: metadata/package/entrypoint::declared-runtime-tree-not-shipped
@@ -166,7 +166,7 @@ composite_rules:
       # any ordinary scripts-block fact silently suppresses it.
       - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
       - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-install
+      - id: metadata/package/scripts/lifecycle::has-install-script
     needs: 1
     unless:
       # A packaging template in a source tree is not a release. Multi-arch npm
@@ -176,3 +176,18 @@ composite_rules:
       # payload. A real hollow release carries the version it published under.
       - id: metadata/package/freeform::npm-release-placeholder-version
       - id: well-known/tool/development/toolchain/deno::source-archive-context
+    # Not hollow when the archive actually ships the advertised runtime tree.
+    # This must be a scoped `downgrade:`, not more `unless:` legs: `unless:`
+    # always resolves against the leaf the rule matched in (here package.json)
+    # while the shipped-code evidence lives in other members, and `downgrade:`
+    # with an explicit `scope:` is the only cross-member suppressor the engine
+    # honours. The member-list legs cover the plain tarball; the per-member
+    # tree legs cover a gzip-wrapped tarball nested in another archive, where
+    # the tar parser exposes no archive.members value but still decodes files.
+    downgrade:
+      scope: archive
+      any:
+        - id: metadata/package/files/included::npm-runtime-code-member
+        - id: metadata/package/files/included::npm-vendored-node-modules-runtime-member
+        - id: metadata/package/files/runtime::javascript-lib-tree-artifact
+        - id: metadata/package/files/runtime::javascript-dist-tree-artifact

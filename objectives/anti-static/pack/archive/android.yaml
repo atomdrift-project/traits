@@ -38,15 +38,13 @@ traits:
       field: archive.max_filename_length
       min: 1024
 
-  - id: apk-encrypted-member-cluster
-    desc: APK contains multiple encrypted archive members
-    crit: notable
-    conf: 0.94
-    for: [zip]
-    if:
-      type: metrics
-      field: archive.security.encrypted_count
-      min: 3
+  # `apk-encrypted-member` and `apk-encrypted-member-cluster` read the
+  # container-neutral archive.security.encrypted_count, and `for:` does not
+  # gate a metrics trait to a container, so they announced "APK contains ..."
+  # over any password-protected archive. They are now
+  # micro-behaviors/data/archive/member::archive-encrypted-member and
+  # ::archive-encrypted-member-cluster; the APK context comes from the
+  # android-apk-archive-layout leg the composites below already carry.
 
 # The executable-count half of this pair moved to
 # metadata/file/archive::archive-executable-member-cluster. Its matcher was a
@@ -58,7 +56,8 @@ traits:
     desc: APK has large member table
     crit: notable
     conf: 0.86
-    for: [archives, apk]
+    # A large member table is meaningful for APK packaging; the file default
+    # keeps this rule from labeling ordinary source archives as APKs.
     if:
       type: metrics
       field: archive.file_count
@@ -77,7 +76,7 @@ traits:
     desc: APK has RTLO member name
     crit: suspicious
     conf: 0.94
-    for: [archives]
+    for: [android_apk, zip]
     if:
       type: metrics
       field: archive.rtlo_filename_count
@@ -91,6 +90,18 @@ traits:
       type: metrics
       field: archive.unicode_filename_count
       min: 100
+
+  # Android cannot install a ZIP-encrypted APK. An unknown compression
+  # method on an .apk is a parser trap, not platform encryption.
+  - id: apk-unknown-zip-method
+    desc: APK uses an unknown ZIP method
+    crit: notable
+    conf: 0.94
+    for: [android_apk, apk, zip]
+    if:
+      type: metrics
+      field: archive.compression.method_counts.other
+      min: 1
 
   - id: apk-empty-primary-dex-member
     desc: APK primary DEX member is empty
@@ -122,7 +133,7 @@ traits:
     desc: Compact XAPK split APK container
     crit: notable
     conf: 0.9
-    for: [archives]
+    for: [android_apk, zip]
     if:
       type: metrics
       field: archive.nested_archive_count
@@ -141,7 +152,7 @@ composite_rules:
     desc: Testkey-signed APK with excessive secondary DEX layout
     crit: suspicious
     conf: 0.92
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: metadata/signed/platform::android-debug-testkey-signature
       - id: metadata/package/files/mobile-package::apk-multiple-secondary-dex
@@ -151,6 +162,8 @@ composite_rules:
     desc: APK combines encrypted payload storage with extreme member-name obfuscation
     crit: suspicious
     conf: 0.96
+    platforms: [android, linux, windows]
+    for: [zip, tar, jar, whl, python-sdist, gem, deb, rpm, npm, nupkg, crate, conda, egg, pkg, dmg, crx, chm, cab, iso, oci_image, xbps, gentoo_binpkg, asar, vsix-archive, xpi, rar, 7z, cpio, apk, alpine_apk, ipa]
     all:
       - id: metadata/package/files/mobile-package::android-apk-archive-layout
       - id: metadata/file/archive::high-entropy-archive
@@ -161,16 +174,47 @@ composite_rules:
     desc: APK archive has encrypted member cluster
     crit: suspicious
     conf: 0.94
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: metadata/package/files/mobile-package::android-apk-archive-layout
-      - id: apk-encrypted-member-cluster
+      - id: micro-behaviors/data/archive/member::archive-encrypted-member-cluster
+
+  - id: apk-unicode-extreme-member-table
+    desc: APK hides members with long Unicode names
+    crit: hostile
+    conf: 0.96
+    for: [android_apk, apk, zip]
+    all:
+      - id: apk-large-member-set
+      - id: apk-unicode-member-cluster
+      - id: apk-extreme-member-name-length
+
+  - id: apk-unknown-method-name-obfuscation
+    desc: Unknown ZIP method hides extreme member names
+    crit: hostile
+    conf: 0.96
+    for: [android_apk, apk, zip]
+    all:
+      - id: apk-unknown-zip-method
+      - id: apk-extreme-member-name-length
+      - id: apk-unicode-member-cluster
+
+  - id: apk-obfuscated-socket-packer
+    desc: Name-obfuscated APK still opens a socket
+    crit: hostile
+    conf: 0.95
+    scope: outer
+    for: [android_apk, apk, zip, dex]
+    all:
+      - id: apk-extreme-member-name-length
+      - id: apk-unicode-member-cluster
+      - id: micro-behaviors/communications/socket/create::java-socket-bytecode-reference
 
   - id: encrypted-apk-native-payload-anomaly
     desc: APK packs encrypted DEX/native payloads with archive integrity anomalies
     crit: hostile
     conf: 0.985
-    for: [archives, apk]
+    for: [zip, apk]
     any:
       - id: metadata/file/archive::archive-misplaced-executable-member
       - id: metadata/package/files/mobile-package::apk-misplaced-executable-member
@@ -182,7 +226,7 @@ composite_rules:
     desc: APK hides payload in obfuscated archive member table
     crit: hostile
     conf: 0.975
-    for: [archives, apk]
+    for: [zip, apk]
     any:
       - id: metadata/file/archive::archive-misplaced-executable-member
       - id: metadata/package/files/mobile-package::apk-misplaced-executable-member
@@ -195,6 +239,7 @@ composite_rules:
       - id: apk-extreme-member-name-length
 
   - id: apk-unicode-nested-archive-packer
+    for: [android_apk, zip, odf]
     desc: APK hides nested payload behind Unicode archive names
     crit: suspicious
     conf: 0.96
@@ -206,7 +251,7 @@ composite_rules:
     desc: APK path poisoning with misplaced payload content
     crit: hostile
     conf: 0.99
-    for: [archives, apk]
+    for: [zip, apk]
     any:
       - id: metadata/file/archive::archive-misplaced-executable-member
       - id: metadata/package/files/mobile-package::apk-misplaced-executable-member
@@ -218,7 +263,7 @@ composite_rules:
     desc: APK uses empty DEX with obfuscated resource table
     crit: suspicious
     conf: 0.95
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: metadata/package/files/mobile-package::android-apk-archive-layout
       - id: apk-empty-primary-dex-member
@@ -228,7 +273,7 @@ composite_rules:
     desc: APK empty DEX resource compression packer
     crit: hostile
     conf: 0.97
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: apk-empty-dex-obfuscated-resource-table
       - id: metadata/file/archive::archive-high-compression-expansion
@@ -237,7 +282,7 @@ composite_rules:
     desc: APK archive has extreme compression expansion
     crit: hostile
     conf: 0.94
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: metadata/package/files/mobile-package::android-apk-archive-layout
       - id: metadata/file/archive::archive-high-compression-expansion
@@ -246,7 +291,7 @@ composite_rules:
     desc: APK dummy filler compression packer
     crit: hostile
     conf: 0.96
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: apk-high-compression-packer
       - id: apk-dummy-filler-member
@@ -255,7 +300,7 @@ composite_rules:
     desc: APK dummy filler archive packer
     crit: hostile
     conf: 0.95
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: metadata/package/files/mobile-package::android-apk-archive-layout
       - id: apk-dummy-filler-member
@@ -264,7 +309,7 @@ composite_rules:
     desc: APK resource pseudo-member dummy packer
     crit: hostile
     conf: 0.96
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: metadata/package/files/mobile-package::android-apk-archive-layout
       - id: apk-resource-table-pseudo-member-cluster
@@ -274,7 +319,7 @@ composite_rules:
     desc: XAPK randomized cleaner split package carrier
     crit: suspicious
     conf: 0.94
-    for: [archives]
+    for: [android_apk, zip]
     all:
       - id: objectives/evasion/masquerade/identity/app::xapk-random-cleaner-package-name
       - id: compact-xapk-split-apk-container

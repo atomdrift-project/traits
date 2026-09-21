@@ -82,6 +82,19 @@ traits:
     if:
       type: text
       regex: '\bassertConnection\s*\(\s*\)\s*;'
+  # Droppers wrap an entire PE write/exec sequence in exec('''...''') so the
+  # payload never appears as a top-level statement for the source parser.
+  - id: python-exec-triple-quoted-blob
+    desc: exec() of a triple-quoted Python payload
+    crit: notable
+    conf: 0.92
+    attack: T1059.006
+    for: [python]
+    if:
+      type: text
+      regex: "\\bexec\\s*\\(\\s*('{3}|\"{3})"
+    unless:
+      - id: metadata/package/testing/
 composite_rules:
   - id: setup-gzip-pyc-loader
     desc: setup.py extracts Python bytecode from gzip
@@ -117,12 +130,36 @@ composite_rules:
       - id: micro-behaviors/data/decode/base64::b64decode-string
       - id: micro-behaviors/fs/file/open::write-append-create-mode
       - id: micro-behaviors/process/create/system::python-aliased-os-system
+  # Do not depend on AST facts here. An implant may deliberately make its
+  # carrier too large or malformed for a bounded source parser, while its
+  # escaped PE header, temporary output path, and launch remain plain text.
+  - id: python-escaped-pe-temp-exec-loader
+    desc: Python writes escaped PE bytes to TEMP and launches it
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.006,T1105
+    for: [python]
+    near_lines: 20
+    all:
+      - id: micro-behaviors/data/embedded/payload/array::escaped-pe-bytes-literal
+      - id: micro-behaviors/fs/path/temp::win-temp-env-source-read
+      - id: micro-behaviors/process/create/system::python-os-system-text
+  - id: python-exec-escaped-pe-dropper
+    desc: Python execs a blob that embeds and launches a PE
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1059.006
+    for: [python]
+    all:
+      - id: micro-behaviors/data/embedded/payload/array::escaped-pe-bytes-literal
+      - id: python-exec-triple-quoted-blob
+      - id: micro-behaviors/process/create/system::python-os-system-text
   - id: pypi-embedded-payload-write-exec-loader
     desc: PyPI package decodes and executes an embedded payload
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [whl, python-sdist]
+    for: [whl, python-sdist, python, pkginfo]
     scope: archive
     all:
       - id: metadata/package/ecosystem::pkginfo-core-metadata
@@ -168,7 +205,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [python, pkginfo, zip, archives]
+    for: [python, pkginfo, zip, whl, python-sdist]
     scope: archive
     all:
       - id: metadata/build/pip::setup-py
@@ -178,7 +215,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: metadata/package/files/count::npm-single-bin
@@ -193,7 +230,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002,T1059.006
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/command-and-control/reverse-shell/dup::node-exec-inline-python-reverse-shell
@@ -206,7 +243,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002,T1102.001,T1059.007
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/command-and-control/dropper/delivery/fetch-eval::jsonkeeper-node-module-compile-loader
@@ -216,7 +253,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002,T1059.007
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/anti-static/obfuscation/eval/require::worker-message-payload-module-smuggling
@@ -228,7 +265,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
@@ -238,7 +275,7 @@ composite_rules:
     crit: hostile
     conf: 0.97
     attack: T1195.002
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
@@ -249,7 +286,7 @@ composite_rules:
     crit: hostile
     conf: 0.97
     attack: "T1195.002,T1059,T1027"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::full-obfuscator-io-toolkit
@@ -266,7 +303,7 @@ composite_rules:
     crit: hostile
     conf: 0.97
     attack: T1195.002,T1027,T1059.007
-    for: [npm, tar, archives]
+    for: [npm, tar, package.json, javascript]
     # The stage composite keeps all executable behaviors in one source
     # file. This outer archive-scoped rule adds the npm publishing context so
     # a standalone JavaScript program cannot be mislabeled as supply-chain.
@@ -282,7 +319,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: "T1195.002,T1027,T1059.007"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: metadata/package/entrypoint::main-root-javascript-entry
@@ -296,7 +333,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: "T1195.002,T1041"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
@@ -306,7 +343,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: "T1195.002,T1041"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
@@ -316,7 +353,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: "T1195.002,T1041"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/impersonation/manifest/placeholder::mature-hollow-index-package
@@ -326,7 +363,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: "T1195.002,T1053,T1059.007"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/install-hook/scripts/process-control::postinstall-supervisor-start-local-js
@@ -336,7 +373,7 @@ composite_rules:
     crit: hostile
     conf: 0.97
     attack: "T1195.002,T1053,T1027"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/install-hook/scripts/process-control::postinstall-supervisor-start-local-js
@@ -360,7 +397,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: "T1195.002,T1027,T1059.007"
-    for: [javascript, package.json, archives]
+    for: [javascript, package.json, npm]
     scope: archive
     all:
       - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
@@ -370,14 +407,14 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002,T1059.007,T1053
-    for: [archives]
+    for: [npm, javascript, package.json]
     scope: archive
     all:
       - id: node-dbconnectify-reference
       - id: node-db-connectivity-probe
       - id: micro-behaviors/process/create/spawn::process-execpath-spawn
       - id: micro-behaviors/process/create/spawn::stdio-ignore
-      - id: metadata/package/dependencies/manifest::npm-peer-dependency-dbconnectify
+      - id: metadata/package/dependencies/manifest/identity::npm-peer-dependency-dbconnectify
     any:
       - id: micro-behaviors/process/create/spawn::node-self-eval-argument
       - id: micro-behaviors/process/create/spawn::detached-true
@@ -387,7 +424,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002,T1059.007
-    for: [archives]
+    for: [npm, javascript]
     scope: archive
     all:
       - id: assert-connection-side-effect-call
@@ -457,18 +494,7 @@ composite_rules:
     all:
       - id: metadata/package/files/included::setup-py-basename
       - id: setup-gzip-pyc-loader
-      - id: setup-pyc-filename-builder
       - id: micro-behaviors/os/api-resolution/dynamic::python-importlib-spec-exec-module
-  - id: pypi-setup-gzip-pyc-loader
-    desc: PyPI sdist executes gzip-compressed bytecode during setup
-    crit: hostile
-    conf: 0.99
-    attack: T1195.002
-    for: [python, pkginfo, archives, zip]
-    all:
-      - id: setup-gzip-pyc-exec-module
-      - id: metadata/build/pip::setup-py
-    scope: archive
   - id: obfuscated-proxy-download-exec
     desc: Obfuscated proxy download-execute payload
     crit: hostile
@@ -484,7 +510,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [python, pkginfo, archives, zip]
+    for: [python, pkginfo, zip, whl, python-sdist]
     all:
       - id: obfuscated-proxy-download-exec
       - id: metadata/build/pip::setup-py
@@ -601,7 +627,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002
-    for: [python, pkginfo, zip, archives]
+    for: [python, pkginfo, zip, whl, python-sdist]
     all:
       - id: objectives/command-and-control/dropper/staging/encrypted::encrypted-loader
       - id: micro-behaviors/fs/read/file/full::file-read-content
@@ -612,7 +638,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002
-    for: [python, pkginfo, zip, archives]
+    for: [scripts, '!jcl', '!ruby', go, pkginfo, python-sdist, whl, zip]
     all:
       - id: metadata/package/ecosystem::pkginfo-core-metadata
       - id: objectives/anti-static/obfuscation/payload/encoded::base64-subprocess-proximity
@@ -636,7 +662,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [python, pkginfo, archives]
+    for: [python, pkginfo, whl, python-sdist]
     all:
       - id: metadata/package/ecosystem::pkginfo-core-metadata
       - id: objectives/persistence/login/python-startup::pth-open-read-startup-exec
@@ -646,7 +672,7 @@ composite_rules:
     crit: hostile
     conf: 0.995
     attack: T1195.002,T1546.004,T1003.007,T1041
-    for: [python, pkginfo, archives]
+    for: [python, pkginfo, whl, python-sdist]
     all:
       - id: metadata/package/ecosystem::pkginfo-core-metadata
       - id: objectives/persistence/login/python-startup::pth-import-exec
@@ -657,7 +683,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [python, pkginfo, archives]
+    for: [python, pkginfo, whl, python-sdist]
     all:
       - id: pypi-pth-open-read-payload
       - id: micro-behaviors/process/create/subprocess::popen-content
@@ -668,7 +694,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002
-    for: [python, pkginfo, zip, archives]
+    for: [python, pkginfo, zip, whl, python-sdist]
     all:
       - id: objectives/persistence/login/python-startup::pth-open-read-startup-exec
       - id: micro-behaviors/process/create/subprocess::popen-content
@@ -678,7 +704,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002
-    for: [python, pkginfo, archives]
+    for: [python, pkginfo, whl, python-sdist]
     all:
       - id: metadata/package/ecosystem::pkginfo-core-metadata
       - id: objectives/command-and-control/dropper/execution/execute-download::python-http-response-write-near-execute
@@ -688,7 +714,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     attack: T1195.002
-    for: [python, pkginfo, archives]
+    for: [python, pkginfo, whl, python-sdist]
     all:
       - id: metadata/package/ecosystem::pkginfo-core-metadata
     any:
@@ -700,7 +726,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: T1195.002
-    for: [python, pkginfo, archives]
+    for: [python, pkginfo, whl, python-sdist]
     all:
       - id: objectives/supply-chain/install-hook/setup::setup-code-execution
       - id: objectives/supply-chain/install-hook/build/behavioral::setup-py-network-in-install

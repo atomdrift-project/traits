@@ -40,6 +40,12 @@ traits:
     unless:
       - id: well-known/tool/detection/agent-glovebox::archive-context
       - id: metadata/package/testing/presence/harness::test-directory-path
+      # Early-boot root assembly. dracut's dmsquash-live-root zeroes and
+      # recreates the live overlay, OpenWrt's emmc.sh sysupgrade clears the
+      # boot partition, and Ubuntu's user-setup-encrypted-swap wipes swap
+      # before encrypting it -- destructive by design, on a device the
+      # operator selected, at a point where no real root exists yet.
+      - id: well-known/tool/sysadmin/initramfs/
 
   # A short loop variable may still hold a device enumerated elsewhere in the
   # script. Keep the write as a component so only the device-target composite
@@ -66,7 +72,7 @@ traits:
     desc: Scans mount table for /dev devices
     crit: notable
     conf: 0.9
-    for: [python, go, perl, javascript, typescript, rust, c, cpp]
+    for: [scripts, source]
     if:
       type: text
       regex: '/proc/mounts[\s\S]{0,400}/dev/'
@@ -118,6 +124,9 @@ traits:
     if:
       type: text
       regex: 'open\s*\(\s*"/dev/(sd|nvme|vd|xvd|da|ada)[^"]{0,30}"\s*,\s*O_RDWR'
+    not:
+      # VDUSE control nodes are `/dev/vduse/...`, not virtio `/dev/vda`.
+      - substr: /dev/vduse
 
   - id: dd-zero-block-device-command
     desc: dd zero-fill block-device command text
@@ -126,6 +135,86 @@ traits:
     if:
       type: text
       regex: 'dd if=/dev/zero of=/dev/(sd|nvme|vd|xvd|da|ada|loop|mmcblk)'
+
+  - id: dd-zero-device-format-source
+    desc: Source formats dd zero fill for device
+    crit: notable
+    conf: 0.92
+    for: [zig, csharp, java, kotlin, elixir, ruby, swift]
+    if:
+      type: text
+      regex: 'dd\s+if=/dev/zero\s+of=.{0,40}(\{s\}|%s|#\{\w+\}|\$\{?\w+)'
+
+  # Managed/systems languages commonly pass dd arguments as an array and
+  # construct only the output argument. Keep this narrower than the generic
+  # argv atom: it requires dd, zero input, and a dynamically built `of=` value
+  # in one short expression. Device provenance is supplied by the mounted-
+  # device composite below.
+  - id: dd-argv-tool-source
+    desc: Source names dd as an executable
+    crit: notable
+    conf: 0.9
+    for: [csharp, elixir, rust, swift]
+    if:
+      type: text
+      regex: '["''](/usr/bin/)?dd["'']'
+
+  - id: dd-zero-input-argument-source
+    desc: Source supplies dd zero input argument
+    crit: notable
+    conf: 0.9
+    for: [csharp, elixir, rust, swift]
+    if:
+      type: text
+      substr: if=/dev/zero
+
+  - id: dd-interpolated-output-argument
+    desc: Source interpolates dd output argument
+    crit: notable
+    conf: 0.92
+    for: [csharp, rust, swift]
+    if:
+      type: text
+      regex: 'of=(\{[A-Za-z_]{0,32}\}|%s|#\{\w+\}|\$\w+|\\\(.{1,60}\))'
+
+  - id: dd-concatenated-output-argument
+    desc: Source concatenates dd output argument
+    crit: notable
+    conf: 0.92
+    for: [elixir]
+    if:
+      type: text
+      regex: 'of=["'']\s*(\+|<>)'
+
+  - id: jvm-dd-tool-string
+    desc: JVM string names dd executable
+    crit: notable
+    conf: 0.97
+    for: [class, java_class]
+    if:
+      type: value
+      path: class.strings[*]
+      exact: dd
+
+  - id: jvm-dd-zero-input-string
+    desc: JVM string names dd zero input
+    crit: notable
+    conf: 0.97
+    for: [class, java_class]
+    if:
+      type: value
+      path: class.strings[*]
+      exact: if=/dev/zero
+
+  - id: jvm-dd-output-prefix-string
+    desc: JVM string builds dd output argument
+    crit: notable
+    conf: 0.97
+    for: [class, java_class]
+    if:
+      type: value
+      path: class.strings[*]
+      exact: of=
 
   - id: dd-zero-block-device-argv
     desc: dd argv zero fill targeting block device
@@ -139,6 +228,9 @@ traits:
     desc: dd argv zero fill dynamic device
     crit: notable
     conf: 0.92
+    # Go uses the value-bound matcher below. The remaining language adapters
+    # still need migration; a zero-input argument alone does not prove a device.
+    for: [python, rust, perl, javascript, typescript, c, cpp]
     if:
       type: text
       regex: '("dd").{0,80}if=/dev/zero'
@@ -180,6 +272,29 @@ traits:
       regex: '("shred"|shred ).{0,60}/dev/(sd|nvme|vd|xvd|da|ada)'
 
 composite_rules:
+  - id: dd-zero-dynamic-output-source
+    desc: Builds dynamic dd zero-fill output argument
+    crit: notable
+    conf: 0.94
+    for: [csharp, elixir, rust, swift]
+    near_bytes: 600
+    all:
+      - id: dd-argv-tool-source
+      - id: dd-zero-input-argument-source
+    any:
+      - id: dd-interpolated-output-argument
+      - id: dd-concatenated-output-argument
+
+  - id: jvm-dd-zero-argv
+    desc: JVM builds dd zero-fill argument vector
+    crit: notable
+    conf: 0.97
+    for: [class, java_class]
+    all:
+      - id: jvm-dd-tool-string
+      - id: jvm-dd-zero-input-string
+      - id: jvm-dd-output-prefix-string
+
   - id: lang-exec-dd-urandom-dev
     desc: Language executes dd urandom against device
     crit: suspicious
@@ -215,14 +330,105 @@ composite_rules:
     any:
       - id: dd-zero-block-device-command
       - id: dd-zero-block-device-argv
-      - id: dd-zero-dynamic-device-argv
+      - id: micro-behaviors/fs/write/file/shell::go-dd-mount-query-output
+      - id: micro-behaviors/fs/write/file/shell::go-dd-mount-table-output
+      - id: micro-behaviors/fs/write/file/shell::go-dd-large-dynamic-output
     unless:
       # Deny-rule / guardrail fixtures quote wipe commands as blocked examples.
       - id: well-known/tool/detection/agent-glovebox::archive-context
       - id: well-known/tool/detection/ai-guardrail/
       - id: metadata/file/policy/identity::enforced-dangerous-action-approval
       - id: metadata/package/testing/presence/harness::go-test-file
+      - id: metadata/package/testing/presence/harness::test-directory-path
       - id: well-known/lib/development/waveloom::waveloom-source-archive-context
+
+  - id: zig-mounted-device-wiper
+    desc: Zig wipes mounted devices through a shell
+    crit: hostile
+    conf: 0.97
+    for: [zig]
+    near_bytes: 4000
+    all:
+      - id: lang-mounts-dev-scan
+      - id: dd-zero-device-format-source
+      - id: micro-behaviors/process/create/direct::zig-child-init
+      - id: objectives/command-and-control/dropper/staging/temp::zig-bin-sh-c
+
+  - id: source-mounted-device-wiper
+    desc: Source wipes mounted devices through a command
+    crit: hostile
+    conf: 0.96
+    for: [java, csharp, swift, kotlin, zig, elixir]
+    scope: file
+    near_lines: 80
+    all:
+      - id: lang-mounts-dev-scan
+      - id: dd-zero-device-format-source
+      - id: micro-behaviors/process/create/exec::child-process-execution
+
+  - id: source-mounted-dynamic-dd-wiper
+    desc: Source zero-fills enumerated mounted devices
+    crit: hostile
+    conf: 0.97
+    for: [csharp, elixir, rust, swift]
+    scope: file
+    near_lines: 80
+    all:
+      - id: lang-mounts-dev-scan
+      - id: dd-zero-dynamic-output-source
+      - id: micro-behaviors/process/create/exec::child-process-execution
+
+  - id: source-mounted-dd-wiper
+    desc: Source wipes mounted devices with dd
+    crit: hostile
+    conf: 0.95
+    # Go uses the stricter large-overwrite composite below, and shell has its
+    # own device-variable rules. Mount enumeration plus a generic dd-zero
+    # command is otherwise bound to the nearby execution site.
+    for: [scripts, source, -go, -shell]
+    scope: file
+    near_lines: 80
+    all:
+      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/write/file/shell::dd-zero-input-command
+      - id: micro-behaviors/process/create/exec::child-process-execution
+
+  - id: source-mounted-argv-wiper
+    desc: Source wipes mounted devices via dd arguments
+    crit: hostile
+    conf: 0.95
+    for: [python, javascript, rust, c, perl]
+    scope: file
+    near_lines: 80
+    all:
+      - id: lang-mounts-dev-scan
+      - id: dd-zero-dynamic-device-argv
+    any:
+      - id: micro-behaviors/process/create/exec::child-process-execution
+      - id: micro-behaviors/process/create/spawn::spawn-call
+      - id: micro-behaviors/process/create/spawn::start
+      - id: micro-behaviors/process/create/direct::rust-spawn
+
+  - id: jvm-mounted-device-wiper
+    desc: JVM zero-fills enumerated mounted devices
+    crit: hostile
+    conf: 0.99
+    for: [class, java_class]
+    all:
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-path
+      - id: jvm-dd-zero-argv
+      - id: micro-behaviors/process/create/exec::child-process-execution
+
+  - id: go-mounted-large-dd-wiper
+    desc: Go zero-fills enumerated mounted devices
+    crit: hostile
+    conf: 0.98
+    for: [go]
+    near_lines: 40
+    all:
+      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/write/file/shell::go-dd-large-dynamic-output
+      - id: micro-behaviors/process/create/exec::child-process-execution
 
   - id: lang-exec-shred-dev
     desc: Language executes shred against block device
@@ -293,6 +499,14 @@ composite_rules:
       - id: metadata/package/testing/presence/harness::go-test-file
       - id: well-known/lib/development/waveloom::waveloom-source-archive-context
       - id: metadata/file/policy/identity::enforced-dangerous-action-approval
+      # A README showing the reader how to flash a board is instructions:
+      # u-boot's doc/README.rockchip spells out `dd if=/dev/zero of=/dev/...`
+      # and ships inside QEMU's vendored roms tree.
+      - id: metadata/package/documentation/source::readme-any-basename
+      # QEMU emulates storage hardware, so its own source opens and
+      # overwrites block devices -- subprojects/libvduse/libvduse.c is the
+      # userspace block-device backend.
+      - id: well-known/tool/development/runtime/qemu::source-tree-path
       # Agent guardrails enumerate `dd if=/dev/zero of=/dev/sda` inside a
       # deny-list they refuse to run; the individual legs already carry this
       # exclusion, so carry it on the composite too.
@@ -311,6 +525,7 @@ composite_rules:
       - id: block-device-destructive
       - id: dd-zero-to-shell-var
 
+
   - id: freebsd-geom-dd-wiper
     desc: Wipes FreeBSD disks enumerated by geom
     crit: hostile
@@ -322,6 +537,7 @@ composite_rules:
       - id: micro-behaviors/os/privilege/check::root-privilege-check
 
   - id: unix-block-device-wiper-shred
+    for: [shell, python, javascript, perl]
     desc: Shreds a raw block device
     crit: hostile
     conf: 0.95
@@ -332,6 +548,7 @@ composite_rules:
       - id: shred-dev
 
   - id: unix-block-device-wiper-discard
+    for: [shell]
     desc: Discards a raw block device
     crit: hostile
     conf: 0.95

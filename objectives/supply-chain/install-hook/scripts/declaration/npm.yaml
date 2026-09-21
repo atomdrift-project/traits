@@ -38,17 +38,17 @@ traits:
   if:
     type: value
     path: "scripts.preinstall"
-  not:
-  - exact: "npx patch-package"
-  - exact: "nuxt prepare"
-  - exact: "npx only-allow pnpm"
-  - exact: "prisma generate"
-  - exact: "ibmtelemetry --config=telemetry.yml"
-  - exact: "husky install"
-  - substr: "tsc || exit 0"
-  - exact: "patch-package"
-  - exact: "husky"
-  - exact: "node -e 'process.exit(0)'"
+    not:
+    - exact: "npx patch-package"
+    - exact: "nuxt prepare"
+    - exact: "npx only-allow pnpm"
+    - exact: "prisma generate"
+    - exact: "ibmtelemetry --config=telemetry.yml"
+    - exact: "husky install"
+    - substr: "tsc || exit 0"
+    - exact: "patch-package"
+    - exact: "husky"
+    - exact: "node -e 'process.exit(0)'"
 - id: has-postinstall
   desc: Has postinstall script hook
   crit: notable
@@ -79,19 +79,6 @@ traits:
   - exact: "patch-package"
   - exact: "husky"
   - exact: "node -e 'process.exit(0)'"
-- id: has-install
-  desc: Has install script hook
-  crit: notable
-  conf: 1.0
-  attack: "T1195.002"
-  unless:
-  - id: metadata/package/files/dependency::node-modules-path
-  - id: well-known/lib/format/xmljs::libxmljs-native-addon-context
-  - id: metadata/package/scripts/lifecycle::npm-install-native-addon-build
-  if:
-    type: value
-    path: "scripts.install"
-    exists: true
 - id: has-preinstall-raw
   desc: Raw content contains preinstall hook
   crit: notable
@@ -126,7 +113,7 @@ composite_rules:
   - id: metadata/package/repository::has-repository-field
   - id: metadata/package/entrypoint::has-bin-field
   - id: metadata/package/publishing::is-private
-  - id: metadata/package/dependencies/manifest::has-dev-deps
+  - id: metadata/package/dependencies/manifest/presence::has-dev-deps
   - id: objectives/supply-chain/impersonation/package/manifest/
   - id: objectives/supply-chain/install-hook/package/manifest::tabby-builtin-plugin-keyword
   # Real packages often omit repository/bin while still declaring keywords and a
@@ -148,7 +135,7 @@ composite_rules:
   any:
   - id: has-preinstall
   - id: objectives/supply-chain/install-hook/package/manifest::postinstall-hook-key
-  - id: has-install
+  - id: metadata/package/scripts/lifecycle::has-install-script
   # A package that publishes repository metadata is the ordinary build-tooling
   # case (pre/post pairs are standard there); relocated from
   # objectives/supply-chain/impersonation/manifest/skeleton in 2026-07.
@@ -172,11 +159,34 @@ composite_rules:
   - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
   - id: metadata/package/versioning/sentinel::npm-version-inflated-major
   - id: metadata/package/empty::npm-empty-author
+# Alpine/Wolfi (and other image) layouts install the package under
+# `usr/lib/node_modules/`, which suppresses empty-author and has-preinstall
+# via the vendored-dependency unless. The index.js preinstall plus a 9x
+# major still names the same depconf probe when those context atoms drop out.
+- id: preinstall-index-inflated-major
+  desc: preinstall runs Node index.js in an inflated-major package
+  crit: hostile
+  conf: 0.97
+  attack: "T1195.002"
+  all:
+  - id: objectives/supply-chain/install-hook/package/direct-url::preinstall-node-index-hook
+  - id: metadata/package/versioning/sentinel::npm-version-inflated-major
 - id: preinstall-metadata-only-inflated-package
   desc: preinstall hook in sparse package with inflated version metadata
-  # A sparse manifest with an unusual version can be a probe or internal
-  # package. Keep it suspicious until the hook's code proves hostile behavior.
-  crit: suspicious
+  # A 9-leading major is not an odd version, it is the exploit primitive:
+  # dependency confusion works by outranking the private package in semver
+  # resolution, which is the only reason 99.1.1 or 9999.0.2 is ever published.
+  # Paired with a hook that runs before the package is used and a manifest with
+  # no author, licence or dependencies, nothing legitimate is being described.
+  #
+  # Previously suspicious, "until the hook's code proves hostile behavior".
+  # That inverts the threat model for this class: a depconf probe's payload is
+  # deliberately trivial -- a DNS callback proving execution -- and frequently
+  # no runtime module ships at all, so waiting for payload code means the probe
+  # class can never be detected. The manifest shape is the attack. This also
+  # aligns the rule with preinstall-local-node-inflated-package above, which is
+  # already hostile on strictly less evidence.
+  crit: hostile
   conf: 0.96
   attack: "T1195.002"
   all:
@@ -186,5 +196,5 @@ composite_rules:
   any:
   - id: metadata/package/empty::npm-empty-author
   - id: metadata/package/empty::npm-no-license
-  - id: metadata/package/dependencies/manifest::npm-no-deps-devdependencies
+  - id: metadata/package/dependencies/manifest/presence::npm-no-deps-devdependencies
   needs: 2

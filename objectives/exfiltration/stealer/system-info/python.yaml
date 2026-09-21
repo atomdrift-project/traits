@@ -14,7 +14,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     scope: archive
-    for: [archives]
+    for: [whl, python-sdist, egg, shell, python]
     attack: "T1082,T1041"
     all:
       - id: objectives/persistence/login/python-startup::pth-telemetry-initializer-import
@@ -28,7 +28,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     scope: archive
-    for: [archives]
+    for: [whl, python-sdist, egg, shell, python]
     attack: "T1546,T1041"
     all:
       - id: objectives/persistence/login/python-startup::pth-telemetry-initializer-import
@@ -44,3 +44,47 @@ composite_rules:
       - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
       - id: micro-behaviors/data/encode/base64::base64-encoding
       - id: micro-behaviors/communications/http/request/client::request-python
+
+  # The sibling above covers the base64-encoded profile. This variant builds a
+  # hardware-stable identifier instead: uuid.getnode() reads the MAC, and the
+  # module pairs it with the username, the hostname, and the public IP from an
+  # ipify lookup before POSTing. The MAC is the tell -- it survives reinstalls
+  # and identifies the machine rather than the session, which no legitimate
+  # telemetry module needs alongside a public-IP lookup and an HTTP client.
+  - id: python-machine-profile-ip-exfil
+    desc: "Exfiltration of hardware-stable machine profile with external IP"
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: objectives/discovery/system/fingerprint/hardware::python-mac-discovery
+      - id: objectives/discovery/system/fingerprint/hardware::python-username
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+      - id: micro-behaviors/communications/http/ip-discovery::ipify-api
+      - id: micro-behaviors/communications/http/request/client::py-post-generic
+    # The only POST in a hosted-notebook telemetry helper may be the platform's
+    # own secret-store RPC (e.g. Kaggle's GetUserSecretByLabelRequest with the
+    # session token), which is documented platform-client use, not exfil
+    # transport. A store-API call must not satisfy the POST leg.
+    unless:
+      - id: objectives/credential-access/credential-manager/store-api::platform-secrets-endpoint-request
+
+  # The notebook-gated variant of the rule above. The sibling stays suppressed
+  # whenever a helper's only notebook contact is the platform secret-store
+  # RPC; this variant instead requires an explicit
+  # hosted-notebook execution gate (is_hosted_notebook over the
+  # colab/kaggle/binder probes) alongside the same hardware-stable profile --
+  # MAC-derived ID, username, hostname, public IP -- and an HTTP POST. A
+  # secrets-store client needs none of those: the gate turns the profile into
+  # victim selection (fingerprint the hosts whose browsers are reachable),
+  # which is why this variant carries no store-API exclusion.
+  - id: python-notebook-gated-machine-profile-exfil
+    desc: "Notebook-gated exfiltration of hardware-stable machine profile"
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: objectives/discovery/system/fingerprint/hardware::python-mac-discovery
+      - id: objectives/discovery/system/fingerprint/hardware::python-username
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+      - id: micro-behaviors/communications/http/ip-discovery::ipify-api
+      - id: micro-behaviors/communications/http/request/client::py-post-generic
+      - id: objectives/discovery/system/fingerprint/notebook::notebook-hosted-execution-gate

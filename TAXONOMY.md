@@ -26,7 +26,7 @@ Traits rarely seen in legitimate software that have well-defined objectives belo
 | **baseline** | Common functionality; doesn't indicate program purpose (e.g., `mmap`, `stdio`, `read`). Always present in JSON, the web UI, and differential analysis. | Any tier |
 | **notable** | Expresses a clear behavior, purpose, or identity that could interest a security engineer during differential analysis (e.g., `socket`, HTTP requests, network-library imports, `exec`, `eval`). If an appeared/disappeared atomic finding would help an analyst understand what changed, it should be at least notable—even when the behavior is benign. This includes communications, code execution, crypto, encoding/decoding, privilege operations, sensitive file access, registry access, persistence, program identity, and signing information. | Any tier |
 | **suspicious** | Rarely legitimate; indicates possible malicious intent. | `micro-behaviors/`, `objectives/`, `well-known/`, `metadata/` (rare) |
-| **hostile** | Clear attack pattern; no legitimate use. Requires precision >= 3.5. | `objectives/`, `well-known/` only — **never** `micro-behaviors/` |
+| **hostile** | Clear attack pattern; no legitimate use. Requires precision >= 3.5 as an authoring bar; runtime precision checks are advisory (see [RULES.md](RULES.md#criticality-levels)). | `objectives/`, `well-known/` only — **never** `micro-behaviors/` |
 
 > **Visibility caveat — `component`/`baseline` are not hidden from users.** The CLI may de-emphasize or omit them (historically `component` was filtered unless a referencing composite fired; that is no longer guaranteed), but the JSON output, the web interface, and version-to-version differential analysis all surface them. Demoting a trait therefore does **not** make a false positive disappear — a user still sees it, mislabeled — and rules are equally important to get right at every criticality level. Lower criticality only when the lower tier is genuinely correct (a true composite fragment or universal-baseline capability). Fix a real false positive properly: tighten the matcher, add an `unless:`/`not:` exclusion, or relocate the trait (see [Matcher Defines Identity](#matcher-defines-identity)).
 
@@ -105,6 +105,18 @@ A trait fails this rule when its name, description, or location claims an intent
 
 When a generic capability false-positives because it sits in the wrong tier, fix the placement. Generic capabilities such as process execution, interpreter invocation, network clients, registry manipulation, file writes to sensitive locations, and persistence surfaces belong where those behaviors are described — usually under `micro-behaviors/` — and should stay `notable` or higher when they are analyst-relevant. Notable in terms of what would be interesting to a security engineer for triage: such as who, what, when, where of a program (even if benign). Objective traits should compose those capabilities with intent-specific evidence rather than bury generic atomics as mislabeled `component` rules.
 
+### Names an attacker or a collector chose
+
+**A trait may match a filename. A conviction may not depend on one that the attacker or the collector picked.** Matching a name is not the problem; resting a `suspicious`/`hostile` verdict on a name that costs nothing to change is. Three cases, and only the first can carry weight:
+
+- **The format mandates it.** `SKILL.md`, `package.json`, `AUTOEXEC.BAT`, `MANIFEST.MF`. The attacker has no choice: a malicious agent skill that omits `SKILL.md` is not a skill, and a boot script that is not named `AUTOEXEC.BAT` does not run at boot. These are properties of the platform, so requiring one in `all:` is correct — and they belong in `metadata/`, `micro-behaviors/` or `well-known/app/` as format facts at `notable`, which is where a conviction composite then references them.
+- **The attacker chose it.** A dropped `motivate.bat`, a `_runtime.js` sidecar, a campaign token, a C2 hostname, a chosen function name. Real evidence about *this* sample, and worth stating — but the next build renames it for free, so it corroborates in `any:` and never gates in `all:`. This is the rule the supply-chain audit already states for matchers: chosen local identifiers must not become identity signatures.
+- **A collector chose it.** The name of the outer artifact being scanned — `Win32.Volk.7z`, `2026-03-27-telnyx-v4.87.2.zip`, `telnyx-4.87.2.tgz`. Nobody in the attack picked it; it was assigned when the specimen was fetched or filed, and it changes on re-collection. It carries no attack information at any criticality.
+
+The distinction is container versus member, not file extension. A member inside an archive is named by the attacker or by the format; the container itself is named by whoever downloaded it. A literal ending in an archive extension is the static approximation of "this can only ever match the container", which is what a validator can check at author time.
+
+**A conviction needs at least one content-derived required leg.** Names, sizes, and metrics describe what a file *is called*, *weighs*, and *counts* — never what it does. A rule assembled entirely from those is a file hash in behavioural clothing: `size_min` and `size_max` both 1917, an exact `.tgz` basename, and `strings.count` exactly 13 convict one artifact and nothing else, including the next build of the same malware. State the behavior, then let the name corroborate it.
+
 ### Tier Dependencies
 
 | Tier | Can Reference | Rationale |
@@ -126,7 +138,7 @@ All tiers follow: `TIER/CATEGORY/BEHAVIOR/METHOD/platform.yaml`
 
 - **`objectives/`**: `objectives/OBJECTIVE/BEHAVIOR/METHOD/` with technique-based directories and per-platform or per-ecosystem YAML files. Add sub-method directories when a method has many variants (e.g., string obfuscation techniques). Avoid platform, language, ecosystem, file-type, and family names as directories unless they are the technique being detected.
 - **`micro-behaviors/`**: `micro-behaviors/CATEGORY/BEHAVIOR/METHOD/` (e.g., `crypto/symmetric/aes/ruby.yaml`, not `crypto/symmetric/aes.yaml`). If no specific method applies, group by syscall, protocol, or logical grouping. Composite traits may reference directory names to match related rules.
-- **`well-known/malware/` and `well-known/unwanted/`**: Organize by recognized family or named entity, not by a generic behavior, delivery method, or bundle of traits. Malware may retain a broad class before its family (`well-known/malware/backdoor/bpfdoor/`); unwanted software normally uses the family directly (`well-known/unwanted/gameograf/`). Do not use generic buckets such as `newtab-wallpaper-adware/` or `vpn-leadgen/`. Put generic unwanted or abusive behavior under the best-fitting `objectives/` hierarchy, then let each named family rule reference that objective. If no objective fits, add a behavior-based objective or document the taxonomy gap rather than filing intent-bearing behavior under `micro-behaviors/`.
+- **`well-known/malware/` and `well-known/unwanted/`**: Organize by recognized family or named entity, not by a generic behavior, delivery method, or bundle of traits. Malware may retain a broad class before its family (`well-known/malware/backdoor/bpfdoor/`); unwanted software normally uses the family directly (`well-known/unwanted/gameograf/`). Do not use generic buckets such as `newtab-wallpaper-adware/` or `vpn-leadgen/`. **"Recognized" means recognized by name outside this repository** — a family a working security engineer would already know (Shai-Hulud, event-stream, XZ Utils), not merely a package that once carried an advisory. That bar is high on purpose, so these directories stay small: an obscure typosquat, a tea.xyz reward-campaign stub, or a single withdrawn npm release is an *instance* of a technique, not a family, and naming a directory after it buys a signature that matches one package and nothing else. Detect those through the technique instead — a registry-pollution, dependency-substitution, or install-hook rule under `objectives/` convicts the next hundred of them too. A family directory earns its place only when the campaign has a name people use and traits that generalize across its members. Put generic unwanted or abusive behavior under the best-fitting `objectives/` hierarchy, then let each named family rule reference that objective. If no objective fits, add a behavior-based objective or document the taxonomy gap rather than filing intent-bearing behavior under `micro-behaviors/`.
 - **Directory names** should be short, readable, and semantically useful. Prefer `exec` over `command-execution`, `poll` over `polling-command`, and `reflect` over `reflective-loader` when the parent path supplies enough context. Keep longer names when the shorter form would be ambiguous. A directory segment must name a SUBJECT — the thing the traits beneath it are about. Three kinds of word fail that and are rejected by the validator:
 
   - **Catch-alls** (`core/`, `common/`, `general/`, `misc/`, `other/`) mean "everything else", so they never make you answer what a trait is about — which is the same question that reveals whether it belongs in the tier at all. Split by the behavior each child actually detects.
@@ -1409,7 +1421,10 @@ metadata/
 ├── package/               # Package ecosystem metadata and project-hygiene facts
 │   ├── config/            #   Configuration file detection
 │   ├── contributors/      #   Contributor metadata
-│   ├── dependencies/      #   Dependency analysis
+│   ├── dependencies/      #   Dependency analysis, split by where the fact was read:
+│   │                      #     manifest/ (declared), lockfile/ (resolved), archive/ (shipped)
+│   │   └── manifest/      #     Facets are ordered; see "Choosing a dependency-manifest facet":
+│   │                      #     identity/ name-form/ source/ range/ reconciliation/ presence/ count/
 │   ├── documentation/     #   Documentation presence
 │   ├── error-handling/    #   Error handling patterns
 │   ├── files/             #   File counts and types
@@ -1505,9 +1520,58 @@ When placing a new metadata trait, use this tiebreaker table. Each row names the
 | `metadata/build/` | `metadata/package/` | Is it evidence of a build/transform tool's output (bundled, minified, autotools-generated)? → `build/`. Is it a project-hygiene fact? → the `metadata/package/` subdirectory for that subject (`documentation/`, `testing/`, `config/`, `logging/`, `error-handling/`) — there is no `quality/` bucket |
 | `package/` | `well-known/lib/` | Is it about ecosystem-level metadata (fields, scripts, quality, testing)? → `package/`. Is it identifying a specific library/framework/runtime? → `well-known/lib/`. There is no third answer: `metadata/library/` is deprecated and closed, so never route a trait there |
 | `package/` | `permission/` | Is it ordinary package metadata (name, dependencies, files, scripts, quality)? → `package/`. Is it declared authority or extension API surface (browser/IDE extension permissions, host access, OAuth scopes, content scripts)? → `permission/` |
+| `dependencies/manifest/<facet>/` | each other | See [Choosing a dependency-manifest facet](#choosing-a-dependency-manifest-facet) — the facets overlap on purpose (every declaration has a name, a source and a version), so they are ordered and the first match wins |
 | `signed/` | `vendor/` | Is it about the cryptographic signature chain or entitlements? → `signed/`. Is it identifying an OS/platform vendor by strings/resources/patterns? → `vendor/` |
 | `vendor/` | `well-known/app/`, `well-known/dual-use/`, or `well-known/tool/` | Is it an OS/platform vendor or system userland marker (Apple, Microsoft, NetBSD, GNU/FSF)? → `vendor/`. Is it a specific well-known application or suite? → `well-known/app/`. Is its legitimate abuse-relevant function the reason analysts need the identity? → `well-known/dual-use/`. Is it a professional analyst/admin/developer tool? → `well-known/tool/` |
 | `vendor/` | `well-known/lib/` | Is it identifying the platform vendor that produced the file? → `vendor/`. Is it an well known third-party library/framework/runtime fingerprint (OpenSSL, zlib, FFmpeg, psutil, SharpShell)? → `well-known/lib/` |
+
+### Choosing a dependency-manifest facet
+
+`metadata/package/dependencies/` first splits by **where the dependency fact was
+read from** — `manifest/` (declared by the author), `lockfile/` (resolved by the
+installer), `archive/` (present in the built artifact). Read the path as a
+sentence: *a package's dependencies, as declared in its manifest, specifically
+the …*
+
+Under `manifest/`, one dependency entry satisfies several facets at once —
+`"@img/sharp-linux-x64": "^0.33"` has an identity, a name shape, a source and a
+version range. **The facets are therefore ordered, and the first one that
+describes what the matcher actually reads wins.** Ask the questions in order:
+
+1. **`identity/` — *which* package?** The matcher names one specific package
+   (`lodash`, `axum`, `child_process`). Test: rename the trait after the package
+   and nothing is lost. A trait that would stop working if the package were
+   renamed belongs here.
+2. **`name-form/` — what does the *name* look like?** The matcher reads the name
+   as a pattern, not as a particular package: a `-linux-x64` platform triple, a
+   `.js` suffix, a `lint`/`build` word. Test: it would match a package that does
+   not exist yet.
+3. **`source/` — where does it *resolve from*?** The matcher reads the
+   right-hand side as a location: a protocol (`git+ssh:`, `file:`, `workspace:`,
+   `catalog:`, `link:`, `portal:`, `github:`), a URL, a local path.
+4. **`range/` — *which version*?** The matcher reads the same right-hand side as
+   a version specifier: `*`, `latest`, `^1.2`. `source/` and `range/` both read
+   that field; the split is **where to fetch** versus **which release**.
+   `"pkg": "*"` is `range/`, `"pkg": "github:o/r"` is `source/`.
+5. **`reconciliation/` — declared versus actually *used*?** The only facet
+   allowed to read beyond the manifest: it compares the declaration against the
+   imports in the shipped code. Everything phantom/unused-dependency lives here.
+6. **`presence/` — is the field *there at all*?** Omitted, present, or an empty
+   object. No entry is examined. `npm-no-dependencies-field` is presence.
+7. **`count/` — *how many*?** The field is populated and the claim is
+   cardinality. `npm-dependency-fanout` is count, not presence.
+
+Two consequences worth stating, because both were live mistakes before the
+split:
+
+- **`identity/` is not `name-form/`.** One names a package; the other names a
+  shape. `npm-dep-lodash` and `optional-native-linux-dep-name` look alike as
+  trait ids and are not the same kind of fact.
+- **A facet is not an ecosystem.** npm, Cargo and Gradle declarations of the
+  same kind share a facet and are separated by *filename*
+  (`identity/cargo.yaml`, `identity/npm.yaml`), per the technology-neutral
+  directory rule above.
+
 
 ## Reference
 

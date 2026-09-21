@@ -221,7 +221,7 @@ composite_rules:
     for: [python]
     all:
       - id: micro-behaviors/os/sysinfo/platform/arch::arch-parameterized-variant
-      - id: micro-behaviors/os/sysinfo/platform/runtime::python-platform-machine
+      - id: micro-behaviors/os/sysinfo/platform/host::python-platform-machine
       - id: micro-behaviors/mem/anonymous/create::memfd-create-python
       - id: micro-behaviors/process/create/direct::python-os-execve-call
 
@@ -311,9 +311,16 @@ composite_rules:
       - id: well-known/tool/sysadmin/alpine-packages/package::alpine-ansible-core-package
       - id: well-known/tool/detection/cilium-tetragon::source-path
       - id: well-known/app/communication/telegram::telegram-desktop-third-party-source
+  # Notable, not suspicious: a bare `any:` over a notable `execveat` API
+  # reference and a /proc/self/fd exec path. Naming the syscall is what a
+  # bindings crate does -- the `nix` crate's src/unistd.rs declares execveat
+  # for every Rust program that vendors it -- and a debugger re-execs itself
+  # through a descriptor by design (valgrind's cachegrind-arm64-linux). The
+  # hostile composite below still requires memfd_create, /proc/self/exe and
+  # the cleanup step alongside it, which is the fileless re-exec sequence.
   - id: memfd-reexec-target
     desc: Executes from memfd file descriptor
-    crit: suspicious
+    crit: notable
     conf: 0.95
     for: [scripts, binaries, c, cpp, rust, go, elf]
     unless:
@@ -321,6 +328,18 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/exec::execveat-api-reference
       - id: proc-fd-exec
+  # micro-behaviors/fs/delete/file/library::unlink is `for: [elf, macho,
+  # shell, c, cpp]` -- it never covers Rust/Go source, which delete their own
+  # file through the language stdlib call instead of the raw libc symbol.
+  - id: memfd-cleanup-delete-call
+    desc: Deletes own file before/after memfd re-exec
+    crit: component
+    conf: 0.5
+    for: [c, cpp, rust, go, elf]
+    any:
+      - id: micro-behaviors/fs/delete/file/library::unlink
+      - id: micro-behaviors/fs/delete/file/library::fs-remove_file
+      - id: micro-behaviors/fs/delete/file/library::os-Remove
   - id: memfd-reexec-cleanup
     desc: Removes artifacts before memfd execution
     crit: suspicious
@@ -330,7 +349,7 @@ composite_rules:
       - id: well-known/tool/development/agent/kilocode::kilo-code-native-runtime
       - id: well-known/tool/reverse-engineering/frida/
     all:
-      - id: micro-behaviors/fs/delete/file/library::unlink
+      - id: memfd-cleanup-delete-call
     any:
       - id: clears-memfd-cloexec
       - id: memfd-reexec-guard
@@ -341,7 +360,7 @@ composite_rules:
     for: [scripts, binaries]
     all:
       - id: proc-fd-path
-      - id: exec-function
+      - id: micro-behaviors/process/create/execv::execve-fn
   - id: memfd-self-reexec
     desc: Re-executes itself from anonymous memory
     crit: hostile
@@ -371,7 +390,7 @@ composite_rules:
     for: [scripts, binaries]
     all:
       - id: http-download-python
-      - id: memfd-create
+      - id: micro-behaviors/mem/anonymous/create::memfd-create-python
     any:
       - id: exec-function
       - id: micro-behaviors/fs/write/file/descriptor::python-os-write-fd

@@ -23,8 +23,29 @@ traits:
       type: text
       regex: '(?is)(execFileSync|spawnSync|execFile)\s*\(\s*["'']launchctl["''][\s\S]{0,160}["'']load["'']'
 
+  # remote-login-enabled (objectives/persistence/system/surface/paths/macos)
+  # is deliberately `for: [shell]` only -- non-shell sources can embed the
+  # command string as test/hook data without running it. This composite
+  # already pairs it with an actual SSH key install and a launchctl load
+  # call, so a Node-scoped copy of the same text pattern (the same
+  # per-language duplication already used for
+  # applescript-remote-login-enabled in objectives/command-and-control/
+  # backdoor/dispatch/local/macos.yaml) is used here instead of widening the
+  # shared shell-only atom.
+  - id: js-remote-login-enabled
+    desc: Remote Login service enabled (Node)
+    crit: suspicious
+    conf: 0.84
+    attack: T1021.004
+    platforms: [macos]
+    for: [javascript]
+    if:
+      type: text
+      regex: 'systemsetup\s+-setremotelogin\s+on|com\.apple\.access_ssh'
+
 composite_rules:
   - id: macos-launchagent-install-surface
+    for: [python, javascript, ruby, php]
     desc: Writes or registers a user LaunchAgent
     crit: notable
     conf: 0.92
@@ -41,6 +62,7 @@ composite_rules:
       - id: micro-behaviors/fs/write/file/full::python-pathlib-write-text
 
   - id: macos-launchagent-recurring-config
+    for: [python, javascript, ruby, php]
     desc: Configures a user LaunchAgent to start or remain running
     crit: notable
     conf: 0.92
@@ -76,6 +98,7 @@ composite_rules:
       - id: well-known/app/ai/coding-agent/pixcode::daemon-manager-source
       - id: well-known/app/ai/coding-agent/pixcode::archive-member-context
   - id: launchd-agent-persistence-with-claude-config
+    for: [javascript]
     desc: LaunchAgent persistence paired with Claude Code configuration writes
     # This combination is security-relevant but has a documented legitimate
     # use in AI proxy software that installs a user service and points the
@@ -118,7 +141,6 @@ composite_rules:
     for: [javascript, typescript]
     scope: leaf
     all:
-      - id: micro-behaviors/os/service/launchagent::source-launchagents-join
       - id: source-launchagent-node-program
       - id: source-launchagent-load-via-node
       - id: micro-behaviors/fs/write/file/full::node-write-file-sync
@@ -128,11 +150,15 @@ composite_rules:
     crit: hostile
     conf: 0.99
     attack: "T1098.004,T1543.004"
+    # js-authorized-key-literal-backdoor is javascript/typescript-only; the
+    # file default's go/kotlin/php/ruby/rust/python spread doesn't apply here.
+    for: [javascript]
     all:
       - id: objectives/persistence/login/ssh/backdoor::js-authorized-key-literal-backdoor
       - id: micro-behaviors/os/service/start::launchctl-load-command
-      - id: objectives/persistence/system/surface/paths::remote-login-enabled
+      - id: js-remote-login-enabled
   - id: disguised-recurring-launchd-persistence
+    for: [python, javascript, ruby, php]
     desc: Disguised recurring LaunchAgent persistence
     crit: hostile
     conf: 0.98
@@ -156,3 +182,53 @@ composite_rules:
       - id: objectives/evasion/masquerade/identity/service::apple-helper-namespace
       - id: micro-behaviors/os/service/control::python-launchctl-argv
       - id: micro-behaviors/os/autorun/scheduled::crontab-install-command
+
+  - id: source-launchagent-remote-shell-persistence
+    desc: Source installs a LaunchAgent that fetches shell code
+    # A package source file that embeds a LaunchAgent, enables it with
+    # launchctl, and makes that agent fetch code into a shell is a persistence
+    # chain. Keep the legs close so ordinary documentation or unrelated service
+    # helpers do not combine into a hostile match.
+    crit: hostile
+    conf: 0.99
+    attack: T1105,T1059.004,T1543.004
+    platforms: [macos]
+    for: [source, '!go', applescript, javascript, lua, perl, php, python, ruby, shell]
+    near_lines: 32
+    all:
+      - id: micro-behaviors/os/service/launchagent::source-runatload-key
+      - id: micro-behaviors/os/service/start::launchctl-load-command-text
+      - id: micro-behaviors/process/create/shell/pipeline::source-curl-pipe-shell
+    any:
+      - id: micro-behaviors/os/service/launchagent::source-launchagents-join
+      - id: micro-behaviors/os/service/launchagent::source-launchagents-literal
+
+  - id: go-launchagent-remote-shell-persistence
+    desc: Go source installs a LaunchAgent that fetches shell code
+    crit: hostile
+    conf: 0.99
+    attack: T1105,T1059.004,T1543.004
+    platforms: [macos]
+    for: [go]
+    near_lines: 28
+    all:
+      - id: micro-behaviors/os/service/launchagent::source-runatload-key
+      - id: micro-behaviors/os/service/start::go-launchctl-load-command
+      - id: micro-behaviors/fs/write/file/full::go-writes-download-shell-pipeline
+    any:
+      - id: micro-behaviors/os/service/launchagent::source-launchagents-join
+      - id: micro-behaviors/os/service/launchagent::source-launchagents-literal
+
+  - id: jvm-launchagent-remote-shell-persistence
+    desc: JVM installs a LaunchAgent that fetches shell code
+    crit: hostile
+    conf: 0.99
+    attack: T1105,T1059.004,T1543.004
+    platforms: [macos]
+    for: [class, java_class]
+    all:
+      - id: micro-behaviors/os/service/launchagent::jvm-launchagents-string
+      - id: micro-behaviors/os/service/launchagent::jvm-runatload-enabled-string
+      - id: micro-behaviors/os/service/launchagent::jvm-startinterval-string
+      - id: micro-behaviors/os/service/start::jvm-launchctl-string
+      - id: micro-behaviors/process/create/shell/pipeline::jvm-curl-pipe-shell-string

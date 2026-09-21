@@ -32,15 +32,35 @@ traits:
       type: raw
       regex: ^\{\\\\rtf1[0-9]
     conf: 0.85
+  # `type: raw`, not `type: text`. Brace nesting is a property of the RTF
+  # markup, and a text match also sees cleave's decoded view of the file's
+  # hex regions -- where a run of 0x7B bytes inside an embedded picture
+  # decodes to `{{{{{{{{{` and means nothing at all. Little CMS's
+  # LittleCMS2.7 tutorial.rtf, shipped in ghostpdl, contains no two
+  # consecutive braces anywhere in its 10 MB of markup yet matched twice, on
+  # the hex runs `737b7b7b7b...` and `7b7b7b7b...` at offset 3038623.
+  # `encoding: none`. Brace nesting is a property of the RTF markup, but a
+  # plain `type: text` also sees cleave's decoded view of the file's hex
+  # regions -- where a run of 0x7B inside an embedded picture decodes to
+  # `{{{{{{{{{` and means nothing. Little CMS's LittleCMS2.7 tutorial.rtf,
+  # shipped in ghostpdl, has no two consecutive braces anywhere in its 10 MB
+  # of markup yet matched twice, on the hex runs at offset 3038623.
   - id: rtf-excessive-nesting
     desc: Excessive brace nesting detected
     if:
       type: text
+      encoding: none
       substr: '{{{{{{{{{'
     conf: 0.9
     attack: T1204
+  # A doubled backslash before a control word is an RTF evasion only when the
+  # writer does it throughout; two incidental hits are not obfuscation. Word
+  # emits `\\hich` where an escaped backslash happens to precede the
+  # high-ANSI control word, and Little CMS's 10 MB tutorial.rtf matched
+  # exactly twice -- enough, with no count, to score the manual suspicious.
   - id: rtf-control-word-obfuscation
     desc: Unusual RTF control word patterns
+    count_min: 20
     if:
       type: text
       regex: \\\\[a-z]+\s*[a-z]
@@ -54,10 +74,18 @@ traits:
   - id: rtf-suspicious-hex-stream
     desc: Large hex data stream
     if:
-      type: text
-      regex: \\objdata\s+[0-9A-Fa-f]{1000,}
+      # Whitespace is part of the stream: writers wrap `\objdata` hex at
+      # around eighty columns, so a thousand *contiguous* hex characters never
+      # appear in a real one and the original pattern matched nothing. Read
+      # from raw bytes rather than extracted strings for the same reason: text
+      # extraction hands back one string per wrapped line, and no single line
+      # is a thousand characters long.
+      type: raw
+      regex: '\\objdata[\s{]{1,8}[0-9A-Fa-f\s]{1000,}'
     conf: 0.8
     crit: suspicious
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
   - id: rtf-malformed-nesting-open
     desc: Suspicious nested object opener
     if:
@@ -87,6 +115,8 @@ traits:
       regex: '\\template\b|tables\.lNk|\\init\b'
     conf: 0.8
     crit: suspicious
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
   - id: rtf-template-reference-b
     desc: Dot or dotm template reference
     if:
@@ -94,6 +124,8 @@ traits:
       regex: \.dotm?
     conf: 0.8
     crit: suspicious
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
   - id: rtf-link-resolution-trigger-c
     desc: Formula rendering trigger
     if:
@@ -114,12 +146,6 @@ traits:
       type: text
       regex: \\[a-z]+\s+\\[a-z]+\s+\\[a-z]+\s+\\[a-z]+\s+\\[a-z]+(\s+\\[a-z]+){10,}
     conf: 0.7
-  - id: rtf-hex-encoded-ole
-    desc: Hex-encoded OLE header
-    conf: 0.92
-    if:
-      type: text
-      regex: D\s*0\s*C\s*F\s*1\s*1\s*E\s*0\s*A\s*1\s*B\s*1\s*1\s*A\s*E\s*1
   - id: rtf-code-in-metadata-js-func
     desc: JavaScript function in RTF metadata
     crit: suspicious

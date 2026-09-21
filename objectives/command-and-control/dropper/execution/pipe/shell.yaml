@@ -2,38 +2,13 @@ defaults:
   platforms: [unix]
   for: [shell]
 traits:
-- id: execute-dot-slash
-  desc: "./ execution pattern"
-  crit: notable
-  conf: 0.6
-  attack: T1059.004
+- id: shell-appended-payload-extract
+  desc: Shell extracts an appended payload
+  crit: suspicious
+  conf: 0.95
   if:
     type: text
-    regex: '(^|\n|[;&|]{1,2}|\bnohup\s+)\s*\./[a-zA-Z0-9_][a-zA-Z0-9_.-]+'
-- id: inline__curl-silent-stdout__any_1
-  desc: "Curl silent download pattern 1"
-  crit: notable
-  unless:
-  - id: well-known/app/finance/coingecko::benign-coingecko-price-api
-  if:
-    type: text
-    regex: 'curl(\.exe)?\s+[^|&\n]{0,120}-s[^|&\n]{0,120}(https?://|ftp://)'
-  not:
-  - substr: api.coingecko.com/api/v3/simple/price
-  - substr: curl --unix-socket
-  - regex: 'puts\s+["''][^"''\n]{0,120}curl\s+--unix-sock(et)?'
-- id: inline__curl-silent-stdout__any_2
-  desc: "Curl silent download pattern 2"
-  crit: notable
-  unless:
-  - id: well-known/app/finance/coingecko::benign-coingecko-price-api
-  if:
-    type: text
-    regex: 'curl(\.exe)?\s+[^|&\n]{0,120}--silent[^|&\n]{0,120}(https?://|ftp://)'
-  not:
-  - substr: api.coingecko.com/api/v3/simple/price
-  - substr: curl --unix-socket
-  - regex: 'puts\s+["''][^"''\n]{0,120}curl\s+--unix-sock(et)?'
+    regex: '(?m)sed\s+-n[^\n]{0,180}(tail\s+-n|tail\s+\+)'
 - id: curl-pipe-rclone-installer
   desc: rclone installer piped to bash
   crit: notable
@@ -92,6 +67,18 @@ traits:
   if:
     type: text
     substr: deb.nodesource.com/setup_
+# micro-behaviors/fs/delete/directory::rm-rf is `for: [scripts, binaries,
+# -shell]` -- shell is deliberately excluded there (bare rm -rf is routine
+# build/cleanup noise in shell scripts). This local copy is scoped to shell,
+# and only ever consumed inside the multi-leg wget/loop/exec dropper chain
+# below, where the co-occurring legs already carry the malicious intent.
+- id: shell-rm-rf-command
+  desc: Executable rm -rf deletion command
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?m)(^|["'';|&])\s*rm\s+-rf\s+\S'
 composite_rules:
 # The toolchain/installer pipe contexts shared by the fetch-exec composites
 # below, grouped once so each composite stays under the suppression limit.
@@ -127,14 +114,20 @@ composite_rules:
   desc: Process API invocation
   crit: component
   conf: 0.9
+  # The exec/ directory ref spans many languages (python/go via the
+  # scripts/source groups, javascript directly, etc.) far beyond this
+  # file's shell-only default; scoped to match process-curl-pipe-shell-
+  # call, its only consumer.
+  for: [python, javascript, typescript, go, rust]
   any:
   - id: micro-behaviors/process/create/exec
-  - id: micro-behaviors/process/create/system::ruby-system
+  - id: micro-behaviors/process/create/system::system-process-call
 - id: process-curl-pipe-shell-call
   desc: Process API occurs near shell pipeline
   crit: component
   conf: 0.92
-  for: [python, javascript, typescript, ruby, go, rust]
+  # Ruby uses a same-call argument predicate below, not proximity to text.
+  for: [python, javascript, typescript, go, rust]
   all:
   - id: process-api-call
   - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
@@ -154,19 +147,15 @@ composite_rules:
   for: [python, javascript, typescript, ruby, go, rust]
   all:
   - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
+  any:
   - id: process-curl-pipe-shell-call
+  - id: micro-behaviors/process/create/shell/pipeline::ruby-system-fetch-shell-pipeline
   unless:
   - id: micro-behaviors/os/package-manager/publish/
   - id: micro-behaviors/os/package-manager/installer-script/
   - id: metadata/build/bundler/asset::js-dist-asset-bundle
   - id: metadata/build/bundler/asset::js-large-module-bundle
-- id: python-inline-mutex-hostile
-  desc: Hostile Python inline socket mutex script
-  crit: suspicious
-  conf: 0.95
-  all:
-  - id: python-inline-socket-listener
-  - id: micro-behaviors/os/sysinfo/network::ss
+  - id: metadata/package/testing/presence/path::benign-testdata-directory-path
 - id: hostile-miner-hijack
   desc: Known hostile miner hijacking behavior
   crit: suspicious
@@ -209,29 +198,11 @@ composite_rules:
   all:
   - id: micro-behaviors/process/create/shell/spawn::bash-exec
   - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
-  any:
-  - id: curl-silent-stdout
   - id: micro-behaviors/communications/http/download/wget::wget-silent-stdout
-- id: shell-fetch-exec-curl
-  desc: Shell script downloads via curl and executes via pipe
-  crit: hostile
-  conf: 0.95
-  attack: T1105
-  unless:
-  - id: recognized-toolchain-bootstrap-context
-  - id: metadata/build/archive::source-archive-member
-  # See shell-fetch-exec-wget: `curl -sSL <url> | sh` in a Dockerfile is
-  # build-time tool provisioning, not payload delivery.
-  - id: metadata/build/docker::dockerfile-basename
-  # cybench challenge resources carry real dropper scripts verbatim.
-  - id: well-known/lib/ai/inspect-evals::eval-corpus-context
-  all:
-  - id: micro-behaviors/communications/http/download/curl::curl-cmd
-  - id: curl-silent-stdout
-  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
-  any:
-  - id: micro-behaviors/process/create/shell/spawn::bash-exec
-  - id: micro-behaviors/process/interpreter/shell::bin-sh
+# Quiet curl-to-shell execution alone is also an installer idiom, not proof
+# of hostile delivery. Its structural observation lives at
+# micro-behaviors/process/create/shell/pipeline::curl-response-shell-stdin.
+# The old shell-fetch-exec-curl wrapper added no intent-specific evidence.
 - id: shell-fetch-exec-wget
   desc: Shell script downloads via wget and executes via pipe
   crit: hostile
@@ -253,7 +224,6 @@ composite_rules:
   # downloads write kubernetes.tar.gz then extract.
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-shell-bootstrap
   all:
-  - id: micro-behaviors/communications/http/download/curl::wget-cmd
   - id: micro-behaviors/communications/http/download/wget::wget-silent-stdout
   - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
   any:
@@ -267,32 +237,12 @@ composite_rules:
   all:
   - id: printf-wget-pipe-bash-loader
   - id: random-sleep-fetch-loop
-  - id: objectives/command-and-control/dropper/execution/binary-native::world-writable-local-binary-exec
-  - id: execute-dot-slash
-  - id: micro-behaviors/fs/delete/directory::rm-rf
+  - id: micro-behaviors/process/create/local-exec::world-writable-local-binary-exec
+  - id: micro-behaviors/process/create/local-exec::execute-dot-slash-literal
+  - id: shell-rm-rf-command
   any:
   - id: objectives/evasion/indicator-removal/logs::history-c
   - id: micro-behaviors/process/daemonize/detach::background-ampersand-hidden
-- id: curl-silent-stdout
-  desc: "Shell text contains a curl silent-output command"
-  crit: notable
-  conf: 0.9
-  mbc: C0002
-  attack: T1105
-  size_max: 5000
-  any:
-  - id: inline__curl-silent-stdout__any_1
-  - id: inline__curl-silent-stdout__any_2
-  unless:
-  - id: well-known/tool/packaging/composer::composer-installer-url
-  - id: metadata/file/catalog/identity/
-  - id: well-known/app/finance/coingecko::benign-coingecko-price-api
-  - id: micro-behaviors/communications/http/download/curl::curl-output-file
-  - id: micro-behaviors/communications/http/download/curl::curl-output-redirect
-  # Dockerfile RUN curl|bash for NodeSource (and similar) is build-time
-  # provisioning; hostile shell-fetch-exec composites already carve this out.
-  - id: metadata/build/docker::dockerfile-basename
-  - id: nodesource-setup-url
 - id: curl-pipe-shell-from-raw-ip
   desc: Remote script piped to shell from a raw IP
   crit: hostile
@@ -311,6 +261,64 @@ composite_rules:
   # exfiltration guard asserting it catches `env | curl -X POST -d @- http://…`).
   unless:
   - id: metadata/package/testing/
+
+- id: makeself-hidden-base64-loader
+  desc: Hidden temporary base64 payload loader
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: micro-behaviors/data/decode/command::base64-decode-to-file
+  - id: micro-behaviors/process/create/local-exec::hidden-tmp-background-exec
+  - id: micro-behaviors/process/daemonize/detach::nohup-hidden-output
+  - id: micro-behaviors/data/encode/base64::base64-encode-command
+
+# The three legs -- a curl-pipe-shell, `uname -s`/`uname -m` to pick a
+# platform, and a dynamically built command -- are also the definition of a
+# portable install script: rustup, nvm, Homebrew, Deno and uv all ship
+# exactly this. What separates the vendor's installer from the attacker's is
+# that the vendor *publishes* the pipe command, because users are meant to run
+# it: oh-my-pi's scripts/install.sh carries
+# `# Usage: curl -fsSL .../install.sh | sh` and lean-ctx's lists three such
+# lines. The corpus dropper it is matched against advertises nothing -- it
+# gates on a hidden marker file and pipes a relay URL to sh.
+- id: shell-os-gated-pipe-loader
+  desc: OS-gated curl pipe shell loader
+  crit: hostile
+  conf: 0.99
+  # The third leg used to be micro-behaviors/process/create/shell/eval::shell-dynamic-command-execution,
+  # whose `any:` includes micro-behaviors/data/runtime/keywords::pipe-to-shell -- the
+  # same `| sh` text that already satisfies leg one. With that restatement the rule
+  # convicted on two observations, "a curl|sh exists somewhere" plus "uname is called
+  # somewhere", which is every published OS-detecting installer: rustup, nvm,
+  # Homebrew, and clawdbot-go's own 748-line install.sh, where the uname branch at
+  # line 161 picks a release asset and the unrelated `curl … | sh` at line 301
+  # installs a third-party CLI.
+  #
+  # What the rule is named for is a loader whose OS gate *feeds* the pipeline, so
+  # require the three observations to sit together in one script: the platform
+  # fingerprint, a fetch whose URL comes from a variable, and the pipe into a shell.
+  # In a dropper stub that is a handful of adjacent lines (`case $(uname -s)` sets
+  # RELAY, `curl "$RELAY" | sh` runs it); in a real installer the fingerprint and any
+  # curl|sh are hundreds of lines apart and the piped URL is a literal.
+  scope: file
+  near_bytes: 400
+  all:
+  - id: objectives/command-and-control/dropper/delivery/pipe::curl-pipe-shell
+  - id: micro-behaviors/os/sysinfo/platform/arch::sh-uname-fingerprint
+  - id: micro-behaviors/communications/http/download/shell::fetch-command-with-var
+  unless:
+  - id: metadata/build/archive::source-archive-member
+  - id: recognized-toolchain-bootstrap-context
+  - id: micro-behaviors/process/create/shell/pipeline::documented-curl-pipe-usage
+
+- id: shell-rot13-eval-loader
+  desc: Shell decodes text before dynamic execution
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: micro-behaviors/data/string/replace::shell-echo-tr-transform
+  - id: micro-behaviors/process/create/shell/eval::shell-evaluates-variable-command
+  - id: micro-behaviors/process/create/shell/command-string::sh-c-exec
 # package-doc-curl-shell-delivery was removed: its `all:` was the canonical
 # curl-pipe atom AND a second copy of the same matcher, so it restated one
 # observation as a C2/dropper finding on every source tarball whose README

@@ -49,7 +49,27 @@ traits:
       name:
         - socket
   - id: socket-connect
-    desc: Connects socket to remote host (Linux)
+    desc: Connects socket to remote host
+    conf: 0.9
+    platforms:
+      - linux
+      - macos
+    for:
+      - elf
+      - macho
+    if:
+      type: syscall
+      name:
+        - connect
+  # The resolved domain is the discriminator. Statically linked musl/glibc
+  # binaries carry raw socket syscall sites inside libc wrappers whose domain
+  # argument passes through in a register (unresolved), plus resolved AF_UNIX
+  # sites for internal nscd/local-IPC sockets; requiring the immediate
+  # AF_INET load keeps internet-socket creation distinct from both. socketcall
+  # is deliberately excluded: its first argument is the operation selector,
+  # not the domain.
+  - id: inet-socket-syscall
+    desc: Creates an AF_INET socket via direct syscall
     conf: 0.9
     platforms:
       - linux
@@ -58,7 +78,10 @@ traits:
     if:
       type: syscall
       name:
-        - connect
+        - socket
+      args:
+        - index: 0
+          value: 2
   - id: x86-64-socket-syscall
     desc: Direct x86-64 socket syscall
     conf: 0.9
@@ -77,17 +100,19 @@ traits:
       type: hex
       section: text
       pattern: "B8 2A 00 00 00 0F 05"
-  - id: socket-connect-macos
-    desc: macOS connect syscall
-    conf: 0.9
-    platforms:
-      - macos
-    for:
-      - macho
+
+  # Statically linked ELF files may not expose socket() in an import or syscall
+  # table. Keep the bare text marker at component level; objective composites
+  # must add architecture, packing, and protocol evidence before using it.
+  - id: static-socket-api-marker
+    desc: Static ELF contains socket API marker
+    crit: component
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
     if:
-      type: syscall
-      name:
-        - connect
+      type: text
+      regex: '(?i)\bsocket\b'
 composite_rules:
   - id: create
     desc: Create network socket
@@ -101,10 +126,7 @@ composite_rules:
     conf: 0.85
     platforms:
       - linux
-    for:
-      - elf
-      - so
-      - c
+    for: [elf]
     all:
       - id: socket-create
       - id: socket-connect
@@ -113,10 +135,7 @@ composite_rules:
     conf: 0.85
     platforms:
       - macos
-    for:
-      - macho
-      - dylib
-      - c
+    for: [macho]
     all:
       - id: socket-socket-macos
-      - id: socket-connect-macos
+      - id: socket-connect

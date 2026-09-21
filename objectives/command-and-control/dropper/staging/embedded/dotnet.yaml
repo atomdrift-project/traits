@@ -36,13 +36,6 @@ traits:
     if:
       type: text
       word: SevenZip.Compression.LZMA
-  - id: convert-frombase64
-    desc: Convert.FromBase64String call
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      regex: Convert.{0,10}FromBase64String|\[Convert\]::FromBase64String
   - id: frombase64-long-literal
     desc: Embedded base64 literal decode
     crit: notable
@@ -89,16 +82,6 @@ traits:
       - substr: vm-support.vbs
     unless:
       - id: metadata/signed/developer::vmware
-  - id: bat-file-write
-    desc: BAT file written to disk
-    # A bare .bat path is only meaningful when combined with decode/write
-    # behavior in the script-dropper composites below.
-    crit: notable
-    conf: 0.8
-    attack: T1059.003
-    if:
-      type: text
-      regex: \.bat['"]|WriteAllBytes.{0,50}\.bat
   - id: ps1-file-write
     desc: PS1 file written to disk
     crit: notable
@@ -110,8 +93,24 @@ traits:
     unless:
       - id: metadata/package/testing/presence/harness/
       - id: metadata/package/testing/presence/fixture::test-filename-pattern
+  # objectives/evasion/self-delete/file/script::vbs-file-delete is a
+  # `type: string_literal` fact scoped `for: [powershell, batch]` -- it can
+  # never fire on a pe leaf. csharp-vbs-dropper below (required by
+  # dropper-with-cleanup) is `for: [pe]` only, so that composite needs a
+  # pe-compatible clone of the same text pattern.
+  - id: dotnet-vbs-file-delete-text
+    desc: .NET binary deletes its dropped VBS file
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    if:
+      type: text
+      regex: (?i)del\s.{0,50}\.vbs|Remove-Item.{0,50}\.vbs|DeleteFile.{0,50}\.vbs
+    not:
+      - regex: (?i)getadmin\.vbs
 composite_rules:
   - id: dotnet-binaryformatter-reflective-loader
+    for: [pe]
     desc: .NET BinaryFormatter and reflection stage loader
     crit: hostile
     conf: 0.98
@@ -129,6 +128,7 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: well-known/lib/
   - id: dotnet-reactor-encrypted-process-stage
+    for: [pe]
     desc: Reactor-protected encrypted process stage
     crit: hostile
     conf: 0.98
@@ -205,6 +205,7 @@ composite_rules:
       - id: sevenzip-helper
       - id: sevenzip-lzma-namespace
   - id: obfuscated-resource-loader
+    for: [pe]
     desc: Obfuscated .NET resource loader
     crit: suspicious
     conf: 0.92
@@ -218,7 +219,6 @@ composite_rules:
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
     any:
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-      - id: convert-frombase64
     downgrade:
       any:
         - id: metadata/lang/compiler/managed/
@@ -231,6 +231,7 @@ composite_rules:
       - id: well-known/app/communication/discord-chat-exporter::discord-chat-exporter-release
       - id: well-known/lib/runtime/managed/dotnet-runtime::dotnet-corelib-assembly
   - id: managed-resource-reflection-loader
+    for: [pe]
     desc: .NET managed resource reflection loader
     crit: suspicious
     conf: 0.94
@@ -277,6 +278,7 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: metadata/binary/vendor/
   - id: assemblyresolve-resource-stage-loader
+    for: [pe]
     desc: .NET AssemblyResolve resource stage loader
     crit: suspicious
     conf: 0.96
@@ -303,6 +305,7 @@ composite_rules:
       - id: well-known/lib/runtime/managed/dotnet-runtime::dotnet-reference-pack-context
       - id: well-known/tool/sysadmin/chocolatey::official-library-pe-context
   - id: vbnet-lzma-resource-stage-loader
+    for: [pe]
     desc: VB.NET LZMA resource stage loader
     crit: hostile
     conf: 0.98
@@ -324,6 +327,7 @@ composite_rules:
         - id: metadata/package/versioning/scheme::pe-version-resource
         - id: metadata/binary/debug::pdb-visual-studio
   - id: vbnet-split-reflection-stage-loader
+    for: [pe]
     desc: VB.NET split token resource stage loader
     crit: hostile
     conf: 0.99
@@ -346,6 +350,7 @@ composite_rules:
         - id: metadata/package/versioning/scheme::pe-version-resource
         - id: metadata/binary/debug::pdb-visual-studio
   - id: vbnet-lzma-latebind-token-cluster
+    for: [pe, csharp]
     desc: VB.NET LZMA late bind stage tokens
     crit: hostile
     conf: 0.99
@@ -359,6 +364,7 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/reflection/vb::resolveeventhandler-token
       - id: micro-behaviors/process/interpreter/reflection/runtime::create-instance-token
   - id: base64-file-dropper
+    for: [pe]
     desc: Base64 decode and write file
     crit: suspicious
     conf: 0.9
@@ -366,18 +372,20 @@ composite_rules:
       - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
       - id: frombase64-long-literal
   - id: dotnet-resx-temp-exec-dropper
+    for: [csharp]
     desc: .NET RESX temp execution dropper
     crit: hostile
     conf: 0.97
     attack: T1027.009
     all:
-      - id: convert-frombase64
+      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
       - id: micro-behaviors/data/embedded/payload/resource::resourcemanager-getobject-call
       - id: micro-behaviors/data/embedded/payload/resource::resourcemanager-getresourceset-call
       - id: micro-behaviors/fs/path/temp::get-temp-path-raw
       - id: micro-behaviors/fs/write/file/handle::filestream-create
       - id: micro-behaviors/process/create/spawn::vbnet-latebound-process-start
   - id: csharp-vbs-dropper
+    for: [pe]
     desc: .NET VBScript dropper
     crit: suspicious
     conf: 0.95
@@ -396,6 +404,7 @@ composite_rules:
       - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
       - id: io-file-write
   - id: csharp-script-dropper
+    for: [pe]
     desc: .NET script file dropper
     crit: suspicious
     conf: 0.9
@@ -404,7 +413,7 @@ composite_rules:
       - id: base64-file-dropper
     any:
       - id: vbs-file-written-to-disk
-      - id: bat-file-write
+      - id: micro-behaviors/fs/path/extension::bat-dup
       - id: ps1-file-write
     downgrade:
       any:
@@ -415,6 +424,7 @@ composite_rules:
   # leg the description's "resource extraction" was unsupported and it fired on
   # any .NET app that encrypts and writes a file.
   - id: dotnet-aes-resource-dropper
+    for: [pe]
     desc: .NET AES resource extraction dropper
     crit: suspicious
     conf: 0.92
@@ -433,17 +443,25 @@ composite_rules:
         - id: micro-behaviors/ui/help/
         - id: metadata/package/completeness/
   - id: dropper-with-cleanup
+    # csharp-vbs-dropper is for: [pe] only (see csharp-powershell-vbs-dropper
+    # below); the original evasion/self-delete vbs-file-delete leg is
+    # string_literal-typed and for: [powershell, batch] only, so paired with
+    # a pe-only required leg neither type could ever satisfy both. Use the
+    # pe-compatible text clone above instead.
+    for: [pe]
     desc: .NET dropper with anti-forensics
     crit: hostile
     conf: 0.95
     attack: T1070.004
     all:
       - id: csharp-vbs-dropper
-      - id: objectives/evasion/self-delete/file/script::vbs-file-delete
+      - id: dotnet-vbs-file-delete-text
     any:
       - id: micro-behaviors/process/interpreter/powershell/host::sma-namespace
       - id: micro-behaviors/process/interpreter/powershell/host::runspace-factory
   - id: csharp-powershell-vbs-dropper
+    # csharp-vbs-dropper is for: [pe] only.
+    for: [pe]
     desc: .NET PowerShell VBS dropper
     crit: hostile
     conf: 0.95
@@ -453,6 +471,7 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/powershell/host::sma-namespace
       - id: micro-behaviors/process/interpreter/powershell/host::add-script
   - id: dotnet-reactor-aes-process-dropper
+    for: [pe]
     desc: Reactor-protected AES process dropper
     crit: hostile
     conf: 0.98
@@ -475,6 +494,7 @@ composite_rules:
   # unmanaged marshalling is the packed .NET crypter path that resolves
   # Win32 APIs after decrypting staged bytes — independent of WriteAllBytes.
   - id: dotnet-reactor-aes-native-delegate-loader
+    for: [pe]
     desc: Reactor AES native-delegate payload loader
     crit: hostile
     conf: 0.98
@@ -510,6 +530,7 @@ composite_rules:
       - id: micro-behaviors/process/create/launch::create-process-api-name
       - id: micro-behaviors/ui/window/visibility::hide-all-windows-for-process-token
   - id: dotnet-compressed-assemblyresolve-embedded-pe-loader
+    for: [pe]
     desc: .NET compressed encrypted embedded PE stage loader
     crit: hostile
     conf: 0.99
@@ -528,6 +549,7 @@ composite_rules:
   # VB.NET wrappers that carry a second native PE plus temp/process staging
   # strings are classic MSIL crypter/dropper shells (AgentTesla-class).
   - id: vbnet-embedded-native-temp-dropper
+    for: [pe]
     desc: VB.NET assembly embeds a native temp-process dropper
     crit: hostile
     conf: 0.98

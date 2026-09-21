@@ -21,7 +21,46 @@ traits:
     for: [batch, powershell, javascript, typescript, source, scripts]
     if:
       type: text
-      regex: '(?i)(InvokeCommand\s*\.\s*NewScriptBlock|\[scriptblock\]\s*::\s*Create)'
+      # The call-site window (`Create(` plus following punctuation/word) lets
+      # the `not:` below see what is being created. A bare `::Create`
+      # reference with no invocation no longer matches; the trait describes a
+      # dynamic scriptblock *invoke*.
+      regex: '(?i)(InvokeCommand\s*\.\s*NewScriptBlock|\[scriptblock\]\s*::\s*Create\s*\(\W*\w*)'
+    not:
+      # `& ([scriptblock]::Create((irm <url>)))` is the documented installer
+      # bootstrap (every vendor install.ps1 shows it in its usage header):
+      # a plaintext download handed straight to Create, with no decoding
+      # layer. Obfuscated loaders decode first (hex, char-code, FromBase64)
+      # and Create from the decoded buffer or a variable, which still matches.
+      - regex: '(?i)\(\s*\(\s*(irm|iwr|Invoke-RestMethod|Invoke-WebRequest)\b'
+      # `Create('literal')` -- a single-quoted PowerShell string interpolates
+      # nothing, so the scriptblock's source is verbatim in the file and there
+      # is no decoding layer to hide behind. ImportExcel builds property
+      # accessors this way (`[scriptblock]::Create(('$this.workbook...' -f $n))`)
+      # in seven cmdlets. A loader Creates from a variable or a decoded buffer.
+      - regex: "Create\\s*\\(\\s*\\(?\\s*'"
+    unless:
+      # A test that builds a scriptblock is exercising the cmdlet under test,
+      # not staging a loader. Chocolatey's Pester suite does it in four
+      # tests/pester-tests/powershell-commands/*.Tests.ps1 files, and the same
+      # shape shows up in ansible's and cinc-auditor's Windows test suites.
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      # An Ansible module that *is* the PowerShell executor builds a script
+      # block because that is its documented job: ansible.windows'
+      # win_powershell.ps1 and win_updates.ps1, community.windows' win_scoop.ps1.
+      # `ansible-module-source-context` requires the module tree path *and* a
+      # module protocol/metadata block, so a file merely sitting in the tarball
+      # does not qualify. It was already used by the PowerShell cert-callback
+      # rule in evasion/security-bypass/tls; this is its sibling case.
+      - id: well-known/app/infrastructure/ansible::ansible-module-source-context
+      # A Go test that embeds a PowerShell snippet to assert on it is exercising
+      # the code under test: azure-dev's cli/azd/main_test.go in two releases.
+      # `go-test` needs two independent Go-testing markers, so an ordinary file
+      # that merely mentions testing does not qualify.
+      - id: metadata/package/testing/harness/unit::go-test
+      # Apache Maven Wrapper (mvnw.cmd) is a polyglot batch/powershell script
+      # that launches its embedded powershell portion via [Scriptblock]::Create.
+      - id: metadata/package/manager::maven-wrapper-script
 
   - id: ps-source-readlines
     desc: PowerShell reads source lines
@@ -31,16 +70,6 @@ traits:
     if:
       type: text
       regex: '(?i)(ReadAllLines|Read''\s*\+\s*''AllLines)'
-
-  - id: ps-hex-byte-conversion
-    desc: PowerShell hexadecimal byte conversion
-    crit: notable
-    conf: 0.92
-    for: [batch, powershell, javascript, typescript, source, scripts]
-    attack: T1140
-    if:
-      type: text
-      regex: '(?i)(Convert\]\s*::|ToByte\s*\()'
 
   - id: ps-indexed-charcode-assignment
     desc: PowerShell indexed char-code decode assignment
@@ -74,15 +103,18 @@ composite_rules:
     attack: T1140
     all:
       - id: ps-source-readlines
-      - id: ps-hex-byte-conversion
       - id: ps-scriptblock-dynamic-execution
+    any:
+      - id: micro-behaviors/data/decode/hex::powershell-convert-tobyte-radix16
+      - id: micro-behaviors/data/decode/hex::embedded-powershell-convert-tobyte-radix16
+    needs: 1
     near_lines: 2
 
   - id: embedded-batch-powershell-self-decoding-loader
     desc: Embedded batch/PowerShell self-decoding loader
     crit: hostile
     conf: 0.99
-    for: [batch, powershell, javascript, typescript, source, scripts]
+    for: [source, '!objectivec', javascript, lua, perl, php, powershell, python, ruby, vbs]
     attack: T1027,T1059.001,T1059.003
     all:
       - id: micro-behaviors/data/format/script::embedded-batch-script-header

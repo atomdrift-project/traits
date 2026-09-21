@@ -93,7 +93,7 @@ traits:
     exact: "paths.target"
 
 - id: systemd-dropin-path--rx-1
-  desc: 'Matches ''/etc/systemd/(system user)/(service'''
+  desc: Systemd service or timer drop-in directory
   crit: notable
   conf: 0.84
   unless:
@@ -367,7 +367,11 @@ traits:
     path: "service.exec_start"
     regex: "^/(home|root|etc)/"
     not:
-      - regex: "^/etc/(rc|update|kubernetes/)"
+      # `/etc/systemd/` is the unit tree itself and is root-owned: Photon OS
+      # keeps unit helper scripts in /etc/systemd/scripts/, which is where
+      # VMware VIC's appliance units point (`nat-setup`,
+      # `permissions-setup`). Same reading as the `rc`/`update` entries.
+      - regex: "^/etc/(rc|update|kubernetes/|systemd/)"
 
 # The %h/~/$HOME macro forms resolve to the same home-relative location that the
 # absolute /home/<user>/ rule above already treats as unusual. A user unit whose
@@ -389,6 +393,18 @@ traits:
     # ~/.local/bin is the standard per-user executable location used by
     # ordinary user services installed with pipx and similar tools.
     regex: '^(%h|~|\$\{?HOME\}?)/\.local/bin/'
+  # The same argument, for the other two standard per-user install roots. A
+  # *user* unit (systemd --user) can only reference the user's own tree, and
+  # `%h` is the documented specifier for doing so: whisrs ships
+  # `ExecStart=%h/.cargo/bin/whisrsd` in contrib/whisrs.service, and omarchy
+  # `%h/.local/share/omarchy/bin/omarchy-battery-monitor`. Split across two
+  # entries because the alternation cap is three per regex.
+  - type: value
+    path: "service.exec_start"
+    regex: '^(%h|~|\$\{?HOME\}?)/\.cargo/bin/'
+  - type: value
+    path: "service.exec_start"
+    regex: '^(%h|~|\$\{?HOME\}?)/\.local/share/'
 
 - id: exec-stop-userwritable-path
   desc: ExecStop from user writable path
@@ -459,6 +475,7 @@ composite_rules:
   - id: exec-start-unusual-root-path
   - id: exec-start-home-dotdir-path
   unless:
+  - id: metadata/file/policy/config/services::packaged-unit-template-path
   - id: micro-behaviors/os/service/unit-field::exec-start-expected-core
   not:
   - regex: "^/(bin|sbin|usr/bin|usr/sbin)/"
@@ -575,6 +592,7 @@ composite_rules:
   - id: metadata/file/catalog/service::cloud-init-embedded-systemd-bootstrap-unit
 
 - id: systemd-user-persistence
+  for: [shell, python, rust, c, go, objectivec]
   desc: Configures a user-level systemd service
   crit: notable
   conf: 0.9
@@ -609,11 +627,12 @@ composite_rules:
   desc: Hidden user service persists with account lingering and automatic respawn
   crit: hostile
   conf: 0.97
+  for: [shell, python, go, rust, objc, c, cpp]
   all:
   - id: systemd-user-persistence
   - id: micro-behaviors/os/service/configure::loginctl-enable-linger
   - id: exec-start-hidden-executable
-  - id: micro-behaviors/os/service/restart-policy::restart-always
+  - id: micro-behaviors/os/service/restart-policy::restart-always-text
 
 # A system-level systemd unit whose ExecStart is a hidden dotfile binary, wired
 # into boot with enable/WantedBy. No legitimate daemon normally needs a hidden
@@ -624,7 +643,7 @@ composite_rules:
   crit: hostile
   conf: 0.96
   attack: T1543.002,T1036.004
-  for: [shell, python, elf, go, rust, objc, c, cpp]
+  for: [shell, python, rust, c, go, objectivec]
   all:
   - id: exec-start-hidden-executable
   any:
@@ -774,7 +793,7 @@ composite_rules:
   desc: Hidden temp payload systemd persistence
   crit: hostile
   conf: 0.98
-  for: [elf, shell, python]
+  for: [elf, shell]
   all:
   - id: systemd-worker-service-path
   - id: micro-behaviors/os/service/control::systemctl-word
@@ -906,6 +925,7 @@ composite_rules:
   # masquerading evidence, so suppress this less specific duplicate.
   - id: objectives/command-and-control/botnet/iot::native-iot-persistence-masquerade
   - id: objectives/evasion/masquerade/process/name::flood-bot-daemon-masquerade
+  - id: objectives/persistence/system/init/boot::multi-method-elf-persistence-templates
 
 - id: native-persistent-wss-pty-ai-agent
   desc: Systemd autostart for native WSS AI CLI remote agent
@@ -917,3 +937,14 @@ composite_rules:
   all:
   - id: native-unit-authoring
   - id: micro-behaviors/process/create/ai-cli-agent::native-wss-pty-ai-cli-agent
+
+- id: shell-user-systemd-remote-loader
+  desc: User systemd unit launches a remote curl loader
+  crit: hostile
+  conf: 0.99
+  for: [shell]
+  all:
+  - id: systemd-user-persistence
+  - id: micro-behaviors/os/service/config::systemd-http-client-command-text
+  - id: objectives/persistence/system/service/systemd::source-systemd-curl-exec
+  - id: micro-behaviors/os/service/unit-field::exec-start-text

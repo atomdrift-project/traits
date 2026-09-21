@@ -2,7 +2,7 @@
 # a nested quantifier of exactly the shape the loader's own qual/re-nested rule
 # rejects. They are bounded now, matching the working ecdsa sibling.
 defaults:
-  for: [scripts, binaries, markdown, python]
+  for: [scripts, binaries, markdown, python, swift]
   platforms: [unix]
 
 traits:
@@ -23,12 +23,15 @@ traits:
       type: text
       regex: 'ssh-rsa\s+AAAA[A-Za-z0-9+/]{40,}'
   - id: ed25519-public-key-literal
-    desc: SSH Ed25519 public key literal
+    desc: Structurally complete SSH Ed25519 public key
     crit: notable
     conf: 0.9
     if:
       type: text
-      regex: 'ssh-ed25519\s+AAAA[A-Za-z0-9+/]{40,}'
+      # RFC 8709: algorithm string plus a 32-byte key (51 wire bytes).
+      # The next base64 character's high two bits finish the length field.
+      # This checks framing, not curve membership or ownership of a private key.
+      regex: 'ssh-ed25519\s+AAAAC3NzaC1lZDI1NTE5AAAAI[A-P][A-Za-z0-9+/]{42}([^A-Za-z0-9+/=]|$)'
   - id: sk-ed25519-public-key-literal
     desc: FIDO2 SSH Ed25519 public key literal
     crit: notable
@@ -72,9 +75,17 @@ traits:
       regex: '["'']ssh-rsa["''][^\r\n]{0,160}(self\.)?(exp_bytes|exponent)'
 
 composite_rules:
+  # Notable, not suspicious -- following the rule's own argument below to its
+  # conclusion: a *public* key is not a secret, so its presence is a pinned
+  # identity, and pinning is ordinary. Ansible's modules/user.py carries one in
+  # its DOCUMENTATION examples, deploy scripts pin host keys, and fixtures ship
+  # known_hosts. That it needed a `not:` regex naming one specific mock key and
+  # three separate downgrade conditions is the tell. All ten consumers are
+  # authorized-keys backdoor composites that pair this with an actual write to
+  # authorized_keys, so every real detection is unaffected.
   - id: hardcoded-public-key
     desc: Hardcoded SSH public key
-    crit: suspicious
+    crit: notable
     conf: 0.9
     any:
       - id: rsa-public-key-literal
@@ -88,6 +99,12 @@ composite_rules:
         - id: metadata/package/testing/
         - type: basename
           regex: '^(authorized_keys|known_hosts|[^/]+\.pub)$'
+        # A key printed in prose is an example, and a *public* key is not a
+        # secret in the first place -- the finding is about a pinned identity.
+        # Cargo's reference manual (rustc's vendored
+        # src/tools/cargo/src/doc/src/reference/config.md) shows one.
+        - type: basename
+          regex: '(?i)\.(md|markdown|rst|adoc)$'
     unless:
       - id: well-known/app/system/kiwi::kiwi-appliance-builder-package
       - id: well-known/app/system/kiwi::kiwi-build-helper-context

@@ -32,6 +32,18 @@ traits:
       type: value
       path: scripts.preinstall
       exists: true
+  - id: has-install-script
+    desc: Manifest declares npm install lifecycle hook
+    crit: notable
+    conf: 1.0
+    unless:
+    - id: metadata/package/files/dependency::node-modules-path
+    - id: well-known/lib/format/xmljs::libxmljs-native-addon-context
+    - id: metadata/package/scripts/lifecycle::npm-install-native-addon-build
+    if:
+      type: value
+      path: scripts.install
+      exists: true
   - id: preinstall-no-op-echo
     desc: Preinstall script only echoes a no-op marker
     crit: notable
@@ -51,8 +63,8 @@ traits:
       type: value
       path: scripts.preinstall
       regex: '^\s*$|^\s*(echo|true|:)\s+[^;&|]{0,200}\s*$'
-    not:
-    - regex: '\$\(|`'
+      not:
+      - regex: '\$\(|`'
   - id: npm-inert-postinstall-script
     desc: Inert postinstall echo/no-op command
     crit: notable
@@ -61,8 +73,8 @@ traits:
       type: value
       path: scripts.postinstall
       regex: '^\s*(echo|true|:)\s+[^;&|]{0,200}\s*$'
-    not:
-    - regex: '\$\(|`'
+      not:
+      - regex: '\$\(|`'
   - id: raw-preinstall-key
     desc: Raw package metadata has preinstall script key
     crit: notable
@@ -103,8 +115,8 @@ traits:
       type: value
       path: scripts.postinstall
       regex: '(^|&&)\s*npm install --prefix[= ][A-Za-z0-9_.\/-]+\s*(&&|$)'
-    not:
-    - regex: '\$\(|`'
+      not:
+      - regex: '\$\(|`'
   - id: postinstall-protobuf-codegen-download
     desc: Postinstall runs protoc-gen-js downloader
     crit: baseline
@@ -314,6 +326,22 @@ traits:
       type: value
       path: scripts.install
       regex: '^\s*(bower|composer|yarn|pnpm)\s+install\s*$'
+  - id: preinstall-addon-builder-bootstrap
+    # A preinstall hook whose entire body is `npm install node-pre-gyp`
+    # (or node-gyp) only ensures the native-addon build tool is present
+    # before the install script runs -- the documented native-module idiom
+    # (@newrelic/native-metrics declares node-pre-gyp and runs
+    # `node-pre-gyp install --fallback-to-build` at install time). The
+    # exact tool name resolves from the registry, so no undeclared payload
+    # enters here; anything chained onto the hook still matches the
+    # install-hook atoms below, which reference this only from unless:.
+    desc: Preinstall bootstraps native build tool
+    crit: notable
+    conf: 0.96
+    if:
+      type: value
+      path: scripts.preinstall
+      regex: '^\s*npm\s+(install|i)\s+(node-pre-gyp|node-gyp)\s*$'
   - id: preinstall-node-runtime-check
     desc: preinstall checks JavaScript runtime
     conf: 0.9
@@ -364,11 +392,13 @@ traits:
 
 composite_rules:
   - id: install-hooks
+    crit: component
+    for: [package.json, npm, tar, zip, whl, python-sdist]
     desc: Package has install hooks
     any:
       - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
       - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-install
+      - id: has-install-script
   - id: composer-lifecycle-hook
     desc: Composer declares an install-time lifecycle hook
     crit: notable
@@ -406,7 +436,7 @@ composite_rules:
     - id: npm-inert-preinstall-script
     - id: npm-inert-postinstall-script
     unless:
-    - id: objectives/supply-chain/install-hook/scripts/declaration::has-install
+    - id: has-install-script
   - id: npm-preinstall-curl-exfil
     desc: Malicious preinstall script with curl data exfiltration
     crit: suspicious
@@ -424,7 +454,7 @@ composite_rules:
     - id: metadata/package/scripts/lifecycle::preinstall-hostname-whoami-pwd
     any:
     - id: metadata/package/scripts/lifecycle::preinstall-oast-endpoint
-    - id: metadata/package/scripts/lifecycle::preinstall-hex-subdomain-exfil
+    - id: metadata/package/scripts/lifecycle::preinstall-curl-dynamic-subdomain
   - id: postinstall-haxelib-server-assets
     desc: Haxelib server static web asset postinstall
     crit: baseline
@@ -440,14 +470,6 @@ composite_rules:
     - id: postinstall-local-server-path-var
     - id: postinstall-checks-local-path
     - id: postinstall-npm-install-tsc
-  - id: preinstall-hex-subdomain-exfil
-    desc: Preinstall exfil via hex subdomain curl
-    crit: suspicious
-    conf: 0.98
-    all:
-    - id: metadata/package/scripts/lifecycle::preinstall-http-url
-    - id: metadata/package/scripts/lifecycle::preinstall-curl-dynamic-subdomain
-    - id: metadata/package/scripts/lifecycle::preinstall-xxd-hex-encode
   - id: preinstall-hostname-whoami
     desc: preinstall script reads hostname and whoami
     crit: suspicious
@@ -484,7 +506,7 @@ composite_rules:
     crit: suspicious
     conf: 0.99
     all:
-    - id: metadata/package/scripts/lifecycle::preinstall-hex-subdomain-exfil
+    - id: metadata/package/scripts/lifecycle::preinstall-curl-dynamic-subdomain
     - id: metadata/package/scripts/lifecycle::preinstall-path-segment-labels
     - id: metadata/package/scripts/lifecycle::preinstall-hex-label-join
     - id: metadata/package/scripts/lifecycle::preinstall-dot-trimmed-labels

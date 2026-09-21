@@ -142,13 +142,21 @@ traits:
     type: text
     word: mwti
 - id: localhost-redirect-pattern
+  # `bulk` is the claim this feeds, so make the count real: a CI script
+  # adding one or two test hostnames to /etc/hosts is not a block list.
+  # Apache APISIX's ci/common.sh appends test.com and admin.apisix.dev so
+  # its own suite can resolve them. Both legs feed only bulk-domain-blocking.
+  # The TLD alternation became a character class so `count_min` counts distinct
+  # lines rather than repeats of one alternative (qual/count-re-alt); a block
+  # list is not limited to .com/.net/.org anyway.
+  count_min: 5
   desc: Localhost IP with domain redirect pattern
   crit: notable
   conf: 0.85
   size_min: 1200
   if:
     type: text
-    regex: 127\.0\.0\.1\s+\S+\.(com|net|org)
+    regex: 127\.0\.0\.1\s+\S+\.[a-z]{2,6}\b
   not:
   - substr: sample HOSTS file used by Microsoft TCP/IP for Windows.
   - substr: '#-iris-'
@@ -172,13 +180,21 @@ traits:
     type: text
     regex: '(?i)127\.0\.0\.1\s+(www\.)?(kaspersky|avast|avg|eset)\.(com|net|org)\b'
 - id: null-redirect-pattern
+  # `bulk` is the claim this feeds, so make the count real: a CI script
+  # adding one or two test hostnames to /etc/hosts is not a block list.
+  # Apache APISIX's ci/common.sh appends test.com and admin.apisix.dev so
+  # its own suite can resolve them. Both legs feed only bulk-domain-blocking.
+  # The TLD alternation became a character class so `count_min` counts distinct
+  # lines rather than repeats of one alternative (qual/count-re-alt); a block
+  # list is not limited to .com/.net/.org anyway.
+  count_min: 5
   desc: Null IP redirect pattern (0.0.0.0)
   crit: notable
   conf: 0.85
   size_min: 1200
   if:
     type: text
-    regex: 0\.0\.0\.0\s+\S+\.(com|net|org)
+    regex: 0\.0\.0\.0\s+\S+\.[a-z]{2,6}\b
   not:
   - substr: sample HOSTS file used by Microsoft TCP/IP for Windows.
   - substr: '#-iris-'
@@ -507,7 +523,7 @@ composite_rules:
   crit: hostile
   conf: 0.97
   platforms: [windows]
-  for: [pe]
+  for: [csharp]
   all:
   - id: windows-hosts-overwrite-download
   - id: objectives/evasion/masquerade/identity/mimicry::windows-live-messenger-masquerade
@@ -592,7 +608,7 @@ composite_rules:
   crit: hostile
   conf: 0.96
   platforms: [openwrt]
-  for: [java, class]
+  for: [class]
   all:
     - id: micro-behaviors/fs/path/config/system::config-hosts-bytecode
     - id: micro-behaviors/fs/path/config/system::hidden-hosts-backup-bytecode
@@ -629,6 +645,13 @@ composite_rules:
   any:
   - id: micro-behaviors/fs/write/file/redirect::batch-append-redirect
   - id: micro-behaviors/fs/path/config/system::hosts-file-modification-api-set
+# `count_min` so the rule means what its name says. Both legs are *notable*
+# single-line matchers -- `127\.0\.0\.1\s+\S+\.(com|net|org)` matches one
+# hosts entry -- and a bare `any:` over them was reported as "bulk" blocking at
+# suspicious. Apache APISIX's ci/common.sh appends three test hostnames
+# (test.com, admin.apisix.dev) so its CI can resolve them; that is one line at
+# a time, not a block list. The consuming composites still pair this with
+# `security-domain`, which is where the sinkhole claim lives.
 - id: bulk-domain-blocking
   desc: Bulk domain blocking via hosts file
   crit: suspicious
@@ -640,7 +663,17 @@ composite_rules:
   # agent-glovebox is a defensive agent sandbox; its evals, risk tests and docs quote the operations it grades.
   - id: well-known/tool/detection/agent-glovebox::archive-context
   - id: well-known/tool/detection/sigmashake::sigmashake-hosts-policy-example-context
+  # Blocking domains in bulk by null-routing them IS a content blocker's
+  # function, and hosts-file syntax (`0.0.0.0 example.com`) is one of the
+  # formats their filter lists ship in. uBlock Origin's CRX matched on its own
+  # bundled lists.
+  - id: well-known/app/browser-extension/content-blocker::adblock-extension-bundle
 - id: windows-hosts-overwrite-download
+  # hosts-file-path (micro-behaviors/fs/path/config/system) is scoped to
+  # [scripts, binaries] and structurally cannot fire on CSharp source, so it
+  # was a dead required leg that made this composite unreachable (ft-impossible).
+  # windows-hosts-webrequest-create + windows-hosts-filestream-create already
+  # pin this to the exact this.dirho/this.verurl() download-and-write flow.
   desc: Remote download overwrites hosts
   crit: hostile
   conf: 0.98
@@ -649,10 +682,15 @@ composite_rules:
   for:
   - csharp
   all:
-  - id: micro-behaviors/fs/path/config/system::hosts-file-path
   - id: windows-hosts-webrequest-create
   - id: windows-hosts-filestream-create
 - id: windows-hosts-timer-refresh
+  # windows-hosts-file (micro-behaviors/fs/path/config/system) is scoped to
+  # [scripts, binaries] and structurally cannot fire on CSharp source, so it
+  # was a dead required leg (ft-impossible). Dropping it also drops the
+  # generic hidden-hosts-refresh-counter alternative from `any:`, since a bare
+  # winforms timer counter is not hosts-specific on its own; hidden-hosts-
+  # refresh-call already names the "downhost" method, keeping this precise.
   desc: Timer refreshes downloaded hosts
   crit: suspicious
   conf: 0.95
@@ -662,9 +700,6 @@ composite_rules:
   - csharp
   all:
   - id: metadata/lang/compiler/source::winforms-timer-source
-  - id: micro-behaviors/fs/path/config/system::windows-hosts-file
-  any:
-  - id: hidden-hosts-refresh-counter
   - id: hidden-hosts-refresh-call
 - id: escan-security-domain
   desc: eScan security update domain

@@ -18,11 +18,19 @@ traits:
       type: text
       regex: \\\\\\\\[a-zA-Z0-9\-\.]+\\
     conf: 0.85
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
+  # `DavWWWRoot` is the literal WebDAV UNC root a document reaches a remote
+  # share through -- an actual path, as the name says. The `webdav`
+  # alternative was just the word, so any document that mentions the protocol
+  # matched: Darling ships Library/Documentation/Acknowledgements.rtf, which
+  # credits a WebDAV component, and scored suspicious for it.
   - id: webdav-path
     desc: WebDAV path detected
     if:
       type: text
-      regex: '[Dd]av[Ww]{2}[Ww]root|webdav'
+      substr: DavWWWRoot
+      case_insensitive: true
     conf: 0.9
   - id: unc-path-utf16-server
     desc: UTF-16LE server reference
@@ -88,12 +96,20 @@ traits:
     conf: 0.9
     crit: suspicious
     attack: T1204
+# A URL scheme name is a clear fact about a document but not, by itself, a
+  # boundary crossing: `file://` is how documentation links a local file, and
+  # Free Pascal's install/darwin/macos/welcome.rtf, Little CMS's API manual
+  # inside ghostpdl, and LibreOffice's RTF fixtures all scored suspicious for
+  # carrying one. The verdict belongs to the two hostile composites below,
+  # which pair the scheme with a WebDAV host or with an OLE HTML body in an
+  # RTF that is not a document.
   - id: file-handler-protocol-file
     desc: 'File handler protocol detector: file://'
     if:
       type: text
       substr: file://
     conf: 0.85
+    crit: notable
     attack: T1204
   - id: file-handler-protocol-mhtml
     desc: 'File handler protocol detector: mhtml:'
@@ -101,6 +117,7 @@ traits:
       type: text
       substr: 'mhtml:'
     conf: 0.85
+    crit: notable
     attack: T1204
   - id: file-handler-protocol-mk
     desc: 'File handler protocol detector: mk:'
@@ -108,6 +125,7 @@ traits:
       type: text
       substr: 'mk:'
     conf: 0.85
+    crit: notable
     attack: T1204
   - id: file-handler-protocol-about
     desc: 'File handler protocol detector: about:'
@@ -115,6 +133,7 @@ traits:
       type: text
       substr: 'about:'
     conf: 0.85
+    crit: notable
     attack: T1204
   - id: file-handler-protocol-data
     desc: 'File handler protocol detector: data:'
@@ -122,6 +141,7 @@ traits:
       type: text
       substr: 'data:'
     conf: 0.85
+    crit: notable
     attack: T1204
   - id: ooxml-embedded-rtf-delivery
     desc: Word OOXML embeds RTF payload member
@@ -145,6 +165,8 @@ traits:
       type: value
       path: "archive.members[*].path"
       regex: '^word/embeddings/[^/]{1,120}\.xlsm$'
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
   - id: ooxml-afchunk-docx-delivery
     desc: Word OOXML embeds altChunk document
     crit: suspicious
@@ -156,6 +178,8 @@ traits:
       type: value
       path: "archive.members[*].path"
       regex: '^word/afchunk[0-9]+\.docx$'
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
 composite_rules:
   - id: c2-domain-indicator
     desc: C2 domain reference (freefoodaid family)
@@ -174,17 +198,10 @@ composite_rules:
     any:
       - id: unc-path-utf16-ssl-400053534C
       - id: unc-path-utf16-ssl-400053005300004C
-  - id: file-handler-protocol
-    desc: File handler protocol
-    crit: suspicious
-    conf: 0.85
-    attack: T1204
-    any:
-      - id: file-handler-protocol-file
-      - id: file-handler-protocol-mhtml
-      - id: file-handler-protocol-mk
-      - id: file-handler-protocol-about
-      - id: file-handler-protocol-data
+  # `file-handler-protocol` removed: a bare `any:` over the five scheme atoms
+  # with no all:/unless:/needs: and the same for:/platforms:, so it fired
+  # exactly where its legs did and restated them one tier higher. Nothing
+  # referenced it.
   - id: ooxml-rtf-lure-delivery
     desc: Word OOXML RTF payload with lure surface
     crit: suspicious
@@ -227,3 +244,68 @@ composite_rules:
     all:
       - id: ooxml-afchunk-docx-delivery
       - id: metadata/document/office/markup::ooxml-large-archive-member
+
+  # A document that reaches a WebDAV share when it is opened.
+  #
+  # `file://` to a host that speaks WebDAV is how a document gets a remote file
+  # onto a Windows machine without a download: the redirector mounts it, the
+  # credentials go out to authenticate, and whatever is at the far end arrives
+  # as if it were local. The obfuscated control words say the author did not
+  # want the path read by anything parsing the document ahead of Word.
+  #
+  # This is the delivery half of the remote-template and forced-authentication
+  # families, and it does not depend on any particular CVE -- which is the
+  # point, since the same document shape has outlived several of them.
+  - id: rtf-webdav-file-handler-delivery
+    desc: RTF resolves a file URL to a WebDAV host
+    crit: hostile
+    conf: 0.95
+    attack: T1187,T1221
+    platforms: [windows]
+    all:
+      - id: webdav-path
+      - id: file-handler-protocol-file
+      - id: objectives/anti-static/obfuscation/document/rtf::rtf-control-word-obfuscation
+
+  # Not a document, and not pretending to be one for long: the RTF body is
+  # sparse and high-entropy, what it actually carries is an HTML/OLE body, and
+  # it names both the `file:` and `data:` handlers. `data:` inlines the content
+  # so nothing is fetched, `file:` reaches the local machine, and the RTF
+  # wrapper exists only to pick which application opens the result.
+  - id: rtf-wrapper-over-html-handler-payload
+    desc: RTF wrapper carries an HTML handler payload
+    crit: hostile
+    conf: 0.95
+    attack: T1204.002,T1027
+    platforms: [windows]
+    all:
+      - id: objectives/anti-static/obfuscation/document/rtf::rtf-body-is-not-a-document
+      - id: file-handler-protocol-file
+      - id: file-handler-protocol-data
+      - id: metadata/document/ole::ole-html-body
+
+  # A document whose embedded object is a command line.
+  #
+  # An OLE object is supposed to be content -- a chart, an equation, a picture
+  # -- handed to the application that owns its class. This one is a shell
+  # command that fetches an executable with a signed Microsoft binary and runs
+  # it from the temp directory. The two facts cannot both be innocent: whatever
+  # the document claims to embed, what it actually embeds is a download.
+  #
+  # Written against the embedded-object feature rather than any particular
+  # trigger because the trigger varies -- objupdate in one build, a click in
+  # the next -- while what is embedded does not.
+  - id: document-embedded-lolbin-download-object
+    desc: Document embeds a LOLBin download command
+    crit: hostile
+    conf: 0.96
+    attack: T1218,T1204.002
+    platforms: [windows]
+    all:
+      - id: metadata/document/rtf/ole::embedded-object-feature
+    needs: 1
+    any:
+      - id: objectives/command-and-control/dropper/execution/batch::certutil-urlcache
+      - id: objectives/command-and-control/dropper/execution/batch::certutil-urlcache-split-force
+      - id: objectives/command-and-control/dropper/execution/batch::bitsadmin-download
+

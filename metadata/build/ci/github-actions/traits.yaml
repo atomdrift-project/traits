@@ -4,6 +4,24 @@ defaults:
     - javascript
     - typescript
 traits:
+  # The workflow file itself. A GitHub Actions workflow runs on an ephemeral,
+  # GitHub-hosted runner and is public in the repository, so build tuning that
+  # would be alarming on a real host is routine there -- turning off Defender
+  # real-time scanning is a standard trick to stop it crawling every file a
+  # Windows test job touches. Elixir's expert-lsp nightly does exactly that in
+  # .github/workflows/ci.yaml and scored three suspicious findings for it.
+  - id: workflow-definition-path
+    desc: GitHub Actions workflow definition path
+    crit: notable
+    conf: 0.99
+    # cleave extracts each workflow step's `run:` script as its own node,
+    # typed by the shell it declares (powershell/batch/shell), so those types
+    # have to be listed or the context never reaches the node the rules
+    # actually match on. The node keeps the workflow in its !!-joined path.
+    for: [github-actions, powershell, batch, shell]
+    if:
+      type: path
+      substr: .github/workflows/
   - id: action-output-env-file
     desc: GitHub Actions output file environment access
     crit: notable
@@ -56,6 +74,38 @@ traits:
     if:
       type: basename
       exact: types.d.ts
+  # A composite action that lives under `.github/actions/` is a repository's
+  # own helper, usable only as `uses: ./.github/actions/<name>` from inside
+  # that repo. A *published* action -- the thing a supply-chain rule cares
+  # about, referenced as `uses: owner/repo@ref` -- must carry its manifest at
+  # the repository root instead.
+  #
+  # The distinction matters because `scope: archive` rules pool their legs
+  # across unrelated members: k3s's source tarball has a composite action in
+  # `.github/actions/setup-go/` and the famous `curl -sfL https://get.k3s.io |
+  # sh -` in `install.sh`, two files with nothing to do with each other, and
+  # that pair scored hostile for "action pipes a downloaded stage into a
+  # shell". cargo-binstall's tarball has the same shape. Bounding the carrier
+  # by size did not help: both archives are well under a megabyte.
+  - id: repo-internal-composite-action-path
+    desc: Composite action is a repo-internal helper
+    crit: notable
+    conf: 0.95
+    for: [tar, zip]
+    if:
+      type: value
+      path: "archive.members[*].path"
+      # Any `actions/<name>/action.yml`, not just `.github/actions/`. A
+      # PUBLISHED action puts its action.yml at the repository root, so an
+      # action.yml nested under an `actions/` collection is repo-internal
+      # tooling by construction. Azure SDK repos keep theirs in
+      # `eng/common/actions/`, which the `.github`-anchored form missed --
+      # azure-dev-cli 1.25.4 scored hostile for "action pipes a downloaded
+      # stage into a shell" on its login-to-github action plus an unrelated
+      # `curl | sh` elsewhere in the tree. Third repo to hit this rule the
+      # same way, after rustc and k3s/cargo-binstall.
+      regex: '/actions/[^/]+/action\.ya?ml$'
+
 composite_rules:
   - id: action-bundle-context
     desc: GitHub Action bundled JavaScript context
