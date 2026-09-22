@@ -49,6 +49,24 @@ traits:
     if:
       type: text
       regex: ([a-z0-9]{8,64}\.)?oast\.(online|site)\b
+  - id: interact-sh-domain
+    desc: interact.sh OOB service domain
+    # The default domain of ProjectDiscovery Interactsh community and
+    # self-hosted servers. Per-session labels hang under *.interact.sh, so
+    # require at least one label: a bare mention is usually documentation.
+    # The Go module path (github.com/projectdiscovery/interactsh) has no
+    # dotted suffix and does not match.
+    if:
+      type: text
+      regex: ([a-z0-9-]{1,63}\.)+interact\.sh\b
+  - id: oast-label-host
+    desc: OAST collaborator DNS label
+    crit: notable
+    conf: 0.9
+    for: [python, scripts, source, text]
+    if:
+      type: text
+      regex: '\boast\.[a-z0-9-]+(\.[a-z]{2,24})+\b'
   - id: interactsh-com
     desc: interactsh.com OOB service
     if:
@@ -262,6 +280,13 @@ traits:
     if:
       type: text
       regex: ([a-z0-9]+\.)?collaborator\.zivyelab\.com\b
+  - id: python-inbound-method-post-check
+    desc: Checks inbound request method for POST
+    crit: component
+    for: [python]
+    if:
+      type: text
+      regex: 'request\.method\s+in\s*\[[^\]]{0,60}["'']POST["'']'
 composite_rules:
   - id: npm-postinstall-stdin-oob-exfil
     desc: npm postinstall pipes command output to an ngrok tunnel
@@ -300,6 +325,7 @@ composite_rules:
       - id: collab-digi-ninja
       - id: interactsh-com
       - id: interact-sh
+      - id: interact-sh-domain
       - id: pipedream
       - id: pipedream-npm-script
       - id: web-content-oob-service-reference
@@ -318,11 +344,34 @@ composite_rules:
       - id: unicode-escaped-canarytokens-com
       - id: beez-buzz
       - id: oastify
+      - id: oast-label-host
       - id: own-sh
       - id: bypass-eu-org
       - id: dnshook-site
       - id: micro-behaviors/communications/dns/oob::eyes-sh-callback-domain
       - id: zivyelab-collaborator
+      - id: xss-report-callback
+
+  # /c/<account> on xss.report serves a blind-XSS collector that records the
+  # browser environment and accessible cookies. Requiring the concrete
+  # collector route keeps ordinary pages that load a Pipedream/webhook URL, or
+  # legitimate vendor SDKs, out of this hostile rule.
+  - id: js-remote-script-oob-loader
+    desc: Loads xss.report browser collector script
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1048
+    mbc: E1041
+    for: [javascript, typescript]
+    near_bytes: 512
+    all:
+      - id: micro-behaviors/ui/window/insert-html::browser-create-script-element
+      - id: micro-behaviors/communications/http/client/resource::js-remote-src-assignment
+      - id: micro-behaviors/ui/window/dom/tree::browser-append-child
+      - id: xss-report-callback
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/
 
   # Single-file install/recon beacon: fetch() to a known OOB collaborator host
   # with errors deliberately swallowed so install never fails visibly.
@@ -393,6 +442,8 @@ composite_rules:
       - id: metadata/package/testing/harness/benchmark::python-benchmark-fixture-harness
       - id: well-known/tool/detection/security-scanner/
       - id: well-known/tool/detection/llm-scanner/
+      # Quoted POST here is an inbound method allowlist, not a client send.
+      - id: python-inbound-method-post-check
   - id: js-local-route-oob-post
     desc: Local application route content posted to OOB callback
     crit: hostile

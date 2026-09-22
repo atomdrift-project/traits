@@ -112,7 +112,26 @@ traits:
     if:
       type: text
       regex: 'github\.com/\S{1,80}/releases/download/\S{1,120}\s*\|\s*(ba)?sh\b'
+  - id: pyproject-downloader-url-table
+    desc: Project table lists downloader URLs
+    crit: suspicious
+    conf: 0.9
+    for: [pyproject.toml]
+    if:
+      type: text
+      substr: "[tool.downloader]"
 composite_rules:
+  - id: python-runs-decoded-builtin-fetch
+    desc: Executes a fetch through a decoded builtin
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1059.006
+    scope: file
+    all:
+      - id: micro-behaviors/communications/url/encoded::python-b64decode-https-url
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
+      - id: micro-behaviors/process/interpreter/python::python-getattr-builtins
+      - id: micro-behaviors/data/decode/symbol-base64::b64decode-call
   - id: python-urllib-alias-download-execute
     desc: Python urllib alias downloads and runs code
     crit: hostile
@@ -205,6 +224,86 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/subprocess::run-content
       - id: micro-behaviors/process/create/subprocess::call
+      - id: micro-behaviors/process/create/subprocess::popen-content
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: python-download-temp-exe-popen
+    desc: Downloads temp EXE then Popen
+    crit: hostile
+    conf: 0.96
+    attack: "T1105,T1059.006"
+    near_lines: 30
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
+    any:
+      - id: micro-behaviors/process/create/subprocess::popen-content
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: python-aliased-hidden-ps-download
+    desc: Hidden PowerShell download via Popen
+    crit: hostile
+    conf: 0.96
+    attack: "T1105,T1059.001,T1564.003"
+    all:
+      - id: micro-behaviors/data/source/import::alias-subprocess
+      - id: micro-behaviors/process/create/hidden::python-powershell-w-hidden
+      - id: micro-behaviors/communications/http/download/webclient::webclient-downloadfile-call
+  - id: python-hidden-ps-zip-stage
+    desc: Hidden PowerShell zip-extracts then runs
+    crit: hostile
+    conf: 0.96
+    attack: "T1105,T1059.001,T1564.003"
+    all:
+      - id: micro-behaviors/process/create/hidden::python-powershell-w-hidden
+      - id: micro-behaviors/data/archive/extract/zip::extract-to-directory
+      - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
+  - id: python-hidden-ps-webclient-extract
+    desc: Hidden PowerShell downloads and extracts
+    crit: hostile
+    conf: 0.95
+    attack: "T1105,T1059.001"
+    all:
+      - id: micro-behaviors/process/create/hidden::python-powershell-w-hidden
+      - id: micro-behaviors/communications/http/download/webclient::webclient-downloadfile-call
+      - id: micro-behaviors/data/archive/extract/zip::extract-to-directory
+  - id: python-http-write-temp-exe
+    desc: HTTP GET writes an EXE under temp
+    crit: hostile
+    conf: 0.96
+    near_lines: 20
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/fs/file/open::binary-write-mode
+      - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
+  - id: python-temp-exe-popen-shell
+    desc: Popen shell-runs a temp-dir EXE
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.006,T1105"
+    near_lines: 20
+    all:
+      - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
+      - id: micro-behaviors/process/create/shell-subprocess::popen-shell-true
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+  - id: python-urlretrieve-temp-exe-popen
+    desc: urlretrieve drops a temp EXE then Popen
+    crit: hostile
+    conf: 0.96
+    attack: "T1105,T1059.006"
+    near_lines: 20
+    all:
+      - id: micro-behaviors/communications/http/lib/urllib::python-urlretrieve-qualified
+      - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
+      - id: micro-behaviors/process/create/shell-subprocess::popen-shell-true
+  - id: python-daemon-urlretrieve-temp-exe
+    desc: Daemon thread urlretrieves a temp EXE
+    crit: hostile
+    conf: 0.95
+    attack: "T1105,T1055"
+    near_lines: 25
+    all:
+      - id: micro-behaviors/process/create/thread::python-daemon-thread
+      - id: micro-behaviors/communications/http/lib/urllib::python-urlretrieve-qualified
+      - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
   - id: python-github-exe-download-exec
     desc: Python downloads GitHub EXE and runs it
     crit: hostile
@@ -309,6 +408,16 @@ composite_rules:
       - id: powershell-long-encoded-variable
       - id: micro-behaviors/process/create/shell/lang::powershell-command-fstring
       - id: micro-behaviors/process/daemonize/spawn::powershell-hidden
+  - id: python-argv-hidden-encoded-powershell
+    desc: Argv launches hidden encoded PowerShell
+    crit: hostile
+    conf: 0.97
+    attack: T1059.001,T1564.003
+    near_lines: 15
+    all:
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/process/create/hidden::argv-array-windowstyle-hidden
+      - id: encoded-powershell-iex
     any:
       - id: micro-behaviors/process/create/system::python-os-system
       - id: micro-behaviors/process/create/subprocess::process-execution
@@ -443,3 +552,161 @@ composite_rules:
       # Join the URL and shell pipe in one command. Large bundled runtimes can
       # independently contain their own installer and release URL resources.
       - id: github-release-url-pipe-shell
+
+  - id: python-urlretrieve-chmod-run
+    desc: urlretrieve then chmod and run
+    crit: hostile
+    conf: 0.96
+    attack: T1105,T1059.006
+    scope: file
+    near_lines: 40
+    all:
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlretrieve-dup
+      - id: micro-behaviors/fs/chmod/executable/mode::python-executable
+    any:
+      - id: micro-behaviors/process/create/subprocess::run-ast
+      - id: micro-behaviors/process/create/subprocess::run-content
+    needs: 1
+    unless:
+      - id: micro-behaviors/os/package-manager/installer-script::devtunnel-cli-installer
+
+  - id: python-urlretrieve-pip-installs
+    desc: urlretrieve then pip-installs the file
+    crit: hostile
+    conf: 0.96
+    attack: T1105,T1195.002
+    scope: file
+    near_lines: 30
+    all:
+      - id: micro-behaviors/communications/http/lib/urllib::python-urlretrieve-qualified
+      - id: micro-behaviors/os/package-manager/install::python-runtime-pip-install
+
+  - id: setup-install-urlretrieve-exec
+    desc: Install hook downloads and runs a file
+    crit: hostile
+    conf: 0.96
+    attack: T1195.002,T1105
+    scope: file
+    near_lines: 120
+    all:
+      - id: metadata/build/package/recipe::setuptools-run-override
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlretrieve-dup
+    any:
+      - id: micro-behaviors/process/create/subprocess::run-ast
+      - id: micro-behaviors/process/create/subprocess::run-content
+    needs: 1
+
+  - id: pyproject-url-table-setup-exec
+    desc: Setup runs URLs from the project table
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1105
+    scope: archive
+    for: [python, pyproject.toml, python-sdist, whl]
+    all:
+      - id: pyproject-downloader-url-table
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlretrieve-dup
+    any:
+      - id: micro-behaviors/process/create/subprocess::run-ast
+      - id: micro-behaviors/process/create/subprocess::run-content
+    needs: 1
+
+  - id: python-get-write-pythonw
+    desc: Writes fetched text and launches pythonw
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1059.006
+    scope: file
+    near_lines: 10
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/process/interpreter/python::pythonw-launch
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+
+  - id: python-unparsed-hidden-pythonw-fetch
+    desc: Hidden pythonw runs a fetched script
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1564.003
+    scope: file
+    near_lines: 8
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get-text
+      - id: micro-behaviors/fs/write/file/response-body::python-write-response-text
+      - id: micro-behaviors/process/interpreter/python::pythonw-launch
+      - id: micro-behaviors/process/create/subprocess::popen-content
+      - id: micro-behaviors/process/create/flags::python-qualified-create-no-window
+  - id: python-hidden-pythonw-fetched-file
+    desc: Hidden pythonw launches a fetched file
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1564.003
+    near_lines: 4
+    all:
+      - id: python-get-write-pythonw
+      - id: micro-behaviors/process/create/flags::creationflags
+      - id: micro-behaviors/process/create/flags::startupinfo
+
+  - id: python-thread-exec-fetched-text
+    desc: Thread execs text fetched over HTTP
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1059.006
+    scope: file
+    near_lines: 12
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/process/create/thread::python-thread-target-exec
+      - id: micro-behaviors/process/create/thread::python-thread-create
+
+  - id: python-import-hidden-iwr-start
+    desc: Import runs a hidden download-and-start
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1059.001
+    scope: file
+    near_lines: 30
+    all:
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/communications/http/download/helper::python-string-powershell-download-cradle
+      - id: micro-behaviors/communications/http/download/cli::iwr-outfile-download
+      - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
+      - id: micro-behaviors/data/control-flow/module-exec::python-column0-noarg-call-assignment
+
+  - id: python-import-hidden-powershell
+    desc: Import launches hidden PowerShell
+    crit: hostile
+    conf: 0.96
+    attack: T1059.001,T1564.003
+    scope: file
+    near_lines: 15
+    all:
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/process/create/hidden::argv-array-windowstyle-hidden
+      - id: objectives/supply-chain/hidden-payload/runtime::python-popen-devnull-inline
+      - id: micro-behaviors/data/control-flow/module-exec::python-column0-noarg-call-assignment
+
+  - id: python-thread-urlretrieve-temp-exe
+    desc: Thread retrieves an EXE and launches it
+    crit: hostile
+    conf: 0.97
+    attack: T1105,T1059.006
+    scope: file
+    near_lines: 18
+    all:
+      - id: micro-behaviors/communications/http/lib/urllib::python-urlretrieve-qualified
+      - id: micro-behaviors/fs/temp/directory::python-named-temp-exe
+      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/process/create/thread::python-daemon-thread
+      - id: micro-behaviors/process/create/flags::python-create-no-window-hex
+
+  - id: python-import-download-chmod-launch
+    desc: Import downloads, chmods, and launches
+    crit: hostile
+    conf: 0.96
+    attack: T1105,T1195.002
+    scope: file
+    all:
+      - id: micro-behaviors/communications/http/download/execute::download-chmod-launch
+      - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
+      - id: micro-behaviors/process/create/subprocess::popen-ast

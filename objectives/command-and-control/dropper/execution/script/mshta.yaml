@@ -14,6 +14,29 @@ traits:
     if:
       type: text
       regex: '(?i)\bmshta(\.exe)?\s+https?://'
+  # VS Code stores a task's executable command as structured JSON. Matching
+  # the command value keeps an unrelated MSHTA string elsewhere in a workspace
+  # file from being reported as execution, while covering the malicious
+  # folder-open project technique independently of the task label or lure.
+  - id: vscode-task-mshta-remote-url
+    desc: VS Code task invokes remote MSHTA URL
+    crit: suspicious
+    conf: 0.98
+    platforms: [windows]
+    for: [json]
+    if:
+      type: value
+      path: tasks[*].command
+      regex: '(?i)^\s*mshta(\.exe)?\s+https?://'
+  - id: encoded-mshta-remote-url
+    desc: Encoded command runs mshta on a URL
+    crit: suspicious
+    conf: 0.95
+    for: [python, shell, powershell]
+    if:
+      type: encoded
+      encoding: base64
+      regex: '(?i)\bmshta(\.exe)?\s+https?://'
   - id: mshta-remote-msixbundle-url
     desc: MSHTA fetches remote MSIX bundle
     crit: suspicious
@@ -143,3 +166,30 @@ composite_rules:
       - id: micro-behaviors/fs/path/extension::hta-extension
     unless:
       - id: metadata/package/testing/
+
+  - id: encoded-mshta-os-system-exec
+    desc: exec() runs an encoded mshta command
+    crit: hostile
+    conf: 0.96
+    attack: T1218.005,T1027
+    for: [python]
+    scope: file
+    all:
+      - id: encoded-mshta-remote-url
+      - id: objectives/anti-static/obfuscation/encoding/content::encoded-python-os-system
+      - id: objectives/anti-static/obfuscation/control-flow/logic::base64-exec-text
+
+  # A local HTA is not inherently malicious. Running it from the shared,
+  # user-writable Public tree while suppressing the console is the loader
+  # shape used by staged phishing chains and is independent of chosen names.
+  - id: batch-background-public-mshta-stage
+    desc: Batch runs a Users\Public HTA through background MSHTA
+    crit: hostile
+    conf: 0.98
+    attack: T1218.005,T1564.003
+    for: [batch]
+    all:
+      - id: micro-behaviors/process/daemonize/spawn::start-no-new-window
+      - id: micro-behaviors/process/create/launch::mshta-execution
+      - id: micro-behaviors/fs/path/system::users-public-script-path
+      - id: micro-behaviors/fs/path/extension::hta-extension

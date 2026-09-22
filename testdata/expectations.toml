@@ -1432,6 +1432,18 @@ name = "buffer-hex-nondecoder.js"
 cap = 10
 forbidden_prefixes = ["micro-behaviors/crypto/library/blockchain", "micro-behaviors/data/decode/hex"]
 
+[[benign]]
+name = "buffer-fixed-offset-slice.js"
+cap = 10
+required_prefixes = ["micro-behaviors/data/buffer/record"]
+forbidden_prefixes = ["objectives/impact", "objectives/persistence"]
+
+[[benign]]
+name = "go-diskfs-identity.go"
+cap = 10
+required_prefixes = ["well-known/lib/platform/go-diskfs"]
+forbidden_prefixes = ["objectives/impact", "objectives/persistence"]
+
 # Rollup-bundled sindresorhus/open (vite dist-chunk shape): the Windows
 # `-EncodedCommand` URL opener must resolve to the open library identity,
 # never to a hidden-PowerShell invocation.
@@ -1577,6 +1589,24 @@ min_hostile = 0
 min_suspicious = 1
 
 [[hostile]]
+name = "ghappier-buried-fetch-eval.js"
+min_score = 8
+min_hostile = 1
+min_suspicious = 0
+
+[[hostile]]
+name = "ghappier-stage1-platform-dispatch.js"
+min_score = 8
+min_hostile = 1
+min_suspicious = 0
+
+[[hostile]]
+name = "ghappier-ethereum-deaddrop-resolver.js"
+min_score = 8
+min_hostile = 1
+min_suspicious = 0
+
+[[hostile]]
 name = "clickfix-motw-download.ps1"
 min_score = 50
 min_hostile = 1
@@ -1683,6 +1713,19 @@ name = "xrpl-wallet-header-exfil.js"
 min_score = 122
 min_hostile = 3
 min_suspicious = 2
+
+# Split-name wallet drainer probe: string-table fragments of eth_accounts,
+# eth_sendTransaction, and signAndSendTransaction plus a provider sendAsync
+# hook and a campaign drainer routine name, with no full RPC method name
+# anywhere. Guards the split-RPC fragment atoms, the needs-2 split composite,
+# and the function-name (not string-literal) routine matchers. Never a full
+# drainer flow, so this asserts suspicious floors, not a hostile verdict.
+[[hostile]]
+name = "obf-split-wallet-rpc.js"
+min_score = 8
+min_hostile = 0
+min_suspicious = 2
+required_prefixes = ["micro-behaviors/communications/rpc", "objectives/credential-access/wallet/provider"]
 
 [[hostile]]
 name = "reverse-shell.cpp.xz"
@@ -1904,7 +1947,7 @@ min_score = 1
 # client/server, crypto hashing, DB/LINQ/SQL, reflection, base64, process spawn,
 # container/env detection); none is a false positive. Score is the sum of
 # per-group maxima, so each new top-3-path group of notables adds ~1.
-cap = 33
+cap = 34
 
 [[benign]]
 name = "ls.macOS.xz"
@@ -1985,6 +2028,33 @@ name = "chrysalis-loader.dll.xz"
 min_score = 165
 min_hostile = 1
 min_suspicious = 8
+
+# math-universe 1.0.2 (npm, 2026-09) -- the mathmain/mathsbase/math-universe
+# encrypted-loader family, stripped to the malicious path: the AES-256-GCM
+# decrypt-and-require loader (utils/event.js), the trigger that reaches it
+# (utils/is.js `isGraph`, called from the solver's removeSolveValidation), the
+# two whole-file ciphertext modules it decrypts (utils/graph.js,
+# utils/fraction.js) and the head of the third (utils/bignumber/type.js,
+# truncated from 1.5 MB). Real bytes throughout; nothing synthesized.
+#
+# This fixture exists because the family scanned as *suspicious* on a generic
+# "large Base64 blob" finding while the loader itself produced nothing: every
+# leg of `node-local-file-decrypt-dynamic-load` is a symbol matcher, and
+# javascript-obfuscator had moved createDecipheriv/setAuthTag/readFileSync/
+# writeFileSync into a rotated string table. The three hostile findings below
+# are the repair -- the concealed-name spelling, the envelope shape, and the
+# archive-level pairing of ciphertext modules with their decryptor. If any of
+# them regresses to a symbol-only matcher this count collapses.
+[[hostile]]
+name = "npm-math-universe-aes-stage-loader.tgz"
+min_score = 250
+min_hostile = 3
+min_suspicious = 2
+required_prefixes = [
+  "objectives/command-and-control/dropper/staging/encrypted",
+  "objectives/supply-chain/hidden-payload/staging",
+  "objectives/anti-static/obfuscation/payload/data-file",
+]
 
 # --- walked hostile corpora : every file must hit min_hostile -----------------
 
@@ -2711,3 +2781,141 @@ cap = 10
 min_score = 1
 required_prefixes = ["micro-behaviors/process/create/load/local"]
 forbidden_prefixes = ["well-known/lib/stdlib/lodash"]
+
+# ghappier (CloudSEK, 2026-09): compromised npm maintainer account shipped a
+# single-line fetch-eval loader (require('https').get(...).eval) at the tail
+# of an otherwise-benign 3,500-line file full of PRNG/SAT-solver filler code.
+# Asserts near_bytes proximity still binds the loader's legs together even
+# when they are surrounded by tens of KB of unrelated plausible-looking code.
+[[hostile]]
+name = "ghappier-buried-fetch-eval.js"
+min_score = 80
+min_hostile = 1
+min_suspicious = 0
+required_prefixes = ["objectives/command-and-control/dropper/delivery/fetch-eval"]
+
+# ghappier Stage 1: the loader's fetched response is itself JS that writes a
+# campaign marker then branches on os.platform() to spawn a curl/wget/cmd
+# pipe into the platform's own shell interpreter.
+[[hostile]]
+name = "ghappier-stage1-platform-dispatch.js"
+min_score = 90
+min_hostile = 1
+min_suspicious = 0
+required_prefixes = ["objectives/command-and-control/dropper/execution/pipe"]
+
+# ghappier's second payload (the one CloudSEK ties to the published
+# NullReceiver/PolinRider indicator set): reads a zero-value, empty-calldata
+# Ethereum transaction's recipient address and decodes it directly into a
+# raw IP:port pair for a socket.connect(port, host) dial -- not into an HTTP
+# URL like every other ethereum-recipient-*-c2-resolution-javascript variant.
+[[hostile]]
+name = "ghappier-ethereum-deaddrop-resolver.js"
+min_score = 120
+min_hostile = 1
+min_suspicious = 1
+required_prefixes = ["objectives/command-and-control/channel/deaddrop/blockchain"]
+
+# ghappier Stage 4 dependency manifest: 11 genuine third-party packages
+# (including the known-malicious "execp" BeaverTail/Nickel Alley dependency)
+# beside 3 Node-builtin-name squats (child_process, crypto, fs). A manifest
+# alone carries no execution evidence, so this stays suspicious rather than
+# hostile -- asserting that ceiling, not a completed hostile verdict.
+[[hostile]]
+name = "ghappier-npm-manifest-core-squat/npm-manifest-core-squat.tgz"
+min_score = 90
+min_hostile = 0
+min_suspicious = 3
+required_prefixes = ["objectives/supply-chain/impersonation/core-module"]
+
+# Prisma cli-telemetry sender shape: process.env is threaded into an event
+# builder that extracts only npm_config_user_agent before a fetch POST. The
+# flow engine reports environment/secret body flows for the object pass; the
+# selective-npm-agent-telemetry exception suppresses both, leaving the
+# package-manager read and HTTP client notables as differential signal.
+[[benign]]
+name = "env-http-controls/telemetry-npm-agent.js"
+cap = 20
+required_prefixes = ["micro-behaviors/os/env/package-manager", "micro-behaviors/communications/http/request/client"]
+forbidden_prefixes = ["micro-behaviors/communications/http/request/credentials", "objectives/exfiltration/stealer/credential/env"]
+
+# Naming a package-manager telemetry field must not suppress a real registry
+# token flow in the same JSON event.
+[[hostile]]
+name = "env-http-npm-agent-secret.js"
+min_score = 20
+min_hostile = 0
+min_suspicious = 1
+required_prefixes = ["micro-behaviors/communications/http/request/credentials"]
+
+# cryptography's test_rsa.py exercises RSAPublicNumbers(1, 1) for repr and
+# equality checks. Degenerate keys in a verified test file must not read as
+# SSH exponent-one auth-bypass construction.
+[[benign]]
+name = "exponent-one-test-controls/test_rsa_repr.py"
+cap = 15
+forbidden_prefixes = ["objectives/lateral-movement/exploit/network-device"]
+
+# typeshed's _frozen_importlib_external.pyi declares SourcelessFileLoader next
+# to exec_module. A stub never executes, so the sourceless-loader atom (and
+# the hidden-payload composite built on it) must stay quiet here.
+[[benign]]
+name = "type-stub-controls/sourceless-loader-stub.pyi"
+cap = 10
+forbidden_prefixes = ["micro-behaviors/os/api-resolution/dynamic"]
+
+# Sourceless bytecode invoked at import under silent exception suppression:
+# the relocated rule must retain the suspicious hidden-payload signal now
+# that stub declarations no longer satisfy its loader leg.
+[[hostile]]
+name = "sourceless-pyc-loader.tar.xz"
+min_score = 30
+min_hostile = 0
+min_suspicious = 1
+required_prefixes = ["objectives/supply-chain/hidden-payload/runtime"]
+
+# Client form of the multipart array-desync upload bypass: a requests `files`
+# list pairing an empty-name tuple with a server-script filename, carrying an
+# embedded PHP command webshell as the uploaded body. The empty-name atom is
+# only the desync primitive, so the floors pin both layers built on it -- the
+# suspicious client-structure composite and the hostile webshell-drop reading
+# that the embedded payload adds. Product-agnostic by construction (no CMS
+# endpoint), so the verdict must come from the client structure alone.
+[[hostile]]
+name = "array-upload-bypass-client.py"
+min_score = 100
+min_hostile = 1
+min_suspicious = 1
+required_prefixes = [
+  "objectives/execution/exploit/file-upload",
+  "objectives/command-and-control/backdoor/webshell/embedded",
+  "micro-behaviors/communications/http/upload",
+]
+
+# Multi-architecture bot payload drop: one archive holding ELF binaries named
+# by target architecture (.arm, .mipsel). The cluster composite counts only
+# members whose suffix sits on a parsed native executable, so this fixture is
+# what keeps that correlation honest -- a name-only match would score the
+# sysroot control beside it too.
+[[hostile]]
+name = "multi-arch-suffix-elf-payloads.tar.gz"
+min_score = 20
+min_hostile = 0
+min_suspicious = 1
+required_prefixes = ["metadata/file/extension/architecture"]
+
+# unittest assertions comparing against "" next to a .php URL literal: the
+# empty-string argument is not a multipart `files` container, so neither the
+# empty-name atom nor anything built on it may fire here.
+[[benign]]
+name = "multipart-upload-controls/empty-string-assertion.py"
+cap = 10
+forbidden_prefixes = ["objectives/execution/exploit/file-upload", "micro-behaviors/communications/http/upload"]
+
+# A sysroot package archive whose members carry architecture suffixes
+# (bullseye.arm) but hold no ELF. Name-only pooling would read this as a
+# multi-arch bot drop; the native-executable leg must keep it silent.
+[[benign]]
+name = "sysroot-suffix-controls/nonelf-arch-suffixes.tar.gz"
+cap = 10
+forbidden_prefixes = ["metadata/file/extension/architecture"]

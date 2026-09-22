@@ -1,0 +1,148 @@
+# Writable entry plus overlay/checksum is the cheap packer/cryptor shape
+# used by old Win32 backdoors: the mapped .text is writable, a stub jumps
+# there, and the real body sits in overlay or a checksum-invalid image.
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1027.002
+  mbc: B0032
+
+composite_rules:
+  - id: writable-ep-text-section-packer
+    desc: Packer entry lives in writable .text
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/binary/section/permission::writable-text-section
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/vendor/
+      - id: well-known/lib/
+
+  - id: writable-ep-overlay-packer
+    desc: Writable entry point with a file overlay
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/binary/layout/overlay::has-overlay
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/vendor/
+      - id: well-known/lib/
+
+  - id: writable-ep-checksum-mismatch
+    desc: Writable entry point with invalid PE checksum
+    crit: hostile
+    conf: 0.93
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/binary/layout/checksum::pe-checksum-mismatch
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/vendor/
+      - id: well-known/lib/
+
+  - id: writable-ep-bound-imports
+    desc: Writable entry point with bound imports
+    crit: hostile
+    conf: 0.92
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/build/artifact::pe-bound-imports-present
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/vendor/
+      - id: well-known/lib/
+
+  - id: writable-ep-high-entropy-overlay
+    desc: Writable entry point with a high-entropy file overlay
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/binary/layout/overlay::high-entropy-overlay
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/vendor/
+      - id: well-known/lib/
+
+  - id: writable-ep-no-exec-sections
+    desc: Writable entry in a PE with no executable sections
+    crit: hostile
+    conf: 0.94
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/binary/section/ratio::pe-no-executable-sections
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/vendor/
+      - id: well-known/lib/
+      - id: well-known/tool/detection/security-scanner-identity::clamav-test-file-section
+
+  - id: writable-ep-vb6-shell
+    desc: Writable-entry VB6 stub shells a payload
+    crit: hostile
+    conf: 0.94
+    attack: T1027.002,T1059
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: micro-behaviors/process/create/macro/office::vb6-shell-execution
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/lib/
+
+  - id: small-pe-writable-ep
+    desc: Small PE entry point is in a writable section
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: metadata/binary/layout/size::small-pe
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/lib/
+      - id: well-known/tool/detection/security-scanner-identity::clamav-test-file-section
+      # Every WDK kernel driver is this shape: a few tens of KB of code with
+      # DriverEntry in INIT, the discardable read/write/execute section the
+      # kernel frees after initialisation. Small plus writable entry therefore
+      # separates nothing among drivers, so the pair is not packer evidence.
+      # `pe-entry-in-writable-section` already downgrades on this same marker,
+      # and `objectives/anti-static/obfuscation/payload/section::ep-in-rwx-section`
+      # excludes it for the same reason.
+      - id: metadata/binary/resource/identity::kernel-driver-init
+
+  - id: writable-ep-no-resources
+    desc: Writable-entry small PE has no resources
+    crit: hostile
+    conf: 0.92
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: metadata/binary/resource/size::small-pe-no-resources
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/lib/
+      - id: well-known/tool/detection/security-scanner-identity::clamav-test-file-section
+
+  - id: writable-ep-wininet
+    desc: Writable-entry PE talks WinInet HTTP
+    crit: hostile
+    conf: 0.94
+    attack: T1027.002,T1071.001
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+      - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/lib/

@@ -133,8 +133,27 @@ traits:
       type: text
       regex: 'DEFAULT_WEBHOOK_URL\s*=\s*["'']https?://'
 composite_rules:
+  # Gate shared by the Feishu record-exfil composites: the record builder alone
+  # matches any structured diagnostics logging, so require the same source file
+  # to collect credentials, other sensitive material, or host identity. Archive-
+  # wide correlation is too broad here: an ordinary application SDK can contain
+  # unrelated credential and collection features alongside its logger.
+  - id: feishu-sensitive-record-content
+    desc: Sensitive record built for Feishu webhook POST
+    crit: suspicious
+    conf: 0.96
+    scope: file
+    for: [javascript, typescript, npm, tar]
+    all:
+      - id: micro-behaviors/communications/http/services/feishu-lark::feishu-record-body-builder
+    any:
+      - id: objectives/credential-access/
+      - id: objectives/collection/
+      - id: webhook-with-system-data-host-1
+      - id: webhook-with-system-data-host-2
+
   - id: feishu-application-record-webhook-exfil
-    desc: Embedded Feishu webhook with record POST code
+    desc: Sensitive record posted to an embedded Feishu webhook
     crit: hostile
     conf: 0.98
     scope: archive
@@ -143,8 +162,8 @@ composite_rules:
     mbc: E1041
     all:
       - id: micro-behaviors/communications/http/services/feishu-lark::feishu-hardcoded-incoming-webhook
-      - id: micro-behaviors/communications/http/services/feishu-lark::feishu-record-body-builder
       - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+      - id: feishu-sensitive-record-content
 
   # A package that reports the machine it landed on to a chat webhook.
   #
@@ -421,7 +440,7 @@ composite_rules:
     any:
       - id: chaveaion-request-field
       - id: micro-behaviors/communications/http/request/client::post-method-text
-      - id: micro-behaviors/communications/http/request/client::http-config-body
+      - id: micro-behaviors/communications/http/request/configuration::http-config-body
     unless:
       - id: metadata/package/testing/
   - id: webhook-license-credential-exfil
@@ -466,3 +485,26 @@ composite_rules:
       - id: micro-behaviors/communications/ipc/agent-hook::agent-hook-config-write
     unless:
       - id: well-known/tool/detection/agent-glovebox::archive-context
+
+  - id: python-decoded-webhook-post
+    desc: Posts to a base64-decoded webhook
+    crit: hostile
+    conf: 0.96
+    for: [python]
+    scope: file
+    all:
+      - id: micro-behaviors/data/decode/symbol-base64::b64decode-call
+      - id: micro-behaviors/communications/http/webhook::discord-webhook-path
+      - id: micro-behaviors/communications/http/request/verb::urllib-request-post
+
+  - id: python-open-hook-posts-webhook
+    desc: Open hook posts content to a webhook
+    crit: hostile
+    conf: 0.97
+    attack: T1041,T1565
+    for: [python]
+    scope: file
+    all:
+      - id: micro-behaviors/process/hook/interception::python-builtins-open-hook
+      - id: micro-behaviors/communications/http/webhook::discord-webhook-path
+      - id: micro-behaviors/process/create/thread::python-daemon-thread
