@@ -1,0 +1,340 @@
+# Python setup.py Install Hooks
+# Neutral observations about setup.py customization patterns.
+# These are legitimate packaging capabilities — intent comes from
+# composites in lateral-movement/supply-chain/ that combine them
+# with execution/network evidence.
+# References: https://docs.python.org/3/distutils/apiref.html
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  crit: notable
+traits:
+  - id: setuptools-build-ext-override
+    desc: setup defines custom build_ext command
+    conf: 0.9
+    if:
+      type: text
+      regex: 'cmdclass\s*=\s*\{\s*["'']build_ext["'']'
+    unless:
+      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+  - id: cmake-extension-class
+    desc: setup defines a CMake extension class
+    conf: 0.95
+    if:
+      type: text
+      substr: CMakeExtension
+  - id: cmake-build-subprocess
+    desc: setup invokes CMake through subprocess
+    conf: 0.95
+    if:
+      type: text
+      regex: 'subprocess\.(run|check_call|check_output)\s*\(.{0,120}["'']cmake["'']'
+  # Native-extension projects commonly run a checked-in script to derive the
+  # package version while setup.py wires build_ext.  This is a build-context
+  # fact, not evidence that the package executes an install-time payload.
+  - id: setuptools-native-extension-local-version-script
+    desc: Native extension setup runs local version script
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'subprocess\.run\s*\(\s*\[[^\]]{0,160}["'']\./[A-Za-z0-9_.-]+\.sh["'']'
+  # `setup(... cmdclass={'install': ...})` — a custom command class wired into
+  # the dict. The `cmdclass` keyword near the quoted command-name key is the
+  # distinctive shape; a source-text match avoids the per-node query.
+  - id: setup-cmdclass-install
+    desc: setup() defines custom install command
+    conf: 0.9
+    if:
+      type: text
+      regex: 'cmdclass[\s\S]{0,200}[''"]install[''"]\s*:'
+    unless:
+      # Test-tree code exercises the packaging machinery (setuptools' own
+      # test_core.py calls `setup(cmdclass={'install': ...})`) but never runs
+      # at install time, so it declares no live hook. Per-file: a real
+      # setup.py ships at the package root, never under tests/.
+      - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: setup-cmdclass-develop
+    desc: setup() defines custom develop command
+    conf: 0.9
+    if:
+      type: text
+      regex: 'cmdclass[\s\S]{0,200}[''"]develop[''"]\s*:'
+  - id: setuptools-develop-delegates-base-run
+    desc: develop override delegates base run
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(setuptools\.command\.)?develop\.develop\.run\s*\(\s*self\s*\)'
+  - id: setup-cmdclass-build-py
+    desc: setup() defines custom build_py command
+    conf: 0.9
+    if:
+      type: text
+      regex: 'cmdclass[\s\S]{0,200}[''"]build_py[''"]\s*:'
+  - id: setup-cmdclass-egg-info
+    desc: setup() defines custom egg_info command
+    conf: 0.9
+    if:
+      type: text
+      regex: 'cmdclass[\s\S]{0,200}[''"]egg_info[''"]\s*:'
+  - id: setuptools-egg-info-run-override
+    desc: setup.py overrides egg_info run method
+    conf: 0.95
+    if:
+      type: text
+      regex: 'class\s+\w+\s*\(\s*(setuptools\.command\.)?egg_info\s*\)[\s\S]{0,400}def\s+run\s*\('
+  - id: setuptools-extension-declared
+    desc: Declares setuptools.Extension
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      substr: setuptools.Extension
+  # `from setuptools import Extension` binds the bare name `Extension`, so the
+  # dotted `setuptools.Extension` symbol never appears. Match the import shape
+  # that native-extension setup.py files actually use (gRPC, cryptography, …).
+  - id: setuptools-extension-from-import
+    desc: Imports Extension from setuptools
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'from\s+setuptools\s+import\s+[^;\n]{0,120}\bExtension\b'
+  # Older native builds (gRPC grpcio-tools) still use distutils.extension.
+  - id: distutils-extension-import
+    desc: Imports Extension from distutils
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'from\s+distutils\s+import\s+[^;\n]{0,80}\bextension\b'
+  - id: distutils-extension-call
+    desc: Constructs distutils.extension.Extension
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '\bextension\.Extension\s*\('
+  - id: setuptools-build-ext-delegates
+    desc: 'setuptools build_ext delegates to base impl'
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: build_ext.build_extension
+  - id: setuptools-build-ext-super-delegates
+    desc: 'setuptools build_ext delegates with super()'
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: super.build_extension
+  - id: setuptools-build-ext-extensions-delegates
+    desc: setuptools build_ext delegates build_extensions
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: build_ext.build_extensions
+  - id: setuptools-build-ext-run-delegate
+    desc: setuptools build_ext delegates run
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: 'build_ext\.run\s*\(\s*self\s*\)'
+  # Cross-compile / wheel builds often override only get_ext_filename (EXT_SUFFIX)
+  # without touching build_extension — still a native-extension packaging signal.
+  - id: setuptools-build-ext-get-ext-filename
+    desc: setuptools build_ext customizes EXT_SUFFIX
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: build_ext.build_ext.get_ext_filename
+  - id: setuptools-install-class
+    desc: Class inherits from setuptools.command.install
+    conf: 0.9
+    if:
+      type: text
+      regex: 'class\s+\w+\s*\(\s*(setuptools\.command\.install\.)?install\s*\)'
+  # `cmdclass` registering an install-phase command class is the delivery
+  # vehicle every setup.py dropper uses -- and also ordinary setuptools
+  # extension machinery (pybind11 relocates headers, numpy and pillow drive
+  # compilers), so it is `notable` evidence here, never intent. Objective
+  # composites (install-hook droppers, module backdoors) add the payload legs
+  # -- in-run exec/eval, fetch, launch -- that turn the vehicle into a
+  # verdict. Keyed on the *command names* setuptools actually dispatches, not
+  # the class name (demanding the literal word `Custom` only matched tutorial
+  # copy-paste).
+  - id: cmdclass-install-phase-override
+    desc: cmdclass overrides an install-phase command
+    conf: 0.85
+    attack: "T1195.001"
+    if:
+      type: text
+      regex: 'cmdclass.{0,80}(install|develop|egg_info|build_py|build_ext)'
+  - id: setuptools-run-override
+    desc: Overrides run() method in install class
+    conf: 0.8
+    # `class X(install): ... def run(...)` — a command subclass overriding run().
+    # The `(install)` base plus a `def run` within the class body is distinctive
+    # enough as source text.
+    if:
+      type: text
+      regex: 'class\s+\w+\s*\(\s*install\s*\)[\s\S]{0,400}def\s+run\b'
+  # run() whose body *begins* with a raise is refusing to install rather than
+  # doing packaging work. Paired with the install-class base (see the composite
+  # in composite_rules) this is the defining shape of a namespace-reservation
+  # stub: vendors publish these on public registries so an internal package name
+  # cannot be claimed by an attacker, and the hook exists only to abort and tell
+  # the developer they resolved against the wrong index. Requiring the raise to
+  # be the first statement is what separates it from a dropper that runs a
+  # payload and raises afterwards, so this stays a neutral packaging fact.
+  - id: install-run-body-raises
+    desc: run() body raises immediately
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: 'def\s+run\s*\(.{0,40}\)\s*:\s{0,40}raise\s+\w{0,30}(Error|Exception)'
+  - id: setuptools-build-py-class
+    desc: "Class extends setuptools.command.build_py"
+    conf: 0.9
+    if:
+      # Migrated from a tree-sitter query to a lenient `type: text`
+      # match (no per-member cursor walk). Approximates the query's
+      # structural intent via its distinctive token(s).
+      type: text
+      regex: 'build_py$|^setuptools.command.build_py.build_py'
+  - id: setuptools-build-py-run-override
+    desc: Overrides run() method in build_py class
+    conf: 0.8
+    # `class X(build_py): ... def run(...)` — command subclass overriding run().
+    if:
+      type: text
+      regex: 'class\s+\w+\s*\(\s*build_py\s*\)[\s\S]{0,400}def\s+run\b'
+  - id: run-override-calls-helper
+    desc: run() override calls helper before super
+    conf: 0.85
+    if:
+      type: text
+      regex: 'def\s+run\(self\):[\s\S]{0,160}\b[A-Za-z_][A-Za-z0-9_]*\(\)[\s\S]{0,80}super\(\)\.run\(\)'
+  - id: run-override-calls-helper-after-super
+    desc: run() override calls helper after base build
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'super\(\)\.run\(\)[\s\S]{0,120}\b[A-Za-z_][A-Za-z0-9_]*\(\)'
+  - id: hatch-build-hook-interface
+    desc: Hatch build hook interface
+    conf: 0.9
+    if:
+      type: import
+      exact: BuildHookInterface
+  - id: hatch-build-hook-initialize
+    desc: Hatch build hook initialize method
+    conf: 0.93
+    if:
+      type: text
+      regex: 'class\s+\w+\s*\(\s*BuildHookInterface\s*\)\s*:[\s\S]{0,420}def\s+initialize\s*\('
+
+composite_rules:
+  # A build/egg-info hook may call a local helper to stage files before the
+  # normal setuptools command.  This is a packaging capability, not an
+  # install-time payload by itself; supply-chain composites must add execution
+  # or network evidence before inferring hostile intent.
+  - id: setuptools-build-hook-calls-local-helper
+    desc: Setuptools build hook calls local helper
+    crit: notable
+    conf: 0.9
+    any:
+      - id: setup-cmdclass-install
+      - id: setup-cmdclass-build-py
+    all:
+      - id: run-override-calls-helper
+
+  - id: python-install-hook
+    desc: Python package custom lifecycle hook
+    crit: notable
+    conf: 0.9
+    any:
+      - id: setup-cmdclass-install
+      - id: setuptools-run-override
+      - id: setuptools-egg-info-run-override
+      - id: metadata/package/files/wheel-sdist::install-class-inherit
+
+  - id: setuptools-extension-present
+    desc: setuptools Extension API is used
+    crit: notable
+    conf: 0.9
+    any:
+      - id: setuptools-extension-declared
+      - id: setuptools-extension-from-import
+      - id: distutils-extension-import
+      - id: distutils-extension-call
+  # The aborting install hook, assembled from its two halves. Kept near_lines so
+  # the raise belongs to the install command's own run() and not to some other
+  # function further down setup.py.
+  # Analyst-facing conclusion: this package's install hook cannot reach any
+  # code, so there is no install-time payload to review. It is the shape every
+  # vendor namespace-reservation stub has, and the inverse of a dropper.
+  # Consumed by namespace-reservation-placeholder-context below, which reaches
+  # the dependency-confusion wording traits through their `downgrade:` and not
+  # their `unless:`. That is forced by the engine, not a preference: `unless:`
+  # is a bare condition list with no scope field and always resolves against the
+  # file the rule matched in, while this evidence lives in setup.py and the
+  # wording lives in PKG-INFO. `downgrade:` takes an explicit `scope:` and is
+  # the only cross-member suppressor cleave honours (measured 2026-09-16,
+  # cleave 2.12.0-beta.0). Note `cleave test-rules` reports the exception as
+  # MATCHED either way -- it evaluates at container scope -- so confirm real
+  # suppression with a full scan, not with test-rules.
+  - id: setuptools-run-override-aborts
+    desc: Install run() aborts by raising
+    crit: notable
+    conf: 0.9
+    near_lines: 6
+    all:
+      - id: setuptools-install-class
+      - id: install-run-body-raises
+
+  - id: namespace-reservation-placeholder-context
+    desc: Reservation stub with aborting hook
+    crit: exception
+    conf: 0.95
+    for: [pkginfo, python, python-sdist, whl]
+    scope: archive
+    all:
+      - id: setuptools-run-override-aborts
+      - id: metadata/package/description/disclosure::desc-namespace-reservation-placeholder
+
+  - id: setuptools-native-extension-build-context
+    desc: setuptools native extension build context
+    crit: exception
+    conf: 0.9
+    all:
+      - id: setuptools-extension-present
+    any:
+      - id: setuptools-build-ext-delegates
+      - id: setuptools-build-ext-super-delegates
+      - id: setuptools-build-ext-extensions-delegates
+      - id: setuptools-build-ext-get-ext-filename
+      - id: setuptools-build-ext-run-delegate
+  - id: setuptools-native-extension-local-version-context
+    desc: Native extension build with local version script
+    crit: exception
+    conf: 0.99
+    all:
+      - id: setuptools-build-ext-override
+      - id: setuptools-native-extension-local-version-script
+  - id: setuptools-cmake-native-extension-context
+    desc: CMake-backed native setuptools build
+    crit: exception
+    conf: 0.99
+    all:
+      - id: setuptools-build-ext-override
+      - id: cmake-extension-class
+      - id: cmake-build-subprocess

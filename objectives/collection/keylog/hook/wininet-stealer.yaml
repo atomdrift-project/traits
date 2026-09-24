@@ -23,10 +23,12 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
   - id: wininet-keyboard-hook-enum-windows
-    desc: Keyboard hook enumerates windows for exfil
+    desc: Hook-chain API, window enumeration and WinInet
+    crit: suspicious
     all:
       - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
       - id: micro-behaviors/ui/window/enumerate::enum-windows
+      - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/platform/wine/
@@ -39,8 +41,17 @@ composite_rules:
       - id: micro-behaviors/process/create/thread::create-thread
     unless:
       - id: metadata/signed/platform/
-      - id: well-known/app/communication/signal::signal-desktop-verified-context
-      - id: well-known/lib/runtime/scripted/electron::chromium-engine-capability-context
+      # signal-desktop-verified-context is an exception composite, so it never
+      # suppressed this rule. The Electron host and chrome.dll both carry the
+      # multi-marker runtime; that is the keyboard hook for the browser shell.
+      - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
+      - id: well-known/lib/native/pywin32::pywin32-module-basename
+      - id: well-known/app/productivity/notepad-plus-plus/
+      - id: well-known/tool/sysadmin/conemu/
+      - id: well-known/lib/media/videolan/
+      - id: well-known/lib/media/sdl::sdl3-dll-basename
+      - id: well-known/game/playnite::reference-binary
+      - id: metadata/binary/installer/plugin::known-nsis-plugin-basename
 
   - id: runkey-async-key-taskmgr
     desc: Run-key implant polls keys and kills Taskmgr
@@ -74,6 +85,8 @@ composite_rules:
       - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-gup-updater
   - id: keyboard-hook-form-header
     desc: Keyboard hook builds a form-urlencoded POST
     all:
@@ -81,13 +94,19 @@ composite_rules:
       - id: micro-behaviors/communications/http/post::form-urlencoded-header-pe
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-gup-updater
   - id: keyboard-hook-hidden-thread
     desc: Keyboard hook starts a hidden-window thread
+    # CREATE_NO_WINDOW is the immediate push 0x08000000, which appears all
+    # over a large x86 image. The hook string has to sit with that push.
+    near_bytes: 1048576
     all:
       - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
       - id: micro-behaviors/process/create/flags::x86-create-no-window-immediate
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/tool/sysadmin/conemu/
   - id: keyboard-hook-openurl
     desc: Keyboard hook downloads via InternetOpenUrl
     all:
@@ -96,18 +115,24 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
   - id: keyboard-hook-cleartext-url
-    desc: Keyboard hook embeds a cleartext HTTP URL
-    # A URL literal alone does not prove that hooked keystrokes are sent to
-    # it; keep this as suspicious evidence. The POST/WinInet composites below
-    # retain hostile criticality when outbound transport is established.
+    desc: Keyboard-hook-capable binary has an HTTP client and cleartext URL
+    # Toolchain banners can contain documentation URLs; require a network
+    # client as well as the hook API before treating the URL as suspicious.
     crit: suspicious
     all:
       - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/url/scheme::cleartext-http-url
+    any:
+      - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
+      - id: micro-behaviors/communications/http/client/winhttp::winhttp-send-request
+      - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+      - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file-import
     unless:
       - id: metadata/signed/platform/
       - id: well-known/app/communication/signal::signal-desktop-verified-context
       - id: well-known/lib/runtime/scripted/electron::chromium-engine-capability-context
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-gup-updater
   - id: dll-hook-wininet-openurl
     desc: Keyboard-hook DLL downloads via InternetOpenUrl
     all:
@@ -123,10 +148,15 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
   - id: dll-hook-cleartext-url
-    desc: Keyboard-hook DLL embeds a cleartext HTTP URL
+    desc: Keyboard-hook DLL has an HTTP client and cleartext URL
     all:
       - id: objectives/collection/keylog/hook::windows-dll-keyboard-hook-lifecycle
       - id: micro-behaviors/communications/http/url/scheme::cleartext-http-url
+    any:
+      - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
+      - id: micro-behaviors/communications/http/client/winhttp::winhttp-send-request
+      - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+      - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file-import
     unless:
       - id: metadata/signed/platform/
   - id: hook-export-wininet
@@ -163,6 +193,26 @@ composite_rules:
       - id: micro-behaviors/ui/window/station::open-desktop-a
     unless:
       - id: metadata/signed/platform/
+  # These recognized desktop runtimes and applications legitimately install
+  # keyboard hooks while reading key state. Keep their identity evidence in a
+  # reusable exception instead of making the detection fight a long allowlist.
+  # Strong Wine and VideoLAN identities replace their former broad directory
+  # suppressors so a lone weak marker cannot silence the keylogger signal.
+  - id: recognized-desktop-input-software
+    desc: Recognized desktop software with input-hook behavior
+    crit: exception
+    conf: 0.99
+    any:
+      - id: well-known/lib/platform/wine::wine-builtin-dll-marker
+      - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
+      - id: well-known/lib/native/pywin32::pywin32-module-basename
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
+      - id: well-known/lib/media/videolan::videolan-codec-lib
+      - id: well-known/lib/media/sdl::sdl3-dll-basename
+      - id: well-known/game/playnite::reference-binary
+      - id: well-known/lib/platform/mfc::mfc-runtime-basename
+      - id: well-known/lib/ui/tcl-tk::tcl-tk-runtime-basename
+      - id: well-known/tool/sysadmin/console::openconsole-basename
   - id: hook-keyboard-state
     desc: Keyboard hook also samples GetKeyboardState
     crit: suspicious
@@ -172,9 +222,7 @@ composite_rules:
       - id: micro-behaviors/hardware/input/keyboard/poll::get-keyboard-state
     unless:
       - id: metadata/signed/platform/
-      - id: well-known/lib/platform/wine/
-      - id: well-known/app/communication/signal::signal-desktop-verified-context
-      - id: well-known/lib/runtime/scripted/electron::chromium-engine-capability-context
+      - id: recognized-desktop-input-software
 
   - id: hook-to-ascii
     desc: Keyboard hook translates keys via ToAscii
@@ -184,3 +232,5 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/platform/wine/
+      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
+      - id: well-known/lib/media/videolan/

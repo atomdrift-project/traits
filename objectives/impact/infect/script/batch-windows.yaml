@@ -77,21 +77,13 @@ traits:
       type: text
       regex: '(?i)copy\s+%0\s+%0\.[0-9]{4}\.bat\s*>>\s*[A-Za-z0-9_.-]+\.bat'
 
-  - id: batch-ctty-nul-stealth
-    desc: Batch hides console via ctty nul
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: text
-      substr: ctty nul
-
   - id: batch-for-bat-loop
     desc: Batch loops over BAT files
     crit: notable
     conf: 0.9
     if:
       type: text
-      regex: '(?i)for\s+%%[A-Za-z]\s+in\s+\("\*\.bat"\)'
+      regex: '(?i)for\s+%%[A-Za-z]\s+in\s+\([^)\r\n]{0,48}\*\.bat'
 
   - id: batch-copy-tmp-append
     desc: Batch appends tmp payload
@@ -157,6 +149,14 @@ traits:
     if:
       type: text
       regex: '(?i)\b(type|copy|xcopy)\s+"?%0'
+  - id: batch-find-redirects-self
+    desc: Find reads the current batch file
+    crit: suspicious
+    conf: 0.92
+    attack: T1080
+    if:
+      type: text
+      regex: '(?i)\bfind\b[^\r\n]{0,80}<%0'
 
   # The generic form of `batch-self-call-over-bat-loop` above, which hardcoded
   # `*.bat` and `call`. A loop over a file mask whose body names `%0` is the
@@ -185,7 +185,22 @@ traits:
     if:
       type: text
       regex: '(?i)\bren(ame)?\s+%\w{1,16}%\s+\S{0,6}%\w{1,16}%'
-
+  - id: batch-for-copy-self-onto-matches
+    desc: For-loop body copies this script
+    crit: suspicious
+    conf: 0.93
+    attack: T1080
+    if:
+      type: text
+      regex: '(?i)for\s+%%[A-Za-z]\s+in\s+\([^)\r\n]{0,120}\)\s*do\s+copy\s+%0\b'
+  - id: batch-append-each-bat
+    desc: Appends a payload onto each BAT
+    crit: suspicious
+    conf: 0.92
+    attack: T1080
+    if:
+      type: text
+      regex: '(?i)for\s+%%[A-Za-z]\s+in\s+\([^)\r\n]{0,24}\*\.bat\)\s*do\s+copy\s+%%[A-Za-z]\s*\+'
 
 composite_rules:
   - id: batch-script-self-infection
@@ -231,7 +246,7 @@ composite_rules:
     all:
       - id: batch-numbered-self-copy-chain
       - id: batch-repeated-self-copy-append
-      - id: batch-ctty-nul-stealth
+      - id: micro-behaviors/os/console/control::batch-ctty-null-device
 
   - id: batch-autoexec-script-infection
     desc: Batch autoexec script infection
@@ -261,17 +276,49 @@ composite_rules:
   # or displace one named program -- and a variant that invents a third still
   # needs the `all:` leg, because without reading itself it has nothing to
   # spread.
+  - id: batch-self-as-data-source
+    desc: Batch reads its own text
+    crit: suspicious
+    conf: 0.94
+    any:
+      - id: batch-self-as-copy-source
+      - id: batch-find-redirects-self
   - id: batch-self-replicating-infector
     desc: Batch file replicates itself into others
     crit: hostile
     conf: 0.96
     attack: T1080
     all:
-      - id: batch-self-as-copy-source
+      - id: batch-self-as-data-source
     any:
       - id: batch-enumerates-and-applies-self
       - id: batch-renames-variable-target
       - id: batch-for-bat-loop
       - id: batch-recursive-script-infect-loop
+      - id: batch-for-copy-self-onto-matches
     unless:
       - id: well-known/tool/detection/
+  - id: batch-copy-self-over-matches
+    desc: Loop copies this script onto matches
+    crit: hostile
+    conf: 0.96
+    attack: T1080
+    all:
+      - id: batch-self-as-copy-source
+      - id: batch-for-copy-self-onto-matches
+  - id: batch-payload-appended-to-bats
+    desc: Appends one file onto every BAT
+    crit: hostile
+    conf: 0.95
+    attack: T1080
+    all:
+      - id: batch-append-each-bat
+      - id: batch-for-bat-loop
+  - id: batch-mirc-self-install
+    desc: Batch reads itself into an mIRC config
+    crit: hostile
+    conf: 0.96
+    attack: T1080
+    all:
+      - id: batch-find-redirects-self
+      - id: micro-behaviors/fs/path/config/app::mirc-config-file
