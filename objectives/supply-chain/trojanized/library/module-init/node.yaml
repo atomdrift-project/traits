@@ -56,24 +56,30 @@ traits:
 
 
 composite_rules:
-  # Parser-hostile packed source conceals module imports alongside detached,
-  # hidden child-process creation. This is the packaged payload objective;
-  # the sibling hidden-payload trait describes the process behavior itself.
-  - id: packed-child-process-module-payload
-    desc: npm library hides child-process payload in packed source
+  # Tie the packed child-process code to a package's relative lib/config load.
+  # The process atoms alone describe a generic obfuscated program; the archive
+  # relationship is what establishes a published library payload.
+  - id: packed-lib-config-child-process-payload
+    desc: Package code requires a packed lib/config child-process payload
     crit: hostile
     conf: 0.97
     attack: T1195.002,T1059.007,T1027
     mbc: C0017
-    for: [javascript]
-    scope: file
+    for: [npm, tar, zip, javascript, typescript]
+    scope: archive
     all:
+      - id: micro-behaviors/os/module/require::relative-lib-config-require
+      - id: metadata/package/files/runtime::javascript-lib-config-artifact
       - id: metadata/file/line::javascript-line-over-20000
       - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-true
-      - id: micro-behaviors/process/create/minified-spawn::detached-double-bang-array-true
-      - id: objectives/anti-static/obfuscation/imports::escaped-require-module
+      - id: micro-behaviors/process/daemonize/detach::detached-obfuscated-true
+    any:
+      - id: objectives/anti-static/obfuscation/imports/concealment::escaped-require-module
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::plain-javascript-obfuscator-string-array-runtime
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::javascript-obfuscator-string-array-runtime
+    needs: 1
     unless:
-      - id: metadata/package/testing/
+      - id: objectives/supply-chain/hidden-payload/runtime::pino-clone-obfuscated-lib-config-loader
 
   # Runtime side effects in a published library are especially dangerous when
   # they combine account-file access, shell reconnaissance, and a JSON POST.
@@ -95,7 +101,7 @@ composite_rules:
       - id: micro-behaviors/process/create/shell/bridge::js-exec
       - id: micro-behaviors/data/source/syntax/schema::hostname-object-key
       - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
-      - id: micro-behaviors/communications/http/request/client::node-http-post-json-body
+      - id: micro-behaviors/communications/http/request/json::node-http-post-json-body
 
   - id: node-directly-invoked-database-connectivity-child
     desc: Invoked child runs database connectivity probe
@@ -105,9 +111,9 @@ composite_rules:
     for: [npm, tar, zip, javascript]
     scope: archive
     all:
-      - id: objectives/supply-chain/hidden-payload/exec::assert-connection-side-effect-call
-      - id: objectives/supply-chain/hidden-payload/exec::node-dbconnectify-reference
-      - id: objectives/supply-chain/hidden-payload/exec::node-db-connectivity-probe
+      - id: objectives/supply-chain/hidden-payload/exec/runtime::assert-connection-side-effect-call
+      - id: objectives/supply-chain/hidden-payload/exec/runtime::node-dbconnectify-reference
+      - id: objectives/supply-chain/hidden-payload/exec/runtime::node-db-connectivity-probe
       - id: micro-behaviors/process/create/spawn::process-execpath-spawn
       - id: micro-behaviors/process/create/spawn::stdio-ignore
     any:
@@ -122,7 +128,7 @@ composite_rules:
     mbc: B0009.016
     scope: file
     all:
-      - id: objectives/command-and-control/dropper/delivery/fetch-eval::fetch-eval-remote-code
+      - id: objectives/command-and-control/dropper/script-eval/remote-code::fetch-eval-remote-code
       - id: micro-behaviors/data/control-flow/module-exec::direct-zero-arg-call
 
   # Import-time trigger (magic numeric arg) that AES-decrypts then dispatches
@@ -135,8 +141,8 @@ composite_rules:
     attack: T1195.002, T1027.013, T1059.007
     all:
       - id: micro-behaviors/data/control-flow/module-exec::direct-numeric-arg-call
-      - id: micro-behaviors/crypto/symmetric/aes/runtime-library::createDecipheriv
-      - id: micro-behaviors/data/source/property/computed::globalthis-computed-property-call
+      - id: micro-behaviors/crypto/symmetric/decrypt::createDecipheriv
+      - id: micro-behaviors/data/control-flow/dispatch::globalthis-computed-property-call
     unless:
       - id: metadata/package/testing/
       - id: well-known/tool/detection/
@@ -156,7 +162,7 @@ composite_rules:
       - id: micro-behaviors/data/control-flow/module-exec::direct-zero-arg-call
       - id: micro-behaviors/fs/path/token::developer-credential-stores
       - id: objectives/command-and-control/channel/http/transport::direct-ip-http-channel
-      - id: micro-behaviors/communications/http/request/client::http-post-json
+      - id: micro-behaviors/communications/http/request/json::http-post-json
     unless:
       - id: metadata/package/testing/
 
@@ -193,9 +199,37 @@ composite_rules:
       - id: micro-behaviors/communications/http/download/handler::node-http-stream-to-file-text
       - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-exec-mode-755
       - id: micro-behaviors/process/create/spawn::detached-ignored-unref-spawn
-    any:
-      - id: objectives/anti-static/obfuscation/string/fragmentation::js-inline-array-empty-join
-      - id: micro-behaviors/os/module/dynamic-load::node-split-literal-require
+    unless:
+      - id: metadata/package/testing/
+
+  - id: n8n-community-node-secret-gated-exec
+    desc: n8n community node runs gated remote commands
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1059.007,T1203
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    all:
+      - id: metadata/package/freeform::npm-n8n-node-manifest
+      - id: micro-behaviors/process/create/shell/request::workflow-cmd-parameter-read
+      - id: micro-behaviors/process/create/shell/guard::literal-secret-exec-gate
+      - id: micro-behaviors/process/create/shell/bridge::js-exec
+    unless:
+      - id: metadata/package/testing/
+
+  - id: n8n-community-node-env-gated-domain-front-dropper
+    desc: n8n node gates on runtime env then domain-fronts payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1105,T1071.001,T1573
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    all:
+      - id: metadata/package/freeform::npm-n8n-node-manifest
+      - id: micro-behaviors/os/env/secret-name::n8n-runtime-env-reference
+      - id: micro-behaviors/communications/http/download/handler::node-http-stream-to-file-text
+      - id: micro-behaviors/communications/tls/verify/disable::reject-unauthorized-false
+      - id: micro-behaviors/communications/http/header/custom::node-ip-host-custom-header
     unless:
       - id: metadata/package/testing/
 
@@ -216,3 +250,34 @@ composite_rules:
       - id: metadata/import/npm/https::https
     unless:
       - id: metadata/package/testing/
+
+  # ghappier-class stagers prepend an atob+eval bootstrap ahead of a copied
+  # library body; Ethereum RPC strings live inside the obfuscated base64 chunks.
+  - id: javascript-atob-eval-ethereum-stager
+    desc: JavaScript atob-eval loader conceals Ethereum RPC stager
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1102,T1059.007
+    scope: file
+    all:
+      - id: micro-behaviors/data/decode/base64::base64-decode-call-text
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
+      - id: objectives/command-and-control/channel/deaddrop/blockchain::base64-ethereum-jsonrpc-method-fragment
+    unless:
+      - id: well-known/lib/format/pdfjs/
+      - id: well-known/tool/offensive/payload-corpus::xss-alert-probe-corpus
+      - id: micro-behaviors/process/interpreter/eval/direct::eval-parenthesized-expression
+
+  - id: npm-typosquat-prepended-ethereum-atob-eval-stager
+    desc: Typosquat npm package prepends Ethereum atob-eval stager
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1102,T1059.007
+    for: [npm, tar, zip, package.json, javascript, typescript]
+    scope: archive
+    all:
+      - id: metadata/package/repository::npm-name-repo-mismatch
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
+      - id: objectives/command-and-control/channel/deaddrop/blockchain::base64-ethereum-jsonrpc-method-fragment
+    unless:
+      - id: metadata/package/publishing::is-private

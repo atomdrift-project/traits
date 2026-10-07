@@ -1,0 +1,80 @@
+# .NET Web Shell Objectives
+#
+# Detects .NET-based web shells by combining HTTP interception capabilities.
+#
+# MBC: B0030 (C2 Communication)
+# ATT&CK: T1505.003 (Server Software Component: Web Shell)
+
+defaults:
+  platforms: [windows]
+  for: [binaries, scripts]
+
+composite_rules:
+  - id: aspnet-runtime-compiled-handler-loader
+    desc: Decodes and invokes an in-memory ASP.NET handler
+    crit: hostile
+    conf: 0.99
+    attack: "T1027,T1140,T1505.003,T1620"
+    for: [csharp]
+    all:
+      - id: micro-behaviors/communications/http/server/managed::aspnet-webhandler-directive
+      - id: micro-behaviors/communications/http/server/managed::http-context
+      - id: objectives/execution/compile/runtime::runtime-in-memory-code-compilation
+      - id: micro-behaviors/data/manipulation::dotnet-array-reverse-call
+      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+      - id: micro-behaviors/process/interpreter/reflection/runtime::csharp-reflection-method-lookup
+      - id: micro-behaviors/process/interpreter/reflection/runtime::dotnet-reflected-method-invoke
+      - id: micro-behaviors/process/interpreter/reflection/runtime::activator-create
+
+  - id: dotnet-header-webshell
+    for: [pe]
+    desc: .NET HTTP headers with assembly loading
+    crit: suspicious
+    conf: 0.95
+    attack: T1505.003
+    all:
+      - id: micro-behaviors/communications/http/server/managed::http-context
+      - id: micro-behaviors/communications/http/server/managed::http-headers-access
+      - id: micro-behaviors/process/interpreter/reflection/resolve::assembly-load-text
+    any:
+      - id: micro-behaviors/communications/http/server/managed::http-request-get
+      - id: micro-behaviors/communications/http/server/managed::http-response-get
+      - id: micro-behaviors/data/manipulation::dotnet-name-value-collection
+    unless:
+      - id: metadata/binary/framework/
+      - id: well-known/app/utility/installer::openra-installer
+      - id: well-known/dual-use/tunnel/netch/
+
+  - id: dotnet-reflective-webshell
+    for: [pe]
+    desc: .NET reflective memory web shell
+    crit: hostile
+    conf: 0.98
+    attack: T1505.003
+    all:
+      - id: micro-behaviors/communications/http/server/managed::http-context
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
+
+  - id: dotnet-deserialization-payload
+    for: [pe]
+    desc: .NET constructor-based deserialization payload
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/binary/framework::managed-constructor-method
+      - id: metadata/binary/layout/size::tiny-dotnet
+    any:
+      - id: micro-behaviors/communications/http/server/managed::http-context
+      - id: objectives/evasion/process/injection/toolkit::module-stomping-target
+
+  - id: tiny-dotnet-web-interceptor
+    for: [pe]
+    desc: Unusually small .NET binary with web interception capabilities
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/communications/http/server/managed::http-context
+      - id: metadata/binary/layout/size::tiny-dotnet
+    unless:
+      # Reference assemblies in the targeting pack are API stubs under 8KB.
+      - id: well-known/lib/runtime/managed/dotnet-runtime::aspnetcore-ref-pack

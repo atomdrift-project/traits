@@ -42,6 +42,14 @@ traits:
     if:
       type: path
       regex: '(?i)\.dockerfile$'
+  - id: dockerfile-azure-appservice-ssh
+    desc: Dockerfile configures Azure App Service SSH
+    crit: baseline
+    conf: 0.95
+    for: [dockerfile]
+    if:
+      type: text
+      substr: 'root:Docker!'
   # A shell script that tags and builds an image is provisioning a container,
   # not configuring the host it runs on. The `-t` is load-bearing: it requires
   # an actual build invocation rather than a mention of the word docker.
@@ -57,7 +65,7 @@ traits:
     for: [shell]
     if:
       type: text
-      regex: '\bdocker\s+build\s+[^\n]{0,40}-t\s'
+      regex: '(?s)\bdocker\s+build\b.{0,200}?\s-t\s'
 
   - id: ci-docker-shell-script
     desc: Shell script in CI Docker tree
@@ -109,6 +117,32 @@ traits:
     if:
       type: text
       substr: /docker-entrypoint
+  # Image vulnerability-scan reports embed the scanned image's Dockerfile
+  # layer history (ADD/RUN/CMD records) as data. A RUN record can carry the
+  # very command idioms dropper rules detect -- chmod of a dotfile stage,
+  # shell RC appends -- without this file executing anything.
+  #
+  # Two spellings cover both analysis paths: oversize reports skip JSON
+  # parsing, so the record keys stay visible to text matching; small reports
+  # parse, which consumes the keys into structure and leaves only the values
+  # to text matching, so the value path is needed there.
+  - id: image-scan-layer-history-text
+    desc: Image scan layer history record text
+    crit: notable
+    conf: 0.95
+    for: [json]
+    if:
+      type: text
+      regex: '"instruction"\s*:\s*"RUN"[\s\S]{0,400}"empty"\s*:\s*false'
+  - id: image-scan-layer-instruction-value
+    desc: Image scan layer instruction value
+    crit: notable
+    conf: 0.95
+    for: [json]
+    if:
+      type: value
+      path: "layers[*].instruction"
+      exact: "RUN"
   - id: cloud-hypervisor-integration-workloads
     desc: Cloud Hypervisor integration workload marker
     crit: notable
@@ -150,7 +184,49 @@ traits:
       type: text
       regex: '\$ID\s*=\s*''(debian|ubuntu|almalinux|fedora|rocky|centos|alpine)'''
 
+  # A stage built `FROM scratch` starts from an empty root filesystem, so each
+  # COPY into it populates a path rather than replacing a vendor binary. That
+  # is how minimal images and test initramfs trees are assembled: crosvm's
+  # e2e guest image copies a static bash to /bin/bash in exactly this way.
+  #
+  # Only the *final* stage counts, so the pattern demands that every line
+  # after the scratch FROM, to end of file, is some other instruction. A later
+  # `FROM` breaks the run, and so does a stage too long for the bounded
+  # window -- both leave this off, so padding a decoy scratch stage cannot
+  # exempt the stage that follows it. Baseline: a bare scratch image is the
+  # repo's own does-nothing fixture.
+  - id: scratch-final-stage
+    desc: Final image stage is a scratch rootfs
+    crit: baseline
+    conf: 0.9
+    for: [dockerfile]
+    if:
+      type: text
+      regex: '(?im-u)^FROM\s(.{0,60}\s)?scratch\b.{0,60}(\n([^F\n].{0,160})?){0,400}\s*\z'
+  # `COPY nginx /usr/sbin/nginx` replaces a daemon the base image already
+  # provides. The FROM and the COPY stay separate so the gap between them is
+  # not a single unbounded regex. A scratch stage has no daemon to replace.
+  - id: dockerfile-from-base-image
+    desc: Dockerfile FROM names a base image
+    for: [dockerfile]
+    platforms: [unix]
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?im)^FROM\s+\S+'
+      not:
+        - regex: '(?i)scratch\b'
+
 composite_rules:
+  - id: image-scan-layer-history
+    desc: Image scan embeds Dockerfile layer history
+    crit: notable
+    conf: 0.95
+    for: [json]
+    any:
+      - id: image-scan-layer-history-text
+      - id: image-scan-layer-instruction-value
   - id: docker
     desc: Built in Docker container
     crit: baseline

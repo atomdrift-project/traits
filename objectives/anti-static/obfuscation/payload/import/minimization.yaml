@@ -7,49 +7,6 @@ defaults:
   mbc: "B0032"
   attack: "T1027"
 composite_rules:
-  - id: minimal-imports
-    desc: Mach-O command runner with sparse imports
-    crit: suspicious
-    conf: 0.8
-    for: [macho]
-    all:
-      - id: micro-behaviors/process/create/shell/spawn::system-fn
-      - id: metadata/binary/symbols/count::imports-at-most-50-macho
-    unless:
-      - id: metadata/binary/symbols/count::many-imports-50
-      - id: well-known/tool/development/toolchain/darling/
-
-  # === Helpers ===
-  - id: pe-dynamic-resolution
-    desc: PE dynamic API resolution primitive
-    crit: component
-    for: [pe]
-    any:
-      - id: micro-behaviors/dylib/load/runtime::load-library-a
-      - id: micro-behaviors/os/module/load::get-proc-address-import
-      # Source-language GetProcAddress references (non-PE).
-      - id: micro-behaviors/dylib/lookup::get-proc-address
-
-  - id: pe-exec-primitive
-    desc: PE process-execution primitive
-    crit: component
-    for: [pe]
-    any:
-      - id: micro-behaviors/process/create/exec::shell-execute
-      - id: micro-behaviors/process/create/exec::winexec
-      - id: micro-behaviors/process/create/spawn::create-process-a
-      - id: micro-behaviors/process/create/spawn::create-process-w
-
-  - id: pe-memory-allocation-primitive
-    desc: PE memory allocation primitive
-    crit: component
-    for: [pe]
-    any:
-      - id: micro-behaviors/mem/protect/modify::virtual-alloc
-      - id: micro-behaviors/mem/protect/modify::virtual-protect
-      - id: micro-behaviors/mem/alloc/heap::heap-alloc
-      - id: micro-behaviors/mem/alloc/heap::heap-free
-
   - id: elf-dynamic-resolution
     desc: ELF dynamic API resolution primitive
     crit: component
@@ -66,7 +23,7 @@ composite_rules:
       - id: micro-behaviors/data/encode/pecompact
       - id: metadata/binary/section/label::upx-section
       - id: metadata/binary/section/label::pdi-section
-      - id: metadata/signed/certificate/identity::pe-signature-verified
+      - id: metadata/signed/certificate/signature::pe-signature-verified
       # The Dell Display Manager leg was dropped when this marker was finally
       # wired into `minimal-pe-dynamic-load`: it is one product rather than a
       # packer or a signature, so it does not fit what this marker says it is,
@@ -74,22 +31,31 @@ composite_rules:
       # inert regardless -- nothing referenced this trait at all.
       - id: objectives/anti-static/pack/asprotect::asprotect-protector-application
       - id: objectives/anti-static/pack/uharc::uharc-version-string
+      - id: metadata/binary/section/label::vmp-section-name
+      - id: metadata/binary/section/label::aspack-section
+      - id: objectives/anti-static/pack/detect::aspack-marker
 
-  # Minimal-import PE contexts that are known-benign rather than concealed:
-  # SVKP-packed binaries and Wine/ReactOS builtins (thin forwarder stubs that
-  # implement the Windows API surface instead of importing it).
+  # Strong, named benign contexts for minimal-import PEs. We require identity
+  # or implementation evidence here; a vendor string or installer directory
+  # alone is handled separately on the consuming rule, not promoted to an
+  # exception.
   - id: minimal-import-recognized-pe
-    desc: Known-recognized minimal-import PE marker
-    crit: component
+    desc: Verified benign minimal-import PE context
+    crit: exception
     conf: 0.9
     for: [pe]
     any:
-      - id: metadata/binary/layout/ratio::svk-packed-section
-      - id: metadata/binary/vendor/
-      # Export-heavy API provider stubs resolve a few backing functions but
-      # are libraries, not sparse-import payload loaders.
-      - id: metadata/binary/symbols/count::many-exports-20
-      - id: well-known/app/system/reactos/
+      - id: metadata/binary/installer/plugin::nsis-system-plugin
+      - id: metadata/binary/vendor::microsoft-signed-system-component-context
+      - id: well-known/app/system/reactos::system-component
+      # Bundled open-source plugin/runtime libraries whose Windows builds
+      # carry a canonical ABI export next to the MSVC static-CRT
+      # delay-load import set (LoadLibraryExW + GetProcAddress +
+      # FreeLibrary) in a table of well under 40 imports. GStreamer
+      # plugin DLLs and the GLib bundle's proxy-libintl gettext shim both
+      # scored here from the @openai/codex voice resources.
+      - id: well-known/lib/media/gstreamer/
+      - id: well-known/lib/runtime/native-platform/glib::proxy-libintl-gettext-export
 
   # Legitimate programs that resolve APIs through their own loader layers keep
   # small import tables next to large images: libcef (its own Windows API
@@ -108,6 +74,8 @@ composite_rules:
       # HWiNFO's protected client library resolves its real imports
       # dynamically behind a 9-import stub (bundled by IObit Driver Booster).
       - id: well-known/app/utility/hwinfo::hwinfo-component-context
+      - id: well-known/lib/platform/squirrel/
+      - id: well-known/tool/sysadmin/ethr::ethr-binary
 
   # === Windows PE Import Patterns ===
   - id: minimal-pe-dynamic-load
@@ -120,21 +88,20 @@ composite_rules:
     # become one synthetic loader merely because the next fixture has imports.
     size_min: 8193
     all:
-      - id: pe-dynamic-resolution
+      - id: micro-behaviors/dylib/lookup::pe-dynamic-linking-api-references
+      - id: metadata/binary/symbols/count::pe-imports-under-40
     unless:
-      # libcef resolves nearly all of its Windows API surface through its own
-      # loader, so the import table stays small next to a 196 MB image; SIW
-      # probes APIs dynamically as a diagnostic utility. Both are grouped in
-      # legitimate-loader-sparse-import-context to fit the suppression budget.
-      - id: legitimate-loader-sparse-import-context
-      - id: metadata/binary/symbols/count::many-imports-30
-      - id: metadata/binary/installer/family/
+      - id: objectives/anti-static/pack/entropy::unsigned-nonstandard-rwx-unpacker
+      # Recognized loaders and system components with legitimately sparse
+      # import tables -- see minimal-pe-dynamic-load-known-benign-context.
+      - id: minimal-pe-dynamic-load-known-benign-context
       - id: metadata/binary/symbols/exports::no-exports
       - id: metadata/binary/layout/ratio::svk-packed-section
-      # Vendor string hits (e.g. "Microsoft Corporation" in leftover EULA
-      # bytes) must not wipe minimal-import crypt stubs — only real
-      # Microsoft identity claims.
-      - id: minimal-import-recognized-pe
+      # These two facts are too broad to establish a benign identity, but they
+      # remain useful as direct, local guards for export-heavy stubs/installers.
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/symbols/count::many-exports-20
+      - id: metadata/package/testing/presence/harness::test-directory-path
       # `minimal-pe-dynamic-load-recognized-marker` is defined above with seven
       # legs -- UPX/PECompact/ASProtect/UHARC sections and a verified
       # signature -- and had **no references at all**; its name says which rule
@@ -143,6 +110,33 @@ composite_rules:
       # import table: AutoIt ships install/Aut2Exe/upx.exe, and Firefox
       # Portable's maintenanceservice_installer.exe is Mozilla-signed.
       - id: minimal-pe-dynamic-load-recognized-marker
+    downgrade:
+      scope: parent
+      any:
+        # Use the parent-visible notable atomic marker directly. The broader
+        # baseline context composite is useful for same-file downgrades, but
+        # baseline composites are not retained as parent findings.
+        - id: metadata/package/testing/presence/integration::bcj-filter-regression-fixture-basename
+
+  - id: minimal-pe-dynamic-load-known-benign-context
+    desc: Recognized PE with legitimately sparse imports
+    crit: exception
+    conf: 0.9
+    for: [pe]
+    any:
+      # libcef resolves nearly all of its Windows API surface through its own
+      # loader, so the import table stays small next to a 196 MB image; SIW
+      # probes APIs dynamically as a diagnostic utility.
+      - id: legitimate-loader-sparse-import-context
+      # Wine builtin DLLs implement the Windows API rather than import it.
+      - id: well-known/lib/platform/wine::wine-builtin-dll-marker
+      # Vendor string hits (e.g. "Microsoft Corporation" in leftover EULA
+      # bytes) must not wipe minimal-import crypt stubs — only real
+      # Microsoft identity claims.
+      - id: minimal-import-recognized-pe
+      - id: well-known/tool/development/toolchain/go-toolchain::go-toolchain-distribution
+      # Go parser fixtures are minimal PEs by design (debug/pe/testdata/*).
+      - id: well-known/tool/development/toolchain/go-toolchain::go-testdata-fixture-path
 
   - id: crypto-minimal-pe
     desc: Crypto API with minimal imports
@@ -152,49 +146,12 @@ composite_rules:
     all:
       - id: micro-behaviors/crypto/library/cryptoapi::capi-key-material-setup
     any:
-      - id: pe-dynamic-resolution
-      - id: pe-exec-primitive
+      - id: micro-behaviors/dylib/lookup::pe-dynamic-linking-api-references
+      - id: metadata/binary/symbols/imports::pe-execution-api-references
     unless:
       - id: metadata/binary/symbols/count::many-imports-30
       - id: metadata/build/recognized-contexts/
       - id: metadata/binary/section/label::upx-section
-  - id: shell-exec-minimal-imports
-    desc: Execution capability with minimal imports
-    crit: suspicious
-    conf: 0.85
-    for: [pe]
-    all:
-      - id: pe-exec-primitive
-      - id: metadata/binary/symbols/count::pe-imports-under-40
-    any:
-      - id: pe-dynamic-resolution
-      - id: pe-memory-allocation-primitive
-    unless:
-      # SIW probes system APIs dynamically as a diagnostic utility; vendor
-      # identity marks the known-benign family.
-      - id: well-known/app/utility/siw::siw-family-identity
-      - id: metadata/binary/symbols/exports::no-exports
-      - id: micro-behaviors/data/encode/pecompact
-      # Chromium's browser engine has a legitimate process-execution surface
-      # for renderer/utility processes and its loader resolves APIs normally.
-      - id: legitimate-loader-sparse-import-context
-      # The NSIS uninstaller stub is the archetype this rule mistakes for
-      # concealment: NSIS emits it at install time, and its exehead resolves
-      # APIs at runtime from a deliberately tiny import table by design, so
-      # the small table explains itself. draw.io Desktop's
-      # `$R0/Uninstall draw.io.exe` scored suspicious on exactly that shape.
-      # Deliberately the uninstaller identity and not the broader
-      # metadata/binary/installer/family/ directory, which would also exempt
-      # NSIS-packed droppers -- NSIS is a common malware carrier. The identity
-      # does lean on an `uninstall*.exe` basename, which an attacker controls,
-      # but it is paired with the embedded NSIS manifest resource, and the
-      # generated stub's behavior is NSIS's, not the packager's.
-      - id: metadata/binary/installer/script::nsis-uninstaller
-    downgrade:
-      any:
-        - id: metadata/binary/section/label::upx-section
-        - id: micro-behaviors/data/encode/pecompact::pecompact-signature
-        - id: metadata/lang/compiler/managed/
   - id: extreme-minimal-imports
     desc: Extremely minimal import table
     crit: notable
@@ -202,9 +159,9 @@ composite_rules:
     for: [pe, elf]
     size_min: 32768
     any:
-      - id: pe-dynamic-resolution
-      - id: pe-memory-allocation-primitive
-      - id: pe-exec-primitive
+      - id: micro-behaviors/dylib/lookup::pe-dynamic-linking-api-references
+      - id: micro-behaviors/mem/combined::pe-memory-management-api-set
+      - id: metadata/binary/symbols/imports::pe-execution-api-references
       - id: micro-behaviors/crypto/library/cryptoapi::capi-key-material-setup
       - id: elf-dynamic-resolution
       - id: micro-behaviors/process/create/shell/spawn::system-fn
@@ -224,22 +181,23 @@ composite_rules:
     conf: 0.85
     for: [pe]
     any:
-      - id: pe-dynamic-resolution
-      - id: pe-memory-allocation-primitive
-      - id: pe-exec-primitive
+      - id: micro-behaviors/dylib/lookup::pe-dynamic-linking-api-references
+      - id: micro-behaviors/mem/combined::pe-memory-management-api-set
+      - id: metadata/binary/symbols/imports::pe-execution-api-references
       - id: micro-behaviors/crypto/library/cryptoapi::capi-key-material-setup
       - id: micro-behaviors/fs/file/open::file-create-win
       - id: micro-behaviors/fs/delete/file/library::deletefile-a
       - id: micro-behaviors/process/inject/dll::create-remote-thread
       - id: micro-behaviors/process/terminate/kill::terminate-process
       - id: micro-behaviors/os/registry/access::reg-create-key-ex-w
-      - id: micro-behaviors/os/registry/access::reg-set-value-ex-w
+      - id: micro-behaviors/os/registry/write::reg-set-value-ex-w
       - id: micro-behaviors/communications/socket/init::wsa-startup
       - id: micro-behaviors/communications/socket/init::socket-api
       - id: micro-behaviors/communications/socket/init::connect-api
     needs: 7
     unless:
       - id: metadata/binary/symbols/count::many-imports-25
+      - id: well-known/app/ai/coding-agent/devez-vibe::runtime-binary-context
       - id: well-known/app/storage/syncback/
       - id: well-known/app/utility/siw::siw-family-identity
       # Chromium/CEF imports many normal browser, IPC, crypto, and process
@@ -263,23 +221,9 @@ composite_rules:
       - id: metadata/binary/installer/family/
       - id: metadata/signed/platform/
       - id: micro-behaviors/fs/temp/pyinstaller/
+      - id: micro-behaviors/data/archive/custom::pyinstaller-archive-cookie-read-error
 
   # === ELF Import Patterns ===
-  - id: minimal-elf-dynamic-load
-    desc: Minimal ELF imports with dynamic loading
-    crit: notable
-    conf: 0.75
-    for: [elf]
-    all:
-      - id: elf-dynamic-resolution
-    unless:
-      - id: metadata/binary/symbols/count::many-imports-30
-      - id: metadata/binary/provenance/
-      - id: objectives/evasion/hijack-execution-flow/linker/
-      - id: well-known/lib/native/modernc-libc::libc-xdlsym-runtime
-      - id: well-known/lib/platform/android-renderscript
-      - id: well-known/lib/runtime/scripted/jruby/
-
   - id: minimal-elf-execution-resolution
     desc: Minimal-import ELF with dynamic resolution or shell execution
     crit: suspicious
@@ -332,7 +276,6 @@ composite_rules:
     all:
       - id: micro-behaviors/dylib/lookup::dlsym-symbol
     any:
-      - id: objectives/anti-static/obfuscation/payload/encrypted::math-cipher-imports
       - id: micro-behaviors/process/create/shell/spawn::system-fn
     unless:
       # Darling's usr/bin/ssh and libdtrace.dylib: dlsym beside crypto or
@@ -347,6 +290,8 @@ composite_rules:
       # addons via dlsym and spawn commands by design.
       - id: well-known/lib/runtime/scripted/bun-runtime/
       - id: well-known/app/ai/coding-agent/anthropic-claude-code/
+      - id: metadata/binary/symbols/count::many-imports-40
+      - id: metadata/binary/layout/size::massive-executable
 
   # === PE Ransomware/Dropper Patterns ===
   - id: pe-dropper-minimal-imports
@@ -359,7 +304,7 @@ composite_rules:
     needs: 2
     any:
       - id: crypto-minimal-pe
-      - id: shell-exec-minimal-imports
+      - id: metadata/binary/symbols/imports::pe-sparse-execution-api-profile
       - id: extreme-minimal-imports
     unless:
       - id: metadata/binary/section/label::upx-section
@@ -391,7 +336,7 @@ composite_rules:
     needs: 2
     any:
       - id: crypto-minimal-pe
-      - id: shell-exec-minimal-imports
+      - id: metadata/binary/symbols/imports::pe-sparse-execution-api-profile
       - id: suspicious-ratio-imports
       - id: extreme-minimal-imports
     unless:
@@ -410,7 +355,7 @@ composite_rules:
     conf: 0.85
     for: [elf]
     all:
-      - id: minimal-elf-dynamic-load
+      - id: elf-dynamic-resolution
     any:
       - id: minimal-elf-execution-resolution
       - id: extreme-minimal-imports
@@ -442,14 +387,14 @@ composite_rules:
     attack: T1027.002,T1620
     for: [pe]
     all:
-      - id: pe-dynamic-resolution
+      - id: micro-behaviors/dylib/lookup::pe-dynamic-linking-api-references
       - id: metadata/binary/layout/overlay::overlay-dominates-80pct
       - id: metadata/binary/section/header::pe-entry-in-writable-section
       - id: micro-behaviors/communications/socket/init::recv-api
       - id: micro-behaviors/process/create/launch::create-process-api-name
     any:
       - id: micro-behaviors/dylib/load/runtime::load-library-a
-      - id: micro-behaviors/os/module/load::get-proc-address-import
+      - id: micro-behaviors/dylib/lookup::get-proc-address-import
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/

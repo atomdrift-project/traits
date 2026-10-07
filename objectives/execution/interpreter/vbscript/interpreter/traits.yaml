@@ -4,20 +4,6 @@ defaults:
   platforms:
     - windows
 traits:
-  - id: vbs-mid-power-slice
-    desc: VBScript Mid power slice
-    crit: suspicious
-    conf: 0.88
-    attack: T1059.001
-    for: [vbs, html, scripts, text]
-    if:
-      type: text
-      # Word boundary so an identifier suffix (vmid) is not the Mid() call.
-      regex: '(?i)\bMid\s*\([^)]{0,60}power[^)]{0,20}\)'
-    unless:
-      - id: metadata/build/generated::sphinx-searchindex-js
-      - id: metadata/package/documentation/source::documentation-dir-path
-      - id: well-known/tool/sysadmin/unix-benign::emacs-install-tree
   - id: vbs-shell-concat-fragment
     desc: VBScript shell concat fragment
     crit: notable
@@ -33,6 +19,8 @@ traits:
     conf: 0.96
     attack: T1059.001
     for: [vbs]
+    unless:
+      - id: micro-behaviors/process/create/shell/wsh::vbs-hidden-powershell-file-run
     if:
       type: text
       regex: '(?i)powershell.{0,40}-(w|WindowStyle)\s+Hidden.{0,80}-ExecutionPolicy\s+Bypass'
@@ -45,15 +33,6 @@ traits:
     if:
       type: text
       regex: IEX\s+\$env:[A-Za-z_][A-Za-z0-9_]{3,40}
-  - id: vbs-hidden-async-run
-    desc: Hidden asynchronous WSH command
-    crit: notable
-    conf: 0.94
-    attack: T1059.001
-    for: [vbs]
-    if:
-      type: text
-      regex: '(?i)\.run\s+[^,\r\n]{1,240},\s*0\s*,\s*(false|0)\b'
 composite_rules:
   - id: vbs-wscript-shell-launcher
     for: [batch, javascript, vbs]
@@ -63,6 +42,21 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/shell/script-host::wscript-shell-run-create
       - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run-statement
+  # A Mid() slice kept in a variable and consumed as a Split delimiter is
+  # the table-boundary computation loaders use to hide the real separator.
+  # Either leg alone is ordinary string handling; together, nearby, they
+  # are the sliced-delimiter technique. Replaces the former
+  # vbs-mid-power-slice atom, which keyed on the literal word "power" inside
+  # Mid() -- one fixture's variable name, not a behavior.
+  - id: vbs-mid-sliced-split-delimiter
+    desc: VBScript Mid-sliced Split delimiter
+    crit: suspicious
+    conf: 0.9
+    for: [vbs, html]
+    all:
+      - id: micro-behaviors/data/decode/custom::mid-sliced-variable
+      - id: micro-behaviors/data/string/split::vbs-split-variable-delimiter
+    near_lines: 15
   - id: vbs-split-powershell-launch
     desc: VBScript split PowerShell launch
     crit: suspicious
@@ -70,16 +64,16 @@ composite_rules:
     attack: T1059.001
     for: [vbs, html, scripts, text]
     all:
-      - id: vbs-mid-power-slice
+      - id: vbs-mid-sliced-split-delimiter
       - id: vbs-shell-concat-fragment
   - id: vbs-hidden-wscript-launcher
-    for: [javascript, vbs]
+    for: [vbs]
     desc: Hidden VBScript WScript.Shell launcher
     crit: hostile
     conf: 0.98
     all:
       - id: vbs-wscript-shell-launcher
-      - id: objectives/execution/wmi::wmi-showwindow-hidden-property
+      - id: micro-behaviors/process/create/hidden::wmi-showwindow-hidden-property
   - id: vbs-hidden-split-powershell-runner
     desc: Hidden split PowerShell runner
     crit: hostile
@@ -88,7 +82,7 @@ composite_rules:
     for: [vbs]
     all:
       - id: vbs-split-powershell-launch
-      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-hidden-run
+      - id: micro-behaviors/process/create/hidden::wscript-shell-hidden-run
       - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-statement
   - id: vbs-hidden-env-powershell-launcher
     desc: VBScript launches hidden env PowerShell
@@ -109,8 +103,10 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/shell/command-flag::powershell-flagged-command-line
       - id: micro-behaviors/os/com/automation::wscript-shell-literal
-      - id: vbs-hidden-async-run
-      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+      - id: micro-behaviors/process/create/hidden::wsh-run-hidden-async-statement
+      - id: micro-behaviors/process/create/flags::execution-policy-bypass
+    unless:
+      - id: micro-behaviors/process/create/shell/wsh::vbs-hidden-powershell-file-run
   - id: vbs-hidden-split-powershell-xor-loader
     desc: Hidden split PowerShell XOR loader
     crit: hostile
@@ -118,7 +114,7 @@ composite_rules:
     attack: T1059.005,T1059.001,T1027
     for: [vbs]
     all:
-      - id: objectives/command-and-control/dropper/execution/wsh::wsh-hidden-powershell-xor-loader
+      - id: objectives/command-and-control/dropper/file-exec/command/script-host-download::wsh-hidden-powershell-xor-loader
       - id: micro-behaviors/os/com/automation::wscript-shell-literal
   - id: vbs-hidden-obfuscated-payload-runner
     for: [vbs]
@@ -126,7 +122,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     all:
-      - id: vbs-hidden-async-run
+      - id: micro-behaviors/process/create/hidden::wsh-run-hidden-async-statement
       - id: objectives/anti-static/obfuscation/multi-layer::vbs-chunked-base64-payload-table
       - id: micro-behaviors/os/env/read::wsh-vbs-environment-method
   - id: vbs-obfuscated-dynamic-payload
@@ -137,5 +133,5 @@ composite_rules:
     for: [vbs]
     all:
       - id: micro-behaviors/data/encode/char-code::dense-chr-construction
-      - id: objectives/anti-static/obfuscation/string/fragmentation::script-host-line-bloat
+      - id: metadata/file/line::vbs-long-average-lines
       - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-statement

@@ -35,12 +35,18 @@ traits:
       type: text
       regex: 'cp\s+[^\n]{0,40}/bin/(ba)?sh\b[\s\S]{0,160}chmod\s+[^\n]{0,20}(u\+s|4[0-7]{3})'
     unless:
+      - id: metadata/package/testing/presence/harness/
       - id: well-known/app/utility/cmdchamp/
       - id: well-known/tool/offensive/bingo/
 composite_rules:
+  # Both *-shell-exec rules carried a downgrade on setuid/ (originally
+  # setuid::drop-privs), which matches whenever the setuid/setgid leg does, so
+  # neither ever reported above notable. That is the honest tier: setuid plus
+  # a /bin/sh string is present in su, sudo, cron, sshd and most daemons.
   - id: setuid-shell-exec
     for: [elf, macho, c]
     desc: Setuid with shell execution
+    crit: notable
     conf: 0.85
     all:
       - id: micro-behaviors/process/identity/setuid::setuid-dup
@@ -50,10 +56,10 @@ composite_rules:
     downgrade:
       any:
         - id: micro-behaviors/process/fork/clone::daemon-dup
-        - id: micro-behaviors/process/identity/setuid/
   - id: setgid-shell-exec
     for: [elf, macho, c]
     desc: Setgid with shell execution
+    crit: notable
     conf: 0.85
     all:
       - id: micro-behaviors/process/identity/setuid::setgid
@@ -63,4 +69,31 @@ composite_rules:
     downgrade:
       any:
         - id: micro-behaviors/process/fork/clone::daemon-dup
-        - id: micro-behaviors/process/identity/setuid/
+
+  - id: shell-setuid-shell-backdoor
+    for: [shell]
+    desc: Shell script enables setuid on system shell alongside command-and-control
+    crit: hostile
+    conf: 0.99
+    platforms: [unix]
+    all:
+      - id: micro-behaviors/fs/chmod/executable/mode::chmod-setuid-shell
+    any:
+      - id: objectives/command-and-control/beacon/network/http::direct-http-c2
+      - id: micro-behaviors/communications/ip/literal::direct-ip-http-client
+      - id: objectives/command-and-control/backdoor/webshell/embedded::shell-php-webshell-drop
+
+  # A complete setuid-root shell in under 4KB of C is a backdoor stub, not a
+  # system utility: real setuid programs are orders of magnitude larger and
+  # interpose authentication. The stub size plus the runtime escalation
+  # composite convicts the stub form without touching full-size tools.
+  - id: minimal-setuid-root-shell-stub
+    for: [c]
+    desc: Minimal setuid-root shell backdoor stub
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/privilege-escalation/elevation-control/setuid/runtime::native-root-setid-shell-escalation
+      - id: metadata/file/size::tiny-c-source-file
+
+

@@ -6,15 +6,6 @@ defaults:
   attack: T1027
   mbc: B0032
 traits:
-  - id: has-invisible-unicode
-    desc: Contains many invisible Unicode characters
-    crit: notable
-    conf: 0.88
-    if:
-      type: metrics
-      field: text.invisible_chars
-      min: 17
-      max: 64
   - id: high-invisible-unicode
     desc: Suspicious invisible Unicode count
     crit: notable
@@ -30,55 +21,6 @@ traits:
       - id: well-known/app/ai/browser-agent/open-webui-computer/
       - id: metadata/lang/generated::codegen-source-path
       - id: metadata/file/catalog/identity/
-  - id: last-line-over-1000
-    desc: Last line is over 1000 chars
-    crit: notable
-    conf: 0.9
-    # The metrics matcher is capped at 17 concrete types; scripts are the
-    # supported obfuscation surface for this shared rule.
-    for: [scripts]
-    # Source maps serialize generated code as one JSON line; that is not
-    # obfuscation evidence.
-    unless:
-      - id: metadata/build/bundler/asset::has-sourcemap
-      - id: metadata/build/bundler/vscode::javascript-source-map-file
-      - id: metadata/file/format/structured::sourcemap-sources-content
-      - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
-      - type: path
-        regex: '(?i)(^|[/\\])dist[/\\].+\.(?:m?js|cjs)$'
-      - id: metadata/lang/scripted::dts-declaration-file
-      - id: well-known/lib/ui/google-code-prettify::runner
-      - type: path
-        basename: true
-        regex: '^[A-Za-z0-9_.-]+[-.][A-Za-z0-9_-]{8,}\.js$'
-
-    if:
-      type: metrics
-      field: text.last_line_length
-      min: 1000
-  - id: single-long-line-outlier
-    desc: Exactly one line exceeds 1000 chars
-    crit: notable
-    conf: 0.9
-    for: [scripts]
-    unless:
-      - id: metadata/build/bundler/asset::has-sourcemap
-      - id: metadata/build/bundler/vscode::javascript-source-map-file
-      - id: metadata/file/format/structured::sourcemap-sources-content
-      - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
-      - type: path
-        regex: '(?i)(^|[/\\])dist[/\\].+\.(?:m?js|cjs)$'
-      - id: metadata/lang/scripted::dts-declaration-file
-      - id: well-known/lib/ui/google-code-prettify::runner
-      - type: path
-        basename: true
-        regex: '^[A-Za-z0-9_.-]+[-.][A-Za-z0-9_-]{8,}\.js$'
-
-    if:
-      type: metrics
-      field: text.lines_over_1000
-      min: 1
-      max: 1
   - id: buildkit-dockerfile-v0
     desc: BuildKit dockerfile marker
     crit: notable
@@ -96,24 +38,23 @@ traits:
       type: path
       basename: true
       regex: \.pyz$
-  - id: ico-resource-basename
-    desc: Icon resource file extension
-    crit: notable
-    for: [data]
-    if:
-      type: path
-      basename: true
-      regex: '(?i)\.ico$'
   - id: source-map-inline
     desc: Inline source map data URL
     crit: notable
     if:
       type: text
       substr: '//# sourceMappingURL=data:application/json'
+    unless:
+      - id: metadata/build/recognized-contexts::benign-build-tooling-context
+      - id: well-known/lib/vendor-sdk/tscircuit-eval/
   - id: test-basename-path
     desc: Test file path or basename
     crit: notable
     for: [javascript, typescript, python]
+    unless:
+      - id: metadata/lang/scripted::dts-declaration-file
+      - id: metadata/package/testing/harness/runtime::test-basename-suffix
+      - id: metadata/package/testing/harness/runtime::test-basename-spec
     if:
       type: path
       dirname: true
@@ -147,7 +88,7 @@ composite_rules:
       - id: well-known/lib/format/protobuf-ts
       - id: well-known/lib/data/apache-arrow
       - id: metadata/package/testing/scripted::xterm-terminal-recording
-      - id: ico-resource-basename
+      - id: metadata/file/extension/identity::ico-basename
       - id: metadata/file/catalog/identity::frequency-list-catalog
   - id: minified-code
     desc: Minified/compressed code (multiple indicators)
@@ -165,7 +106,7 @@ composite_rules:
     unless:
       - id: metadata/build/
       - id: metadata/file/extension/identity::html-basename
-      - id: ico-resource-basename
+      - id: metadata/file/extension/identity::ico-basename
       - id: metadata/lang/source/
       - id: well-known/lib/web/
       - id: objectives/anti-static/obfuscation/code-metrics/functions/
@@ -176,15 +117,15 @@ composite_rules:
     for: [scripts, '!jcl']
 
     all:
-      - id: last-line-over-1000
+      - id: metadata/file/line::last-line-over-1000
       - id: metadata/file/line::file-has-30-plus-lines
-      - id: single-long-line-outlier
+      - id: metadata/file/line::single-long-line-outlier
     unless:
       - id: source-map-inline
       - id: metadata/build/bundler/asset::js-large-module-bundle
       - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
       - id: metadata/build/recognized-contexts::benign-build-tooling-context
-      - id: metadata/signed/platform::microsoft-corporation
+      - id: metadata/signed/platform::microsoft
       - id: metadata/build/ecosystem::deno-cache-metadata-trailer
   - id: appended-steganography
     desc: Steganography payload in appended long line
@@ -205,7 +146,7 @@ composite_rules:
     for: [scripts, source]
 
     any:
-      - id: has-invisible-unicode
+      - id: metadata/file/invisible-unicode::invisible-unicode-17-to-64
       - id: micro-behaviors/data/decode/base64/
       - id: metadata/file/encoded::large-base64-like-string
       - id: micro-behaviors/data/decode/hex/
@@ -222,26 +163,31 @@ composite_rules:
 
     any:
       - id: micro-behaviors/process/interpreter/eval/
-      - id: micro-behaviors/process/interpreter/runtime/eval/
-      - id: micro-behaviors/process/interpreter/python/
+      - id: micro-behaviors/process/interpreter/vm::vm-runInContext-call
+      - id: micro-behaviors/process/interpreter/python::dunder-import-call
+      - id: micro-behaviors/process/interpreter/python::dunder-import-string-call
+      - id: micro-behaviors/process/interpreter/python::runpy-run-module
+      - id: micro-behaviors/process/interpreter/python::runpy-run-path
       - id: objectives/execution/interpreter/eval/
       - id: micro-behaviors/process/create/direct/
+      - id: micro-behaviors/process/create/shell/command-mode::start-executable-command
+      - id: micro-behaviors/process/create/shell/command-mode::batch-absolute-executable-command
       - id: micro-behaviors/process/create/shell/bridge::child-process-exec
       - id: micro-behaviors/process/create/shell/bridge::js-exec
-      - id: micro-behaviors/process/create/shell/bridge::js-execsync
+      - id: micro-behaviors/process/create/shell/bridge::execSync-call
       - id: micro-behaviors/process/create/shell/command-string::sh-c-exec
       - id: micro-behaviors/process/create/shell/spawn::bin-sh-interactive
       - id: micro-behaviors/process/create/shell/spawn::system-fn
-      - id: objectives/command-and-control/dropper/execution/script/
-      - id: objectives/command-and-control/dropper/execution/eval/
+      - id: micro-behaviors/process/create/launch::ruby-http-write-process-profile
+      - id: objectives/command-and-control/dropper/script-eval/
   - id: trailing-whitespace-payload
     desc: Trailing whitespace on a line hides code
     crit: suspicious
     conf: 0.9
     for: [javascript]
     all:
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::whitespace-hiding
-      - id: last-line-over-1000
+      - id: metadata/file/line::long-inline-whitespace-run
+      - id: metadata/file/line::last-line-over-1000
     any:
       - id: has-encoding
       - id: has-dynamic-exec
@@ -270,43 +216,36 @@ composite_rules:
       - id: metadata/file/line::file-one-liner
       - id: metadata/file/line::single-long-line
       - id: has-encoding
+    # A bare file write is not a payload write: minified config vaults, cache
+    # writers, and log helpers all decode something and write a file. Only
+    # writes that stage an executable artifact count here (see
+    # staged-payload-write below); the execution half stays covered by
+    # has-dynamic-exec above.
     any:
       - id: has-dynamic-exec
-      - id: micro-behaviors/fs/write/file
+      - id: micro-behaviors/fs/write/content::multiple-file-write-observations
     unless:
-      # Second guard on the same theme: a "line" tens of thousands of
-      # characters wide is generated bundle output, never a hand-written
-      # dropper one-liner.
       - id: metadata/file/line::enormous-single-line
-      # Third guard, and the one that actually holds. `file-one-liner` is
-      # computed per text *segment*, not per file, so it resolves true as a
-      # composite leg on files that are plainly not one-liners: react-json-tree's
-      # 248 KB / 962-line UMD bundle and node-pty's 201-line unixTerminal.test.js
-      # both scored hostile here, while `test-rules` on the atom alone reports
-      # NOT MATCHED (text.lines 962 vs the required <= 1). Until that is fixed in
-      # the engine, assert the file-level fact directly: a file with 30+ lines is
-      # not a one-line dropper, whatever the segment metrics say.
       - id: metadata/file/line::file-has-30-plus-lines
-      # The jsimplifier BenignJS corpus is a deobfuscation-research control
-      # set: commercially packed but benign scripts. Three of its members are
-      # `eval(decodeURIComponent(XOR(atob(<blob>))))` one-liners whose payload
-      # decodes to a Yandex ad/weather widget -- the packer shape without the
-      # payload. `base64-exec-proximity` in
-      # objectives/anti-static/obfuscation/payload/encoded/exec.yaml already
-      # carries this same exclusion; this rule was missing it.
-      #
-      # Path-scoped, so it only acquits a member of that corpus. A real
-      # decode-and-execute one-liner elsewhere -- the Laravel
-      # `rizhou-laravel-request-log` stat.min.js, which fingerprints the
-      # visitor and evals the server's reply -- keeps scoring, and this rule is
-      # currently its only detection.
       - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
-      # Legacy `eval("(" + str + ")")` JSON deserializer reads a value back rather than
-      # executing a decoded payload.
-      - id: micro-behaviors/data/parse/json::eval-parenthesized-json-deserializer
-      # A webpack source map is one JSON line of base64 mappings. That shape
-      # is the map, not a decode-and-execute dropper.
       - id: metadata/build/bundler/vscode::javascript-source-map-file
+      - id: metadata/package/testing/presence/harness::go-test-file
+      - id: one-line-dropper-benign-context
+      - id: well-known/tool/development/vcs/github-web::js-parse-end-mark
+      - id: well-known/tool/development/vcs/github-web::catalog-service-meta
+
+  - id: one-line-dropper-benign-context
+    desc: Recognized benign contexts for one-line script metrics
+    crit: exception
+    conf: 0.99
+    any:
+      # A .pth path configuration file is line-oriented Python configuration,
+      # not a standalone executable dropper script.
+      - id: micro-behaviors/process/interpreter/python::pth-path-config-file
+      - id: micro-behaviors/process/interpreter/eval/direct::eval-parenthesized-expression
+      - id: metadata/package/testing/harness/unit::rust-test
+      - id: well-known/tool/development/vcs/github-web::js-parse-end-mark
+      - id: well-known/tool/development/vcs/github-web::githubassets-fetched-artifact-path
 
   - id: obfuscated-dropper-in-asar-unpacked
     desc: Obfuscated dropper in unpacked asar
@@ -332,3 +271,4 @@ composite_rules:
       - id: metadata/file/magic/identity/
       - id: micro-behaviors/fs/temp/pyinstaller/
       - id: metadata/build/
+      - id: micro-behaviors/data/archive/custom::pyinstaller-archive-cookie-read-error

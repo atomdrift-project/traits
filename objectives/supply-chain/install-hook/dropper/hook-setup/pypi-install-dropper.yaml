@@ -125,6 +125,7 @@ traits:
     unless:
       - id: metadata/package/files/dependency::bundled-python-library-path
       - id: metadata/file/naming::generated-attack-map-context
+      - id: metadata/file/extension/identity::inno-setup-script-extension
   - id: python-release-impersonation-url-1
     desc: Fake Python release (exe/scr/msi)
     crit: suspicious
@@ -147,6 +148,8 @@ traits:
     if:
       type: text
       regex: (?i)\bInvoke-Expression\b.{0,80}\.exe\b
+    unless:
+      - id: well-known/tool/detection/cordon-scanner::cordon-defensive-scanner-context
   - id: setup-install-prompt-word
     desc: input prompt contains installer-themed keyword
     crit: notable
@@ -191,18 +194,6 @@ traits:
     if:
       type: text
       regex: '(?is)telemetry\.pth[\s\S]{0,240}shutil\.copy2\s*\('
-  # powershell-flagged-command-line is deliberately scoped to for: [vbs,
-  # html] only (see its own comment) to avoid matching any plain-text file
-  # that quotes a PowerShell command. setup.py building a PowerShell
-  # command-line string is the same shape, one language over.
-  - id: python-powershell-flagged-command-line
-    desc: PowerShell flagged command line in Python string
-    crit: notable
-    conf: 0.9
-    attack: T1059.001
-    if:
-      type: string_literal
-      regex: '(?i)\bpowershell(\.exe)?\b\s+[-/][A-Za-z]'
 composite_rules:
   - id: setup-py-sysargv-install-gate
     desc: setup.py gates behavior on the install argv token
@@ -310,7 +301,7 @@ composite_rules:
     mbc: E1204
     attack: T1204.002
     all:
-      - id: objectives/command-and-control/infrastructure/paste::pastebin
+      - id: micro-behaviors/communications/http/services/file-hosting::pastebin
       - id: micro-behaviors/communications/http/lib/urllib::urllib-request-symbol
       - id: micro-behaviors/process/create/subprocess::call
       - id: micro-behaviors/process/create/system::python-os-system
@@ -321,16 +312,16 @@ composite_rules:
     mbc: "E1059"
     all:
       - id: metadata/build/pip::setup-py
-      - id: objectives/anti-static/obfuscation/eval/scripting::python-decode-decrypt-dynamic-exec
+      - id: objectives/anti-static/obfuscation/eval/scripting/decode::python-decode-decrypt-dynamic-exec
     any:
-      - id: objectives/anti-static/obfuscation/payload/encoded::decoded-shell-command
-      - id: objectives/anti-static/obfuscation/payload/encoded::decoded-python-import-b
+      - id: objectives/anti-static/obfuscation/payload/encoded/exec::decoded-shell-command
+      - id: metadata/import/package::encoded-python-network-import-text
   - id: encoded-powershell-exe-path-use
     desc: Encoded PowerShell references executable path
     crit: suspicious
     conf: 0.92
     all:
-      - id: objectives/command-and-control/dropper/download::powershell-encoded-command-in-string
+      - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-raw
       - id: encoded-powershell-exe-path
   - id: inline-chr-loader
     desc: Inline decimal chr loader
@@ -352,8 +343,9 @@ composite_rules:
     any:
       - id: micro-behaviors/os/package-manager/install::pip-install
       - id: micro-behaviors/os/package-manager/install::python-pip-module-command
-    unless:
-      - id: metadata/build/pip/
+    # No `unless:`. The former `metadata/build/pip/` (earlier `pip::pip`, an
+    # any: over setup-py/root-setup-py) contained this rule's own
+    # root-setup-py leg, so the rule could never fire.
     downgrade:
       any:
         - id: metadata/package/completeness/
@@ -418,18 +410,17 @@ composite_rules:
     any:
       - id: micro-behaviors/fs/write/file/handle::py-open-write-inline
   - id: pypi-install-dropper
-    desc: PyPI install-time dropper
+    desc: Setup hook evaluates downloaded Python response bytes
     crit: hostile
     conf: 0.95
-    mbc: E1204
-    attack: T1204.002
+    attack: T1195.002,T1059.006
     all:
       - id: metadata/build/pip::root-setup-py
       - id: metadata/build/package/recipe/setup-hooks::python-install-hook
-      - id: micro-behaviors/communications/http/request/client::request-python
-      - id: micro-behaviors/process/create/launch::python-command-exec-any
-    unless:
-      - id: metadata/build/pip/
+    any:
+      - id: objectives/command-and-control/dropper/script-eval/response-eval::exec-get-text
+      - id: objectives/command-and-control/dropper/script-eval/response-eval::exec-get-content
+      - id: objectives/command-and-control/dropper/script-eval/response-eval::exec-urlopen-read
   - id: pypi-sysargv-install-download-execute
     desc: PyPI setup.py install gate downloads and runs an executable
     crit: hostile
@@ -450,7 +441,7 @@ composite_rules:
     all:
       - id: metadata/build/pip::root-setup-py
       - id: setup-py-sysargv-install-gate
-      - id: objectives/evasion/anti-av/platform/defender::defender-notification-disable-policy
+      - id: objectives/evasion/anti-av/blinding::defender-notification-disable-policy
       - id: micro-behaviors/os/registry/manipulate::reg-exe-add-command
       - id: pypi-setup-executable-download
       - id: micro-behaviors/process/create/launch::python-command-exec-any
@@ -527,7 +518,7 @@ composite_rules:
       - id: metadata/build/pip::root-setup-py
       - id: objectives/execution/autoinstall/pip::main-call-content
       - id: objectives/persistence/login/startup/shortcut::windows-shortcut-obfuscated-argument-inject
-      - id: objectives/anti-static/obfuscation/eval/scripting::advanced-python-obfuscation
+      - id: objectives/anti-static/obfuscation/eval/scripting/reflection::advanced-python-obfuscation
   - id: pypi-shortcut-hijack-dropper
     desc: PyPI package enumerates and hijacks browser shortcuts
     crit: hostile
@@ -548,7 +539,7 @@ composite_rules:
     all:
       - id: setup-py-win32com-import
       - id: objectives/supply-chain/install-hook/setup::setup-py-getenv
-      - id: micro-behaviors/os/wsh/file::create-shortcut
+      - id: micro-behaviors/fs/file/create::create-shortcut
   - id: pypi-browser-shortcut-target
     desc: PyPI installer targets browser shortcut
     crit: suspicious
@@ -556,11 +547,11 @@ composite_rules:
     attack: T1518
     all:
       - id: metadata/build/pip::root-setup-py
-      - id: micro-behaviors/os/wsh/file::browser-target-path
-      - id: micro-behaviors/os/wsh/file::shortcut-target-path
+      - id: micro-behaviors/fs/file/create::browser-target-path
+      - id: micro-behaviors/fs/file/create::shortcut-target-path
     any:
-      - id: micro-behaviors/os/wsh/file::shortcut-arguments
-      - id: micro-behaviors/os/wsh/file::create-shortcut
+      - id: micro-behaviors/fs/file/create::shortcut-arguments
+      - id: micro-behaviors/fs/file/create::create-shortcut
   - id: install-time-gated-execution
     desc: Platform-gated dependency install in setup.py
     crit: suspicious
@@ -581,7 +572,7 @@ composite_rules:
     mbc: E1204
     all:
       - id: metadata/build/pip::root-setup-py
-      - id: objectives/anti-static/obfuscation/eval/scripting::advanced-python-obfuscation
+      - id: objectives/anti-static/obfuscation/eval/scripting/reflection::advanced-python-obfuscation
       - id: micro-behaviors/fs/directory/mkdir::mkdir-python
   - id: pypi-inline-chr-loader
     desc: setup.py inline chr-array exec loader
@@ -614,7 +605,7 @@ composite_rules:
     all:
       - id: metadata/build/pip::root-setup-py
       - id: micro-behaviors/process/create/subprocess::popen-content
-      - id: objectives/command-and-control/dropper/download::powershell-encoded-command-in-string
+      - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-raw
       - id: micro-behaviors/process/daemonize/spawn::powershell-hidden
   - id: pypi-base64-powershell-downloader
     desc: PyPI setup.py launches a hidden Base64-concealed downloader
@@ -638,7 +629,7 @@ composite_rules:
     all:
       - id: metadata/build/pip::root-setup-py
       - id: micro-behaviors/process/create/subprocess::popen-ast
-      - id: objectives/command-and-control/dropper/download::powershell-encoded-command-in-string
+      - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-raw
       - id: micro-behaviors/process/daemonize/spawn::powershell-hidden
       - id: micro-behaviors/process/create/flags::creationflags
   - id: pypi-powershell-stager
@@ -650,7 +641,7 @@ composite_rules:
       - id: metadata/build/pip::root-setup-py
       - id: micro-behaviors/communications/http/download/helper::python-string-powershell-download-cradle
       - id: micro-behaviors/data/archive/extract/zip::powershell-expand-archive
-      - id: python-powershell-flagged-command-line
+      - id: micro-behaviors/process/create/shell/command-flag::python-string-powershell-flagged-command
   - id: pypi-extension-dropper-admin-gated
     desc: PyPI setup.py gates file creation on admin state
     crit: suspicious
@@ -679,8 +670,8 @@ composite_rules:
       - id: metadata/package/files/included::setup-py-basename
       - id: micro-behaviors/fs/temp/reference::tempfile-ref
       - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
-      - id: micro-behaviors/process/interpreter/python::exec-builtin
-      - id: objectives/anti-static/obfuscation/eval/scripting::platform-name-check
+      - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
+      - id: objectives/anti-static/obfuscation/eval/scripting/host::platform-name-check
     downgrade:
       any:
         - id: metadata/package/testing/
@@ -718,7 +709,7 @@ composite_rules:
     mbc: E1041
     all:
       - id: metadata/package/files/included::setup-py-basename
-      - id: objectives/exfiltration/oob/endpoint::webhook-site
+      - id: micro-behaviors/communications/url/host::webhook-site
     any:
       - id: micro-behaviors/process/create/system::python-os-system
       - id: micro-behaviors/communications/http/request/client::request-python

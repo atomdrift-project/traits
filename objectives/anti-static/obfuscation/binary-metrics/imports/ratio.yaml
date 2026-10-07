@@ -4,32 +4,6 @@
 defaults:
   platforms: [linux, macos, windows]
 traits:
-- id: max-50-imports
-  desc: Binary has 50 or fewer imports
-    # Component-only: import count alone doesn't indicate obfuscation.
-    # Used by composites that require entropy/section-dominance context.
-  crit: notable
-  conf: 0.7
-  for: [pe, elf, macho, -go, -rust]
-  size_min: 524288   # 512KB
-  if:
-    type: metrics
-    field: imports.count
-    max: 50
-  unless:
-  - type: basename
-    regex: \.(ko(\.zst)?|pak|bin|dat|desktop)$
-  - type: basename
-    regex: \.(map|deb|gz|mun)$
-  - type: metrics
-    field: imports.count
-    max: 0
-  - id: metadata/lang/compiler/systems::go-binary
-  - type: metrics
-    field: exports.count
-    min: 100
-  - id: metadata/package/vendor::bitdefender-ctc-module
-  - id: metadata/lang/compiler/systems::go-pe-symtab
 - id: max-80-imports
   desc: Binary has 80 or fewer imports
     # Component-only: the import count alone doesn't indicate obfuscation.
@@ -41,7 +15,7 @@ traits:
   platforms: [windows]
   size_min: 524288
   if:
-    id: objectives/anti-static/obfuscation/binary-metrics/sparse-imports::import-count-under-80
+    id: metadata/binary/symbols/count::imported-functions-under-80
   unless:
   - type: basename
     regex: \.(pak|bin|dat|desktop)$
@@ -166,14 +140,6 @@ traits:
     type: text
     substr: WMDRM backwards compatibility stub
     section: .rsrc
-- id: aliased-export-libiconv-symbol
-  desc: Aliased export with libiconv symbol
-  crit: component
-  conf: 0.95
-  for: [pe]
-  if:
-    type: trait
-    id: libiconv-open-symbol
 - id: aliased-export-com-server-exports
   desc: Aliased export with COM server exports
   crit: component
@@ -189,7 +155,7 @@ traits:
   for: [pe]
   if:
     type: trait
-    id: metadata/signed/platform::microsoft-corporation
+    id: metadata/signed/unknown::microsoft-corporation
 - id: aliased-export-wmdrm-stub
   desc: Aliased export in WMDRM compatibility stub
   crit: component
@@ -207,7 +173,7 @@ composite_rules:
   any:
   - id: metadata/signed/leaf::microsoft-corporation
   - id: metadata/signed/leaf::python-software-foundation
-  - id: aliased-export-libiconv-symbol
+  - id: objectives/anti-static/obfuscation/binary-metrics/imports::libiconv-open-symbol
   - id: aliased-export-com-server-exports
   - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
   - id: aliased-export-microsoft-signed
@@ -233,36 +199,6 @@ composite_rules:
   - id: micro-behaviors/fs/temp/py2exe::py2exe-pythondll
   - id: well-known/tool/development/toolchain/cygwin::cygwin-setup-signature
   # === Extreme size-to-import ratio ===
-- id: massive-file-minimal-imports
-  desc: Large binary with minimal imports
-  crit: suspicious
-  conf: 0.9
-  for: [pe, elf, macho, -go, -rust]
-  attack: "T1027"
-  mbc: "B0032"
-  size_min: 5242880   # 5MB
-  all:
-  - id: metadata/binary/symbols/count::max-30-imports
-  any:
-      # Has dynamic loading (hiding real imports)
-  - id: micro-behaviors/dylib/load/runtime::load-library-a
-  - id: micro-behaviors/dylib/lookup::get-proc-address
-  - id: objectives/anti-static/obfuscation/reflection/class::dlopen
-  - id: micro-behaviors/dylib/lookup::dlsym-symbol
-  unless:
-  - id: metadata/binary/framework::clr-runtime-header
-  - id: metadata/lang/compiler/systems::go-binary
-  - id: metadata/lang/compiled/
-  - id: metadata/binary/linking/static/
-  - id: metadata/package/vendor::bitdefender-ctc-module
-  - id: taggant-prepare-import
-  # IObit Driver Booster's large signed components (main app, installer)
-  # show a sparse import surface next to installer/patcher code that resolves
-  # APIs dynamically; the verified vendor identity marks the known-benign set.
-  - id: well-known/app/system/iobit::iobit-signed-component-context
-  # PhantomJS 2.x deliberately ships as one large UPX-packed browser binary;
-  # the packer's small import table does not imply concealed API resolution.
-  - id: well-known/app/browser/phantomjs::phantomjs-official-binary
 - id: huge-file-tiny-imports
   desc: Huge binary with minimal imports
   crit: hostile
@@ -287,40 +223,6 @@ composite_rules:
   # Official PhantomJS is a large UPX-packed WebKit binary with a thin PE
   # import table — the ratio looks like a packed dropper but is the product.
   - id: well-known/app/browser/phantomjs::phantomjs-official-binary
-- id: embedded-payload-binary
-  desc: Binary with suspected embedded payload
-  crit: suspicious
-  conf: 0.85
-  for: [pe, elf, macho, -go, -rust]
-  attack: "T1027.009"
-  size_min: 1048576   # 1MB
-  all:
-  - id: max-50-imports
-  needs: 2
-  any:
-  - id: metadata/binary/code/entropy::pe-code-entropy-78
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::dominant-section
-  - id: micro-behaviors/process/create/shell/
-  - id: micro-behaviors/crypto/
-  unless:
-  - id: well-known/tool/sysadmin/
-  - id: metadata/lang/compiler/systems::go-binary
-  - id: metadata/binary/symbols/count::many-exports
-  # Managed assemblies structurally match this rule: one mscoree import, a
-  # dominant .text section holding IL plus resources, and generic hash/xor
-  # constants. mscoree-string alone misses section-merged assemblies that
-  # carry no .idata, so use the consensus .NET identity instead.
-  - id: metadata/binary/framework::dotnet-assembly
-  - id: objectives/anti-static/pack/asprotect/
-  # HWiNFO's protected client library (bundled by IObit Driver Booster)
-  # keeps a 9-import table with an 8.0-entropy payload section by design;
-  # the verified vendor identity marks the known-benign component.
-  - id: well-known/app/utility/hwinfo::hwinfo-component-context
-  - id: metadata/binary/symbols/plugin::jni-native-library
-  downgrade:
-    any:
-    - id: objectives/anti-static/obfuscation/reflection/invoke/
-    - id: micro-behaviors/dylib/library/
 - id: dynamic-resolution-export-stub-profile
   desc: Dynamic resolution with aliased export stubs
   crit: suspicious
@@ -333,7 +235,7 @@ composite_rules:
   - id: micro-behaviors/dylib/lookup::get-proc-address
   any:
   - id: metadata/binary/layout/entropy::high-entropy-data
-  - id: objectives/anti-static/obfuscation/payload/section::oversized-data-section
+  - id: metadata/binary/section/ratio::data-section-1p5x-code
   - id: micro-behaviors/data/embedded/payload/archive::zip-magic
   - id: objectives/anti-analysis/debugger-detect/check::anti-debug-api-pair
   needs: 2
@@ -355,10 +257,10 @@ composite_rules:
   all:
   - id: micro-behaviors/dylib/lookup::get-proc-address
   - id: micro-behaviors/os/module/load::self-module-resolution
-  - id: objectives/anti-static/obfuscation/payload/section::packed-loader-data-geometry
+  - id: objectives/anti-static/obfuscation/payload/section/content::packed-loader-data-geometry
   any:
   - id: max-80-imports
-  - id: max-50-imports
+  - id: metadata/binary/symbols/count::imports-at-most-50-large-binary
   downgrade:
     any:
     - id: metadata/binary/vendor::is-microsoft-named

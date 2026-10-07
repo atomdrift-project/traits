@@ -7,17 +7,10 @@ defaults:
   # file-identification layer quite reasonably treats as Objective-C.  Keep
   # the additional scope narrow: these predicates require mIRC syntax and do
   # not classify ordinary Objective-C merely because it mentions IRC.
-  for: [mirc, ircii, scripts, binaries, objectivec, lua, data]
+  # DOS COM droppers embed the same remote-script text they write to the
+  # victim's script.ini, so a content-typed DosCom file is in scope too.
+  for: [mirc, ircii, scripts, binaries, objectivec, lua, data, dos_com]
 traits:
-  - id: mirc-script-event-join
-    desc: Detects mIRC JOIN event
-    crit: suspicious
-    if:
-      type: text
-      regex: 'ON ([*]|1):JOIN:'
-      case_insensitive: true
-    unless:
-      - id: metadata/lang/encoded/xor::highlightjs-resource
   - id: mirc-script-event-join-bang
     desc: mIRC join event with a level mark
     crit: suspicious
@@ -25,29 +18,17 @@ traits:
       type: text
       case_insensitive: true
       substr: '!:JOIN:'
-  - id: mirc-script-event-text
-    desc: Detects mIRC TEXT event
-    crit: suspicious
+  - id: mirc-caret-text-event
+    desc: mIRC caret TEXT event can hide messages
+    crit: notable
+    conf: 0.9
+    for: [mirc, ircii, scripts]
     if:
       type: text
       case_insensitive: true
-      # Bare `:TEXT:` also sits in ODF namespace URNs (`xmlns:text:`)
-      # embedded in Qt binaries such as cmake-gui.exe.
-      regex: 'ON ([*]|[0-9]+):TEXT:'
-  - id: mirc-script-event-part
-    desc: Detects mIRC PART event
-    crit: suspicious
-    if:
-      type: text
-      regex: 'ON ([*]|1):PART:'
-      case_insensitive: true
-  - id: mirc-script-event-quit
-    desc: Detects mIRC QUIT event
-    crit: suspicious
-    if:
-      type: text
-      regex: 'ON ([*]|1):QUIT:'
-      case_insensitive: true
+      # `on ^*:TEXT:` runs before mIRC displays the message, so a halt in the
+      # handler hides the triggering line from the victim's window.
+      regex: '(?m)^\s*on\s+\^([*]|[0-9]+):TEXT:'
   - id: mirc-script-cmd-dcc-send
     desc: Detects mIRC dcc send command
     crit: suspicious
@@ -55,13 +36,6 @@ traits:
       type: text
       case_insensitive: true
       substr: /dcc send
-  - id: mirc-script-cmd-dot-dcc-send
-    desc: mIRC dot-form dcc send command
-    crit: suspicious
-    if:
-      type: text
-      case_insensitive: true
-      substr: .dcc send
   - id: mirc-script-cmd-dcc-send-bare
     desc: Bare mIRC dcc send command
     crit: suspicious
@@ -89,25 +63,56 @@ traits:
       type: text
       case_insensitive: true
       substr: /ignore $nick
-  - id: mirc-script-cmd-writeini
-    desc: Detects mIRC writeini command
-    crit: suspicious
-    if:
-      type: text
-      case_insensitive: true
-      substr: /writeini
   - id: mirc-command-targets-nick
     desc: mIRC command targets nickname variable
     crit: notable
     if:
       type: text
       case_insensitive: true
-      regex: '(/(msg|notice|query|ignore|kick|ban|dcc)\s+\$nick\b|\.privmsg\s+\$nick\b)'
-
+      # Both the slash form (/msg) and the silent dot form (.msg, which
+      # suppresses local echo) address a command at $nick; backdoors prefer
+      # the dot form so the victim never sees the reply.
+      regex: '([/.](msg|notice|query|ignore|kick|ban|dcc)\s+\$nick\b|\.privmsg\s+\$nick\b)'
+  - id: mirc-script-event-ctcp
+    desc: mIRC CTCP event handler
+    crit: suspicious
+    conf: 0.93
+    for: [mirc, ircii, scripts]
+    if:
+      type: text
+      case_insensitive: true
+      # A remote CTCP definition: `ctcp <level>:<matchtext>:{` at line start.
+      # Ordinary prose never opens a brace after two colon fields.
+      regex: '(?m)^\s*ctcp\s+.{1,24}:\s*\{'
+  - id: mirc-exec-sender-text-command
+    desc: mIRC executes sender text as command
+    crit: suspicious
+    conf: 0.94
+    for: [mirc, ircii, scripts]
+    if:
+      type: text
+      case_insensitive: true
+      # Executes the sender-controlled message parameters ($N-) as a command:
+      # `.$+ $2-` (silent concat-exec) or `/$2-` (direct exec). Legitimate
+      # scripts echo or forward $N-, never execute it.
+      # Sed replacements such as `s/^(@PACKAGE@)-/$1-0.0~/` are not mIRC exec.
+      regex: '(\.\$\+\s+\$[0-9]-|/\$[0-9]-(\s|$))'
+  - id: mirc-controller-nick-gate
+    desc: mIRC handler gated on hardcoded nickname
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii, scripts]
+    if:
+      type: text
+      case_insensitive: true
+      # `$nick != hacker` / `$nick == boss`: the handler only answers a fixed
+      # operator nick. The gated name must start with a nick character, which
+      # also excludes self-comparisons (`$nick != $me`) — those are ordinary.
+      regex: '\$nick\s*(!=|==)\s*[A-Za-z0-9_\-\[\]{}^`|\\]{1,32}'
   - id: mirc-script-cmd-fserve
     desc: Detects mIRC file-server command
     crit: suspicious
-    for: [objectivec]
+    for: [mirc, ircii, objectivec]
     if:
       type: text
       case_insensitive: true
@@ -139,22 +144,6 @@ traits:
       type: text
       case_insensitive: true
       regex: '\bDCC\s+SEND\b'
-  - id: mirc-socklisten-event
-    desc: Listens with an mIRC socket
-    crit: suspicious
-    conf: 0.94
-    if:
-      type: text
-      case_insensitive: true
-      substr: '*:socklisten:'
-  - id: mirc-sockread-event
-    desc: Reads an mIRC socket line
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      case_insensitive: true
-      substr: '*:sockread:'
   - id: mirc-run-command-com
     desc: Runs command.com from mIRC
     crit: suspicious
@@ -162,7 +151,12 @@ traits:
     if:
       type: text
       case_insensitive: true
-      substr: 'command.com /c'
+      # DOS makefiles install with `command.com /c for %f in (...)`. mIRC
+      # launches it through its `run` command; a bare `command.com /c set`
+      # is jnr-posix picking the Windows 9x shell.
+      regex: '\brun\s+(-\w+\s+)?command\.com /c[^\r\n]{0,16}'
+      not:
+        - substr: ' /c for'
   - id: mirc-run-ping-flood
     desc: mIRC run launches a sized ping
     crit: suspicious
@@ -188,75 +182,364 @@ traits:
       # gyp's win_tool.py shells out to a compiler; a "run … .exe" line is
       # the build helper, not an mIRC /run command.
       - id: well-known/tool/development/cli/dev-cli/node-gyp::vendored-path
+  # Handlers and commands of the mIRC scripting language only. The file-wide
+  # `for:` reaches batch, Objective-C and data because filefacts used to type
+  # mIRC samples by their vxheaven variant letter (`.a`, `.m`); these atoms
+  # were written after it types them by content. Reaching `scripts` let
+  # `run … .bat` fire on Go's run.bat.
+  - id: mirc-enables-group
+    desc: mIRC enables a named group
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii, scripts, static-lib]
+    if:
+      type: text
+      regex: '(?i)(^|[;{|\r\n=])[ \t]*[/.!]?enable[ \t]+#[A-Za-z0-9_]'
+  - id: mirc-privmsg-client-address
+    desc: mIRC privmsg reports client address
+    crit: suspicious
+    conf: 0.92
+    for: [mirc, ircii, scripts, static-lib]
+    if:
+      type: text
+      regex: '(?i)\bprivmsg\b[^\r\n]{0,80}\$(ip|host)\b'
+  - id: mirc-write-net-view-bat
+    desc: mIRC writes a net view batch
+    crit: notable
+    conf: 0.9
+    for: [mirc]
+    if:
+      type: text
+      # `.w` is the mIRC abbreviation of `.write`; both stage the same batch.
+      regex: '(?i)\.w(rite)?\s+\S+\.bat\s+net\s+view\b'
+  - id: mirc-on-numbered-join
+    desc: mIRC numbered JOIN event
+    crit: suspicious
+    conf: 0.9
+    # DOS COM droppers embed the numbered remote they drop into script.ini
+    # (e.g. `n0=on 1:JOIN:#:/dcc send $nick c:\tiny.com`).
+    for: [mirc, static-lib, dos_com]
+    if:
+      type: text
+      substr: 'on 1:JOIN:'
+  - id: mirc-dot-copy
+    desc: mIRC dot-form copy command
+    crit: notable
+    conf: 0.86
+    for: [mirc]
+    if:
+      type: text
+      substr: '.copy '
+  - id: mirc-ping-pong-reply
+    desc: Replies to an IRC PING
+    crit: suspicious
+    conf: 0.92
+    for: [mirc]
+    if:
+      # Hyphen/dot-joined tokens are identifiers, not protocol verbs: libuv
+      # ships test/test-ping-pong.c and its file lists matched as a PING reply.
+      type: text
+      regex: '(?i)(^|[^\w.-])PING[^\w.-].{0,80}[^\w.-]PONG\b'
+  # Socket-driven clone kits (e.g. clonez payloads stored as `.drv` data
+  # files) share these atoms with the relay, harvest and flood composites.
+  - id: mirc-sockwrite-cisco-password
+    desc: mIRC socket types the cisco password
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii, scripts, data]
+    if:
+      type: text
+      # The factory VTY password as the whole line written to the socket.
+      regex: '(?i)\bsockwrite\s+(-[a-z]+\s+)?\S+\s+cisco\s*($|[|}\r\n])'
+  - id: mirc-sockwrite-onward-irc-port
+    desc: mIRC socket sends host and IRC port
+    crit: notable
+    conf: 0.88
+    for: [mirc, ircii, scripts, data]
+    if:
+      type: text
+      # `sockwrite -n <sock> <server> 6667`: the telnet target typed into
+      # the relaying router's prompt.
+      regex: '(?i)\bsockwrite\s+(-[a-z]+\s+)?\S+\s+\S+\s+(666[0-9]|7000|%\w*port)\b'
+  - id: mirc-list-reply-numeric-compare
+    desc: mIRC compares channel LIST numerics
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii, scripts, data]
+    if:
+      type: text
+      # RPL_LIST (322) / RPL_LISTEND (323) tested in a raw socket parser.
+      regex: '(?i)(==\s*32[23]\b|\b32[23]\s*==)'
+  - id: mirc-persists-parsed-socket-token
+    desc: mIRC saves a parsed token to file
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii, scripts, data]
+    if:
+      type: text
+      regex: '(?i)(^|[\s;{|=./])write\s+(-[a-z]+\s+)?\S+\s+\$gettok\('
+  - id: mirc-sockwrite-all-privmsg
+    desc: mIRC writes PRIVMSG to all clone sockets
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii, scripts, data]
+    if:
+      type: text
+      # A wildcard socket name (`clone*`) broadcasts to every connection.
+      regex: '(?i)\bsockwrite\s+(-[a-z]+\s+)?[\w.]*\*\s+PRIVMSG\b'
+  - id: mirc-text-flood-command
+    desc: mIRC trigger names a flood command
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii, scripts, data]
+    if:
+      type: text
+      # `on *:TEXT:!msgflood1*:` or `if ($1 == !ctcpflood)`.
+      regex: '(?i)(:TEXT:|==\s*)[!.@]\w{0,12}flood'
+  - id: mirc-random-chr-fill
+    desc: mIRC builds strings from random characters
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii]
+    count_min: 12
+    if:
+      type: text
+      substr: '$chr($r('
+  - id: mirc-exec-bare-params
+    desc: mIRC executes a message parameter
+    crit: suspicious
+    conf: 0.92
+    for: [mirc, ircii]
+    if:
+      type: text
+      # `{ $2- | ... }` substitutes the sender's text and executes it.
+      regex: '(?i)(^|[{;|])\s*\$[1-9]-\s*\|'
+  - id: mirc-clone-with-parameter
+    desc: mIRC clone command takes a parameter
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)(^|[\s;{|/=])/?\.?clone\s+\$'
+  - id: mirc-bocon-clone
+    desc: mIRC broadcasts a command to clones
+    crit: suspicious
+    conf: 0.92
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bbocon\s+clone'
+  - id: mirc-join-parameter
+    desc: mIRC join command takes a parameter
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)(^|[\s;{|:=/])/?join\s+\$[0-9]'
+  - id: mirc-msg-username-password
+    desc: mIRC message states a username and password
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bmsg\b[^\r\n]{0,180}\busername\b[^\r\n]{0,80}\bpassword\b'
+  - id: mirc-download-and-run-command
+    desc: mIRC command names download-and-run
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bdl\.run\b|download\s*&\s*run'
+  - id: mirc-findfile-ini
+    desc: mIRC searches the disk for ini files
+    crit: suspicious
+    conf: 0.88
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\$findfile\([^)\r\n]{0,80}\*\.ini'
+  - id: mirc-messenger-automation
+    desc: mIRC opens Messenger UI automation
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bMessenger\.UIAutomation\b'
+  - id: mirc-synp-start-call
+    desc: mIRC calls synp start with arguments
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bsynp\s+start\s+\$'
+  # Raw-socket file-server and scanner legs (Mushashi, Mox): each one is
+  # ordinary socket scripting alone; the listener, exfil, file-deletion and
+  # port-scan composites decide intent from their combination.
+  - id: mirc-bread-binary-transfer
+    desc: mIRC reads file bytes into binary var
+    crit: notable
+    conf: 0.88
+    for: [mirc, ircii]
+    if:
+      type: text
+      # `bread <file> <offset> <length> &bin` stages raw file contents.
+      regex: '(?i)(^|[\s;{|=])\.?/?bread\s+\S+\s+\S+\s+\S+\s+&\w'
+  - id: mirc-sockwrite-binary-var
+    desc: mIRC writes binary var to a socket
+    crit: notable
+    conf: 0.88
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bsockwrite\s+(-[a-z]+\s+)?\S+\s+&\w'
+  - id: mirc-remove-remote-path
+    desc: mIRC deletes a parameter-named file
+    crit: notable
+    conf: 0.88
+    for: [mirc, ircii]
+    if:
+      type: text
+      # The path comes from a parsed token or a parameter; a static
+      # `remove dir.txt` cleanup stays out.
+      regex: '(?i)(^|[\s;{|=])\.?/?remove\s+(-b\s+)?\$(gettok\(|[1-9]\b)'
+  - id: mirc-gettok-command-parse
+    desc: mIRC parses line's first word as verb
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii]
+    if:
+      type: text
+      # `$gettok(%line,1,32)`: first space-separated token of a variable.
+      regex: '(?i)\$gettok\(\s*%[\w.]+\s*,\s*1\s*,\s*32\s*\)'
+  - id: mirc-sockopen-longip-target
+    desc: mIRC opens socket to a numeric IP
+    crit: suspicious
+    conf: 0.9
+    for: [mirc, ircii]
+    if:
+      type: text
+      # `$longip()` turns a counter into a dotted address to probe.
+      regex: '(?i)\bsockopen\s+[^\r\n|}]{0,60}\$longip\('
+  - id: mirc-scan-counter-increment
+    desc: mIRC increments a scan address counter
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)(^|[\s;{|=])\.?/?inc\s+%(\w+[._])?(scan|ip|addr)([._]\w+)?\b'
+  # `nick $rand(a,z) $+ ...` chained three or more times: the bot builds an
+  # unblockable random identity instead of taking one $rand fallback nick.
+  - id: mirc-random-nick-chain
+    desc: mIRC randomizes its nick in chunks
+    crit: notable
+    conf: 0.86
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\bnick\s+(\$rand\([^)\r\n]{0,24}\)[^|\r\n}]{0,12}){3,}'
+  # `.msg ns identify $did(2)`: the script sends a password to NickServ.
+  # Auto-identify scripts do this with their own stored password; paired
+  # with a password dialog below, the password is the victim's.
+  - id: mirc-ns-identify-send
+    desc: mIRC sends NickServ identification
+    crit: notable
+    conf: 0.9
+    for: [mirc, text, data]
+    if:
+      type: text
+      regex: '(?i)\.msg\s+ns\s+identify\s+\$'
+  # A dialog that prompts for a password (`dialog identify` with a
+  # `Password:` field). Benign auto-identify scripts share the shape, so
+  # this stays notable until the exfiltration leg joins it.
+  - id: mirc-password-dialog-open
+    desc: mIRC opens a password dialog
+    crit: notable
+    conf: 0.88
+    for: [mirc, text, data]
+    if:
+      type: text
+      regex: '(?i)\bdialog\b[^\r\n]{0,24}\bidentify\b'
+  # `.write mirc32.hlp $me --> $did(2)`: the dialog entry is also appended
+  # to a help-named log file, a second copy of the stolen password no
+  # legitimate identify script keeps.
+  - id: mirc-password-log-write
+    desc: mIRC logs a dialog entry to hlp
+    crit: notable
+    conf: 0.9
+    for: [mirc, text, data]
+    if:
+      type: text
+      regex: '(?i)\.write\s+\S*\.hlp\s+[^\r\n]{0,40}\$did\('
+  # `sockudp <name> ...`: fire-and-forget UDP datagrams from a script.
+  # Ordinary scripts have no reason to speak raw UDP; flood kits do.
+  - id: mirc-sockudp-send
+    desc: mIRC sends UDP datagrams by socket
+    crit: notable
+    conf: 0.88
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)(^|[\s;{|=])\.?/?sockudp\b'
+  # `timer<label> -m <millions> <secs> <command>`: a timer repeating a
+  # command millions of times is a flood loop, not a reminder.
+  - id: mirc-mass-repeat-timer
+    desc: mIRC timer repeats millions of times
+    crit: notable
+    conf: 0.88
+    for: [mirc, ircii]
+    if:
+      type: text
+      regex: '(?i)\btimer[A-Za-z0-9_.]*\s+-m\s+\d{7,}\b'
 composite_rules:
-  - id: mirc-script-event
-    desc: Detects mIRC scripting events used by worms
-    crit: suspicious
-    any:
-      - id: mirc-script-event-join
-      - id: mirc-script-event-text
-      - id: mirc-script-event-part
-      - id: mirc-script-event-quit
-  - id: mirc-script-cmd
-    desc: Detects mIRC scripting commands used by worms
-    crit: suspicious
-    any:
-      - id: mirc-script-cmd-dcc-send
-      - id: mirc-script-cmd-dcc-send-bare
-      - id: mirc-script-cmd-msg-chan
-      - id: mirc-script-cmd-ignore-nick
-      - id: mirc-script-cmd-writeini
-      - id: mirc-command-targets-nick
-      - id: mirc-script-cmd-fserve
-      - id: mirc-script-cmd-clone
-      - id: mirc-script-cmd-sockwrite
-      - id: mirc-script-cmd-dcc-send-phrase
-
-  # A remote TEXT handler that exposes a file server and clone/socket
-  # controls is an operator-controlled IRC bot surface.  Keep this at
-  # suspicious: the rule identifies a hostile-capable control surface, not
-  # successful delivery or execution.
   - id: mirc-remote-bot-control-surface
     desc: mIRC remote bot control surface
     crit: suspicious
     all:
-      - id: mirc-script-event-text
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
     any:
       - id: mirc-script-cmd-fserve
       - id: mirc-script-cmd-clone
       - id: mirc-script-cmd-sockwrite
       - id: mirc-script-cmd-dcc-send-phrase
-  - id: mirc-join-dcc-spread
-    desc: Joins a channel and DCC-sends a file
-    crit: hostile
-    conf: 0.96
-    all:
-      - id: mirc-script-event-join
-    any:
-      - id: mirc-script-cmd-dcc-send
-      - id: mirc-script-cmd-dcc-send-bare
-      - id: mirc-script-cmd-dcc-send-phrase
-      - id: mirc-script-cmd-dot-dcc-send
   - id: mirc-marked-join-dcc-spread
     desc: Marked join event DCC-sends a file
     crit: hostile
     conf: 0.96
     all:
       - id: mirc-script-event-join-bang
-      - id: mirc-script-cmd-dot-dcc-send
+      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
   - id: mirc-text-dcc-spread
     desc: Text handler also DCC-sends a file
     crit: hostile
     conf: 0.95
     all:
-      - id: mirc-script-event-text
-      - id: mirc-script-cmd-dot-dcc-send
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
+  # A caret TEXT handler hides the trigger line and `| halt` swallows the
+  # event, so a DCC send from it is operator-triggered silent file exfil.
+  - id: mirc-hidden-text-dcc-send
+    desc: Hidden TEXT trigger DCC-sends a file
+    crit: hostile
+    conf: 0.94
+    attack: T1041
+    for: [mirc, ircii]
+    all:
+      - id: mirc-caret-text-event
+      - id: mirc-script-cmd-dcc-send-bare
+      - id: micro-behaviors/communications/ipc/irc::mirc-halt-default-processing
   - id: mirc-multi-command-bot
     desc: mIRC bot exposes several remote commands
     crit: hostile
     conf: 0.95
     all:
-      - id: mirc-script-event-text
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
     any:
       - id: mirc-script-cmd-fserve
       - id: mirc-script-cmd-clone
@@ -267,16 +550,45 @@ composite_rules:
     desc: mIRC text handler launches an exe
     crit: hostile
     conf: 0.96
+    # Both run legs only fire in real remotes: the file-wide scope (which
+    # reaches batch, Objective-C and data for vxheaven-suffixed samples) is
+    # dead weight on this composite.
+    for: [mirc, ircii]
     all:
-      - id: mirc-script-event-text
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+    any:
+      # The slash form (/run) and the bare remote form (run) are the same
+      # behavior: prose cannot supply the handler leg, so both convict here.
       - id: mirc-run-exe
+      - id: micro-behaviors/process/create/exec::mirc-run-executable
+  # A channel TEXT command that fires UDP datagrams off a million-repeat
+  # timer is a remote-commanded UDP flood. Trigger, transport, and
+  # repetition each read benign alone; together they do not.
+  - id: mirc-text-udp-flood
+    desc: mIRC text command drives a UDP flood
+    crit: hostile
+    conf: 0.95
+    attack: T1498
+    for: [mirc, ircii]
+    all:
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: mirc-sockudp-send
+      - id: mirc-mass-repeat-timer
+  - id: mirc-socket-ping-client
+    desc: Socket client answers IRC PING
+    crit: hostile
+    conf: 0.94
+    for: [mirc]
+    all:
+      - id: micro-behaviors/communications/socket/connect::mirc-sockopen
+      - id: mirc-ping-pong-reply
   - id: mirc-socket-command-backdoor
     desc: mIRC socket runs shell commands
     crit: hostile
     conf: 0.97
     all:
-      - id: mirc-socklisten-event
-      - id: mirc-sockread-event
+      - id: micro-behaviors/communications/socket/listen::mirc-socklisten-event
+      - id: micro-behaviors/communications/socket/receive::mirc-sockread-event
       - id: mirc-run-command-com
   # A channel TEXT handler that shells out to ping with an attacker-chosen
   # packet size is an IRC-commanded ICMP flood.
@@ -286,5 +598,94 @@ composite_rules:
     conf: 0.95
     attack: T1498
     all:
-      - id: mirc-script-event-text
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
       - id: mirc-run-ping-flood
+  # A CTCP handler that runs the sender's message text as a command and then
+  # halts is arbitrary remote command execution: anyone who can CTCP the
+  # victim runs mIRC commands (file, process, DCC) with no visible reply.
+  - id: mirc-ctcp-remote-exec-backdoor
+    desc: mIRC CTCP handler executes remote text
+    crit: hostile
+    conf: 0.96
+    attack: T1059
+    # An actual remote: droppers that merely quote these lines are covered by
+    # the source-side worm traits, not by this execution verdict.
+    for: [mirc, ircii]
+    all:
+      - id: mirc-script-event-ctcp
+      - id: mirc-exec-sender-text-command
+      - id: micro-behaviors/communications/ipc/irc::mirc-halt-default-processing
+
+  - id: mirc-numbered-join-dcc
+    desc: Numbered JOIN event DCC-sends a file
+    crit: hostile
+    conf: 0.94
+    for: [mirc, static-lib, dos_com]
+    all:
+      - id: mirc-on-numbered-join
+    any:
+      # The dot form (`.dcc send`) anywhere in the script, or the slash/bare
+      # command on the handler line itself: Tiny-style DOS droppers write
+      # `n0=on 1:JOIN:#:/dcc send $nick <path>` into the victim's
+      # script.ini, auto-sending their self-copy to every joiner.
+      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
+      - id: micro-behaviors/communications/transfer::mirc-join-handler-dcc-send
+  - id: mirc-copy-then-dcc
+    desc: mIRC copies a file then DCC-sends it
+    crit: hostile
+    conf: 0.94
+    for: [mirc]
+    all:
+      - id: mirc-dot-copy
+      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
+  - id: mirc-group-reports-client
+    desc: Enabled group reports the client address
+    crit: hostile
+    conf: 0.94
+    for: [mirc, ircii, scripts, static-lib]
+    all:
+      - id: mirc-enables-group
+      - id: mirc-privmsg-client-address
+  - id: mirc-lan-view-batch
+    desc: mIRC writes a batch and runs it
+    crit: hostile
+    conf: 0.94
+    for: [mirc]
+    all:
+      - id: mirc-write-net-view-bat
+      - id: micro-behaviors/process/create/exec::mirc-run-batch-file
+  # A channel TEXT handler that both spawns clones and broadcasts to them
+  # is a clone botnet, not a single-session remote.
+  - id: mirc-text-directs-clones
+    desc: Remote text handler directs IRC clones
+    crit: hostile
+    conf: 0.95
+    attack: T1071
+    for: [mirc, ircii]
+    all:
+      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: mirc-clone-with-parameter
+      - id: mirc-bocon-clone
+
+  - id: mirc-clone-flood-bot
+    desc: Remote text flood command drives IRC clones
+    crit: hostile
+    conf: 0.95
+    attack: T1071,T1498
+    for: [mirc, ircii]
+    all:
+      - id: mirc-text-flood-command
+      - id: mirc-clone-with-parameter
+  # The flood-server triple (%flserv + %flport + %flchan) names the botnet's
+  # meeting point: individually each is one notable variable, together they
+  # are a flood bot's server configuration with no benign use.
+  - id: mirc-flood-server-config
+    desc: mIRC flood-bot server configuration
+    crit: hostile
+    conf: 0.96
+    for: [mirc, text, data]
+    all:
+      - id: objectives/command-and-control/channel/irc/bot::mirc-flood-server-var
+      - id: objectives/command-and-control/channel/irc/bot::mirc-flood-port-var
+      - id: objectives/command-and-control/channel/irc/bot::mirc-flood-channel-var
+

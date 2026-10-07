@@ -32,18 +32,16 @@ traits:
     if:
       type: text
       regex: upload.{0,50}\.zip
-  # Every curl flag that attaches a file to the request body, not just one:
-  # -T/--upload-file (PUT a file) and -F/--form (multipart part, `-F f=@path`).
-  # Naming the trait after a single spelling made an ordinary `-F` upload read
-  # back as a --upload-file the script does not contain.
-  - id: curl-upload-file
-    desc: curl file-upload flag (-T/-F/--upload-file)
+  # Multipart forms need not attach files. Stop at shell command separators
+  # so flags belonging to awk or another pipeline stage cannot be curl flags.
+  - id: curl-upload-or-form-option
+    desc: curl upload or multipart form option
     crit: notable
     conf: 0.9
     for: [scripts, binaries]
     if:
       type: text
-      regex: '\bcurl\b[^\n]{0,180}(--upload-file\b|--form([ =])|[ \t](-T|-F)([ \t=]))'
+      regex: '\bcurl\b[^\n|;]{0,180}(--upload-file\b|--form([ =])|[ \t](-T|-F)([ \t=]))'
   - id: rust-curl-upload-args
     desc: Rust curl command uses file upload
     crit: notable
@@ -135,53 +133,6 @@ traits:
       # o.createReadStream(p))`) are still covered.
       regex: '\.append\([^\r\n]{0,80}createReadStream\(|createReadStream\([^\r\n]{0,200}\.append\('
 
-  - id: multipart-file-array-field
-    desc: Multipart file array field
-    crit: component
-    conf: 0.82
-    if:
-      type: text
-      exact: file[]
-  - id: multipart-empty-filename
-    desc: Multipart file part has an empty filename
-    crit: component
-    conf: 0.96
-    for: [scripts, binaries]
-    if:
-      type: text
-      regex: '(?im)filename\s*=\s*""\s*$'
-
-  # Server-executable extensions are useful structure for triage, but uploads
-  # of deployment artifacts can be legitimate. The atoms remain separated by
-  # runtime family to keep each pattern small and reusable.
-  - id: multipart-php-script-filename
-    desc: Multipart part names a PHP script
-    crit: notable
-    conf: 0.96
-    for: [scripts, binaries]
-    if:
-      type: text
-      regex: '(?i);\s*filename\s*=\s*"[^"\r\n]{1,160}\.(php[3-8]?|phtml|pht|phar)"'
-  - id: multipart-managed-script-filename
-    desc: Multipart part names a managed web script
-    crit: notable
-    conf: 0.96
-    for: [scripts, binaries]
-    if:
-      type: text
-      regex: '(?i);\s*filename\s*=\s*"[^"\r\n]{1,160}\.(jspx?|aspx?|ashx|asmx|cfm|cfc)"'
-  - id: multipart-cgi-script-filename
-    desc: Multipart part names a CGI script
-    crit: notable
-    conf: 0.96
-    for: [scripts, binaries]
-    if:
-      type: text
-      regex: '(?i);\s*filename\s*=\s*"[^"\r\n]{1,160}\.(cgi|pl)"'
-
-  # An upload policy that accepts a server-executable script extension is a
-  # concrete, risky capability. It becomes exploitation evidence only when a
-  # client also sends a script under that caller-supplied policy.
   - id: upload-extension-allowlist-key
     desc: Upload extension allowlist field
     # Bare `accepted...types` (e.g. a Kubernetes discovery accepted_types
@@ -192,34 +143,20 @@ traits:
     for: [scripts, source, text]
     if:
       type: text
-      regex: '(?i)(allowed|permitted)[_-]?(file[_-]?)?(types|extensions)|accepted[_-]?files?(_types)?'
+      # `allowed_types` alone is any type allowlist (a protocol's accepted
+      # message types); a file-upload policy names files or extensions.
+      regex: '(?i)(allowed|permitted)[_-]?(file[_-]?types|(file[_-]?)?ext(ension)?s?\b)'
 
-  - id: php-script-extension-token
-    desc: PHP server-script extension token
-    crit: component
-    conf: 0.9
+  # Dropzone-style `acceptedFiles` / `accepted_file_types` upload option.
+  - id: upload-accepted-files-key
+    desc: Upload accepted-files option field
+    crit: notable
+    conf: 0.94
     for: [scripts, source, text]
     if:
-      type: string_literal
-      regex: '(?i)^\.?(php[3-8]?|phtml|pht|phar)$'
+      type: text
+      regex: '(?i)accepted[_-]?files?(_types)?'
 
-  - id: managed-script-extension-token
-    desc: Managed server-script extension token
-    crit: component
-    conf: 0.9
-    for: [scripts, source, text]
-    if:
-      type: string_literal
-      regex: '(?i)^\.?(jspx?|aspx?|ashx|asmx|cfm|cfc)$'
-
-  - id: cgi-script-extension-token
-    desc: CGI server-script extension token
-    crit: component
-    conf: 0.9
-    for: [scripts, source, text]
-    if:
-      type: string_literal
-      regex: '(?i)^\.?(cgi|pl|shtml)$'
   - id: dotnet-webclient-uploadfile
     desc: .NET WebClient UploadFile call
     crit: notable
@@ -228,24 +165,11 @@ traits:
     if:
       type: text
       regex: client\.UploadFile\s*\(
-  - id: dotnet-webclient-uploadvalues
-    desc: .NET WebClient.UploadValues form post
-    crit: notable
-    conf: 0.8
-    for: [csharp]
-    if:
-      type: text
-      regex: client\.UploadValues\s*\(
-
-  # `curl -X POST --data-binary @a` -- the request body IS a named local
-  # file. Distinct from -F/-T upload flags: this is "send this file's bytes
-  # as the payload", the instruction form agent skills use to exfiltrate a
-  # bundled or harvested file to an arbitrary endpoint.
   - id: curl-post-data-binary-file
     desc: curl POST sends named local file
     crit: notable
     conf: 0.9
-    for: [markdown, shell, text, javascript, typescript, python]
+    for: [markdown, shell, powershell, text, javascript, typescript, python]
     if:
       type: text
       # The name after `@` must start with a filename character, so the bare
@@ -255,7 +179,12 @@ traits:
       # Reading it as a named local file made this trait, and the exfiltration
       # composite built on it, fire on gofiber's docs/api/ctx.md, where that
       # line documents the framework's gzip request-body handling.
-      regex: '\bcurl\b[^\n]{0,120}--data-(binary|raw)[^\n]{0,60}@[\w@./][\w@./-]*'
+      # Accept the forms curl itself accepts around a named file: relative and
+      # absolute paths, quoted paths, environment-expanded home directories
+      # (`@$HOME/.npmrc`, `@"$HOME/.npmrc"`, `@%USERPROFILE%\\.npmrc`), and
+      # Windows drive paths.  The first filename character still excludes `-`,
+      # preserving the separate stdin atom for `@-`.
+      regex: '\bcurl\b[^\n]{0,160}--data-(binary|raw)\s+@["'']?[$%~\w./\\][^\s;&|"''<>]{0,199}'
 
   # Sending a file as an HTTP request body is a neutral transfer capability.
   # A temporary JSON path says where the body came from, not whether its
@@ -271,17 +200,40 @@ traits:
       regex: '\bcurl\b.{0,120}-X\s+POST.{0,120}-d\s+@(/tmp|/var/tmp)/[^ \t\r\n;|]{1,80}\.json'
 
 composite_rules:
+  # Text matching retains embedded agent instructions and host-language command
+  # strings, while the structured call leg proves that a shell-like artifact
+  # actually invokes curl.  This keeps commented examples from becoming an
+  # upload behavior.
+  - id: curl-named-file-body-upload-command
+    desc: curl command sends a named local file as request body
+    crit: notable
+    conf: 0.96
+    for: [shell, powershell]
+    near_lines: 1
+    all:
+      - id: curl-post-data-binary-file
+      - id: micro-behaviors/communications/http/download/cli::curl-command-call
+
+  - id: upload-file-type-allowlist
+    desc: Upload file-type allowlist field
+    crit: notable
+    conf: 0.94
+    for: [scripts, source, text]
+    any:
+      - id: upload-extension-allowlist-key
+      - id: upload-accepted-files-key
+
   - id: server-script-extension-allowlist
     desc: Upload allowlist accepts server scripts
     crit: notable
     conf: 0.96
     for: [scripts, source, text]
     all:
-      - id: upload-extension-allowlist-key
+      - id: upload-file-type-allowlist
     any:
-      - id: php-script-extension-token
-      - id: managed-script-extension-token
-      - id: cgi-script-extension-token
+      - id: micro-behaviors/fs/path/extension::php-script-extension-token
+      - id: micro-behaviors/fs/path/extension::managed-script-extension-token
+      - id: micro-behaviors/fs/path/extension::cgi-script-extension-token
     near_bytes: 512
 
   - id: browser-multi-channel-upload-fallback
@@ -310,7 +262,7 @@ composite_rules:
     any:
       - id: post-zip
       - id: upload-zip
-      - id: curl-upload-file
+      - id: curl-upload-or-form-option
   # The legs establish multipart body construction plus an upload-shaped
   # request; nothing here identifies the destination, so the description does
   # not claim a remote endpoint.

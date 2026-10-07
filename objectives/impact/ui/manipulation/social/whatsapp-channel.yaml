@@ -8,6 +8,14 @@ defaults:
   attack: T1491
 
 composite_rules:
+  - id: whatsapp-newsletter-follow-invocation
+    desc: Invokes a WhatsApp newsletter follow
+    crit: notable
+    conf: 0.97
+    any:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-query
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-api-call
+
   # The channel-id leg is an `any:` because the id does not have to be in the
   # file. A fork that hardcodes `1203...@newsletter` and one that pulls the
   # list from a remote JSON blob perform the identical action on the user's
@@ -15,6 +23,19 @@ composite_rules:
   # changed after publication. Requiring the literal graded the first as
   # suspicious and the second — the remotely retargetable one — not at all.
   # When the ids are fetched, the suffix guard on the loop is what remains.
+  # Requires the connect handler, open branch, and follow invocation to sit in
+  # the same source file — a Baileys tree spread across an archive is not
+  # enough on its own.
+  - id: connect-time-newsletter-auto-follow-loop
+    desc: Auto-follows newsletters when connection opens
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-update-handler
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-open-branch
+      - id: whatsapp-newsletter-follow-invocation
+    near_bytes: 3500
+
   - id: autonomous-whatsapp-newsletter-follow
     desc: Automatically follows a WhatsApp newsletter on session open
     crit: suspicious
@@ -22,11 +43,26 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-update-handler
       - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-open-branch
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-query
+      - id: whatsapp-newsletter-follow-invocation
     any:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid-suffix-check
-    near_bytes: 12000
+    near_bytes: 3500
+
+  # Archive-scoped counterpart for npm tarballs: at least one member file must
+  # contain the full connect-time follow loop, not merely API surface spread
+  # across unrelated modules.
+  - id: archive-session-open-whatsapp-newsletter-follow
+    for: [javascript, typescript, npm, tar, zip]
+    desc: Archive contains session-open newsletter follows
+    crit: suspicious
+    conf: 0.97
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-update-handler
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-open-branch
+      - id: whatsapp-newsletter-follow-invocation
+    near_bytes: 3500
 
   - id: remote-whatsapp-newsletter-follow-and-mute
     desc: Remotely controlled WhatsApp newsletter follow with concealment
@@ -37,6 +73,69 @@ composite_rules:
       - id: micro-behaviors/communications/http/request/json::fetch-json-response
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-mute-query
     near_bytes: 16000
+
+  # Following and muting automatically is suspicious even without a remote
+  # list. A source fragment cannot establish the user's lack of consent.
+  - id: connect-time-whatsapp-newsletter-follow-and-mute
+    desc: Session-open newsletter follow with notification muting
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: autonomous-whatsapp-newsletter-follow
+    any:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-mute-query
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-mute-api-call
+    near_bytes: 2000
+
+  # A hidden invite list must be resolved before it becomes a JID. There is
+  # no literal @newsletter target and no newsletterFollow helper call here.
+  - id: encoded-invite-resolved-whatsapp-newsletter-follow
+    desc: Hidden invites resolved into raw newsletter follows
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-base64-channel-invite-list
+      - id: micro-behaviors/data/decode/base64::buffer-from-base64-to-utf8
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-invite-metadata-input
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-operation-target
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-wmex-newsletter-query
+    near_bytes: 3000
+
+  - id: delayed-raw-whatsapp-newsletter-follow
+    desc: Raw newsletter follow with delayed callback
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-operation-target
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-wmex-newsletter-query
+      - id: micro-behaviors/time/schedule/delay::settimeout-callback-long-delay
+    near_bytes: 3000
+
+  # Injected into the socket client's login-success path: resolve a hardcoded
+  # channel invite, wait a few seconds, then issue the authenticated follow.
+  - id: wa-login-success-delayed-invite-channel-follow
+    desc: Login success handler auto-follows invite channel
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-ws-login-success-handler
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-invite-metadata-input
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-query
+      - id: micro-behaviors/time/schedule/delay::settimeout-callback-short-delay
+    near_bytes: 6000
+
+  - id: archive-wa-login-success-delayed-invite-channel-follow
+    for: [javascript, typescript, npm, tar, zip]
+    desc: Archive login handler auto-follows invite channel
+    crit: hostile
+    conf: 0.99
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-ws-login-success-handler
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-invite-metadata-input
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-query
+      - id: micro-behaviors/time/schedule/delay::settimeout-callback-short-delay
+    near_bytes: 6000
 
   - id: obfuscated-whatsapp-media-source-url
     desc: Obfuscated sourceUrl in outgoing WhatsApp media
@@ -138,6 +237,22 @@ composite_rules:
       - id: micro-behaviors/time/schedule/delay::settimeout-callback-long-delay
     near_bytes: 2400
 
+  # The same remotely retargetable follow with the helper call gone: the
+  # injected block fetches its channel list, waits out a long timer, then
+  # issues hand-rolled `w:mex` follow stanzas through the low-level query
+  # path, so neither the helper-call composites above nor the hardcoded-JID
+  # legs see it. The durable signal is the fetched list plus the delayed raw
+  # stanza; a bot that follows on user command fetches no target list.
+  - id: remote-config-driven-raw-whatsapp-newsletter-follow
+    desc: Delayed raw follow of remotely listed WhatsApp channels
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-wmex-newsletter-query
+      - id: micro-behaviors/communications/http/request/json::fetch-variable-near-json-response
+      - id: micro-behaviors/time/schedule/delay::settimeout-callback-long-delay
+    near_bytes: 1200
+
   # Baileys forks moved the follow into a helper that Base64-decodes a payload,
   # XOR-rebuilds the channel id, and only calls the low-level follow after a
   # long setTimeout. The public newsletterWMexQuery call shape is gone, so the
@@ -149,7 +264,7 @@ composite_rules:
     conf: 0.98
     all:
       - id: micro-behaviors/time/schedule/delay::settimeout-callback-long-delay
-      - id: objectives/supply-chain/install-hook/dropper/obfuscation::xor-charcode-decode-func
+      - id: micro-behaviors/data/encode/xor::js-charcode-xor-operation
       - id: micro-behaviors/data/decode/base64::buffer-from-base64-to-utf8
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-encoded-suffix
     near_bytes: 1200

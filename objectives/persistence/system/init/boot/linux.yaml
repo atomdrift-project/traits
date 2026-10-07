@@ -34,31 +34,6 @@ traits:
       - id: well-known/tool/detection/ai-guardrail/
       - id: well-known/app/development/calvyn-code
       - id: well-known/app/infrastructure/pvetui::pvetui-workflow-test-script
-  - id: etc-rc-local
-    desc: References /etc/rc.local boot path
-    crit: notable
-    conf: 0.8
-    attack: T1037.004
-    for: [c, cpp, elf, go, javascript, lua, php, python, shell, typescript]
-    if:
-      type: text
-      substr: /etc/rc.local
-    unless:
-      - id: metadata/file/catalog/persistence-path::persistence-path-catalog-constant
-      # Standard headers and vendored runtimes commonly document this path;
-      # the bare reference is not persistence behavior in those files.
-      - type: path
-        regex: '(?i)(^|[\\/])(include|libc|libcxx|libtsan)[\\/]'
-  - id: etc-rc-d-rc-local
-    desc: References /etc/rc.d/rc.local boot path
-    crit: notable
-    conf: 0.8
-    attack: T1037.004
-    if:
-      type: text
-      substr: /etc/rc.d/rc.local
-    unless:
-      - id: metadata/file/catalog/persistence-path::persistence-path-catalog-constant
   - id: go-main-autostart-handler
     desc: Go binary auto-start handler
     crit: suspicious
@@ -76,18 +51,16 @@ traits:
     if:
       type: text
       substr: "#!/sbin/openrc-run"
-  - id: update-rc-d-cmd
-    desc: update-rc.d command
+  - id: init-script-self-removal
+    desc: Init script removed via update-rc.d remove
     crit: notable
-    conf: 0.7
-    attack: T1037.004
+    conf: 0.95
     for: [shell]
     if:
-      type: symbol
-      kind: call
-      exact: update-rc.d
-    unless:
-      - id: well-known/app/network/dropbear::source-tree
+      type: text
+      # Match an executable command, not a no-op argument such as
+      # `: update-rc.d foo remove` in Debian postrm skeleton documentation.
+      regex: '(?m)^[ \t]*(sudo[ \t]+)?(/usr/sbin/)?update-rc\.d[ \t]+\S+[ \t]+remove\b'
   - id: chkconfig-cmd
     desc: chkconfig command (persistence context)
     crit: suspicious
@@ -102,6 +75,8 @@ traits:
       type: text
       regex: '(?m)^\s*(sudo\s+)?(/sbin/)?chkconfig\s+--add\b'
     unless:
+      - type: path
+        regex: '(^|/)usr/share/doc/'
       - id: metadata/build/package/
       - id: metadata/build/package-builder::package-builder-maintainer-script
       - id: well-known/dual-use/tunnel/shadowsocks-libev::shadowsocks-libev-source
@@ -124,41 +99,6 @@ traits:
       - id: well-known/app/infrastructure/walinuxagent::source-tree
       - id: well-known/app/finance/tollgate::source-tree
       - id: well-known/app/finance/tollgate::official-source-context
-  - id: install-action-before-initd-path
-    desc: Install action before init.d path
-    crit: notable
-    conf: 0.85
-    attack: T1037.004
-    unless:
-      - id: well-known/app/network/dropbear::source-tree
-    if:
-      type: text
-      regex: \b(install|enable|disable)\b.{0,40}/etc/init\.d/[^\s"'`|;]{1,96}
-  - id: write-action-before-initd-path
-    desc: Write action before init.d path
-    crit: suspicious
-    conf: 0.85
-    attack: T1037.004
-    unless:
-      - id: metadata/build/docker::dockerfile-basename
-      - id: metadata/build/package/
-      # W3 Total Cache's clean plugin archive contains packaging helpers that
-      # copy an init.d example; the plugin identity is not persistence intent.
-      - id: well-known/app/publishing/wordpress-plugins/performance::wordpress-plugin-path-w3-total-cache
-      # An APK/deb vendored as test data brings its maintainer scripts with it:
-      # apko's pkg/apk/apk/testdata/alpine-*/alpine-baselayout-*.apk installs
-      # Alpine's own init tree, which is the fixture, not the behavior.
-      - type: path
-        regex: 'testdata/'
-      # A container template's whole job is to build a root filesystem, init
-      # scripts included -- lxc ships usr/share/lxc/templates/lxc-busybox.
-      - id: metadata/build/package-builder::container-rootfs-template-path
-      # OpenSSH's own buildpkg.sh.in installs its init script; that is the
-      # package build recipe for the service, not persistence added to a host.
-      - id: well-known/app/network/openssh::source-tree-path
-    if:
-      type: text
-      regex: \b(copy|write|chmod|chown)\b.{0,40}/etc/init\.d/[^\s"'`|;]{1,96}
   - id: native-initd-write-call
     desc: Native code writes an init.d service
     crit: suspicious
@@ -180,7 +120,7 @@ composite_rules:
     for: [c, cpp]
     all:
       - id: micro-behaviors/os/service/config::systemd-etc-unit-path
-      - id: etc-rc-local
+      - id: micro-behaviors/os/service/config::etc-rc-local
       - id: micro-behaviors/process/interpreter/shell::system-profiled-path
       - id: micro-behaviors/fs/write/file/handle::native-write-file-call
     near_lines: 32
@@ -201,8 +141,8 @@ composite_rules:
     crit: component
     attack: T1037.004
     any:
-      - id: etc-rc-local
-      - id: etc-rc-d-rc-local
+      - id: micro-behaviors/os/service/config::etc-rc-local
+      - id: micro-behaviors/os/service/config::etc-rc-d-rc-local
   - id: c-rc-local-self-persistence
     desc: C appends its own executable path to rc.local
     crit: suspicious
@@ -217,20 +157,22 @@ composite_rules:
     # construction, and append-mode fopen in neighboring statements rather
     # than one expression. Proximity keeps unrelated append logic out.
     near_lines: 50
-  - id: hidden-rc-local-downloader-persistence
-    desc: Hidden rc.local downloader persistence
+  - id: native-bot-hidden-init-templates
+    desc: Raw-IP dropper with hidden init templates
     crit: hostile
     conf: 0.99
     attack: T1037.004,T1105,T1564.001
     for: [elf]
     all:
-      - id: etc-rc-local
-      - id: micro-behaviors/communications/http/download/fallback::multi-client-download-fallback
+      - id: micro-behaviors/os/service/config::etc-rc-local
+      - id: objectives/command-and-control/dropper/file-exec/command/shell::raw-ip-multi-client-download-execute
+      - id: micro-behaviors/os/service/unit-field::native-unit-template
       - id: micro-behaviors/fs/path/temp::hidden-tmp-state-file
       - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
     unless:
       - id: metadata/package/testing/
       - id: well-known/tool/sysadmin/unix-benign/
+      - id: objectives/persistence/system/service/systemd::native-mips-shell-persistence
   - id: hidden-multi-surface-init-persistence
     desc: Hidden multi-surface Linux init persistence templates
     crit: hostile
@@ -238,7 +180,7 @@ composite_rules:
     attack: T1036.004,T1037.004,T1543.003,T1564.001
     for: [elf]
     all:
-      - id: etc-rc-local
+      - id: micro-behaviors/os/service/config::etc-rc-local
       - id: micro-behaviors/os/service/config::init-script-path
       - id: micro-behaviors/fs/file/copy::copy-to-executable-directory
       - id: micro-behaviors/fs/path/temp::hidden-tmp-state-file
@@ -261,14 +203,15 @@ composite_rules:
       - id: well-known/lib/data/redis::redis-source-tree
       - id: well-known/lib/testing/modernc-ccorpus2::package-context
       - id: well-known/lib/testing/modernc-ccorpus2::source-archive-path
+      - id: init-script-self-removal
     all:
       - id: micro-behaviors/os/service/config::sysv-init-script-header
     any:
-      - id: update-rc-d-cmd
+      - id: micro-behaviors/os/service/config::update-rc-d-call
       - id: chkconfig-cmd
       - id: initd-path-before-install-action
-      - id: install-action-before-initd-path
-      - id: write-action-before-initd-path
+      - id: micro-behaviors/os/service/config::install-verb-before-initd-path
+      - id: micro-behaviors/os/service/config::write-verb-before-initd-path
       - id: native-initd-write-call
   - id: linux-init-iot-bot-persistence
     desc: Linux init persists IoT bot
@@ -278,7 +221,7 @@ composite_rules:
     for: [elf]
     all:
       - id: linux-init-script
-      - id: objectives/command-and-control/botnet/iot::huawei-upnp-encoded-download-exec
+      - id: objectives/lateral-movement/exploit/network-device/upnp::huawei-upnp-encoded-download-exec
   - id: shell-multi-surface-payload-persistence
     desc: Shell installs downloaded payload across init surfaces
     crit: hostile
@@ -287,10 +230,21 @@ composite_rules:
     mbc: B0030
     for: [shell]
     all:
-      - id: objectives/command-and-control/dropper/delivery/execute-download::raw-ip-multiarch-shell-payload
+      - id: objectives/command-and-control/dropper/file-exec/command/shell::raw-ip-multiarch-shell-payload
       - id: micro-behaviors/os/autorun/cron::crontab-echo-pipe
       - id: micro-behaviors/os/service/config::init-script-path
       - id: micro-behaviors/os/service/config::systemd-etc-directory-path
+
+  - id: shell-multi-surface-boot-persistence
+    desc: Hidden downloader cron relaunch with init-script writes
+    crit: hostile
+    conf: 0.99
+    attack: T1037.004,T1053.003,T1105
+    for: [shell]
+    all:
+      - id: objectives/persistence/system/cron/job::hidden-temp-download-cron-relaunch
+      - id: micro-behaviors/os/service/config::etc-rc-local
+      - id: micro-behaviors/fs/write/system-paths::startup-init-file-redirect
 
   - id: multi-method-elf-persistence-templates
     desc: ELF embeds cron, systemd, and init persistence templates
@@ -322,8 +276,9 @@ composite_rules:
       - id: well-known/app/storage/ubuntu-release-upgrader::ubuntu-release-upgrader-font-restore-context
       - id: micro-behaviors/os/service/config::systemd-xdg-fallback-branch
       - id: micro-behaviors/os/autorun/login-items::gtk-desktop-autostart-installer-context
+      - id: well-known/app/utility/eraigosa-dotfiles/
     all:
-      - id: objectives/persistence/login/xdg::xdg-persistence
+      - id: micro-behaviors/os/autorun/login-items::xdg-autostart-entry-reference
       - id: linux-user-systemd
   - id: go-bot-rc-local-autostart
     desc: Go flood bot combines auto-start logic with rc.local persistence
@@ -333,7 +288,7 @@ composite_rules:
     for: [elf]
     all:
       - id: go-main-autostart-handler
-      - id: objectives/persistence/system/init/boot::etc-rc-d-rc-local
+      - id: micro-behaviors/os/service/config::etc-rc-d-rc-local
       - id: objectives/impact/dos/attack/botnet::go-multivector-flood-methods
   - id: native-sysv-self-relocation
     desc: Self-deleting executable installs SysV service

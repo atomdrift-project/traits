@@ -1,1604 +1,1056 @@
 # cleave Taxonomy
 
-A three-tier taxonomy following [MBC (Malware Behavior Catalog)](https://github.com/MBCProject/mbc-markdown) principles.
+Where a trait goes, and why. Apply it mechanically: two authors — human or
+model — reading the same matcher should choose the same directory without
+knowing the sample, its reputation, its language, or the composite that
+consumes it.
+
+This is the authoritative placement contract; [RULES.md](RULES.md) covers rule
+syntax and matchers. Validator admission and migration acceptance are tracked
+separately, in [NEW_TAXONOMY_PLAN.md](NEW_TAXONOMY_PLAN.md) and
+[taxonomy-migration/](taxonomy-migration/README.md); a documented target proves
+neither. The retired proposal is in the
+[document archive](taxonomy-migration/research/document-authority/README.md).
+
+**How to use it.** Read through the
+[directory rules](#directory-budgets-and-placement-contracts) once, then place
+each rule with the [placement procedure](#placement-procedure) and check the
+[worked placements](#worked-placements). *(legacy: X)* marks a home
+mid-migration ([reading paths](#reading-paths)).
+
+## Philosophy
+
+The taxonomy is a precise, defensible catalog of malware behaviors and
+characteristics — and of ordinary software's, since malware is built from
+ordinary capabilities. It aims for Linnaean rigor (one reasonable home per
+observation, each child refining its parent, documented boundaries between
+neighbors), borrows [MBC](https://github.com/MBCProject/mbc-markdown)'s split
+of objectives, behaviors and methods, and follows Pike's economy: the fewest
+predictable categories that keep different claims apart.
+
+1. **Catalog observations, not specimens.** A sample yields many findings, each
+   placed separately. Its reputation, its family, where its other rules live
+   and spare directory capacity never choose a home.
+2. **The matcher is the identity.** Name, description and directory describe
+   what the matcher finds, not the consuming composite's intent
+   ([Matcher defines identity](#matcher-defines-identity)).
+3. **One canonical home (the Single-Trait Rule).** MBC files Process Injection
+   under both Defense Evasion and Privilege Escalation; cleave defines each
+   observation once, at its most specific supported home, and composites
+   reference it. Define each matcher once too: copies drift, double-count, and
+   split one signal across two ML features.
+4. **Each level narrows.** A child keeps its parent's meaning and answers the one
+   question the parent asks of all its children. Synonyms and "everything else"
+   buckets are not children.
+5. **Four claims, four tiers:** mechanics (`micro-behaviors/`), intent
+   (`objectives/`), properties (`metadata/`), identity (`well-known/`). An
+   embedded AES implementation is a capability; a manifest naming a crypto
+   dependency is metadata; a fingerprint showing the file *is* that library is
+   identity; encrypting a victim's files for ransom is an objective.
+6. **Claim no more than the evidence.** A string, API reference, path, constant
+   or embedded implementation can support a *probable* capability; proof of
+   execution is not required. The directory names the inferred capability; the
+   description names the evidence. Never infer an algorithm, data flow, target
+   or purpose the matcher lacks.
+7. **Implementation is scope.** Language, platform, file type, backend, API
+   spelling and matcher type go in `for:`, `platforms:`, the filename and the
+   trait ID, not in directories — unless the platform *is* the technique
+   (systemd, `LD_PRELOAD`, Winlogon).
+8. **Shortest precise path.** Split only for a real distinction, never for
+   symmetry, rule count or ML feature depth. Prefer breadth when siblings are
+   equally exact.
+9. **Criticality never fixes placement.** Fix a misleading classification by
+   moving, renaming or tightening the rule, never by demoting it.
+10. **Preserve detection.** Moves keep matchers and effective scope; detection
+    fixes are separate, tested and recorded.
+
+## Placement procedure
+
+1. **Write the claim** the matcher supports in one sentence. For a composite,
+   that is what its *required* evidence establishes.
+2. **Choose the tier** ([Tiers](#tiers)).
+3. **Choose level 1:** facility, objective, artifact subject or entity class.
+4. **Apply the branch's boundary and ordered tests.** Required results beat
+   incidental context.
+5. **Stop at the most specific home the evidence supports.** Evidence lacking
+   the algorithm, mechanism or subtype stays in the broad operation leaf
+   (`crypto/encrypt`, `crypto/cipher`).
+6. **Check the nearest competing leaf.** If both fit, add a deciding example and
+   counterexample here first.
+
+For composites:
+
+- **Required evidence decides.** `all:` requires every condition; `any:` requires
+  its `needs:` threshold (one by default). A named subtype must hold for every
+  passing combination. Alternatives that all establish Base64 encoding can
+  support that home without `all:`; an alternative that can be bypassed cannot
+  establish a mechanism. `needs:` counts `any:` matches only.
+- **Count roles, not traits.** `needs: 2` can be met by two indicators of one
+  source. Require each role (source, transfer, sink) separately; an `any:`
+  mixing endpoints and sources can convict on endpoints alone. A directory
+  selector can count both an atom and a composite derived from it; test that
+  one observation cannot satisfy a threshold intended to require two roles.
+  Check proximity separately: one nearby constituent can make a compound match
+  appear nearby while another required constituent is distant.
+
+- **The result owns the composite.** Trigger, carrier, transport, encoding and
+  language are referenced facts, not homes.
+- **Co-occurrence is not data flow.** Unless the rule binds source to sink
+  (same value, path or handle), describe it as co-occurrence.
+- **One result per composite.** Split unrelated results; keep a joint rule only
+  when the relationship is the observation. There is no `misc/`, `combined/` or
+  `behavioral/` overflow.
 
 ## Tiers
 
-| Tier | Purpose | Criticality Range | MBC Equivalent |
-|------|---------|-------------------|----------------|
-| **Capabilities** (`micro-behaviors/`) | Observable mechanics — what code *can do* | component → baseline → notable → suspicious | [Micro-objectives](https://github.com/MBCProject/mbc-markdown/tree/master/micro-behaviors) |
-| **Objectives** (`objectives/`) | Attacker goals — why code *likely wants* to do something | component → baseline → notable → suspicious → hostile | [Objectives](https://github.com/MBCProject/mbc-markdown#malware-objective-descriptions) |
-| **Known Entities** (`well-known/`) | Specific well-known malware, unwanted software, and tool/app/library signatures | component → baseline → notable → suspicious → hostile | [Corpus](https://github.com/MBCProject/mbc-markdown/tree/master/xample-malware) |
-| **Metadata** (`metadata/`) | Neutral file-structure properties — what a file *is* | component → baseline → notable → suspicious (rare) | — |
+| Tier | Holds | Does not claim | MBC analogue |
+|---|---|---|---|
+| `micro-behaviors/` | Probable capabilities, simple or compound | Malicious intent or observed execution | [Micro-behaviors](https://github.com/MBCProject/mbc-markdown/tree/master/micro-behaviors) |
+| `objectives/` | Attack claims that required evidence supports | That every constituent operation is malicious | [Objectives](https://github.com/MBCProject/mbc-markdown#malware-objective-descriptions) |
+| `metadata/` | Artifact structure, format, declarations, provenance, measurements | That declared behavior runs, or that provenance identifies a product | — |
+| `well-known/` | Identity of recognized software or malware families | That a shared capability or dependency identifies the artifact | [Corpus](https://github.com/MBCProject/mbc-markdown/tree/master/xample-malware) |
 
-**`metadata/` reaches `notable` when the fact identifies something rather than merely measuring it.** The tier is neutral about *intent*, not about *significance*: a file-structure property that establishes provenance — a signer, a toolchain or compiler, a declared import, a referenced library or runtime — is precisely what the `notable` definition below calls "program identity, and signing information", and an analyst wants it surfaced in a version diff. (This is a criticality rule, not a placement licence: a fingerprint saying a file *is* a named piece of software still belongs in `well-known/` — see [Metadata (`metadata/`)](#metadata-metadata).) Reserve `baseline` for properties that are near-universal **within the trait's own `for:` scope** (`USER32.dll` in a Windows GUI PE, `BSJB` in a .NET assembly); a property that most files of that type do not have is not baseline. `hostile` remains the real tier prohibition — `objectives/` and `well-known/` only.
+**Choose in this order:**
 
-Organize atomic traits by what they detect, not by what composite they serve — atomics and the composites that reference them often live in completely different directories. See [Matcher Defines Identity](#matcher-defines-identity) for the full rule and the placement-over-criticality guidance.
+1. The matcher shows the artifact *is* a specific, recognized product or
+   malware family → `well-known/`.
+2. Required evidence supports an attacker goal, unauthorized result or abuse
+   mechanism → `objectives/`. One structured matcher can qualify (an AMSI
+   patch); being common in malware cannot.
+3. A probable capability with no attack claim → `micro-behaviors/`.
+4. A property of the artifact → `metadata/`.
 
-Traits rarely seen in legitimate software that have well-defined objectives belong in `objectives/` rather than `micro-behaviors/`.
+**References** (validated):
 
-## Criticality
+| Tier | May reference | Why |
+|---|---|---|
+| `micro-behaviors/` | `micro-behaviors/`, `metadata/`; `well-known/{app,dual-use,game,lib,tool}/` only for false-positive exclusions | Capabilities must not depend on intent or families. |
+| `objectives/` | `micro-behaviors/`, `objectives/`, `metadata/`, `well-known/{app,dual-use,game,lib,tool}/`; never `well-known/malware/` | Families build on objectives, not the reverse. |
+| `metadata/` | `metadata/`; `well-known/{app,dual-use,game,lib,tool}/` only for benign context | Properties must not depend on behavior. |
+| `well-known/` | Everything | — |
 
-| Level | Meaning | Tier Constraints |
-|-------|---------|-----------------|
-| **exception** | Benign-context composite: a known-good pattern assembled from `notable` traits that, when it matches, suppresses or downgrades a host detection. Referenced only from `unless:`/`downgrade:`. Assembly-only — never emitted to JSON, the CLI, the web UI, or differential analysis. See [Exception composites](#exception-composites-crit-exception). | Composites only; any tier |
-| **component** | Evidence too weak or incomplete to express a clear standalone observation (e.g., the string fragment `&cc=` or one half of a protocol marker). Reserve this for fragments that only acquire meaning when combined with other evidence. Being referenced by a composite does **not** make a trait a component. | Any tier |
-| **baseline** | Common functionality; doesn't indicate program purpose (e.g., `mmap`, `stdio`, `read`). Always present in JSON, the web UI, and differential analysis. | Any tier |
-| **notable** | Expresses a clear behavior, purpose, or identity that could interest a security engineer during differential analysis (e.g., `socket`, HTTP requests, network-library imports, `exec`, `eval`). If an appeared/disappeared atomic finding would help an analyst understand what changed, it should be at least notable—even when the behavior is benign. This includes communications, code execution, crypto, encoding/decoding, privilege operations, sensitive file access, registry access, persistence, program identity, and signing information. | Any tier |
-| **suspicious** | Rarely legitimate; indicates possible malicious intent. | `micro-behaviors/`, `objectives/`, `well-known/`, `metadata/` (rare) |
-| **hostile** | Clear attack pattern; no legitimate use. Requires precision >= 3.5 as an authoring bar; runtime precision checks are advisory (see [RULES.md](RULES.md#criticality-levels)). | `objectives/`, `well-known/` only — **never** `micro-behaviors/` |
+If a capability needs an objective, one of them is misfiled or the dependency
+should go.
 
-> **Visibility caveat — `component`/`baseline` are not hidden from users.** The CLI may de-emphasize or omit them (historically `component` was filtered unless a referencing composite fired; that is no longer guaranteed), but the JSON output, the web interface, and version-to-version differential analysis all surface them. Demoting a trait therefore does **not** make a false positive disappear — a user still sees it, mislabeled — and rules are equally important to get right at every criticality level. Lower criticality only when the lower tier is genuinely correct (a true composite fragment or universal-baseline capability). Fix a real false positive properly: tighten the matcher, add an `unless:`/`not:` exclusion, or relocate the trait (see [Matcher Defines Identity](#matcher-defines-identity)).
+Atomic and composite are rule forms, not tiers. A neutral operation stays in
+`micro-behaviors/` whatever consumes it — Swift `Data(base64Encoded:)` is
+`data/decode/base64` even inside an anti-static composite — and a compound
+neutral capability stays neutral. An atom belongs in `objectives/` only if its
+matcher alone establishes an attack claim, or it is a `component` fragment
+meaningless outside that attack (Nemucod string pieces, default-credential
+lists). RULES.md is stricter; see [open checkpoints](#open-checkpoints).
+
+## Criticality and identity
+
+### Levels
+
+| Level | Meaning | Allowed in |
+|---|---|---|
+| `exception` | Benign-context composite that suppresses or downgrades another rule; never emitted ([below](#exception-composites)). | Composites; any tier |
+| `component` | Too incomplete to state a fact alone: `&cc=`, one token of a family signature, half a marker. Composite membership does **not** make a trait a component. | Any tier |
+| `baseline` | Clear but near-universal within the trait's `for:` scope (`read`, `mmap`; `USER32.dll` in a Windows GUI PE). | Any tier |
+| `notable` | A behavior, purpose or identity an analyst would want to see change in a version diff, even when benign: communications, code execution, crypto, encoding/decoding, privilege operations, sensitive file access, registry access, persistence surfaces, program identity, signing. | Any tier |
+| `suspicious` | Rarely legitimate. | Any tier; rare in `metadata/` |
+| `hostile` | Clear attack pattern with no legitimate use; authoring bar precision ≥ 3.5 ([RULES.md](RULES.md#criticality-levels)). | `objectives/`, `well-known/` |
+
+In `metadata/`, a fact that *identifies* something — signer, compiler, declared
+import, runtime — is `notable`; `baseline` is for properties most files of that
+type share.
+
+`component` and `baseline` are **not hidden**: JSON output, the web UI and
+diffs show them. A demoted false positive stays visible, mislabeled, under the
+wrong ML feature.
 
 ### Prefer strong atomic traits
 
-Atomic traits should, whenever possible, be strong enough to communicate a precise and useful fact on their own. `component` is a last resort for evidence that cannot honestly support such a fact—not a default for the leaves of a composite.
+- **Membership does not set criticality.** A complete call, import, command,
+  protocol operation, path access or product identity that informs on its own is
+  `notable` (`urlopen()`, `execve`, AES use, a registry write).
+- **Standalone test:** if the only honest description of the finding on its own
+  is "fragment" or "part of", it may be a `component`; otherwise it is not.
+- **Strengthen before settling for a component:** a structured matcher, call
+  argument, anchored token or proximity bound.
+- **Never demote to hide duplicate output;** consolidate instead.
+- **A bare `any:` composite shares its legs' criticality.** With no `all:`,
+  `unless:`, `not:`, `downgrade:`, `needs:`, size or scope, and the same
+  `for:`/`platforms:`, it fires exactly where a leg fires. Raise the legs or add
+  the filter that earns the higher level.
+- Criticality is part of the [ML feature](#ml-features); set it from
+  confidence, never to shape features.
 
-- **Composite membership does not determine criticality.** A complete API call, import, command, protocol operation, path access, or product identity remains `notable` when it independently tells an analyst something useful, even if a composite also references it.
-- **Use the standalone-description test.** Imagine the atomic finding appearing by itself in a version diff. If its matcher supports a clear description that a security engineer could use to understand or investigate the change, it is not a component. If the only honest description is “fragment,” “marker,” “part of,” or an otherwise incomplete clue, `component` may be correct.
-- **Distinguish `baseline` from `component`.** A baseline trait expresses a clear but nearly universal behavior (`read`, `stdio`, `mmap`). A component does not yet express a clear behavior at all. Do not use `component` merely because a behavior is common.
-- **Strengthen weak atoms before accepting components.** Prefer a structured matcher, call argument, anchored token, tighter context, proximity constraint, or a canonical matcher that captures equivalent syntax. The goal is fewer, stronger atomics—not many weak fragments assembled mechanically.
-- **Never demote to manage duplicate output.** If an atomic and composite finding overlap, consolidate equivalent matchers, choose a canonical trait, update references, or improve presentation. Do not lower an independently meaningful atomic capability to `component` just because it participates in a composite.
+### Matcher defines identity
 
-Examples: `urllib.request.urlopen()`, a socket connection, an HTTP-client import, `execve`, AES use, or a registry write are independently meaningful and therefore notable. A bare `&cc=` fragment, one word from a multi-token family signature, or one half of an encoded marker may correctly be a component.
+**A trait's name, description and directory must say what its matcher finds**,
+at every criticality.
 
-### Exception composites (`crit: exception`)
-
-`exception` is a special, **composite-only** criticality for a *benign-context suppressor*: a known-good pattern that, when it matches, suppresses or downgrades another detection through that detection's `unless:`/`downgrade:` clause. It is the sanctioned home for "this combination looks alarming but is a recognized benign program or toolchain" rules — the kind that otherwise drift into `objectives/` or `well-known/malware/`, where a benign suppressor does not belong. A rule whose id or description reads as benign suppression — `benign`, a `<thing>-context` name (`fp-context`, `safety-context`, `panos-context`, …), a `-fp` / `-soft-fp` / `-known-fp` or `-exceptions` id, `false-positive`, or allow/whitelisting — sitting in `objectives/` or `well-known/malware/` is almost certainly misorganized; make it a `crit: exception` composite instead (or, if it really detects something, rename it for what its matcher finds).
-
-The contract (each is enforced at load time):
-
-- **Composites only.** An atomic trait may not be `crit: exception`.
-- **Referenced only from `unless:`/`downgrade:`.** An exception is never positive evidence — referencing one from `all:`/`any:`/atomic `if:` is an error.
-- **Must be referenced.** An exception no rule reaches is dead weight and is rejected.
-- **Members must be `notable`.** Its `all:`/`any:` legs must each resolve to a `notable` trait — or another `exception` (an exception may compose nested benign patterns). A benign assertion is assembled from "defines program purpose" facts, not baseline noise, component fragments, or `suspicious`/`hostile` legs.
-- **Named traits only.** Every condition must be a trait reference; inline matchers (`text`, `symbol`, `raw`, …) are rejected, since they carry no criticality and would bypass the `notable`-member rule.
-- **May live anywhere**, because it is named and located by what it suppresses rather than by tier.
-
-**Directory-reference safety — the reason this class exists.** A bare directory reference (`objectives/foo`) in an `all:`/`any:` clause silently *excludes* any exception beneath it, so you can fold an entire `objectives/` directory in as positive evidence without ever inheriting a suppressor by accident. Exceptions are reached only by an exact `dir::id` reference — the form `unless:`/`downgrade:` use — with one carve-out: inside another exception composite, a directory reference *does* include the exceptions beneath it, so an exception may deliberately assemble a directory of benign patterns.
-
-## ML Feature Extraction
-
-The ML pipeline extracts features from **subdirectory path + criticality**, not individual trait IDs. Each trait's directory path (up to 3 levels deep), combined with its criticality level, becomes a feature dimension. This means:
-
-- **Directory structure is the feature space.** A trait at `objectives/evasion/kernel-hide/rootkit/linux.yaml` with `crit: suspicious` generates the feature `evasion/kernel-hide/rootkit:suspicious`. The directory hierarchy directly shapes what the model learns.
-- **Criticality is the signal strength.** Two traits in the same directory but at different criticality levels produce different features. A `suspicious` rootkit trait and a `component` rootkit trait are distinct signals.
-- **Depth matters.** The pipeline uses up to 3 directory levels. Features aggregate at the deepest available level, so `evasion/kernel-hide/rootkit` is more specific than `evasion/kernel-hide`, which is more specific than `evasion`.
-
-### Design implications for trait authors
-
-- **Group related detections under the same subdirectory** so they aggregate into a single, strong feature. A directory with 10+ traits produces a robust signal; a directory with 1-2 traits produces a weak one.
-- **Don't create single-trait subdirectories** when the trait fits an existing directory. `credential-access/browser/` (11 traits) is a strong feature; adding `credential-access/opera/` with 1 trait creates a weak feature that should instead be a file within `credential-access/browser/`.
-- **Use technique-based directories.** Directory names should describe the behavior or method being detected, not the implementation language, platform, ecosystem, file type, malware family, or sample source. Put implementation details in filenames when they help readability, unless the technique itself is platform-specific.
-- **Prefer concise, meaningful names.** Short directory names are easier to scan and produce cleaner ML features: use `exec`, `poll`, `proxy`, `shell`, `reflect`, or `stage` when they are clear in context. Do not shorten names so far that humans lose the technique meaning.
-- **Avoid marker buckets.** Do not use `marker/` or `markers/` as directory names; name the behavior or technique being indicated instead.
-- **Every subdirectory must add precision over the path that leads to it.** A child directory has to answer "the parent's concept, but *which kind / how / in what form?*" — if it merely restates the parent (a synonym) or means "everything else here," it earns no place in the tree. Test: read the full path left-to-right; each segment should narrow the set further. `process/create/shell/invoke/` fails — *invoking* a shell **is** *creating* a shell process, so `invoke` is a synonym for `create`, not a refinement; in practice it had become the catch-all bucket (everything that wasn't one of the precise siblings `batch/`, `encoded/`, `injection/`, `interactive/`…), which is why it bloated past the size cap. Contrast its siblings, which each genuinely refine "create a shell" (*via a batch file*, *with an encoded command*, *by injection*). A segment that you can't finish the sentence "…the parent, specifically the **___** kind" for is either a synonym (drop it / merge up) or a grab-bag (split it into the precise techniques it actually contains). Verb-vs-verb synonyms (`create`/`invoke`/`spawn`/`exec`/`run`) are the most common offenders.
-- **A bare `any:` composite shares its legs' criticality.** A composite that is nothing but an `any:` list — no `all:`/`unless:`/`not:`/`downgrade:`/`needs:`/size/scope, and a `for:`/`platforms:` identical to its legs — fires exactly where its legs fire, on whichever one matched. Ranking it above them makes the reported tier depend on which leg happened to hit, so the same evidence in the same file surfaces at two different levels. Either raise the legs to the composite's `crit:`, or add the filtering that earns the higher tier (`needs: 2`, a second `all:` leg, a size band). This bites most often on library-identity rules: if each marker independently identifies the library, every marker is `notable` and so is the roll-up — put the criticality once, in `defaults:`.
-
-- **Criticality assignment affects ML directly.** A trait bumped from `notable` to `suspicious` changes which feature it contributes to. Assign criticality based on the trait's actual detection confidence, not to manipulate features.
-- **Never name a directory for a verdict.** `legitimate/`, `benign/`, `known-good/`,
-  `safe/`, `trusted/`, `whitelist/` and friends are rejected: a directory names what
-  its traits *search for*, whether the answer is alarming is `crit:`, and a
-  benign-context suppressor belongs in the directory for the thing it detects.
-  `os/service/legitimate/` held `uv publish` markers and `curl | sh` installer
-  shapes -- neither a service nor a judgment a reader could act on; they now sit in
-  `os/package-manager/publish/` and `os/package-manager/installer-script/`.
-
-- **Name the level the model can see.** The feature keeps three directory levels after the tier, so the segment that carries the distinction has to sit at or above level 3. A tree like `fs/path/sensitive/private-key/` puts the real discriminator at level 4, where it is aggregated away: every child of `sensitive/` — SSH keys, cookies, `/etc/passwd`, an iMessage database — collapses into the single feature `fs/path/sensitive`, teaching the model that reading someone's notes and reading their private key are the same event. Promote the discriminating axis instead (`fs/path/private-key/`, `fs/path/password-store/`), and express the secondary axis — *whose* credential it is — in the **filename** (`ssh.yaml`, `browser.yaml`), which costs nothing because filenames are never part of trait IDs. A grouping word that only re-states its parent (`sensitive/credentials/`) fails the precision test above *and* spends the last visible level; drop it and let the type take that slot.
-- **The 3-level depth limit** means `objectives/anti-static/obfuscation/string/encoding/` extracts as `anti-static/obfuscation/string` — the `encoding/` level is aggregated into `string/`. Plan directory depth accordingly, and avoid unnecessary intermediate directories (e.g., prefer `obfuscation/syntax/` over `obfuscation/source/syntax/`).
-
-## Core Principles
-
-### Single-Trait Rule
-
-Unlike MBC, which allows one behavior to map to multiple objectives (e.g., Process Injection is both Defense Evasion and Privilege Escalation), cleave allows exactly **one trait per behavior**. Place it at the most specific location the evidence supports. Composite rules in other directories can reference the single trait to express multi-objective interpretations.
-
-The same logic extends to matchers: define each one once. If two traits would search for the same thing, make a single canonical atom and reference it rather than copy the pattern — duplicate matchers drift out of sync, double-count evidence, and split one signal across two ML features. Unique matchers keep the trait set slim.
-
-### Matcher Defines Identity
-
-**A trait's matcher is its identity. Its name, description, and directory must describe what the matcher actually searches for — not the intent of a composite that references it, and not the worst case it might contribute to.** Organize atomic traits by what they detect, not by what composite they serve. This applies at **every** criticality, `component` and `baseline` included.
-
-A trait fails this rule when its name, description, or location claims an intent its matcher does not capture. Example: a regex that merely reads `$_SERVER['HTTP_REFERER']`, named `http-referer-to-reflection` ("HTTP Referer used in function execution") and filed under `objectives/command-and-control/backdoor/webshell/obf-dispatch/`. The matcher detects only *"reads the Referer request header"* — a neutral capability present in countless benign plugins — so the trait is both **mislabeled** (the name asserts reflective dispatch the regex never checks) and **misplaced** (a neutral read does not belong in a webshell objective directory). The reflective-dispatch intent lives in the *other* legs of the composite (the dynamic-call atoms); this atom only contributes "the referer was read."
-
-**The fix is to relocate and rename the trait to match its matcher** (here, a `micro-behaviors/communications/http/...` capability such as "reads the Referer request header"), then have the webshell composite reference it cross-directory. **Lowering the criticality is never the fix.** Demoting to `component` does not make the false positive disappear — per the [Criticality](#criticality) visibility caveat, the JSON output, web UI, and differential analysis still surface it (and the CLI may too), now mislabeled as a webshell building block and keyed to the wrong `directory-path + criticality` ML feature. Reserve `component`/`baseline` for traits that are *already* accurately named and located for what they detect and genuinely have no standalone meaning.
-
-When a generic capability false-positives because it sits in the wrong tier, fix the placement. Generic capabilities such as process execution, interpreter invocation, network clients, registry manipulation, file writes to sensitive locations, and persistence surfaces belong where those behaviors are described — usually under `micro-behaviors/` — and should stay `notable` or higher when they are analyst-relevant. Notable in terms of what would be interesting to a security engineer for triage: such as who, what, when, where of a program (even if benign). Objective traits should compose those capabilities with intent-specific evidence rather than bury generic atomics as mislabeled `component` rules.
+A regex that only reads `$_SERVER['HTTP_REFERER']`, named
+`http-referer-to-reflection` and filed under
+`objectives/command-and-control/backdoor/webshell/…`, is mislabeled (it never
+checks reflection) and misplaced (reading a request header is a neutral
+capability). The reflective dispatch lives in the composite's other legs. Move
+and rename the atom to a `micro-behaviors/communications/http/…` capability
+("reads the Referer header") and reference it from the webshell composite.
 
 ### Names an attacker or a collector chose
 
-**A trait may match a filename. A conviction may not depend on one that the attacker or the collector picked.** Matching a name is not the problem; resting a `suspicious`/`hostile` verdict on a name that costs nothing to change is. Three cases, and only the first can carry weight:
+**A trait may match a filename; a conviction may not depend on one the attacker
+or the collector picked.**
 
-- **The format mandates it.** `SKILL.md`, `package.json`, `AUTOEXEC.BAT`, `MANIFEST.MF`. The attacker has no choice: a malicious agent skill that omits `SKILL.md` is not a skill, and a boot script that is not named `AUTOEXEC.BAT` does not run at boot. These are properties of the platform, so requiring one in `all:` is correct — and they belong in `metadata/`, `micro-behaviors/` or `well-known/app/` as format facts at `notable`, which is where a conviction composite then references them.
-- **The attacker chose it.** A dropped `motivate.bat`, a `_runtime.js` sidecar, a campaign token, a C2 hostname, a chosen function name. Real evidence about *this* sample, and worth stating — but the next build renames it for free, so it corroborates in `any:` and never gates in `all:`. This is the rule the supply-chain audit already states for matchers: chosen local identifiers must not become identity signatures.
-- **A collector chose it.** The name of the outer artifact being scanned — `Win32.Volk.7z`, `2026-03-27-telnyx-v4.87.2.zip`, `telnyx-4.87.2.tgz`. Nobody in the attack picked it; it was assigned when the specimen was fetched or filed, and it changes on re-collection. It carries no attack information at any criticality.
+- **Mandated by the format** (`SKILL.md`, `package.json`, `AUTOEXEC.BAT`,
+  `MANIFEST.MF`): a platform property, fine to require in `all:`; a `notable`
+  fact in `metadata/`, `micro-behaviors/` or `well-known/app/`.
+- **Chosen by the attacker** (a dropped `motivate.bat`, a `_runtime.js`
+  sidecar, a campaign token, a C2 hostname): real evidence, but the next build
+  can rename it for free. It corroborates in `any:`; it never gates in `all:`.
+- **Chosen by a collector** (the outer archive's name, such as
+  `Win32.Volk.7z`): assigned when the specimen was filed; no attack information
+  at any criticality.
 
-The distinction is container versus member, not file extension. A member inside an archive is named by the attacker or by the format; the container itself is named by whoever downloaded it. A literal ending in an archive extension is the static approximation of "this can only ever match the container", which is what a validator can check at author time.
+The line is container versus member: the format or the attacker names a member;
+whoever downloaded it names the container. **Every conviction needs a
+content-derived required leg.** One built only from name, exact size and metric
+counts is a file hash in disguise.
 
-**A conviction needs at least one content-derived required leg.** Names, sizes, and metrics describe what a file *is called*, *weighs*, and *counts* — never what it does. A rule assembled entirely from those is a file hash in behavioural clothing: `size_min` and `size_max` both 1917, an exact `.tgz` basename, and `strings.count` exactly 13 convict one artifact and nothing else, including the next build of the same malware. State the behavior, then let the name corroborate it.
+### Exception composites
 
-### Tier Dependencies
+`crit: exception` is the home for "looks alarming, but is a recognized benign
+program or toolchain". The loader enforces the first three rules:
 
-| Tier | Can Reference | Rationale |
-|------|--------------|-----------|
-| `micro-behaviors/` | `micro-behaviors/`, `metadata/`, `well-known/{app,dual-use,game,lib,tool}/` for false-positive exclusions only | Capabilities must not depend on objectives or malware families |
-| `objectives/` | `micro-behaviors/`, `objectives/`, `metadata/`, `well-known/{app,dual-use,game,lib,tool}/` (positive evidence allowed); never `well-known/malware/` | Objectives build on capabilities and other objectives. Legitimate-software identifiers are fine as positive evidence — the relationship runs `well-known/malware/ → objectives/`, not the reverse |
-| `well-known/` | all tiers | Signatures can reference anything |
-| `metadata/` | `metadata/`, `well-known/{app,dual-use,game,lib,tool}/` for benign context only | Informational properties must not depend on behavior or objectives |
+- Composite only.
+- Referenced only from `unless:`/`downgrade:`, never as evidence, and
+  referenced by something.
+- Every leg is a named trait resolving to `notable` or another `exception`; no
+  inline matchers.
+- It may live anywhere; name it for what it recognizes or suppresses.
 
-**Capabilities must not reference objectives.** Capabilities are observable mechanics; objectives infer intent. If a `micro-behaviors/` rule needs an `objectives/` trait, either move the objective to `micro-behaviors/` (if it's actually a capability), refactor the dependency away, or move the whole rule to `objectives/` (if it's actually inferring intent).
+A directory reference in `all:`/`any:` skips exceptions beneath it, so folding
+in a directory never inherits a suppressor. Only an exact `dir::id`, or a
+directory reference inside another exception, reaches one.
 
-**Capabilities must not use `crit: hostile`.** Hostile requires intent inference, which belongs in `objectives/`. Maximum capability criticality is `suspicious`; validation rejects hostile capabilities.
+A rule in `objectives/` or `well-known/malware/` whose ID or description signals
+suppression (`benign`, `*-context`, `*-fp`, `*-exceptions`, `false-positive`,
+allowlisting) is misplaced: make it an exception, or rename it for what it
+detects. Never key an exception on something the attacker controls (a name, a
+classifier field), and test the exact suppression it performs.
 
-**Neutral capabilities belong in `micro-behaviors/`, not `objectives/`.** A trait that detects a single API call, syscall, or keyword (fork, crontab, SetFileAttributes, getenv) is a capability — it belongs in `micro-behaviors/` regardless of which objective composite references it. Composites reference traits across directories. Component traits (`crit: component`) may appear in `objectives/` only when they are attack-context-specific fragments with no meaning outside that context (e.g., Nemucod string pieces, default credential lists, supply-chain URL patterns).
+## Directory budgets and placement contracts
 
-### Directory Layout Convention
+### Structure and limits
 
-All tiers follow: `TIER/CATEGORY/BEHAVIOR/METHOD/platform.yaml`
+**Rules live only in leaves.** A directory holds YAML or subdirectories, never
+both, for traits, composites and aliases alike; mixed nodes grew duplicate homes.
+A parent stays referenceable. A single child is fine if it adds meaning.
 
-- **`objectives/`**: `objectives/OBJECTIVE/BEHAVIOR/METHOD/` with technique-based directories and per-platform or per-ecosystem YAML files. Add sub-method directories when a method has many variants (e.g., string obfuscation techniques). Avoid platform, language, ecosystem, file-type, and family names as directories unless they are the technique being detected.
-- **`micro-behaviors/`**: `micro-behaviors/CATEGORY/BEHAVIOR/METHOD/` (e.g., `crypto/symmetric/aes/ruby.yaml`, not `crypto/symmetric/aes.yaml`). If no specific method applies, group by syscall, protocol, or logical grouping. Composite traits may reference directory names to match related rules.
-- **`well-known/malware/` and `well-known/unwanted/`**: Organize by recognized family or named entity, not by a generic behavior, delivery method, or bundle of traits. Malware may retain a broad class before its family (`well-known/malware/backdoor/bpfdoor/`); unwanted software normally uses the family directly (`well-known/unwanted/gameograf/`). Do not use generic buckets such as `newtab-wallpaper-adware/` or `vpn-leadgen/`. **"Recognized" means recognized by name outside this repository** — a family a working security engineer would already know (Shai-Hulud, event-stream, XZ Utils), not merely a package that once carried an advisory. That bar is high on purpose, so these directories stay small: an obscure typosquat, a tea.xyz reward-campaign stub, or a single withdrawn npm release is an *instance* of a technique, not a family, and naming a directory after it buys a signature that matches one package and nothing else. Detect those through the technique instead — a registry-pollution, dependency-substitution, or install-hook rule under `objectives/` convicts the next hundred of them too. A family directory earns its place only when the campaign has a name people use and traits that generalize across its members. Put generic unwanted or abusive behavior under the best-fitting `objectives/` hierarchy, then let each named family rule reference that objective. If no objective fits, add a behavior-based objective or document the taxonomy gap rather than filing intent-bearing behavior under `micro-behaviors/`.
-- **Directory names** should be short, readable, and semantically useful. Prefer `exec` over `command-execution`, `poll` over `polling-command`, and `reflect` over `reflective-loader` when the parent path supplies enough context. Keep longer names when the shorter form would be ambiguous. A directory segment must name a SUBJECT — the thing the traits beneath it are about. Three kinds of word fail that and are rejected by the validator:
+| Check (`make validate`) | Limit |
+|---|---|
+| Rules per directory | **100** traits plus composites, summed over its YAML files, at every criticality. No exemptions; filenames create no budgets. |
+| Subdirectories | 150. Split broad catalogs by a stable function with a tiebreaker. |
+| Depth | Soft warning beyond five levels below the tier (`objectives/a/b/c/d/e/f/x.yaml` warns). Soft warnings fail `make validate`; `cleave validate --soft` only reports them. |
+| Sparse siblings | Soft warning when, below level 1 of a behavioral tier, two or more child subtrees hold fewer than 35 rules together — unless the exact partition is in `REVIEWED_SPARSE_TAXONOMY_PARTITIONS` (`cleave/src/capabilities/validation/taxonomy.rs`). |
+| Sibling stems | Soft warning on shared stems. A shared stem is not synonymy (account identity ≠ process accounting); document the boundary or merge. |
+| Platforms | Soft warning at four or more. `platforms: [all]` only in `ALL_PLATFORM_DIRECTORY_ALLOWLIST` (same file). |
 
-  - **Catch-alls** (`core/`, `common/`, `general/`, `misc/`, `other/`) mean "everything else", so they never make you answer what a trait is about — which is the same question that reveals whether it belongs in the tier at all. Split by the behavior each child actually detects.
-  - **Judgments** (`anomaly/`, `quality/`, `suspicious/`, `notable/`) assert a verdict instead of naming a subject. The fact belongs with the thing it describes, and *how unusual it is* belongs in `crit:` — which already carries exactly that, at the level the ML pipeline reads. `metadata/binary/anomaly/provenance::pe-zero-timestamp` is `baseline` and `…::pe-far-future-timestamp` is `notable`: the degree is already expressed, so the directory is restating it and spending a visible level to do so.
-  - **Forms** (`metrics/`, `threshold/`, `scoring/`, `pattern/`, `indicators/`) describe the shape of the rule rather than its subject. Everything in `metadata/` is measured; put the count with the part it counts and let the threshold live in the trait name (`few-basic-blocks`, not `metrics/threshold/`).
+`platforms: [all]` is allowed only where a fact means the same on every OS:
+`metadata/package/description/disclosure`,
+`metadata/package/documentation/{claims,security-advisory,source}`,
+`metadata/registry` and `micro-behaviors/communications/url/host`. Even there it
+must be justified: an AUR package targets Linux, and source code alone does not
+prove portability.
 
-Adjectives fail for the same reason as judgments: `sparse/`, `dense/`, `structural/` partition by value, not by subject, so they separate facts that belong together (`few-basic-blocks` from the other code measurements) and spend the last ML-visible level saying nothing.
+**Size and warnings prompt review; they never justify a split.** At the cap,
+first move misplaced rules home and merge equivalent matchers (after comparing
+scope and conditions). Moving the same set elsewhere fixes nothing. A coherent
+oversized leaf is a design issue to record, not a license for a false split.
 
-### Directory & Evolution Guidelines
+### Splitting a directory
 
-- **Leaf-Node Policy**: A directory level cannot contain both YAML files and subdirectories. This prevents files from being "orphaned" or miscategorized when adding new sub-techniques. If a directory contains subdirectories (representing sub-techniques), it must not contain its own YAML files.
-- **Intent-Based Categorization**:
-  - **`objectives/`**: Reserved for unwanted, improper, or malicious behavior that requires intent inference. Any generic finding suggesting unwanted behavior, malice, or abuse must be categorized under an `objectives/` hierarchy.
-  - **`micro-behaviors/`**: Reserved for strictly neutral, atomic observations. If an id, description, or matcher interpretation hints that the observed behavior is unwanted, promotional, deceptive, abusive, or malicious, it is not neutral and should move to `objectives/`; keep only the underlying factual mechanic here.
-- **Platform/Language Neutrality**: Directories must NOT be named after programming languages (e.g., `python/`) or platforms (e.g., `windows/`). These are used as suffixes in YAML filenames (e.g., `dropper_python.yaml`). This ensures the ML pipeline can perform cross-language and cross-platform technique correlation.
+A split must place **every** existing rule, including the broadest, before
+anything moves. Each new parent needs a contract stating:
 
-## Decision Framework
+1. The one question its children answer, and the evidence to enter.
+2. Each child's definition, exclusions and nearest sibling.
+3. A precedence rule for matchers that fit several children.
+4. An example and a counterexample.
 
-### Tier Selection
+If the children cannot hold the broad observations without overlap or
+overstatement, revise the split or keep a precisely named broad operation leaf.
+Never invent specificity or create `other`.
 
-```
-Specific malware, unwanted software, dual-use product, app, library, game, or tool signature; well known enough that at least 1 in 1000 developers or security engineers would recognize it?
-  → well-known/
+### Naming
 
-Attacker intent inferred from capability combinations?
-  → objectives/
+A segment names a **subject**: what the traits beneath it detect. It must finish
+"…the parent, specifically the ___ kind."
 
-Single observable mechanic, no intent inference?
-  → micro-behaviors/
-     Rarely legitimate?     → suspicious
-     Useful in differential analysis? → notable
-     Universal baseline?      → baseline
+| Fails | Examples | Instead |
+|---|---|---|
+| Catch-alls | `core`, `common`, `general`, `misc`, `other`, `combined`, `behavioral` | Split by what each child detects. |
+| Judgments | `anomaly`, `quality`, `suspicious`, `notable`, `legitimate`, `benign`, `known-good`, `safe`, `trusted`, `whitelist` | File the fact by subject; `crit:` says how unusual it is. |
+| Rule forms | `metrics`, `threshold`, `scoring`, `pattern`, `indicators`, `marker(s)` | Put a count with what it counts; the threshold goes in the trait name (`few-basic-blocks`). |
+| Adjectives | `sparse`, `dense`, `structural` | Partition by subject, not value. |
+| Synonyms of the parent | `process/create/shell/invoke` | Merge up. Verb piles (`launch`, `invoke`, `spawn`, `run`) are the usual culprits. |
+| Implementation containers | `library`, `lib`, `stdlib`, `framework`, `wrapper`, `runtime`, `provider` splitting one technique by backend | Apply the [substitution test](#implementation-layers). Fine when they name a real resource (`fs/path/library`, `os/env/runtime`, `well-known/lib`). |
+| Matcher input form | `source`, `ast`, `javascript`, `python`, `pe`, `windows` | Use scope and filenames. `ast/` is a subject only when the analyzed program manipulates an AST. |
 
-Neutral file property (not behavioral)?
-  → metadata/
-```
+Short names are fine when the parent supplies context (`exec`, `poll`, `proxy`).
 
-### Text, Content, and Metadata Boundaries
+**One level, one question** (principle 4). `fs/path/` asks
+*what the path points at*; siblings answering *whose* (`application/`) or *what
+is done with it* (`construct/`) give one rule several homes — which is how
+`fs/path/config/app/` and `fs/path/application/config/` came to hold the same
+subject. Keep the axis that distinguishes behavior; move the others to filenames
+(`config/app/vscode.yaml`).
 
-The matcher type does not decide tier placement. A `type: text`, `string_literal`, `raw`, or `encoded` matcher still belongs where the thing it detects belongs:
+**A trigger is not an objective.** What a payload does, what sets it off and
+where it came from vary independently. A directory level per axis copies every
+objective under every trigger, as `objectives/supply-chain/install-hook/` did.
+The behavior owns the directory; the trigger is a referenced trait
+(`metadata/package/scripts/lifecycle::…`). A level naming *when* or *how*
+rather than *what is achieved* breeds duplicates.
 
-- Terms go where the represented concept belongs, not under a text bucket. A credential word belongs in `objectives/credential-access/theft/keywords/`; HTTP verbs belong in `micro-behaviors/communications/http/keywords/`; help and usage strings belong in `micro-behaviors/ui/help/` because they represent the ability to expose a user-facing help surface.
-- Terms that represent attacker intent or impact go under `objectives/`. Infection terms such as "infected", "virus", or ELF infection context belong with `objectives/impact/infect/`; hostile traits stay in `objectives/` or `well-known/`.
-- Specific product, malware-family, tool, library, app, or game identifiers go under `well-known/`, not a generic keyword bucket.
-- Metadata is only for neutral structural facts about what a file or package is: manifest fields, declared permissions, file magic, dimensions, counts, layout, package quality, or other non-behavioral shape. Suspicious metadata can be used as evidence in an objective composite, but "metadata anomaly" is not itself a supply-chain attack kind.
-- Benign generated/tooling contexts belong in `metadata/package/tooling/` or an adjacent metadata library path. Examples include generated shell helpers, package-manager runtime bootstraps, compiler/bundler output, and framework-managed install steps. Objective rules should reference those metadata contexts in `unless:` rather than defining local "benign context" atoms under an attacker objective.
-- `micro-behaviors/data/` is for operations on data: encoding, decoding, compression, serialization, parsing, archive handling, string manipulation, buffers, databases, embedded payload/resource handling, source-level data mechanics, and control-flow patterns over data. It is not for data merely being present.
-- Do not create generic content buckets such as `data/text/`, `text/`, `lexicon/`, `vocabulary/`, `words/`, or `strings/` as dumping grounds. Split terms by the concept they represent, and let composites reference those atoms across directories.
+### Reading paths
 
-### Evasion Boundaries
+Paths are relative to their tier. `{a,b}` lists siblings; `<protocol>`,
+`<mechanism>` and the like name a child's axis, not a literal directory.
 
-Three objective categories cover evasion, following MBC's distinction between analysis evasion and detection evasion:
+- **A plain path** admits rules under its contract. Create a missing one only
+  after the validator check in [migration rule 1](#migration-status-and-legacy-branches).
+- ***(legacy: X)***: new rules go in the target; X keeps its existing rules,
+  takes no new ones, and stays valid until empty
+  ([migration map](#migration-map)).
+- **Reserved:** documented, with no directory yet.
+- **Retired / closed:** no new rules; existing ones migrate by claim.
 
-| Category | Target | MBC Definition | Examples |
-|----------|--------|---------------|----------|
-| `anti-analysis/` | Automated analysis environments | *"Prevent, obstruct, or evade behavioral analysis — for example, analysis done using a sandbox or debugger."* (OB0001) | IsDebuggerPresent, VM detection, sandbox fingerprinting, emulator checks |
-| `anti-static/` | Static analysis of the file at rest | *"Prevent or hinder static analysis. Simple static analysis identifies features such as embedded strings, header information, or file metadata. More involved static analysis involves disassembly."* (OB0002) | Code obfuscation, packing, control-flow flattening, code virtualization |
-| `evasion/` | Users, admins, deployed security products | *"Enable malware to evade detection."* (OB0006) | Rootkits, masquerading, AMSI bypass, log clearing, process injection, self-deletion |
+Some homes named here are parents today (`mem/alloc`, `fs/read`, `fs/write`,
+`crypto/kdf`, `data/{parse,serialize,format}`, `http/{client,server}`,
+`process/{identity,info,enumerate,exit,terminate,control,daemonize}`): use the
+matching child, never the parent.
 
-**Tiebreaker:** When a technique spans categories, ask what it *primarily* defeats:
-- Fools a sandbox, debugger, emulator, or VM? → `anti-analysis/`
-- Resists disassembly, decompilation, or string extraction? → `anti-static/`
-- Hides from users, admins, or AV/EDR in production? → `evasion/`
+### ML features
 
-### Process creation
+The pipeline builds features from **path prefix plus criticality**. The
+extractor keeps the first three segments including the tier
+(`objectives/evasion/kernel-hide`), so only two levels below the tier get a
+direct feature.
 
-`micro-behaviors/process/create/<mechanism>/` is the feature `process/create/<mechanism>`. The model keeps that third segment and no further one, so the segment has to be the mechanism. A directory under `launch/`, `shell/`, or `exec/` does not gain a new meaning by existing; the model still reads the parent.
+- Directories are the feature space; criticality is signal strength.
+- Group by shared behavior; no single-trait directory for a trait that fits an
+  existing one.
+- The prefix limit may change; never erase a real distinction to fit it.
 
-Each sibling has to name a different fact. Finish "this matcher creates a process by ___." If an existing sibling already finishes that sentence, the trait belongs there and the language or API spelling goes in the filename. A synonym of the parent or of a sibling does not get a path. Verb piles (`launch` / `invoke` / `spawn` / `exec` / `run`) are the usual way this fails.
+## Capabilities: `micro-behaviors/`
 
-Stop at the first row that describes the matcher:
+Value-neutral observations of what code can probably do — MBC's
+micro-behaviors: "low-level, support many objectives, and aren't necessarily
+malicious". If the ID, description or matcher implies unwanted, deceptive or
+abusive behavior, that part belongs in `objectives/`; only the mechanic stays
+here. An OS API goes to its resource: filesystem calls to `fs`, memory to `mem`,
+processes to `process`.
+
+| Facility | Admits | Not here |
+|---|---|---|
+| `communications` | Exchange with peers: protocols, channels, addresses. Level 2 is the protocol or transport; level 3 the operation. | Local interface or route state (`network`); control or theft (objectives). |
+| `network` | Local network resources: interfaces, routes, neighbors, resolver configuration, forwarding, traffic policy, tunnels, connectivity, shares. | Wire protocols (`communications`); reconnaissance (`objectives/discovery/network`). |
+| `crypto` | Primitives and operations, keys, derivation, hashes, certificates. | Encoding (`data`), randomness (`os/random`), the file's own signature (`metadata/signed`), library identity (`well-known/lib`). |
+| `data` | Transforming, interpreting or organizing data; control-flow constructs. | Data merely present (`metadata`). No `text/`, `strings/` or `words/` buckets. |
+| `fs` | Files, directories, paths, filesystem properties. | Raw device I/O (`hardware`). |
+| `mem` | Address spaces, memory objects, access, permissions. | Execution transfer (`process/inject`); in-memory decompression (`data`). |
+| `hardware` | Device and peripheral I/O or control. | Host property queries (`os/sysinfo`); windows and widgets (`ui`); surveillance (objectives). |
+| `process` | Execution contexts: creation, lifecycle, coordination, descriptors, interpreters, attach/hook/inject. | Privilege (`os/privilege`); durable activation (`objectives/persistence`). |
+| `dylib` | Native library loading, unloading, enumeration, symbol lookup. | Language modules (`os/module`); manual API resolution (`os/api-resolution`). |
+| `metaprogramming` | The program inspecting, generating or transforming program structure: `ast`, `generation`, `reflection` *(legacy: `process/interpreter/reflection`)*. | An AST the *analyzer* uses to match. |
+| `os` | Host services without a more specific facility: registry, services, environment, accounts, privilege, security controls, kernel, packages, autorun, sysinfo, telemetry, clipboard, console. | File, process and network operations, even through an OS API. |
+| `time` | Clocks, waits, elapsed time, in-process scheduling. | OS task registration (`os/autorun`, `os/service`); evasion gates (objectives). |
+| `ui` | Presentation and interaction. | Display hardware or capture (`hardware/display`); deception (objectives); framework identity (`well-known/lib/ui`). |
+| `browser-extension` | Extension-host surfaces with no neutral home: `action`, `lifecycle`, `management`, `tabs`; engine-emitted `host-access/<host>` and `permission/<perm>`. | Storage, messaging, HTTP, scheduling and injection keep their usual homes; manifest authority is `metadata/permission`. |
+
+### Communications and local networking
+
+| Home | Admission and boundary |
+|---|---|
+| `communications/<protocol>/<operation>` | DNS, FTP, TFTP, SSH, TLS, WebSocket, RPC, gRPC, email, messaging, IRC, MCP, ICS protocols (`modbus`, `dnp3`, `s7`, `bacnet`, `ethernet-ip`, `opcua`, `profinet`). Children are operations (connect, authenticate, send, receive, serve, configure). A vendor, SDK or client library is not a protocol. |
+| `communications/http/{client,server}` | Method-unspecified client use; server-side handling. No `request` leaf duplicating `client`. |
+| `communications/http/{get,post,put,patch,delete,head,options}` | A required method. |
+| `communications/http/{download,upload}` | A response saved as an artifact (ordered retries in `download/fallback`); a file or attachment sent. GET alone is `get` and POST alone `post`; neither is upload, exfiltration or execution. |
+| `communications/http/{header,cookies,auth,redirect,response,form}` | Classify a header by meaning: authentication → its auth leaf (`oauth` incl. device code, `token-auth`, `jwt`, `basic-auth`; `auth` when unknown), `user-agent`, `cookies`; otherwise `header`. A cookie-jar path is `fs/path/cookie`. |
+| `communications/http/services/<provider>` | A named service endpoint with no operation; an operation goes to its own leaf. Cloud metadata: provider host or path → `services/<provider>/metadata`; headers such as `Metadata-Flavor` → `header/custom`. |
+| `communications/socket/{create,connect,bind,listen,accept,send,receive,close,configure}` | Lifecycle and I/O. An operation beats a transport-only fact (`tcp`, `udp`); `dial`, `wrapper-connect` and `state-connect` are not operations. Hand-built HTTP over a socket is `http/direct-socket`. |
+| `communications/tls/{initialize,verify}` | TLS apart from the application protocol: setup; peer verification (`verify/callback`; `verify/disable` only for explicit disabling). Setup is not a connection; a callback or suppressed warning does not disable verification. |
+| `communications/ip/{literal,parse,construct}` | Address syntax, including private ranges and defanged notation. Address text proves no connection. |
+| `communications/url/{parse,construction,host,scheme,path,query}` | Generic URL structure and endpoints. HTTP-specific URL facts stay in `http/url`; request parameters are `http/query`. A Wayback URL targets the archive, not its inner path. |
+| `communications/ipc/<mechanism>` | Local channels: pipes, named pipes, Unix sockets, D-Bus, XPC, Binder, native-messaging hosts. Descriptor duplication is `process/fd`; shared-memory allocation is `mem`. IRC is a network protocol: `communications/irc` (*legacy: `ipc/irc`*). |
+| `communications/messaging` | Send verbs shared across chat platforms. The platform's host is `http/services/<platform>`. |
+| `communications/{proxy,capture,transfer,benchmark,flood}` | Relays (`proxy/socks` for SOCKS, `tunnel` to build an encapsulated channel, `relay` to forward over one), packet capture, protocol-neutral send wording, throughput tests, repeated sends. Attack traffic is an impact claim. |
+| `network/interface` | Interface identity, address, configuration or state, including a distinctive name (`veth`, `docker0`) and MAC addresses. Wi-Fi and Bluetooth radios and WLAN profiles → `hardware/wireless`. |
+| `network/{connections,route,neighbors,dns,forward,qos,tunnel,status,share}` *(legacy: `os/network/*`)* | Connection inventory, routes, ARP caches, resolver configuration, forwarding, traffic policy, OS tunnel interfaces (TUN/TAP, WinTun), connectivity, share mapping. DNS wire traffic stays `communications/dns`; application-level forwarding is `communications/proxy/tunnel`. |
+
+Don't duplicate WebSocket under HTTP, or a client library under each HTTP verb.
+A port literal is not a service, scan or authentication state.
+
+### Cryptography
+
+**Operation beats presence.** An AES encryption call is `encrypt`; an AES
+implementation signature (tables, S-box) is AES presence — two observations,
+not one matcher copied. A direction-specific constructor goes with its
+direction but claims initialization, not transformed bytes; imports and
+constructors alone never map to MBC Encrypt Data.
+
+| Home | Admission and boundary |
+|---|---|
+| `crypto/symmetric/<algorithm>`, `asymmetric/<algorithm>`, `hybrid` | Primitive or implementation presence with no narrower operation ("contains AES", not "encrypts files"). Refinements such as `aes/initialize` (non-directional constructor), `aes/ctr` and `aes/decrypt` stay until the operation leaves absorb them. `hybrid` is symmetric payload crypto plus asymmetric key wrapping. |
+| `crypto/{encrypt,decrypt,sign,verify}` *(legacy: algorithm leaves such as `symmetric/aes/decrypt`, `asymmetric/{encrypt,signature}`)* | The operation, whether or not the algorithm is known. |
+| `crypto/asymmetric/signature` | Public-key signature support with no required direction or named primitive. A known direction goes to `sign` or `verify`; a named primitive without a required operation stays in its presence home. Excludes MACs, key formats and the file’s own signature. |
+| `crypto/cipher` | Cipher capability with no named algorithm or direction (a bare `Cipher`, Go GCM block-size errors). Record any known family in the rule. |
+| `crypto/hash/{digest,hmac}` | Cryptographic digest or MAC, including implementation presence; CryptoAPI hashing is `digest`. Noncryptographic checksums → `data/checksum` *(legacy: `crypto/hash/{crc32,fnv}`)*. |
+| `crypto/kdf` | Key derivation, whether or not the algorithm is known (PBKDF2 parameters, salt). |
+| `crypto/key/{generate,import,export,exchange,representation}` *(legacy: `asymmetric/key`, `asymmetric/ecdh`)* | Key lifecycle and representation. Bitcoin WIF is a key representation, not a mnemonic. |
+| `crypto/certificate` | Parsing, validating, installing and storing certificates. The file's own signature is `metadata/signed`. |
+| `crypto/provider` *(legacy: `crypto/native`, `crypto/library/{provider,cng,cryptoapi}`)* | Provider acquisition and release with no narrower operation; `CryptHashData` is hashing. No remainder bucket. |
+| `crypto/mnemonic` | Seed-phrase wordlists, generation and validation. Not a KDF (BIP-39 separates them). A bare `self.wordlist` is `data/collection`. |
+
+**Signature direction needs evidence.** A reference to
+[`java.security.Signature`](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/security/Signature.html)
+supports public-key signature capability; it does not choose signing or
+verification. Every passing alternative must establish that public-key subject.
+A bare `Signature` name, key import or hex string does not. WebCrypto's
+[`sign` and `verify` also support HMAC](https://www.w3.org/TR/2017/REC-WebCryptoAPI-20170126/#hmac);
+those method names alone do not establish asymmetric signature support.
+
+<a id="implementation-layers"></a>**Implementation-layer substitution test.**
+Swap the library or backend for another that performs the same operation. If
+only the directory would change, the level is not a subtechnique.
+`crypto/library`, `http/lib`, `aes/runtime-library`, `string/library` and
+`process/create/stdlib` fail; renaming them `framework`, `provider`, `wrapper`
+or `runtime` does not help. Embedded library code follows its capability; a
+dependency declaration is metadata; the analyzed library's own identity is
+`well-known/lib/<function>`. Linking style, vendoring and handwritten code are
+evidence differences, not techniques.
+
+**Ledgers and wallets are not crypto primitives.** Transaction construction,
+authorization (allowances, permits), financial-transaction signing, submission
+and record queries → `data/transaction/{construct,authorize,sign,submit,query}`;
+chain RPC → `communications/blockchain/client`; RPC endpoints with no operation
+→ `communications/http/url/rpc`; wallet UI → `ui/controls/wallet`; wallet files
+→ `fs/path/wallet`. Signing arbitrary messages is `crypto/sign`
+*(legacy: `crypto/asymmetric/signature`)*.
+A keyed XOR cipher is `crypto/symmetric/xor`; XOR scrambling is
+`data/{encode,decode}/xor`; a bare XOR instruction is neither.
+
+### Data
+
+| Home | Admission and boundary |
+|---|---|
+| `data/{encode,decode}/<scheme>` | A required direction. Keep a scheme child only if the matcher establishes it: Base16 → `hex`, `base32`, ASCII85/Z85 → `base85`, standard and URL-safe → `base64`. Repeated decoding is a refinement; origin or spelling (`request-base64`) is not. `DecodeString` without its receiver does not identify Base64. |
+| `data/encoding/<scheme>` | Direction-neutral scheme evidence (an embedded Base64 alphabet); asserts no operation. |
+| `data/{compress,decompress}/<algorithm>` | Directional compression; languages and libraries share the algorithm leaf. |
+| `data/codec` | Direct evidence for a codec interface or support spanning directions; keep a known scheme in the trait ID. Keep this broad leaf until a complete semantic partition can place every rule, including scheme-unknown evidence, in a named child. Size alone does not justify a split. |
+| `data/compression` | Composite findings spanning codec schemes or compression directions; direct codec evidence stays in `data/codec`. |
+| `data/{parse,serialize,format}/<format>` | Parsing input; object ↔ representation (JSON, YAML, protobuf, pickle; record fields in `serialize/schema-object`); formatting (`format/string` for number text, `format/credentials` for token shapes). Format identity alone is metadata. |
+| `data/archive/{create,extract,list,modify}` | Code that manipulates archives. A rule binding a member to its extracted file is `extract`, though it also writes. |
+| `data/{string,buffer,collection,property}/<operation>` | Operations on strings, byte buffers, collections (DOM trees in `collection/dom`) and object members (`property/{access,assign,define,enumerate}`), classified by receiver and operation, not method name. |
+| `data/{arithmetic,checksum,reassembly,transaction}` | Numeric and bitwise operations; noncryptographic integrity checks; reassembly; ledger transactions. |
+| `data/db/<operation>`, `data/config/<operation>` | Database operations, engine in the filename: rows (`write/row` for INSERT, UPDATE, REPLACE; `delete/row` for DELETE, TRUNCATE) and schema (`schema/{introspection,relational,stored-code,delete}`, `DROP` being `delete`); `sql` holds legacy generic syntax. Configuration reads and writes; a configuration file path is `fs/path`. |
+| `data/control-flow/{branch,loop,dispatch,error-handling,assert,return,sequence}` | Execution-path constructs. A method named `Run`, an indexed invocation or a computed call is `dispatch` until its receiver shows a launch. |
+| `data/{stream,embedded,llm}/<operation>` | Streams and recording; embedded resources; model inference and tool calls. Prompt text that overrides policy is `objectives/evasion/security-bypass/llm`. |
+
+`data/source` is **closed**: it split by evidence form. Syntax manipulation goes
+to `metaprogramming`, execution constructs to `data/control-flow`, artifact and
+language facts to `metadata`. A function *defined* with a utility's name is not
+a call to it.
+
+### Files, memory and hardware
+
+| Home | Admission and boundary |
+|---|---|
+| `fs/file/{create,open,close,copy,move,rename,stat,io-mode}` | File-object operations. Text/binary mode is `io-mode`; permission bits are `fs/chmod`; share and disposition flags are `open`. |
+| `fs/read`, `fs/write`, `fs/delete/{file,directory}` | Content I/O; deletion by what is removed. A sensitive filename creates no second home. |
+| `fs/directory/{create,readdir,traverse}`, `fs/search` | Create; list one directory; recurse; select by name, extension or content. A required predicate makes it `search` even when recursive. `fs/enumerate` is drive and device inventory only. |
+| `fs/path/<resource>` | A location, classified by **what it points at**, not its owner or an ancestor's name (`/Library/Caches` is `cache`). For secrets, the first that fits: `password-store`, `cookie`, `private-key`, `public-key` (authorized_keys, known_hosts), `token`, `secret-config`, `config`; a generic secret directory (`/run/secrets`) or cross-family union is `credential`. Others: `wallet`, `account-db`, `certificate`, `app-data`, `personal`, `cache`, `font`, `library`, `log`, `metadata-store`, `system`, `temp`, `socket`, `stream`, `extension`, `application/{bundle,browser,executable}`. A path never proves access. |
+| `fs/path-ops/{join,normalize,parse,match}` | Pathname manipulation (`Path.Combine`, `realpath`, `GetDirectoryName`). |
+| `fs/{acl,attributes,chmod,chown,link,lock,sync,watch,quota}` | Permissions, attributes, ownership, links (`hardlink`, `symlink`, `junction`), file locks (not `.lock` names), sync, change monitoring, quotas. |
+| `fs/temp/{file,directory}`, `fs/volume`, `fs/disk/{partition,raw}` | Creating temporary objects (a temp *location* is `fs/path/temp`); mounts; partitions and raw disk. Disk inventory is `os/sysinfo/disk`. |
+| `mem/{alloc,free,resize,copy,fill,compare}` | Allocate, release (`HeapFree`), resize (`HeapReAlloc`), copy, fill, compare. |
+| `mem/{map,unmap}`, `mem/create`, `mem/anonymous/create` | Mappings (`mremap` is `map`, not proof of a size change); shared and image-section objects; anonymous file descriptors (`memfd_create` proves no execution from it). |
+| `mem/{read,write,protect,query,advise,lock,gc,sync}` | Access (local, remote or physical, when established), permissions, inspection, advice, pinning, GC, cache visibility. RWX alone is neutral; writing to another process transfers no execution. |
+| `mem/combined` | Composites needing one alternative across memory operations. |
+| `mem/{heap-spray,stack-pivot,overflow}` | The required spray layout, stack redirection or out-of-bounds write; allocation, stack access or an unsafe API alone is not enough (MBC C0006, C0009, C0010). |
+| `hardware/{input,display,block,flash,gpu,wireless,smartcard,serial,iokit}/<operation>` | Device I/O and control. Input: `event`, `device`, keyboard `hook`/`listener`/`poll`/`layout`/`simulate`, mouse `position`/`simulate`, and `media` for audio-or-video interfaces (`getUserMedia`). A generic window hook is `ui/window/hook`. |
+
+### Process, OS, time and UI
+
+| Home | Admission and boundary |
+|---|---|
+| `process/create/<mechanism>` | Creating an execution context; see [process creation](#process-creation). |
+| `process/thread/{lifecycle,enumerate,group,priority,config,terminate}`, `process/fiber/<operation>` | Thread or fiber management apart from creation; a fiber is not a thread. |
+| `process/sync/{mutex,semaphore,event,critical-section,join}` | Coordination between execution contexts; memory visibility is `mem/sync`. |
+| `process/work/{queue,pool,task}` *(legacy: `process/threading/queue`)* | Queue and pool management; task submission, completion, waiting, cancellation and future/result access (`QueueUserWorkItem`, `dispatch_async`). These do not establish thread creation. Joining a thread is `process/sync/join`; timer callbacks are `time/schedule`. |
+| `process/{identity,info,enumerate,argument,resources,pid}` | Current identity; attributes (`info/name` for a process-name literal); listing; arguments; limits; PID files (a PID value is not one). |
+| `process/{exit,terminate,control,daemonize}` | Ending this process (`exit/handler` for exit callbacks); killing another (a signal API without the kill signal is not); other state changes; detaching (`fork`+`setsid`). |
+| `process/lifecycle/<operation>` | Lifecycle; a guard blocking a second instance (mutex, PID file, lock) is `single-instance` (MBC B0024), while a mutex alone is `process/sync/mutex`. |
+| `process/fd/{query,control,close,dup,stdio}`, `process/io/stream`, `process/tty/<operation>` | Descriptors (a duplication API is `dup`; the resulting stream wiring is `stdio`); stream pumping; terminals (`tty/pty`). Creating a pipe is `communications/ipc`. |
+| `process/interpreter/<operation>` | In-process execution: `eval/{direct,indirect,compile}` (including shell `eval` and `source "$x"`), `bof` (Beacon Object File host APIs), `wasm`, `vm`. Launching an interpreter is `process/create`; language identity is metadata. |
+| `process/{attach,debug,hook,inject}/<mechanism>` | Attaching, debugging, intercepting and transferring execution, with no established attacker purpose. |
+| `process/deploy/<sink>` | Neutral acquisition- or staging-to-activation chains (an updater fetching and launching its image), by the [payload sinks](#payload-activation-and-staging). |
+| `dylib/{load,unload,lookup,enumerate}` | Native loader operations. Language modules are `os/module`; export walking or API hashing is `os/api-resolution`; hiding import identity is an anti-static claim. |
+| `os/registry/<operation>` | A value read, write or delete beats key or hive references (`keys`, `hive`). Only a Run-key write with durable activation is persistence. |
+| `os/service/<operation>` | `create`, `start`, `stop`, `delete`, `configure`, `query`, `dispatch` (running as a service), `control` (no verb). A definition field alone is configuration; user or system scope is evidence, not a branch. |
+| `os/env/<subject>`, `os/env/<operation>` | The first required meaning wins: CI-issued credential (`ci-credentials`) → other credential (`secret-name`, e.g. `AWS_SECRET_ACCESS_KEY`) → interpreter or loader configuration (`runtime`: `BASH_ENV`, `NODE_OPTIONS`) → filesystem location (`path`; *legacy: `user-paths`*) → CI job metadata (`cicd`) → user identity (`user-info`) → service configuration (`provider`). Otherwise use the operation: `read`, `enumerate` (*legacy: `enumeration`, `dump`*), `write` (*legacy: `modify`*), `test` (*legacy: `check`, `gate`*). A name is a reference, not a read; reading a secret is not theft. |
+| `os/{user,group,privilege,security}/<operation>` | Principals and authority; security controls (`security/auth`, `security/jailbreak`). Crossing to higher authority is an objective. |
+| `os/kernel/<facility>`, `os/{syscall,bpf,container,virtualization}` | Kernel facilities (`kernel/driver` for driver installation and loading, MBC C0037/C0023, not ordinary service creation; *legacy: `os/service/driver`*); direct syscalls; BPF; namespaces (`container/namespace`) and container runtimes; hypervisors. |
+| `os/module/load`; `os/{api-resolution,linker}` | Language-module loading; manual API resolution; dynamic-linker configuration (`linker/{audit,env,load-path,symbol-version}`). Ruby `require` caches a module; `Kernel.load` evaluates the source file on each call. Native libraries belong under `dylib`. |
+| `os/autorun`, `os/package-manager`, `os/sysinfo/<property>`, `os/random`, `os/telemetry` | OS task and autorun registration (malicious durability is persistence); package operations; host properties (`hostname`, `platform`, `hardware`, `disk`, `locale`, `profile`); randomness; logging and analytics. |
+| `os/{clipboard,console,event,signal,exception,message,com,wmi}` | Host facilities. Clipboard by operation: `read`, `write`, `monitor`. COM or WMI evidence with a known function goes to that function. |
+| `os/application/target` | An app or package cited as the program's target (wallet brands, `SpringBoard`); neither discovery nor the file's identity. |
+| `time/{query,sleep,timing,schedule}` | Read time; wait; measure elapsed time (`timing/check`); schedule in-process callbacks (`schedule/timeout` for alarms). |
+| `ui/{controls,dialog,graphics,help,menu,terminal,wallpaper,window}` | Credential-entry controls (`controls/credential`), wallet UI (`controls/wallet`), prompts (`dialog/prompt`), `--help` text (`help`), window hooks, enumeration and notifications. Deceptive hiding is evasion. |
+
+#### Process creation
+
+`process/create/<mechanism>` is an ML feature; finish "creates an execution
+context by ___". **The first matching row wins:**
 
 | The matcher shows | Directory |
 |---|---|
-| A thread inside the current process | `thread` |
+| A thread in the current process | `thread` |
+| A fiber | `fiber` |
 | A clone of the current process | `fork` |
-| A shell parsing command text (`sh -c`, `cmd /c`, `shell=True`, a pipeline) | `shell` |
-| An interpreter evaluating source (`eval`, `node -e`) | `eval` |
+| A new shell parsing command text (`sh -c`, `cmd /c`, `shell=True`, a pipeline, `bash "$f"`, `%COMSPEC% /c`) | `shell` |
+| A new interpreter handed source text (`node -e`, `python -c`) | `eval` |
 | A library object standing for the child (`Popen`, `NSTask`, `ProcessBuilder`) | `subprocess` |
 | The desktop opener choosing the handler (`ShellExecute`, `open`, `NSWorkspace`) | `shellexec` |
-| An argument vector starting an image (`execve`, `CreateProcess`, `posix_spawn`) | `exec` |
-| Which image was named (calculator, `mshta`, `java -jar`), when the row above already covers how it starts | `launch` |
+| An API starting an image from an argument vector or command line (`execve`, `CreateProcess`, `posix_spawn`, `WinExec`, `WshShell.Run` with an executable path) | `exec` |
+| Only an executable name, launch flag, permission or import | Its path, configuration or import observation, not process creation |
 
-`shell/batch`, `shell/encoded`, `shell/injection`, and `shell/interactive` are legal children because each names a different form of a shell command, and `shell/` itself holds no YAML. They still share the feature `process/create/shell`. A child added so a full directory stays under the trait cap, whose sentence is still the parent's sentence, is not a split.
+An explicit shell argument beats the wrapper. An API's optional features are no
+evidence that this call uses them, and the launched executable does not change
+the mechanism. Under `shell`, pick one command-form axis (interactive session,
+command text, script file, pipeline).
 
-`launch/workspace` fails that test. Opening a bundle through NSWorkspace is the desktop opener, which is `shellexec`, and the extra segment would still be read as `launch`.
+## Attacker behaviors: `objectives/`
 
-### Placement Tiebreaker
+**Admission comes before placement.** Required evidence must support the attack
+claim — a target, deception, unauthorized action or attack-specific
+relationship — not just the mechanics. Static inference suffices. Ordinary
+download-and-run, secret access or service registration does not qualify, nor
+do reputation, optional clues or two unrelated APIs. State the admitting fact
+in the description.
 
-When a behavior could serve multiple objectives, place the single trait where evidence points most specifically. Composites in other objectives reference it.
+Level 2 names the behavior; level 3, the mechanism, target or source that
+distinguishes it.
 
-| Scenario | Placement | Rationale |
-|----------|-----------|-----------|
-| Process injection, no further context | `evasion/process/injection/` | Stealth is the most common use; privesc/lateral composites reference it |
-| Dropper (any payload delivery) | `command-and-control/dropper/` | All droppers are C2 — organized by kill-chain: delivery/, staging/, execution/, behavior/ |
-| Keylogging capability detected | `collection/keylog/` | General capture; credential-access composites reference it when combined with specific store targeting |
-| Rootkit hides files/processes | `evasion/kernel-hide/` | Hides from users/admins, not from sandboxes |
-| Masquerades as system binary | `evasion/masquerade/` | Deceives users/admins, not analysis tools |
-| Port scanning / network recon | `discovery/network/scan/` | Gaining knowledge, not propagating |
-| Brute-forcing remote services (SSH, IoT) | `lateral-movement/brute-force/` | Malware brute-forcing is about spreading to new hosts |
-| Local password cracking (hashcat, john) | `credential-access/` | Cracking local hashes, not spreading |
-| Killing rival malware processes | `impact/degrade/` | Destructive impact, not propagation |
-| WMI process execution | `execution/` | Execution; lateral only when combined with network evidence |
-| Killing AV/EDR processes | `impact/degrade/edr/` | Aggression ("I'll stop you"), not stealth; evasion/anti-av/ is for bypass |
-| Bypassing AMSI or using indirect syscalls | `evasion/anti-av/` | Stealth ("don't see me"), not aggressive termination |
-| Disabling/flushing firewall rules | `impact/degrade/firewall/` | Degrading system capability, not hiding |
-| Hidden files in system directories | `evasion/file-hiding/` | Concealment from users/admins; a hidden file doesn't survive reboots better |
-| Daemon fork+setsid persisting across reboot | `persistence/system/daemon/` | Restarting after reboot is persistence |
-| Reads Chrome Login Data SQLite | `credential-access/browser/` | Targets a specific credential store |
-| Reads a cookie-store data field (`CookiesData`, etc.) | `micro-behaviors/communications/http/cookies/` | Neutral cookie-store field access; credential-access/exfil composites reference it |
-| Extracts saved Wi-Fi profile keys | `credential-access/wifi/` | Targets a specific credential store |
-| Reads `AWS_SECRET_ACCESS_KEY` from env | `credential-access/env/secrets/` | Targets a specific secret |
-| Reads `os.environ` generically | `micro-behaviors/os/env/` | Neutral capability, no credential targeting |
-| Generic keystroke capture | `collection/keylog/` | General capture; credential-access composites reference it |
-| Chrome passwords + HTTP POST to attacker | `exfiltration/stealer/credential/` | Source + transport = exfiltration |
-| "admin" or "root" keyword | Concept-specific keyword directory, usually `objectives/discovery/account/keywords/` or a narrower objective when context supports it | Account/user concept, not credential access and not generic text |
-| CLI `--help` / `Usage:` text | `micro-behaviors/ui/help/` | Help text is a user-interface behavior, not file metadata |
-| Infection vocabulary | `objectives/impact/infect/` | The terms represent an impact objective, not generic content |
-| File property with no behavioral implication | `metadata/` | Structural fact, not behavior |
-| File property indicating deceptive intent | `evasion/masquerade/` | Deception is behavioral |
+| Objective | Level 2 | Admission and nearest neighbor |
+|---|---|---|
+| `anti-analysis` | `debugger-detect`, `sandbox-detect`, `vm-detect`, `emulator-detect`, `tool-detect`, `environment-detect`, `fingerprinting`, `timing`, `geofencing`, `anti-tampering`, `self-modify`, `self-terminate`, `process-tree`, `browser-detect` | Probing, gating or interfering with analysis environments; the required probe picks the child (a VM artifact is not a sandbox artifact). Ordinary environment queries and sleeps stay capabilities. |
+| `anti-static` | `obfuscation/<concealment>`, `pack/<unpacking-mechanism>`, `polyglot/<interpretation-conflict>` | Obstructing static recovery of code or data (disassembly, decompilation, string extraction). Encoding, compression, entropy or section shape alone is not concealment; a named packer is `well-known/`; stock UPX output is notable layout, not hostile. |
+| `collection` | `keylog`, `clipboard`, `screenshot`, `audio`, `camera`, `touch`, `messaging`, `email` *(legacy: `email-harvest`)*, `network`, `app-data`, `database`, `file-targeting`, `file-copy`, `archive`, `monitor`, `activity`, `multi-source` | Targeted acquisition or staging **without** a required send. Credentials → `credential-access`; reconnaissance → `discovery`; source plus send → `exfiltration`. `network` means captured traffic. |
+| `credential-access` | By source: `browser`, `cloud`, `credential-manager`, `keychain`, `env`, `files`, `ssh`, `wallet`, `email`, `messaging`, `dev-tools`, `wifi`, `registry` *(legacy: `windows-registry`)*, `memory` *(legacy: part of `dump`)*; by acquisition: `capture`, `cracking`, `phishing` | Acquiring authentication material or a targeted secret store, by the [credential-source order](#objective-boundaries). A store path alone is a reference; a login form alone is not phishing. |
+| `discovery` | `account`, `host`, `system`, `network`, `process`, `cloud` | A reconnaissance survey, by surveyed resource: `host` = installed software, security products, browsers; `system` = machine, hardware, OS; `process` = running processes; `network` = interfaces, peers, probes, scans; `account` = principals; `cloud` = provider resources. One generic query stays a capability. |
+| `command-and-control` | `channel/<transport>`, `beacon`, `remote-command/<dispatch>`, `backdoor/<access-surface>`, `reverse-shell/<io-coupling>`, `botnet`, `infrastructure`, `dns`, `trigger` | Attacker control, tasking, access or communication. Payload delivery is [execution](#payload-activation-and-staging); a protocol name is not C2. |
+| `execution` | `payload/<sink>` *(legacy: `command-and-control/dropper/<sink>`)*, `staging/<operation>` *(legacy: `command-and-control/dropper/staging/<carrier>`)*, `exploit`, `interpreter`, `lolbin`, `lure`, `trigger`, `database`, `activex`, `automation`, `compile`, `condition`, `lnk`, `wmi`, `autoinstall` | Unwanted execution through an exploit, deceptive invocation, trusted execution surface or admitted payload chain. Generic execution APIs stay in `process`. `database` is database-hosted execution (CLR procedures, `xp_cmdshell`, OLE Automation). |
+| `exfiltration` | `stealer/<source>`; transport-only: `http`, `dns`, `ftp`, `cloud`, `messaging`, `llm`, `oob`, `side-channel` | Unauthorized transfer. A full source-to-send chain is `stealer/<source>` and beats transport; a transport child needs an established theft claim with no narrower source. A POST, an endpoint or ordinary model inference is not exfiltration. Header, query and body are distinct HTTP carriers. |
+| `evasion` | `anti-av/<control>`, `security-bypass/<control>`, `masquerade/<deception>`, `decoy`, `file-hiding`, `kernel-hide`, `indicator-removal/<record>`, `self-delete`, `process/<concealment>`, `fileless`, `hijack-execution-flow`, `hosts-file`, `quarantine-removal`, `tcc-manipulation`, `file-unlock` | Hiding activity from users, admins or deployed security products, or bypassing their controls. |
+| `impact` | `destroy/<resource>`, `wipe`, `ransom`, `dos`, `degrade/<target>`, `infect/<host-artifact>`, `crypto-manipulation`, `cryptojacking`, `deface`, `services`, `system`, `ui`, `spam` *(legacy: `lateral-movement/social-engineering/spam`)* | Destruction, disruption, extortion, unauthorized modification or resource abuse. Ordinary deletion or encryption is neutral; spam needs unsolicited-message abuse, not volume. |
+| `lateral-movement` | `exploit/<remote-surface>`, `brute-force/<service>`, `pass-the-hash`, `smb`, `ssh`, `worm`, `usb-worm`, `delivery` *(open)*, `social-engineering` | Reaching or spreading to **another** system. A mechanism-specific exploit or credential reuse beats a generic protocol home. Scanning is discovery; local cracking is `credential-access/cracking`; infecting local files is `impact/infect`. |
+| `persistence` | `login/<surface>`, `system/<surface>`, `firmware/<surface>` | Durable, unwanted reactivation, [by trigger](#persistence-follows-the-trigger). |
+| `privilege-escalation` | `exploit/<boundary>`, `elevation-control/<bypass>`, `token-manipulation`, `hijack-execution-flow/<surface>`, `modify-service`, `kernel-modules`, `install-certificate`, `process-injection` | A required crossing to greater authority. A privileged API, requested permission, `sudo` text or injection alone is not one. |
+| `supply-chain` | `impersonation/<deception>`, `trojanized/<trusted-input>`, `hidden-payload/<inspection-evasion>` | Abuse of component selection, distribution, or build and update trust; [package scope is not enough](#supply-chain-trust). |
 
-## Tier 1: Capabilities (`micro-behaviors/`)
+### Objective boundaries
 
-Value-neutral observations about what code can do. High confidence from static analysis. Maps to MBC [Micro-objectives](https://github.com/MBCProject/mbc-markdown/tree/master/micro-behaviors): *"low-level, support many objectives and other behaviors, and aren't necessarily malicious."*
+- **Credential source.** Classify deceptive capture as `phishing`, hash or
+  password recovery as `cracking`, live interception as `capture`. For stored
+  secrets, use the *immediate* store — OS keychain, credential manager,
+  environment, cloud secret service — else the required application or
+  key-format store (browser, SSH, wallet), else `files` for generic extraction.
+  Process-memory extraction is `memory`; registry keys and hives, including an
+  offline SAM, are `registry`. An application store beats its file or registry
+  container; the final source beats any key used to unlock it.
+- **Export follows the same rule.** A keychain-to-send chain is
+  `exfiltration/stealer/keychain` even when a browser consumes the secret.
+  Never invent a source.
+- **Activation before delivery detail.** An admitted acquisition- or
+  staging-to-activation chain is placed by its sink; language, transport,
+  encryption and carrier are supporting facts.
+- **Control before payload.** A reusable operator request-to-command surface is
+  C2; activating one acquired payload is a payload chain.
+- **Mechanism before intent.** Neutral hooking and injection stay in
+  `micro-behaviors/process/{hook,inject}`; evasion, credential or escalation
+  composites add their own result. Common use is not stealth.
+- **Stopping defenders is impact; blinding them is evasion.** Killing EDR or
+  flushing firewall rules → `impact/degrade`; AMSI, ETW, indirect syscalls or
+  Defender exclusions → `evasion/anti-av`.
+- **Narrow effects beat broad.** Secure erasure → `wipe`; extortion → `ransom`;
+  exhaustion → `dos`; other destructive deletion → `destroy`; code inserted into
+  a host file → `infect`.
+- **Several outcomes:** place by the distinguishing result — source plus send →
+  exfiltration; cross-host installation → lateral movement; higher-authority
+  execution → privilege escalation; durable reactivation → persistence; else
+  payload activation. Unrelated outcomes are separate composites.
 
-```
-micro-behaviors/
-├── browser-extension/     # Browser-extension (WebExtension) platform APIs
-│   │                      #   Irreducibly extension-specific surfaces only — the
-│   │                      #   browser is the host platform here, not an OS.
-│   │                      #   Generic extension capabilities map to their technique
-│   │                      #   homes instead (messaging → communications/ipc/message/,
-│   │                      #   storage → data/db/web-storage/, alarms → time/schedule/,
-│   │                      #   scripting → process/inject/, webRequest → process/hook/,
-│   │                      #   cookies → communications/http/cookies/, downloads →
-│   │                      #   communications/http/download/, native messaging →
-│   │                      #   communications/ipc/native-host/, identity → os/security/,
-│   │                      #   proxy → os/network/, debugger → process/attach/).
-│   ├── host-access/       #   Granted origin authority (host_permissions /
-│   │                      #     content-script matches). Engine-emitted, one
-│   │                      #     dynamic trait per host: host-access/<host>::granted.
-│   │                      #     The host is its own subdirectory (not a local id)
-│   │                      #     so the UI shows each host and the ML pipeline keys
-│   │                      #     a per-host feature; engine IDs use the canonical
-│   │                      #     <dir>::<local> form, same as YAML. The grant covers
-│   │                      #     DOM injection, cookie reads, privileged cross-origin
-│   │                      #     requests, and traffic interception — not mere comms.
-│   │   └── shopping/      #     Shopping and e-commerce host targeting
-│   ├── permission/        #   Declared API permission, engine-emitted one per
-│   │                      #     permission: permission/<perm>::declared (kebab-cased).
-│   │                      #     Own subdir per permission (UI + ML). Risk/intent
-│   │                      #     (overprivileged, dangerous combos) → YAML objectives.
-│   ├── lifecycle/         #   Runtime lifecycle / identity / browser.* namespace
-│   ├── tabs/              #   Tab create / query / update / navigate
-│   ├── management/        #   Enumerate / enable / uninstall other extensions
-│   └── action/            #   Toolbar action / popup surface
-│
-├── communications/        # Network communication              → MBC: Communication
-│   │                      #   Organized by protocol. Neutral mechanics only.
-│   │                      #   Port scanning → objectives/discovery/network/scan/.
-│   │                      #   Tor hidden services → objectives/command-and-control/.
-│   │                      #   DDoS amplification → objectives/impact/dos/.
-│   │                      #   DNS tunneling → objectives/command-and-control/.
-│   ├── socket/            #   Socket ops (TCP, UDP, raw, bind, listen)  C0001
-│   ├── http/              #   HTTP/HTTPS (client, server, download)     C0002
-│   ├── dns/               #   DNS (lookups, records, DoH, tools)        C0011
-│   ├── email/             #   Email (SMTP, MAPI, MIME, NNTP)            C0012
-│   ├── icmp/              #   ICMP (ping, traceroute)                   C0014
-│   ├── ipc/               #   IPC (pipes, DDE, XPC, WCF, IRC)          C0003
-│   ├── rpc/               #   Remote procedure-call protocols
-│   ├── mcp/               #   Model Context Protocol (stdio and HTTP)
-│   ├── ftp/               #   FTP client/upload                         C0004
-│   ├── ssh/               #   SSH client/connect
-│   ├── ip/                #   IP addressing (parse, resolve, embedded)
-│   ├── proxy/             #   Proxy/tunneling (SOCKS)
-│   ├── url/               #   URL construction/parsing
-│   ├── websocket/         #   WebSocket
-│   ├── messaging/         #   Chat/bot platform send APIs (sendMessage, sendDocument)
-│   │                      #     Platform-AGNOSTIC message-send verbs only — Slack,
-│   │                      #     Discord, Teams, Telegram all share them. The platform
-│   │                      #     HOST marker (api.telegram.org) belongs in
-│   │                      #     http/services/<platform>/; exfil INTENT belongs in
-│   │                      #     objectives/exfiltration/messaging/. Native-messaging
-│   │                      #     IPC (browser host bridge) → ipc/native-host/, not here.
-│   ├── async-io/          #   Async I/O (epoll, kqueue, io_uring, tokio)
-│   ├── capture/           #   Packet capture (tcpdump, wireshark)
-│   ├── benchmark/         #   Network performance testing
-│   │                      #   --- ICS/OT protocols (neutral mechanics only) ---
-│   │                      #   ICS port scanning → objectives/discovery/network/scan/.
-│   │                      #   ICS sabotage/manipulation → objectives/impact/degrade/ics/.
-│   │                      #   ICS environment discovery → objectives/discovery/system/.
-│   ├── modbus/            #   Modbus industrial control protocol         (TCP 502)
-│   ├── dnp3/              #   DNP3 SCADA/utility protocol                (TCP 20000)
-│   ├── s7/                #   Siemens S7comm/ISO-TSAP                    (TCP 102)
-│   ├── bacnet/            #   BACnet building/industrial automation      (UDP 47808)
-│   ├── ethernet-ip/       #   EtherNet/IP + CIP industrial protocol     (TCP 44818)
-│   ├── opcua/             #   OPC UA industrial interoperability         (TCP 4840)
-│   └── profinet/          #   PROFINET industrial Ethernet               (RT/IRT)
-│
-├── crypto/                # Cryptographic operations            → MBC: Cryptography
-│   │                      #   Neutral crypto primitives only.
-│   │                      #   API hashing → objectives/anti-static/obfuscation/imports/.
-│   │                      #   DPAPI credential decryption → objectives/credential-access/.
-│   │                      #   PRNG → os/random/.
-│   ├── symmetric/         #   Symmetric ciphers (AES, DES, XOR, RC4)   C0068
-│   ├── asymmetric/        #   Asymmetric ciphers (RSA, ECC, Curve25519)
-│   ├── hash/              #   Cryptographic hashes (SHA, MD5, Blake2b)  C0029
-│   ├── kdf/               #   Key derivation functions                  C0028
-│   ├── certificate/       #   Certificate ops (install, store, sign, verify)
-│   └── library/           #   Crypto library/framework detection        C0059
-│
-├── data/                  # Data transformation                 → MBC: Data
-│   │                      #   Neutral data operations only.
-│   │                      #   Shellcode/exploit payloads → objectives/evasion/ or execution/.
-│   │                      #   Token extraction → objectives/credential-access/.
-│   │                      #   Obfuscator detection → objectives/anti-static/.
-│   │                      #   CVE-specific patterns → objectives/execution/exploit/.
-│   │                      #   Malware family markers → well-known/.
-│   ├── encode/            #   Encoding (base64, hex, URL, XOR, rot13, custom)  C0026
-│   ├── decode/            #   Decoding (base64, hex, buffer)                   C0053
-│   ├── compress/          #   Compression (zip, gzip, zlib)                    C0024
-│   │   ├── aplib/         #   aPLib compression/decompression
-│   │   ├── brotli/         #   Brotli compression/decompression
-│   │   ├── bzip2/          #   BZip2 compression/decompression
-│   │   ├── gzip/           #   Gzip compression/decompression
-│   │   ├── lz4/            #   LZ4 compression/decompression
-│   │   ├── lzma/           #   LZMA/XZ compression/decompression
-│   │   ├── combined/       #   Rules spanning multiple compression algorithms
-│   │   ├── stream/         #   Algorithm-neutral compression streams
-│   │   ├── zip/            #   ZIP compression
-│   │   ├── zlib/            #   zlib/deflate compression/decompression
-│   │   └── zstd/            #   Zstandard compression/decompression
-│   ├── decompress/        #   Decompression of encoded/compressed data
-│   │   └── combined/       #   Rules spanning multiple decompression algorithms
-│   ├── archive/           #   Archive operations (tar, zip extraction)
-│   ├── serialize/         #   Serialization (JSON, YAML, pickle, protobuf)
-│   ├── format/            #   Format patterns in content (MZ header, PDF, HTML)
-│   │                      #     File-level format identification → metadata/file/format/
-│   ├── embedded/          #   Embedded content/resource handling (certificates, EXIF, runtime)
-│   ├── language/          #   Human language detection (Chinese, Russian, etc.)
-│   ├── source/            #   Source code patterns (syntax, quality, identifiers)
-│   ├── string/            #   String operations (library, conversion)          C0019
-│   ├── buffer/            #   Buffer operations (offset writes, reassembly)
-│   ├── db/                #   Database operations (SQL, Redis, MongoDB, etc.)
-│   └── control-flow/      #   Control flow patterns (loops, error handling)
-│   # NOTE: PRNG → os/random/. Config detection → metadata/config/.
-│   # data/ is for data transformation and data-structure handling, not
-│   # system queries, file metadata, data merely being present, or generic
-│   # text/content buckets. Do not add data/text/; terms belong where the
-│   # concept they represent belongs.
-│   #
-│   # NOTE — decoding/deserialization is a CAPABILITY, not file metadata.
-│   #   Decoding an encoding (base64, hex, custom alphabet) or parsing a
-│   #   particular format (pickle/marshal, an image/archive/document format)
-│   #   is on the TAXONOMY notable bar — an analyst wants it surfaced in a
-│   #   supply-chain diff. It belongs here (data/encode/, data/decode/,
-│   #   data/serialize/, data/compress/, data/archive/, data/format/),
-│   #   NOT in metadata/. This includes the
-│   #   neutral act of IMPORTING such a module (e.g. Python `import base64`
-│   #   → data/encode/base64::import-base64, `import pickle` →
-│   #   data/serialize/unsafe/python::import-pickle): the import is a
-│   #   capability observation, kept at notable. metadata/ only records what a file IS
-│   #   (e.g. "contains base64-looking strings"), never that code decodes.
-│   #   The engine also emits a neutral per-module import node under
-│   #   metadata/import/<lang>/<module> for composites that need an
-│   #   import fact without inferring the decode capability.
-│
-├── fs/                    # Filesystem access                   → MBC: File System
-│   │                      #   Neutral file operations only.
-│   │                      #   File infection → objectives/impact/infect/.
-│   │                      #   Disk wiping → objectives/impact/wipe/.
-│   │                      #   Hidden file creation → objectives/evasion/file-hiding/.
-│   │                      #   Obfuscated paths → objectives/anti-static/obfuscation/.
-│   ├── acl/               #   Access Control List manipulation (setfacl, getfacl, NTFS ACLs)
-│   ├── attributes/        #   File attributes (chattr, xattr)
-│   ├── chmod/             #   Permission mode modification and queries (chmod, umask)
-│   ├── chown/             #   Ownership modification (chown, lchown, fchown, takeown)
-│   ├── config/            #   Configuration file operations
-│   ├── delete/            #   File deletion
-│   ├── device/            #   Block/character device access
-│   ├── directory/         #   Directory operations (create, list, traverse, delete)
-│   ├── disk/              #   Disk/partition operations
-│   ├── enumerate/         #   File/directory/drive enumeration
-│   ├── file/              #   File operations (read, write, copy, move, delete, stat)
-│   ├── link/              #   Hard/symbolic links
-│   ├── lock/              #   File locking (flock)
-│   ├── memory/            #   Memory-mapped I/O (mmap)
-│   ├── path/              #   Path references and construction
-│   │   ├── config/        #     Config paths (accounts, groups, sudoers)
-│   │   ├── device/        #     Device paths (storage, terminal)
-│   │   ├── private-key/   #     Private key material (SSH, TLS, keystores, DPAPI)
-│   │   ├── public-key/    #     authorized_keys / known_hosts (access grant, not a secret)
-│   │   ├── password-store/#     Password databases (browser logins, keychain, vaults)
-│   │   ├── token/         #     OAuth / API / session token files
-│   │   ├── secret-config/ #     Config that carries secrets (.env, .npmrc, kube/docker)
-│   │   ├── wallet/        #     Cryptocurrency wallets and seed phrases
-│   │   ├── cookie/        #     Cookie jars
-│   │   ├── account-db/    #     System account databases (/etc/passwd, shadow, SAM)
-│   │   ├── credential-filename/ # Filename itself marks it secret (auth.json, secrets.*)
-│   │   ├── credential/    #     Cross-family umbrellas ("any credential path") + guards
-│   │   ├── app-data/      #     Application data/profile dirs (bulk content, not a secret)
-│   │   ├── personal/      #     Messages, notes, contacts, history -- not credentials
-│   │   └── temp/          #     Temporary paths
-│   ├── pipe/              #   Named pipes (FIFO)
-│   ├── proc/              #   /proc filesystem access
-│   ├── quota/             #   Filesystem quota operations
-│   ├── read/              #   File reading (standalone)
-│   ├── search/            #   File search/query tools (locate, mdfind, Spotlight)
-│   ├── shell-ops/         #   Shell file operations (cp, mv, rm)
-│   ├── swap/              #   Swap operations
-│   ├── sync/              #   Filesystem sync (fsync, fdatasync)
-│   ├── temp/              #   Temporary file/directory creation
-│   ├── traversal/         #   Directory/drive traversal
-│   ├── volume/            #   Volume mount/unmount
-│   ├── watch/             #   File monitoring (inotify, fanotify, fswatch)
-│   └── write/             #   File writing (standalone)
-│
-├── hardware/              # Hardware device I/O                 → MBC: Hardware
-│   │                      #   Direct interaction with hardware devices.
-│   │                      #   Querying system properties → os/sysinfo/.
-│   │                      #   Hardware enumeration libraries → objectives/discovery/.
-│   │                      #   Clipboard (OS IPC) → os/clipboard/.
-│   ├── block/             #   Block storage device access
-│   ├── display/           #   Screen/graphics (capture APIs, DirectX)
-│   ├── flash/             #   Flash memory devices (MTD, MMC)
-│   ├── input/             #   Keyboard, mouse (capture, simulation)
-│   ├── iokit/             #   macOS IOKit device framework
-│   ├── smartcard/         #   Smart card reader access (WinSCard)
-│   └── wireless/          #   Wireless network interfaces
-│
-├── mem/                   # Memory operations                   → MBC: Memory
-│   ├── advise/            #   Memory advisory (madvise, posix_madvise)
-│   ├── alloc/             #   Memory allocation (malloc, VirtualAlloc, PAGE_EXECUTE_*)
-│   ├── anonymous/         #   Anonymous memory (memfd_create, /dev/shm)
-│   ├── c-runtime/         #   C runtime memory functions (memcpy, memset)
-│   ├── create/            #   Memory-backed file creation
-│   ├── decompress/        #   Native decompression in memory
-│   ├── gc/                #   Garbage collection
-│   ├── inline-asm/        #   Inline assembly detection
-│   ├── lock/              #   Memory locking (VirtualLock, mlock)
-│   ├── protect/           #   Memory protection changes (mprotect, VirtualProtect)
-│   ├── query/             #   Memory queries (VirtualQuery)
-│   ├── read/              #   Memory read (including cross-process ReadProcessMemory)
-│   └── sync/              #   Synchronization primitives (mutex, semaphore)
-│   # NOTE: RWX allocation, reflective loading, shellcode execution,
-│   # ntdll unhooking, and UAF exploits → objectives/ (evasion or execution).
-│
-├── os/                    # OS integration                      → MBC: Operating System
-│   │                      #   OS-specific APIs that don't fit other top-level categories.
-│   │                      #   Process ops → process/. File ops → fs/. Timing → time/.
-│   │                      #   Persistence composites (crontab, registry Run keys) →
-│   │                      #   objectives/persistence/.
-│   ├── api-resolution/    #   API resolution (GetProcAddress, hash-based)
-│   ├── autorun/           #   Autorun keyword/scheduled task patterns
-│   ├── bpf/               #   BPF/eBPF operations
-│   ├── callback/          #   OS callback mechanisms
-│   ├── clipboard/         #   Clipboard (OS IPC), split by what the code
-│   │   │                  #   does to it -- reading someone's clipboard and
-│   │   │                  #   replacing it are different threats, and the
-│   │   │                  #   feature stops at this level.
-│   │   ├── read/          #     Pulls clipboard contents out          T1115
-│   │   ├── write/         #     Puts contents in, clears, or replaces
-│   │   │                  #     them (the clipper/hijack shape)
-│   │   ├── monitor/       #     Watches for changes over time
-│   │   └── reference/     #     Names the clipboard API without
-│   │                      #     performing an operation
-│   ├── com/               #   Windows COM/OLE
-│   ├── compat/            #   OS compatibility layers
-│   ├── console/           #   Console I/O (C0033)
-│   ├── container/         #   Container runtime detection
-│   ├── env/               #   Environment variables (C0034). Which variable
-│   │   │                  #   is named is the discriminator, so the topic sits
-│   │   │                  #   at this level -- it used to live under a `vars/`
-│   │   │                  #   grouping word, where all 14 topics collapsed into
-│   │   │                  #   the single feature `os/env/vars`.
-│   │   ├── credentials/   #     Secret-bearing variables               T1552.001
-│   │   ├── ai-provider/   #     AI SDK configuration variables
-│   │   ├── package-manager/ #   npm/node ecosystem variables
-│   │   ├── runtime/       #     Language/runtime tuning knobs (NODE_OPTIONS,
-│   │   │                  #     OMP_NUM_THREADS, MallocStackLogging)
-│   │   ├── ci-credentials/ #    CI-issued secrets
-│   │   ├── cicd/          #     CI/CD runner variables
-│   │   ├── cloud/         #     Cloud-provider variables
-│   │   ├── system-info/   #     Host/system description variables
-│   │   ├── user-info/     #     User identity variables
-│   │   ├── user-paths/    #     Per-user path variables
-│   │   ├── platform/      #     Platform/arch variables
-│   │   ├── ssh/           #     SSH agent/auth variables
-│   │   ├── editor/        #     EDITOR/VISUAL and friends
-│   │   ├── pipeline/      #     Pipeline plumbing variables
-│   │   ├── modify/        #     Setting, clearing or injecting a variable
-│   │   │
-│   │   │                  #   The operation axis, alongside the topics above:
-│   │   ├── read/          #     Querying a variable (os.Getenv, System.getenv,
-│   │   │                  #     process.env, getenv)
-│   │   ├── enumeration/   #     Walking the whole environment
-│   │   ├── block/         #     Windows environment-block APIs that allocate
-│   │   │                  #     and release the block itself
-│   │   ├── dump/          #     Dumping the environment wholesale
-│   │   ├── config/        #     Env-driven configuration
-│   │   └── check/         #     Guarding on a variable's value
-│   ├── event/             #   OS event mechanisms
-│   ├── exception/         #   Exception/error handling
-│   ├── firewall/          #   Firewall tool references (iptables, nft, ufw, firewalld)
-│   │                      #     Neutral: "code references a firewall tool" (notable)
-│   │                      #     Destructive ops (flush, disable, policy change) →
-│   │                      #     objectives/impact/degrade/firewall/
-│   ├── group/             #   Group management
-│   ├── kernel/            #   Kernel interaction (modules, devices, callbacks)
-│   │   └── boot/          #     Boot configuration (bcdedit, Safe Mode, boot flags)
-│   │                      #       Neutral: "changes how the machine next boots";
-│   │                      #       EDR teardown / ransomware staging composites →
-│   │                      #       objectives/impact/degrade/ and objectives/evasion/anti-av/
-│   ├── linker/            #   Dynamic linker configuration
-│   ├── message/           #   Message queues
-│   ├── module/            #   Module loading
-│   ├── msdos/             #   MS-DOS interrupt handling (vintage)
-│   ├── network/           #   Network config (interfaces, status)
-│   ├── package-manager/   #   Package management (apt, pip)
-│   ├── pam/               #   PAM authentication
-│   ├── privilege/         #   Privilege APIs (manifest, paths — neutral only)
-│   ├── random/            #   Random number generation
-│   ├── registry/          #   Windows registry (C0036)
-│   ├── security/          #   OS security APIs (keychain, capabilities, auth)
-│   │   ├── auth/          #     Authentication and authorization checks, including
-│   │   │                  #       app-level ones (WordPress capability/nonce/session)
-│   │   └── jailbreak/     #     Jailbreak/root artifact paths a program looks for.
-│   │                      #       Neutral: banking and DRM apps check these too;
-│   │                      #       evasion intent → objectives/anti-analysis/
-│   │                      #       environment-detect/
-│   ├── recovery/          #   OS recovery points (SRSetRestorePoint). Creating
-│   │                      #     one is neutral; removing them is
-│   │                      #     objectives/impact/degrade/system/recovery/.
-│   ├── service/           #   System service management, split by the verb --
-│   │   │                  #   the verb is the discriminator and the feature
-│   │   │                  #   stops at this level, so each is a sibling rather
-│   │   │                  #   than a child of control/.
-│   │   ├── create/        #     Registering a new service
-│   │   ├── start/         #     Starting or restarting one
-│   │   ├── stop/          #     Stopping one
-│   │   ├── delete/        #     Removing one
-│   │   ├── configure/     #     Changing start type or config
-│   │   ├── query/         #     Reading status or config
-│   │   ├── dispatch/      #     A program acting AS a service (control
-│   │   │                  #     dispatcher, status handler)
-│   │   ├── control/       #     Generic service-manager interaction that
-│   │   │                  #     names no particular verb (OpenSCManager,
-│   │   │                  #     ControlService, bare systemctl/launchctl)
-│   │   └── user-session/  #     Per-user service management (systemd user
-│   │                      #     units, launchd agents, loginctl linger)
-│   ├── signal/            #   Signal handling
-│   ├── stdio/             #   Standard I/O operations
-│   ├── syscall/           #   Direct syscall invocation
-│   ├── sysinfo/           #   System information queries
-│   │   ├── platform/      #     OS/arch detection (uname, sys.platform, GOOS)
-│   │   ├── hostname/      #     Machine name (gethostname, hostname cmd)
-│   │   ├── hardware/      #     Hardware info (DMI, SMBIOS, memory)
-│   │   ├── directories/   #     System directory paths
-│   │   ├── process/       #     Current process info (GetStartupInfo)
-│   │   ├── config/        #     System config (sysconf, sysctl)
-│   │   └── vmware/        #     VMware/ESXi paths, commands
-│   ├── telemetry/         #   OS telemetry and instrumentation
-│   ├── user/              #   User account management
-│   ├── virtualization/    #   Hypervisors, virtual devices, VM snapshots
-│   ├── wmi/               #   Windows WMI queries
-│   └── wsh/               #   Windows Script Host
-│
-├── process/               # Process control                     → MBC: Process
-│   │                      #   Privilege APIs → os/privilege/. Env vars → os/env/.
-│   │                      #   Container runtime → os/container/.
-│   ├── argument/          #   Command-line argument parsing
-│   ├── attach/            #   Process attachment (ptrace, debug)
-│   ├── control/           #   Process control signals
-│   ├── create/            #   Process creation (spawn, exec)
-│   ├── daemonize/         #   Daemon creation (setsid, double-fork)
-│   ├── debug/             #   Debug operations
-│   ├── enumerate/         #   Process listing
-│   ├── exit/              #   Process self-exit
-│   ├── fd/                #   File descriptor manipulation (dup2)
-│   ├── fork/              #   POSIX fork/clone
-│   ├── hook/              #   API/function hooking
-│   ├── identity/          #   Process identity (getpid, getppid)
-│   ├── info/              #   Process information queries
-│   ├── inject/            #   Cross-process injection (DLL, thread, APC, atom-bombing)
-│   ├── interpreter/       #   Code interpreters/runtimes
-│   │   ├── vm/            #     Node.js VM module (createContext, runInContext)
-│   │   ├── node/          #     Node.js internal bindings (process.binding)
-│   │   └── gentee/        #     Gentee scripting runtime
-│   ├── io/                #   Process I/O redirection
-│   ├── lifecycle/         #   Process lifecycle management
-│   ├── pid/               #   PID file operations
-│   ├── resources/         #   Process resource management
-│   ├── script/            #   Script execution
-│   ├── sync/              #   Process synchronization
-│   ├── terminate/         #   Process termination (killing other processes)
-│   ├── thread/            #   Thread lifecycle (Java)
-│   ├── threading/         #   Threading primitives (Windows sync)
-│   ├── tls/               #   Thread-local storage
-│   ├── tty/               #   TTY/PTY operations (terminal detection, pseudoterminals)
-│   └── user/              #   Process user identity (whoami, getlogin, getpwuid)
-│
-├── ui/                    # User interface operations
-│   ├── controls/          #   Widget/control operations
-│   ├── dialog/            #   Dialog boxes, message boxes, prompts
-│   ├── framework/         #   UI framework usage (tkinter, WinForms)
-│   ├── graphics/          #   GDI/drawing operations
-│   ├── help/              #   Help/usage surfaces and documented CLI behavior
-│   ├── menu/              #   Menu operations (popup, context)
-│   ├── terminal/          #   Terminal/console UI (ANSI, ncurses)
-│   ├── wallpaper/         #   Desktop wallpaper manipulation
-│   └── window/            #   Window management (create, show, position)
-│   # NOTE: Stealth UI behaviors (hiding Dock icon, hiding windows,
-│   # excessive VScrollBar deception) belong in objectives/evasion/,
-│   # not here. Micro-behaviors/ui is for NEUTRAL UI operations only.
-│
-└── time/                  # Timing operations
-    ├── sleep/             #   Delays
-    ├── schedule/          #   Scheduled execution
-    └── timing/            #   Timers and timing measurements
-```
+### Command and control
 
-## Tier 2: Objectives (`objectives/`)
+| Child | Admission | Not this |
+|---|---|---|
+| `reverse-shell` | An **outbound** connection coupled to a shell's I/O. | Socket and shell without that coupling; a listener (`backdoor/bind-shell`). |
+| `backdoor/bind-shell` | A listener handing an accepted client a shell. | A handler taking independent tasks (`backdoor/dispatch`, `remote-command`). |
+| `backdoor/webshell` | A server page or hook that executes operator requests; children name what the request drives (`request/<sink>`, `intercept/<hook>`) or the shell's role (`relay`, `stager`, `upload`, `recon`, `file-manager`, `auth`). | A handler that only reads request headers. |
+| `backdoor/*` | Other unauthorized access: auth bypass, RAT command sets, implants. | Generic dispatch; carriers (`binary`, `script`, `native-source`). |
+| `remote-command` | Received tasks tied to execution; a response written back strengthens it. | Socket plus execution, or output to a socket, without received tasks. One HTTP request is not polling. |
+| `beacon` | Repeated check-in or heartbeat. | Ordinary timers and telemetry. |
+| `botnet` | Fleet membership or distributed tasking. | A DDoS action or device platform alone. |
+| `channel/<transport>` | A transport shown to carry attacker control. | Generic transport APIs. |
+| `dns` | DNS tasking, check-in or tunneling; DGA. | A DoH endpoint or lookup (`micro-behaviors/communications/dns`). |
+| `infrastructure` | Endpoints or rendezvous with a demonstrated C2 role. | Ordinary hosting and chosen labels. |
+| `trigger` | Attacker activation conditions: packet knock, content gate, local artifact gate. | Ordinary lifecycle or timer facts. |
 
-Attacker goals inferred from capability combinations. Maps to MBC [Objectives](https://github.com/MBCProject/mbc-markdown#malware-objective-descriptions). Implies *likely* intent — static analysis alone can't be 100% certain.
+**Reverse-shell level 3: the first required relay mechanism wins.** `dev-tcp`
+(shell pseudo-device) → `netcat` (netcat in connect mode owns the relay) →
+`pty` → `fd-redirect` (socket as the shell's inherited descriptors) →
+`stream-bridge` (explicit copying between socket and child streams, including
+`telnet | sh | telnet` and FIFO cycles on one path). Encoding, syscall and
+language are not mechanisms; `encoded`, `socket-exec`, `stdio`, `syscall` and
+`dup` are retired.
 
-```
-objectives/
-├── anti-analysis/             # Evade behavioral analysis (OB0001)
-│   │                          #   Sandboxes, debuggers, emulators, VMs
-│   │                          #   "Don't analyze me" — targets analysts & analysis tools
-│   ├── debugger-detect/       #   Debugger detection                      B0001
-│   ├── sandbox-detect/        #   Sandbox detection                       B0007
-│   ├── vm-detect/             #   Virtual machine detection               B0009
-│   ├── emulator-detect/       #   Emulator detection                      B0004
-│   ├── environment-detect/    #   Analysis environment detection          B0013
-│   ├── timing/                #   Timing-based evasion / delays           B0025
-│   ├── tool-detect/           #   Detect analyst tools (IDA, procmon)
-│   ├── geofencing/            #   Geographic/locale conditional exec      B0025
-│   ├── anti-tampering/        #   Detect analyst code patches
-│   ├── self-modify/           #   Runtime self-modification               B0008
-│   ├── self-terminate/        #   Crash/exit when analysis detected
-│   ├── process-tree/          #   Break process lineage for sandbox evasion
-│   ├── fingerprinting/        #   CPU/instruction environment detection
-│   ├── browser-detect/        #   Browser sandbox detection
-│
-├── anti-static/               # Evade static analysis (OB0002)
-│   │                          #   Disassembly, decompilation, string extraction
-│   ├── obfuscation/           #   Obfuscated files/code          E1027 + B0032
-│   │   │                      #   Organized by technique, not by language or file type.
-│   │   │                      #   A string encryption rule works the same whether
-│   │   │                      #   the target is a Python script or a PE binary.
-│   │   ├── string/            #     String obfuscation (encrypt, split, concat)
-│   │   ├── encoding/          #     Data encoding (base64, hex, xor, arithmetic)
-│   │   ├── eval/              #     Dynamic execution (eval, exec, Function, WSH)
-│   │   ├── control-flow/      #     Control-flow (flattening, VM dispatch, polymorphism)
-│   │   ├── syntax/            #     Source syntax patterns (AST/raw; anti-tamper,
-│   │   │                      #       dynamic property access, IIFE wrappers).
-│   │   │                      #       vs string/: string/ detects string-value techniques;
-│   │   │                      #       syntax/ detects source-level structural patterns.
-│   │   │                      #       vs control-flow/: control-flow/ is about execution
-│   │   │                      #       path manipulation; syntax/ is about language-specific
-│   │   │                      #       constructs used to hide intent.
-│   │   ├── instruction/       #     Instruction-level (junk/dead code)     B0032
-│   │   ├── name-mangling/     #     Name mangling (var rename, exports, identifiers)
-│   │   ├── imports/           #     Import concealment, API hashing
-│   │   ├── reflection/        #     Dynamic dispatch (prototype, proxy, dlsym)
-│   │   ├── payload/           #     Embedded/encrypted payloads
-│   │   ├── document/          #     Document-specific (RTF, Office, LNK)
-│   │   ├── steganography/     #     Data hiding (images, unicode)
-│   │   ├── binary-metrics/    #     Binary structural anomalies
-│   │   ├── code-metrics/      #     Source code anomalies (metrics-driven)
-│   │   ├── tools/             #     Known obfuscators (js-obfuscator, garble)
-│   │   ├── multi-layer/       #     Multiple techniques combined
-│   │   └── anti-decompile/    #     Anti-disassembly tricks                B0012
-│   ├── pack/                  #   Software packing                        F0001
-│   └── polyglot/              #   Polyglot file format abuse
-│
-├── evasion/                   # Evade detection in production (OB0006)
-│   │                          #   Users, admins, AV/EDR, forensics
-│   │                          #   "Don't see me" — targets defenders & security tools
-│   │                          #   Bypass/stealth only — aggressive termination of
-│   │                          #   security products belongs in impact/degrade/edr/.
-│   ├── anti-av/               #   AV/EDR bypass (stealth, not termination)
-│   │   ├── amsi/              #     AMSI bypass
-│   │   ├── blinding/          #     Kernel security module neutralization
-│   │   ├── code-padding/      #     Benign code-mass padding (ML/heuristic dilution)
-│   │   ├── edr-detect/        #     Security product enumeration           B0013
-│   │   ├── gui-decoy/         #     Decoy GUI message-pump (no real GUI resources)
-│   │   ├── import-pollution/  #     Import table pollution
-│   │   ├── manifest-padding/  #     Fake AV dummy text in PE manifest
-│   │   ├── platform/          #     Platform-specific bypass (exclusions, disables)
-│   │   ├── syscall/           #     Direct/indirect syscalls (EDR bypass)
-│   │   ├── tbav/              #     TBAV anti-heuristic ASM signature
-│   │   └── tls-fingerprint/   #     TLS fingerprint manipulation
-│   ├── decoy/                 #   Deceptive content (documents, fake errors, lures)
-│   ├── file-hiding/           #   Hidden files/directories                E1564, F0005
-│   ├── file-unlock/           #   Force-close file locks                  T1562
-│   ├── fileless/              #   Avoid disk artifacts (memory-only staging)
-│   ├── hijack-execution-flow/ #   Execution flow hijacking                F0015
-│   ├── hosts-file/            #   Hosts file manipulation                 F0004
-│   ├── indicator-removal/     #   Remove evidence of activity             T1070
-│   │   ├── cleanup/           #     Artifact cleanup (scripts, marker files)
-│   │   ├── history/           #     Shell history clearing                T1070.003
-│   │   ├── logs/              #     Log clearing + audit sanitization     T1070.001
-│   │   └── timestamps/        #     Timestomping                          T1070.006
-│   ├── kernel-hide/           #   Kernel-level hiding (rootkit)           E1014
-│   ├── masquerade/            #   File/process masquerading               T1036
-│   ├── process/               #   Process-level evasion
-│   │   ├── callstack-spoof/   #     Callstack spoofing
-│   │   ├── hidden/            #     Hidden process/window execution       E1564
-│   │   ├── hook/              #     API/XHR hooking
-│   │   └── injection/         #     Process injection                     E1055
-│   ├── quarantine-removal/    #   macOS Gatekeeper bypass                 B0047
-│   ├── security-bypass/       #   Security restriction bypass (PHP, LLM policy boundaries)
-│   │   └── llm/               #     Prompt-injection composites that bypass
-│   │                          #     AI agent instruction hierarchy, tool-use
-│   │                          #     controls, or safety policies. Neutral or
-│   │                          #     standalone prompt text atoms stay in
-│   │                          #     micro-behaviors/data/llm/.
-│   ├── self-delete/           #   Self-deletion after execution           F0007
-│   └── tcc-manipulation/      #   macOS TCC database manipulation
-│
-├── command-and-control/       # C2 communication (OB0004)
-│   │                          #   "Communicate with compromised systems to control them"
-│   │                          #   MBC: B0030 C2 Communication, B0031 DGA, E1105 Ingress Tool Transfer.
-│   │                          #   NOT C2: DDoS → impact/dos/. Exfil → exfiltration/.
-│   │                          #   Credential phishing → credential-access/. Competing malware → impact/.
-│   ├── backdoor/              #   Persistent remote access (all types)       B0030
-│   │   ├── binary/            #     Compiled backdoors (PE, ELF, Mach-O)
-│   │   ├── script/            #     Script-based backdoors (+ RAT scripts)
-│   │   ├── daemon/            #     Daemon/service backdoors
-│   │   ├── stealth/           #     Stealthy backdoor techniques
-│   │   ├── reflective-load/   #     Reflective loading patterns
-│   │   └── webshell/          #     Web-based backdoors (PHP, JSP, ASPX)
-│   ├── beacon/                #   Periodic check-in / heartbeat              B0030
-│   ├── botnet/                #   Bot network coordination                   B0030
-│   ├── channel/               #   Communication channels (all protocols)     B0030
-│   │   ├── covert/            #     Covert channels (ICMP, stego)
-│   │   ├── http/              #     HTTP/HTTPS C2 protocol
-│   │   ├── irc/               #     IRC-based C2
-│   │   ├── messaging/         #     Discord, Slack, Telegram
-│   │   ├── tor/               #     Tor hidden services
-│   │   ├── tunnel/            #     Tunneling, proxy, SOCKS
-│   │   └── websocket/         #     WebSocket C2
-│   ├── dns/                   #   DNS-based C2 + DGA + tunneling             B0031
-│   ├── dropper/               #   Payload delivery & execution               E1105 + B0023
-│   │   ├── delivery/          #     Transport (HTTP, FTP, GitHub, document)
-│   │   ├── staging/           #     Payload prep (embedded, encrypted, memory)
-│   │   ├── execution/         #     How payload runs (script, loader, eval)
-│   │   │                      #       native-binary/ → fetch + chmod +x + run a
-│   │   │                      #         downloaded executable; the stealth-exec leg
-│   │   │                      #         (detached/stdio-ignore) separates it from a
-│   │   │                      #         benign binary-wrapper installer.
-│   │   │                      #       reentrancy-guard/ → process re-spawns ITSELF
-│   │   │                      #         detached with a guard env var to outlive the
-│   │   │                      #         installer; hostile only with payload retrieval.
-│   │   └── behavior/          #     Multi-step behavioral composites
-│   ├── infrastructure/        #   C2 infrastructure (domains, IPs, cloud)    B0030
-│   │   ├── domain/            #     Domains, DGA, hosting
-│   │   └── config/            #     C2 config patterns
-│   ├── remote-command/        #   Command dispatch                           B0011
-│   ├── reverse-shell/         #   Reverse shell patterns                     B0030
-│   └── trigger/               #   Activation triggers
-│
-├── collection/                # Information gathering (OB0003)
-│   │                          #   "Identify and gather information, such as sensitive files"
-│   │                          #   Generic capture mechanisms live here.
-│   │                          #   Credential-specific stores → credential-access/.
-│   │                          #   Financial data → credential-access/financial/.
-│   ├── keylog/                #   Keystroke logging                       T1056.001
-│   ├── clipboard/             #   Clipboard capture                       T1115
-│   ├── screenshot/            #   Screen capture                          T1113
-│   ├── archive/               #   Archive collected data                  T1560
-│   ├── database/              #   Database enumeration/access             T1005
-│   ├── email-harvest/         #   Email address harvesting                T1114
-│   ├── file-copy/             #   File copying mechanisms                 T1005
-│   ├── file-targeting/        #   File enumeration for targeting          T1083
-│   ├── network/               #   Network packet/traffic capture          T1040
-│   ├── messaging/             #   Messaging app data collection           T1005
-│   ├── app-data/              #   Application-specific data (Notes, Stickies)
-│   ├── monitor/               #   Monitoring/telemetry capture
-│   ├── stealer/               #   Multi-step stealer behavior composites  T1119
-│   ├── activity/              #   User activity tracking
-│
-├── credential-access/         # Credential theft (OB0005)
-│   │                          #   "Obtain credential access" — targeting specific stores.
-│   │                          #   Generic capture (keystrokes, clipboard) → collection/.
-│   │                          #   Neutral env access (os.environ) → micro-behaviors/.
-│   │                          #   Credential access + transport → exfiltration/stealer/.
-│   │                          #   Neutral keywords ("admin", "root") → micro-behaviors/.
-│   ├── api-harvest/           #   API key/token harvesting                T1528
-│   ├── browser/               #   Browser credential stores              T1555.003
-│   ├── capture/input/         #   Password prompt capture                 T1056
-│   ├── clipboard/             #   Clipboard credential targeting
-│   ├── cloud/token/           #   Cloud service tokens
-│   ├── cracking/              #   Password cracking                       T1110
-│   ├── credential-manager/    #   Windows Credential Manager              T1555.004
-│   ├── dev-tools/             #   Developer tool credentials (JFrog)
-│   ├── discord/token/         #   Discord token theft                     T1528
-│   ├── dump/system/           #   OS credential dumping                   T1003
-│   ├── email/                 #   Email client credentials
-│   ├── env/                   #   Environment secrets                     T1552.001
-│   │   ├── dotenv/            #     .env file access
-│   │   ├── harvesting/        #     Env var harvesting
-│   │   ├── secrets/           #     Secret access patterns (AWS_SECRET, etc.)
-│   │   └── token/             #     Hardcoded tokens in env
-│   ├── files/config/          #   Config file credentials                 T1552.001
-│   ├── financial/             #   Financial data (credit cards)            T1005
-│   ├── ftp/                   #   FTP client credentials
-│   ├── gaming/                #   Gaming platform credentials (Steam)
-│   ├── keychain/              #   macOS Keychain                          T1555.001
-│   ├── messaging/             #   Messaging app credentials (Telegram)
-│   ├── pam/intercept/         #   PAM interception                        T1556.003
-│   ├── phishing/              #   Credential phishing                     T1566
-│   ├── shell/history/         #   Shell history                           T1552.003
-│   ├── ssh/key/               #   SSH key theft                           T1552.004
-│   ├── theft/                 #   Credential theft composites
-│   │   ├── multi-app/         #     Sweep across app SESSIONS (wallets, Discord, Steam)
-│   │   └── multi-store/       #     Sweep across developer credential STORES (cloud
-│   │                          #       configs, SSH keys, .env/.npmrc, browser DBs) +
-│   │                          #       exfil; the dev-workstation analogue of multi-app.
-│   ├── validation/            #   Credential validation
-│   ├── vpn/config/            #   VPN config credentials
-│   ├── wallet/                #   Crypto wallet access                    B0028
-│   └── windows-registry/      #   Registry credential extraction
-│
-├── discovery/                 # Environment reconnaissance (OB0007)
-│   │                          #   "Gain knowledge about the system and network"
-│   │                          #   Rules must infer reconnaissance INTENT, not just
-│   │                          #   observe a single system call. Single os.platform() →
-│   │                          #   micro-behaviors/. Profiling multiple properties → here.
-│   ├── system/                #   System information                      E1082
-│   │   ├── fingerprint/       #     System/hardware/OS profiling
-│   │   ├── architecture/      #     CPU architecture discovery
-│   │   ├── locale/            #     Language/region discovery
-│   │   ├── hardware/          #     Hardware enumeration
-│   │   └── device/            #     Device discovery
-│   ├── network/               #   Network information                     T1016
-│   │   ├── connections/       #     Active connections                     T1049
-│   │   ├── enumeration/       #     Host enumeration                      T1018
-│   │   ├── interface/         #     Interface listing
-│   │   ├── scan/              #     Port/service scanning                 T1046
-│   │   └── iot-devices/       #     IoT device discovery
-│   ├── host/                  #   Host-specific discovery
-│   │   ├── application/       #     Application discovery                 E1010
-│   │   ├── browser/           #     Browser data locations
-│   │   ├── geo/               #     Geolocation
-│   │   ├── permissions/       #     Permission enumeration
-│   │   ├── security/          #     Security software discovery           T1518.001
-│   │   └── software/          #     Installed software                    T1518
-│   ├── process/               #   Process enumeration                     T1057
-│   │   └── window/            #     Window discovery                      E1010
-│   ├── account/               #   Account/user discovery                  T1087, T1033
-│   │   └── lookup/
-│   └── cloud/                 #   Cloud instance metadata                 T1552.005
-│       └── metadata/
-│
-├── execution/                 # Code execution (OB0009)
-│   │                          #   "Execute code on a system to achieve a variety of goals"
-│   │                          #   Neutral capabilities (openpty, GetModuleHandle, fork+setsid,
-│   │                          #   Math.random) → micro-behaviors/. Evasive execution (reflective
-│   │                          #   loading, fileless, shellcode) → evasion/. Privesc (sudo, GTFOBins)
-│   │                          #   → privilege-escalation/. Remote commands → command-and-control/.
-│   │                          #   Droppers → command-and-control/dropper/ (all droppers are C2).
-│   │                          #   Install hooks (setup.py cmdclass) → micro-behaviors/build/setup/;
-│   │                          #   composites using them live in supply-chain/.
-│   ├── activex/               #   COM/ActiveX execution                   E1569
-│   ├── autoinstall/           #   Automatic dependency installation
-│   ├── automation/            #   Compiled automation (AppleScript)        E1059
-│   ├── compile/               #   Compile after delivery
-│   ├── condition/             #   Conditional execution / guardrails       B0025
-│   ├── exploit/               #   Exploitation for client execution        E1203
-│   ├── interpreter/           #   Script/code interpreters                 E1059
-│   ├── lnk/                   #   LNK-based execution                     E1204
-│   ├── lolbin/                #   Living-off-the-land binaries             T1218
-│   ├── lure/                  #   User execution via social engineering    E1204
-│   ├── trigger/               #   Document exploitation triggers           E1203
-│   └── wmi/                   #   WMI execution                            E1569
-│
-├── exfiltration/              # Data theft (OB0010)
-│   │                          #   "Steal data from a system" — focuses on TRANSPORT.
-│   │                          #   Reading credential stores → credential-access/.
-│   │                          #   Gathering/archiving data → collection/.
-│   │                          #   Sending data to attacker → exfiltration/.
-│   │                          #   Transport mechanism alone (HTTP POST) = micro-behavior.
-│   │                          #   Transport + sensitive source = exfiltration objective.
-│   ├── cloud/                 #   Cloud storage exfil (S3, GCS, Colab)     T1567
-│   ├── dns/                   #   DNS-based exfil (subdomain encoding)     T1048
-│   ├── ftp/                   #   FTP-based exfil
-│   ├── http/                  #   HTTP/HTTPS exfil (POST, upload, paste)   T1041
-│   ├── messaging/             #   Messaging platform abuse for exfil
-│   │   ├── discord/           #     Discord webhooks
-│   │   ├── slack/             #     Slack webhooks
-│   │   └── telegram/          #     Telegram bot API
-│   ├── oob/                   #   Out-of-band data collection services
-│   │   └── shortener/         #     URL shortener abuse
-│   ├── sensitive-data/        #   Sensitive file targeting before transport
-│   ├── serialization/         #   Data serialization for transport
-│   ├── side-channel/          #   Covert channels (DNS tunneling, stego)
-│   └── stealer/               #   Complete steal-and-send chains           E1020
-│       ├── credential/        #     Credential access + transport
-│       ├── file/              #     File theft + transport
-│       └── system-info/       #     System profiling + transport
-│
-├── impact/                    # Destructive operations (OB0008)
-│   │                          #   "Manipulate, interrupt, or destroy systems and data"
-│   │                          #   Aggressive actions that damage, disrupt, or hijack resources.
-│   │                          #   NOTE: evasion/ = stealth ("don't see me").
-│   │                          #   impact/degrade/ = aggression ("I'll stop you").
-│   │                          #   Killing AV processes is impact, not evasion. Bypassing AV
-│   │                          #   (AMSI, indirect syscalls) is evasion.
-│   ├── cryptojacking/         #   Resource hijacking / cryptomining        B0018
-│   ├── crypto-manipulation/   #   Cryptocurrency manipulation (clipboard hijack) T1565.001
-│   ├── deface/                #   Defacement                              T1491
-│   ├── degrade/               #   System capability degradation
-│   │   ├── edr/               #     EDR/AV termination (aggressive)       T1562.001
-│   │   ├── firewall/          #     Firewall disable/flush                T1562.004
-│   │   │                      #       Atoms (tool refs) in micro-behaviors/os/firewall/
-│   │   ├── ics/               #     ICS/OT safety parameter manipulation  T0836
-│   │   │                      #       Chemical dosing, pressure, valve overrides,
-│   │   │                      #       turbine speed, safety interlock disable.
-│   │   │                      #       Atoms (protocol refs) in micro-behaviors/communications/.
-│   │   ├── rival-bot/         #     Competing malware termination
-│   │   └── system/            #     Critical file/recovery deletion
-│   ├── destroy/               #   Data destruction                        T1485
-│   ├── dos/                   #   Denial of service                       B0033
-│   ├── infect/                #   File infection (virus propagation)
-│   ├── ransom/                #   Ransomware encryption + extortion       T1486
-│   ├── services/stop/         #   Service stopping                        T1489
-│   ├── system/                #   System impact (crash, shutdown, reboot)
-│   ├── ui/manipulation/       #   Screen locker / UI lockout
-│   └── wipe/disk/             #   Disk wiping                             T1561
-│
-├── lateral-movement/          # Propagation (OB0011)
-│   │                          #   "Propagate or move through an environment"
-│   │                          #   Active (direct access) or passive (malicious email).
-│   │                          #   Everything here must involve spreading to new systems.
-│   │                          #   Scanning/recon → discovery/. Local password cracking → credential-access/.
-│   │                          #   Process injection → evasion/. Masquerading → evasion/masquerade/.
-│   ├── brute-force/           #   Remote service credential spraying      T1110
-│   │   ├── ssh/               #     SSH brute-force                       T1021.004
-│   │   ├── iot/               #     IoT default credentials (Mirai-style)
-│   │   ├── network/           #     Network service cracking
-│   │   └── password/          #     Default credential lists (components)
-│   ├── delivery/              #   Payload delivery to new targets         E1105
-│   ├── exploit/               #   Remote exploitation for access
-│   ├── infection/             #   File infection / virus propagation      T1554
-│   ├── pass-the-hash/         #   Credential reuse for remote access      T1550.002
-│   ├── smb/                   #   SMB share propagation                   T1021.002
-│   ├── social-engineering/    #   Lures, spam (passive lateral)           B0020, B0021
-│   ├── ssh/                   #   SSH lateral (connect, backdoor, deploy) T1021.004
-│   ├── trojanize/             #   Software trojanization
-│   ├── usb-worm/              #   USB drive propagation
-│   └── worm/                  #   Self-propagating (email, SMB, IRC, P2P)
-│   # Brute-force lives here (not credential-access/) because malware brute-forcing
-│   # is almost always about spreading to remote services, not cracking local passwords.
-│   # Local password cracking (hashcat, john) would be credential-access/.
-│
-├── persistence/               # Remain on system (OB0012)
-│   │                          #   "Remain on a system regardless of system events"
-│   │                          #   Organized by trigger event: firmware (survives OS reinstall),
-│   │                          #   system (OS boot), or login (user session start).
-│   │                          #   NOTE: hiding/concealment belongs in evasion/, not here.
-│   │                          #   Persistence is about *restarting*, not *hiding*.
-│   ├── firmware/              #   Survives OS reinstall — below the OS
-│   │   └── boot/record/      #     MBR/bootkit                           F0013, T1542
-│   ├── system/                #   Runs at OS boot, no user login needed
-│   │   ├── cron/              #     System crontabs (/etc/crontab)        T1053.003
-│   │   ├── daemon/init/       #     Unix daemon patterns (fork+setsid)    T1543
-│   │   ├── init/              #     SysV init.d, rc.local, chkconfig
-│   │   ├── input-manager/     #     macOS InputManager                    T1547.015
-│   │   ├── launchd/           #     macOS LaunchDaemons                   T1543.004
-│   │   ├── registry/          #     HKLM registry keys                    E1112
-│   │   ├── service/install/   #     Windows SCM / systemd units           T1543.003
-│   │   ├── systemd/           #     systemd service files                 T1543.002
-│   │   └── wmi/subscription/  #     WMI event subscriptions               T1546.003
-│   └── login/                 #   Runs at user login / session start
-│       ├── account/create/    #     Backdoor user accounts                T1136.001
-│       ├── ifeo/debugger/     #     IFEO registry hijack                  T1546.012
-│       ├── registry/          #     HKCU Run keys, auto-launcher          F0012
-│       ├── scheduled-task/    #     Windows Task Scheduler
-│       ├── self-install/      #     Self-copy + registry persistence
-│       ├── shell/config/      #     .bashrc, .zshrc, .profile             T1546.004
-│       ├── ssh/backdoor/      #     authorized_keys injection             T1098.004
-│       ├── startup/           #     Start Menu folder, shortcuts          T1547
-│       ├── winlogon/userinit/ #     Winlogon Userinit key                 T1547.004
-│       └── xdg/               #     XDG autostart entries
-│
-├── privilege-escalation/      # Obtain higher permissions (OB0013)
-│   │                          #   Often overlaps with Persistence behaviors
-│   ├── exploit/               #   Local exploitation                      T1068
-│   │   └── kernel/            #     Kernel LPE (IDT, commit_creds)
-│   ├── elevation-control/     #   Abuse elevation control                 T1548
-│   │   ├── uac-bypass/        #     Windows UAC bypass                    T1548.002
-│   │   ├── manifest/          #     Windows manifest elevation
-│   │   ├── setuid/            #     Setuid abuse (Unix)                   T1548.001
-│   │   ├── applescript/       #     AppleScript admin privs               T1548.004
-│   │   └── security-framework/#     macOS Authorization APIs              T1548.004
-│   ├── hijack-execution-flow/ #   Execution flow hijacking                F0015
-│   │   ├── service/           #     Service binary path hijack
-│   │   └── preload/           #     LD_PRELOAD into privileged procs
-│   ├── kernel-modules/        #   Kernel modules & extensions             F0010
-│   ├── modify-service/        #   Modify existing service                 F0011
-│   ├── process-injection/     #   Injection into privileged procs         E1055
-│   ├── install-certificate/   #   Root cert installation                  F0016
-│   └── token-manipulation/    #   Token/privilege manipulation             T1134
-│
-├── supply-chain/                # Supply chain compromise (T1195)
-│   │                            #   "Manipulate products or product delivery mechanisms
-│   │                            #   prior to receipt by a final consumer for the purpose
-│   │                            #   of data or system compromise."
-│   │                            #   Organized by ATTACK TECHNIQUE, not ecosystem
-│   │                            #   or evidence container. Ecosystem (npm, pypi,
-│   │                            #   rubygems) usually belongs in filenames; use it
-│   │                            #   as a directory only when the registry surface
-│   │                            #   itself is the technique being modeled.
-│   │                            #   Avoid vague buckets such as package/,
-│   │                            #   manifest/, behavior/, metadata/, or more/:
-│   │                            #   choose the move being made instead.
-│   │                            #   A trait belongs here only if it is supply-chain-specific —
-│   │                            #   it would never fire outside a package/extension context.
-│   │                            #   Generic behaviors stay in their existing objectives:
-│   │                            #     Generic recon (whoami) → discovery/.
-│   │                            #     Generic exfil (HTTP POST) → exfiltration/.
-│   │                            #     Generic obfuscation → anti-static/obfuscation/.
-│   │                            #     Generic credential reads → credential-access/.
-│   │                            #   Supply-chain composites reference those atomics.
-│   │                            #   Neutral FP-context (bundler/framework/test detection)
-│   │                            #   belongs in metadata/ tier, not here.
-│   ├── install-hook/            #   Install-time code execution              T1195.002
-│   │                            #     Code that runs as side-effect of package installation.
-│   │                            #     NOT runtime code. NOT manually invoked build scripts.
-│   ├── recon-exfil/             #   Package-install-triggered recon + exfil  T1082, T1041
-│   │                            #     Gathering host/env info and exfiltrating from package
-│   │                            #     lifecycle contexts (postinstall scripts, OAST callbacks,
-│   │                            #     CI/CD secrets exfil from lifecycle hooks).
-│   │                            #     Useful subdirectories name the move:
-│   │                            #     host-profile/, callback/, dns/, artifacts/,
-│   │                            #     install-hook/, pipeline/, registry/, secrets/,
-│   │                            #     oast/. Do not add package/ or manifest/ under
-│   │                            #     recon-exfil; those describe where evidence was
-│   │                            #     found, not what the attack does.
-│   │                            #     NOT generic recon (→ discovery/).
-│   │                            #     NOT generic exfil (→ exfiltration/).
-│   ├── credential-theft/        #   Stealing package-manager credentials     T1552
-│   │                            #     Targeting package-ecosystem credential stores (.npmrc,
-│   │                            #     pip.conf, gem credentials, registry tokens).
-│   │                            #     NOT generic credential access (→ credential-access/).
-│   ├── hidden-payload/          #   Concealed malicious code in packages     T1027
-│   │                            #     Package-specific concealment — unicode steg in manifests,
-│   │                            #     bytenode compilation, hex arrays in install scripts.
-│   │                            #     Composites reference anti-static/ atomics.
-│   │                            #     NOT general obfuscation (→ anti-static/obfuscation/).
-│   ├── impersonation/           #   Package identity deception               T1195.002
-│   │                            #     Typosquatting, dependency confusion, deprecated-package
-│   │                            #     hijack, function shadowing, name similarity.
-│   │                            #     Suspicious metadata is not a supply-chain attack kind;
-│   │                            #     use metadata/package facts as signals for concrete
-│   │                            #     objectives such as impersonation, install-hook,
-│   │                            #     recon-exfil, hidden-payload, or credential-theft.
-│   └── trojanized/              #   Backdoored legitimate code               T1195.002
-│                                #     Modifications to known-good libraries/frameworks.
-│                                #     NOT wholly malicious packages (→ hidden-payload/).
-```
+**Webshell precedence:** request input loading compiled code into the server
+(`defineClass`, `Assembly.Load`, deserialization, JNDI) → `code-load` >
+in-process evaluation (eval, EL, ScriptEngine, XSLT) → `eval` > an OS command →
+`command`. Request hooks: `handler-patch` > `container-registration` >
+`module`. Tunnels: SOCKS framing → `channel/tunnel/socks` > HTTP-carried socket
+relay → `http` > generic proxy chains → `proxy`.
 
-## Tier 3: Known Entities (`well-known/`)
+### Payload activation and staging
 
-Specific, broadly recognizable software identities, including malware families, unwanted software, dual-use products, applications, libraries, games, and professional tools. Malware categories align with [MBC/STIX 2.1 malware types](https://docs.oasis-open.org/cti/stix/v2.1/os/stix-v2.1-os.html).
+A payload chain needs **acquisition or staging linked to activation**, plus
+admission. Admitted chains go in `execution/payload/<sink>`; the same chain in
+an ordinary updater goes in `micro-behaviors/process/deploy/<sink>`. Choose
+**one** sink; reference source, concealment and trigger facts.
 
-Do not create general-purpose traits in `well-known/` that could match multiple families, even at a low criticality. Move general-purpose traits to a general-purpose location.
+| Sink | Required activation |
+|---|---|
+| `process-inject` | Execution moved into another process (`hollow`, `remote-thread`, `thread-hijack`). |
+| `image-map` | A native image mapped for execution in this process. |
+| `module-load` | Staged code loaded by a module or assembly loader (`Assembly.Load`, `AppDomain.AssemblyResolve`, `Module._compile`, dynamic `require`, WASM instantiation of staged bytes). |
+| `script-eval` | Staged source evaluated in the running interpreter (`eval`, `new Function`, `iex`). |
+| `interpreter-stdin` | Staged source piped to a new interpreter. |
+| `file-exec` | A staged file launched via `command` (a shell parses the launch), `spawn` (a process API launches the path) or `installer` (an installer transaction such as `msiexec`). |
 
-**Rules:**
-- Each malware family appears in exactly **one** category — pick the primary behavior
-- Categories describe **what the malware does**, not who made it or how it arrives
-- Actor attribution (APT group, nation-state) belongs in trait descriptions, not directory names
-- When a family has multiple capabilities (e.g., stealer + worm), pick the most distinctive
-- `trojan/` is the catch-all — use only when no more specific type fits
-- `dual-use/` is for legitimate named software whose abuse-relevant function warrants explicit analyst notice; group it by that function
-- `unwanted/` is the umbrella for PUA, PUP, adware, and riskware families whose distribution or operation is itself unwanted; do not add a parallel `pua/` alias
-- `tool/` is for professional developer, analyst, offensive-security, reverse-engineering, and administration tools that do not fit the narrower dual-use boundary
+`image-map` and `interpreter-stdin` are not in the target sink set
+([open checkpoint](#open-checkpoints)).
 
-```
-well-known/
-├── app/                   # Specific legitimate applications and suites
-│   ├── ai/                #   AI assistants, agents, and automation products
-│   ├── browser/           #   Web browsers and browser runtimes
-│   ├── browser-extension/ #   Browser extensions, grouped by product
-│   ├── communication/     #   Mail, chat, messaging, and conferencing clients
-│   ├── publishing/        #   CMS, publishing, and content-management products
-│   ├── data/              #   Databases, dashboards, search, and analytics apps
-│   ├── development/       #   User-facing IDEs and development applications
-│   │                      #     Standalone build/CLI utilities → tool/development/.
-│   ├── enterprise/        #   Enterprise management and business suites
-│   ├── finance/           #   Wallet, trading, banking, and payment applications
-│   ├── infrastructure/    #   Cloud, server, container, and deployment products
-│   ├── media/             #   Audio, video, graphics, and creative applications
-│   ├── network/           #   Ordinary network clients, services, and monitors
-│   │                      #     Abuse-salient tunnels/proxies → dual-use/tunnel/.
-│   ├── productivity/      #   Office, notes, documents, and personal productivity
-│   ├── security/          #   End-user defensive and security products
-│   │                      #     Analyst/pentest utilities → tool/{detection,offensive}/.
-│   ├── storage/           #   Backup, synchronization, recovery, and storage apps
-│   ├── system/            #   OS, desktop, runtime, and platform components
-│   └── utility/           #   Cleaners, installers, disk, and system utilities
-├── dual-use/              # Legitimate software with abuse-relevant capabilities
-│   ├── access-control/    #   Licensing, activation, and privilege-control utilities
-│   ├── credentials/       #   Password, hash, key, and product-key recovery
-│   ├── tunnel/            #   Proxies, relays, and network tunnels
-│   ├── packaging/         #   Packers and executable converters
-│   ├── remote-admin/      #   Remote monitoring and administration products
-│   └── transfer/          #   General-purpose bulk transfer and cloud-sync tools
-├── game/                  # Game clients/platforms and game-specific tools
-│   └── (steam, etc.)
-├── lib/                   # Widely recognized libraries/frameworks/runtimes
-│   ├── ai/                #   AI, machine-learning, and inference libraries
-│   ├── cloud/             #   Cloud-provider and platform SDKs
-│   ├── concurrency/       #   Async control flow, promises, queues, pooling
-│   ├── crypto/            #   Cryptography, identity, and authentication libraries
-│   ├── data/              #   Databases, dataframes, ORM, and storage clients
-│   ├── datetime/          #   Date, time, calendar, and astronomical libraries
-│   ├── development/       #   Compilers, testing, linting, and build libraries
-│   ├── format/            #   Parsers, schemas, archives, and serialization
-│   ├── media/             #   Audio, video, image, font, and codec libraries
-│   ├── network/           #   Protocol, transport, and network client libraries
-│   ├── observability/     #   Logging, error tracking, APM, and session replay
-│   ├── platform/          #   OS, desktop, mobile, and platform integration
-│   ├── runtime/           #   Language runtimes, engines, FFI, and bindings
-│   ├── stdlib/            #   Standard-library extensions, polyfills, shims
-│   ├── testing/           #   Test frameworks, assertion and fixture libraries
-│   ├── native/            #   Native systems, libc, allocators, and kernel support
-│   ├── ui/                #   UI components, editors, and frontend libraries
-│   ├── vendor-sdk/        #   Single-vendor product and service SDKs
-│   └── web/               #   Web and application frameworks
-│                          #
-│                          # `stdlib/` replaced `core/`, which was banned as a
-│                          # catch-all. It is not "small utilities": the test is
-│                          # that the library extends or polyfills the language's
-│                          # OWN standard library -- collections (lodash), type
-│                          # predicates (is-what), compat shims (six, es6-shim).
-│                          # A library with a subject of its own goes to that
-│                          # subject's category, never here.
-│                          #
-│                          # `vendor-sdk/` is for a single vendor's product or
-│                          # service SDK, where the name identifies the vendor
-│                          # rather than a technique. Cross-vendor cloud SDKs
-│                          # stay in `cloud/`.
-│                          #
-│                          # Every library sits in a FUNCTION bucket above. There is
-│                          # no `core/`, `common/` or `misc/`: a catch-all never makes
-│                          # you answer "what does this library do", which is the
-│                          # question that also surfaces whether it belongs here at
-│                          # all. If you cannot name the function, that is the signal
-│                          # to stop, not to invent a bucket.
-│                          #
-│                          # ENTRY BAR — `well-known/` is for "specific, broadly
-│                          # recognizable software identities". Before adding a
-│                          # library, both must hold:
-│                          #   1. an analyst would recognize the name unprompted, and
-│                          #   2. it appears across many samples, so the rule earns
-│                          #      its keep beyond the one file that prompted it.
-│                          # A directory whose whole content is a package-name match
-│                          # is an allowlist, not an identity. Two rules and a name is
-│                          # the shape that gives it away.
-│                          #
-│                          # If a narrow package keeps false-positiving, the fix is
-│                          # one of: tighten the matcher that fired (usually right),
-│                          # or a `crit: exception` benign-context composite, which
-│                          # may live anywhere and is the sanctioned home. Adding an
-│                          # obscure package here to silence one sample trades a
-│                          # false positive for a permanent maintenance burden and
-│                          # teaches the model a name it will never see again.
-├── malware/               # Malware family signatures
-│   ├── backdoor/          #   Passive remote access — shell, tunnel, implant
-│   │                      #     Waits for attacker commands. Simpler than a RAT.
-│   │                      #     (BPFDoor, TinyShell, RustDoor)
-│   ├── botnet/            #   Bot network member — C2-controlled fleet
-│   │                      #     Part of coordinated infrastructure.
-│   │                      #     (Mirai, Gafgyt, Mozi)
-│   ├── downloader/        #   Fetches payload from remote URL
-│   │                      #     No embedded payload — downloads at runtime.
-│   │                      #     (SugarLoader)
-│   ├── dropper/           #   Contains or stages another payload
-│   │                      #     Embedded payload dropped to disk or loaded into memory.
-│   │                      #     (Nemucod, Hadooken, TEARDROP)
-│   ├── exploit/           #   Exploits a specific vulnerability (CVE, PoC)
-│   │                      #     (Roblox game exploits, CVE-specific code)
-│   ├── keylogger/         #   Primary function is keystroke capture
-│   │                      #     (Backtrack, ChromePush)
-│   ├── miner/             #   Cryptomining / resource hijacking
-│   │                      #     MBC: resource-exploitation. (XMRig, Kinsing)
-│   ├── ransomware/        #   Encrypts files and demands ransom
-│   │                      #     (LockBit, Conti, Babuk)
-│   ├── rat/               #   Full remote administration toolkit
-│   │                      #     Superset of backdoor — file manager, screen viewer,
-│   │                      #     keylogger, webcam, plugin system.
-│   │                      #     (Cobalt Strike, Sliver, Pupy)
-│   ├── rootkit/           #   Kernel or userspace hiding + privilege escalation
-│   │                      #     (eBPFKit, Reptile, Diamorphine)
-│   ├── stealer/           #   Information stealer — credentials, tokens, wallets
-│   │                      #     MBC: information-stealer. (AMOS, RedLine, Vidar)
-│   ├── supply-chain/      #   Malicious package, extension, or update
-│   │                      #     Delivery context matters for ML — a malicious npm
-│   │                      #     package looks different from a standalone binary.
-│   ├── trojan/            #   Disguised as legitimate software
-│   │                      #     Use only when no more specific type fits. The social
-│   │                      #     engineering / disguise is the defining characteristic.
-│   │                      #     (Emotet, DNSChanger)
-│   ├── virus/             #   Self-replicating file infector
-│   │                      #     Modifies other executables to include itself.
-│   │                      #     (Rivanon, BlackHawk, Nicole)
-│   ├── webshell/          #   Web-based backdoor (PHP/JSP/ASP shell)
-│   │                      #     (Alfa, Ribel)
-│   └── worm/              #   Self-propagating across networks
-│                          #     Spreads without user interaction (email, SMB, SSH).
-│                          #     (MyDoom, Conficker, Beagle)
-│
-├── unwanted/              # Potentially unwanted software and riskware families
-│                          #   Umbrella for named PUA/PUP/adware/riskware entities
-│                          #   whose distribution or operation is itself unwanted,
-│                          #   but which are not clearly hostile malware.
-│                          #   Do not use for ordinary legitimate dual-use products.
-│                          #   (Computrace/rpcnetp, OfferCore)
-│
-└── tool/                  # Legitimate tools often abused
-    ├── browser/           #   Browser components (Chromium sandbox, extensions)
-    ├── development/       #   IDEs and developer tools (JetBrains)
-    ├── detection/         #   Security detection tools (cleave's own stng)
-    ├── forensics/         #   Memory, disk, and incident-forensics tools
-    ├── media/             #   Media acquisition/conversion (yt-dlp, gallery-dl)
-    ├── packaging/         #   Package/version managers, installer builders
-    ├── offensive/         #   Pentesting/red-team tools + game cheat frameworks
-    ├── reverse-engineering/#  RE tools (IDA, OllyDbg, Scylla, LordPE)
-    └── sysadmin/          #   Admin tools, system libraries, VCS
-```
+**The link is the claim.** A download, URL, encoded blob, execution API,
+installer identity or loader-like name alone is not a payload chain: bind the
+bytes or path to the sink, or keep the parts as neutral capabilities. Script,
+HTA, WSH, MSI and package formats are carriers, not sinks. `regsvr32 /i:` with
+`scrobj` is `execution/lolbin/regsvr32`. An auto-open document trigger with a
+process call but no linked payload is `execution/trigger`.
 
-## Metadata (`metadata/`)
+**Staging without activation** needs executable-payload preparation plus
+admission. Partition by operation, in precedence order: `reconstruct`
+(synthesis or decoding) → `extract` (an embedded or container member) →
+`acquire` (external fetch) → `store` (placement), as
+`execution/staging/<operation>`. The carrier (archive, encrypted blob, stub,
+runtime) is evidence, not the partition. Ordinary extraction stays
+`data/archive/extract` or `data/embedded`; encoded bytes alone are
+`metadata/file/encoding`.
 
-File-level properties with no behavioral implication. Describes *what a file is*, not *what it does*.
+### Collection, credentials and theft
 
-**Rules:**
-- Behavioral detection belongs in `objectives/`, not here
-- Tool/malware signatures belong in `well-known/`, not here
-- Supply-chain attack indicators belong in `objectives/supply-chain/` (organized by technique, not ecosystem)
-- OS/platform vendor traits go under `vendor/`
-- Specific apps, dual-use products, tools, games, and library/framework/runtime fingerprints go under `well-known/{app,dual-use,tool,game,lib}/`, not `metadata/`
-- **Distinguish a tool's *output* from the tool's *identity*.** "This code was bundled/minified/transpiled" is a build-transform fact → `metadata/build/<function>/` (group by function: `bundler/`, `minifier/`, `transpiler/`). "This file *is* webpack / PuTTY / Wireshark" is a named-software fingerprint → `well-known/`. Putting a software identity in `metadata/` is the same *matcher-defines-identity* violation as mislabeling a generic capability.
-- **Avoid grab-bag directories.** A directory must name one coherent concept that is meaningful as an ML path feature. If a dir accretes unrelated kinds of traits — e.g. the former `package/tooling/` held build-output (`webpack-bundled`), software identities (`tool-identity-putty`), *and* project-hygiene facts (`has-eslint-config`) all at once — the path feature becomes noise and analysts can't reason about it. Split each kind to its proper home (`build/`, `well-known/`, and the `package/` subdirectory for the subject) and delete the grab-bag. Vague names (`tooling`, `context`, `misc`, `helpers`) are a smell that this has happened.
+Classify **what is acquired**, then whether it must leave.
 
-  The former `metadata/library/` tree held ~1,030 rules across ~68 directories and mixed several different concepts: library fingerprints that duplicated `well-known/lib/`, plain capability markers wearing a library's directory name, named offensive tools, CI fingerprints, and vague structural leaves. That migration is complete: `metadata/library/` is now closed and empty. Because a directory reference is an ML path feature, each migrated matcher was placed according to what it actually finds; never recreate the old bucket or move a whole directory on the strength of its name.
-- New top-level subdirectories require updating both TAXONOMY.md and `ALLOWED_METADATA` in `src/capabilities/validation/directory_whitelist.rs`
-- **Max depth:** 3 levels within `metadata/` (ML pipeline limit)
-- **Max leaf size:** No leaf directory should exceed 75 traits
-- **Max fan-out:** No directory should have more than 150 immediate subdirectories. Past that the level is a flat list rather than a taxonomy — group the entries under an intermediate layer (ecosystem, vendor, family) so each level stays browsable.
-- **Prefer technology-neutral subdirectory names.** Technology names belong in filenames, not directory names, unless needed to stay under the 75-trait limit at depth 3.
-- **One level, one question.** Every child of a directory must answer the *same* question about its parent. A level that mixes axes gives some traits two valid homes at once, and the duplicate pair is then created by the taxonomy rather than by an author: it is not a mistake anyone can avoid.
+`exfiltration/stealer/<source>` answers one question — **what leaves?** — not
+the search strategy, transport, API, language or purpose. A stealer composite
+needs a source leg **and** a transport leg; its atoms live in `credential-access/`,
+`collection/`, `discovery/` or `micro-behaviors/`. Use
+the most specific source the whole matcher requires; host identifiers riding
+along never displace it.
 
-  The test is to name the question out loud and check that every sibling answers it. `micro-behaviors/fs/path/` should answer *what does this path point at* — a credential, a cookie, a config file, a log, a cache. Siblings like `application/`, `package-manager/`, `os/` and `webserver/` answer a different question, *whose is it*, and siblings like `basename/`, `construct/` and `traversal/` answer a third, *what is being done with it*. With all three present, "an application's config file path" is a genuine member of `config/`, of `application/config/`, and arguably of `basename/` — which is exactly how `fs/path/config/app/` and `fs/path/application/config/` both came to exist, holding the same subject (`editor-extensions` on one side, `vscode` on the other).
+| Required source, with a send | Child |
+|---|---|
+| Wallet secrets, seed phrases | `wallet` |
+| Browser-owned logins, cookies, storage, history | `browser` |
+| OS secret store (Keychain, libsecret, Vault, Protected Storage) | `keychain` |
+| SSH keys and host files | `ssh` |
+| Cloud credentials (`~/.aws`, IMDS, kubeconfig) | `cloud` |
+| Developer credential files (`.npmrc`, `.git-credentials`, `.env`, CI secrets) | `dev-secret` |
+| Process environment | `env` |
+| App session tokens not covered above | `token` |
+| Authentication material, store left open | `credential` |
+| Account databases, password hashes | `account-db` |
+| Appliance configuration files | `appliance-config` |
+| Keystrokes, form input, touch, clipboard | `input` |
+| Displayed content: screenshots, screen streams, OCR text | `screen` |
+| Image data of unspecified origin | `image` |
+| Sound; camera imagery; either-or recordings | `audio`; `camera`; `audiovisual` |
+| Messages, mailboxes, SMS | `message` |
+| Documents or files with no narrower class | `file` |
+| Host report: identifiers / OS and runtime / installed software / running processes / network inventory | `system-info/{identity,platform,software,process,network}` |
+| Host report spanning or leaving open several of those | `system-info/profile` |
+| Two or more independent source classes, **each required** | `multi-source` |
 
-  Pick the axis that distinguishes *behavior*, because that is what the directory feature feeds to the ML pipeline. Reading a credential path is a different act from reading a cache path, so the resource kind is the axis; Chrome's cookie path and Firefox's are the same act, so the owner is not. The losing axes move into the filename, exactly as platform and language already do: `config/app/vscode.yaml`, never `application/config/vscode.yaml`.
+- `multi-source` counts source classes, not traits: two browser stores are
+  `browser`, and an `any:` over sources takes the common broader source (often
+  `credential` or `system-info/profile`).
+- A sweep is a search method, surveillance a purpose and phishing an
+  acquisition method; none is a source. Sent files are `file`; an unsent sweep
+  is `collection/file-targeting`.
 
-- **A trigger is not an objective.** Independent dimensions must not be multiplied into a path. A rule about a payload carries three facts that vary freely: what it *does* (fetch, stage, execute), what *sets it off* (an install hook, a git hook, a `.lnk`, a fake update), and where it *came from* (npm, PyPI, an RPM). Give each its own directory level and the tree has to enumerate every objective under every trigger.
+**Local acquisition** uses the same subjects under `collection/`. In
+`collection/keylog`: `hook` (hook or listener), `polling` (key-state queries),
+`device` (input-device reads with recording context), `terminal`; `capture` is
+legacy. Keyboard events, hooks and evdev reads stay
+`micro-behaviors/hardware/input` until recording, staging or surveillance is
+shown; synthesized keystrokes are `hardware/input/keyboard/simulate`.
 
-  That is what `objectives/supply-chain/install-hook/` is. An install hook is a trigger, so the level forced a second copy of the objective tree beneath it — `dropper/`, `credential/`, `config-write/`, `database/`, `registry/` — while `objectives/command-and-control/dropper/` independently grew `lifecycle/` and `package/`, which are install-hook subjects. Both now hold a `bun/`. Neither copy is wrong; the path shape made them inevitable, and they will keep diverging.
+### Persistence follows the trigger
 
-  The behavior owns the directory, because that is the feature the ML pipeline reads. The channel is a filename, as for any other ecosystem. The trigger is a *referenced trait*: `metadata/package/scripts/lifecycle::install-hooks` is a fact about the package, and a composite that wants "install hook downloads and executes" names it as a leg rather than moving house to sit under it.
+Level 2 is the event that reactivates the code; level 3, the activation
+surface.
 
-  The diagnostic: if a directory level names *when* or *how* something runs rather than *what is achieved*, every objective underneath it is a duplicate waiting to be written.
+| Level 2 | Admission | Not this |
+|---|---|---|
+| `firmware` | Below the OS: boot records, firmware, NVRAM. | Ordinary firmware queries or updates. |
+| `login` | A login or session start: Run keys (`registry`, even under HKLM), startup items and shortcuts (`startup`), `winlogon`, XDG autostart (`xdg`), shell profiles (`shell`), login-triggered tasks. | HKLM vs HKCU, or the run-as user, does not decide the trigger. |
+| `system` | OS-managed, login-independent: services (`service`; svchost DLLs in `service/loader`), `driver`, `safeboot`, boot scripts (`init`), cron and timers (`cron`), WMI subscriptions (`wmi`), application or platform hooks (editor extensions, git config and hooks). | Detaching (`fork`/`setsid`: `micro-behaviors/process/daemonize`), hiding, or a long-running loop. |
 
+The registry is storage, not proof of login persistence. Service managers use
+`service`, not a `systemd` sibling. Platform, privilege and file location are
+scope. Retained access without reactivation (created accounts, authorized SSH
+keys, now in `login/{account,ssh}`) is an [open checkpoint](#open-checkpoints).
 
+### Supply-chain trust
 
-```
-metadata/
-├── arch/                  # CPU architecture (x86, ARM, MIPS, IoT)
-├── binary/                # Binary internals (requires binary parsing).
-│   │                      #
-│   │                      #   ONE ORGANIZING AXIS: the anatomy of the format. Each child
-│   │                      #   names a PART of the binary (header, sections, symbol
-│   │                      #   tables, resources, …) and holds facts ABOUT that part.
-│   │                      #
-│   │                      #   The rule that settles every placement question here:
-│   │                      #   **a directory holds facts about a part of the format,
-│   │                      #   never facts about what the contents of that part MEAN.**
-│   │                      #     "the import table has three entries"  → symbols/
-│   │                      #     "it imports GetProcAddress"           → micro-behaviors/
-│   │                      #     "its exports impersonate version.dll" → objectives/ (sideload)
-│   │                      #     "those exports are libcurl's ABI"     → well-known/lib/
-│   │                      #
-│   │                      #   Two axes that are NOT directories here, because they are
-│   │                      #   things a trait SAYS rather than parts of the artifact:
-│   │                      #     - measurement ("metrics") — every fact here is measured;
-│   │                      #       put the count with the part it counts and let the
-│   │                      #       threshold live in the trait name.
-│   │                      #     - judgment ("anomaly") — malformedness is a fact about
-│   │                      #       the part; `crit:` carries how unusual it is.
-│   │                      #   Adjectives (`sparse/`, `dense/`, `threshold/`, `structural/`)
-│   │                      #   fail the precision test above: they partition by value, not
-│   │                      #   by subject, and spend the last ML-visible level on nothing.
-│   ├── header/            #   Machine, characteristics, timestamps, entry point,
-│   │                      #     malformed/contradictory header fields
-│   ├── section/           #   Sections: names, count, size, entropy, permissions,
-│   │                      #     alignment, sparsity. Section *content* patterns are
-│   │                      #     behavior → objectives/, or capability → micro-behaviors/
-│   ├── symbols/           #   Shape of the import/export/symbol tables: counts, ordinal-
-│   │                      #     only imports, stripped tables, export-name statistics.
-│   │                      #     A NAMED api/symbol is a capability → micro-behaviors/
-│   ├── code/              #   The code itself: basic blocks, functions, complexity,
-│   │                      #     code size and density
-│   ├── instruction/       #   Instruction-level patterns (indirect calls, CPUID)
-│   ├── resource/          #   Embedded resources
-│   ├── linking/           #   Dynamic dependencies, RPATH/RUNPATH, delay-load
-│   ├── debug/             #   Debug directories and symbol files (PDB, DWARF)
-│   ├── layout/            #   Whole-file structure: overlay, embedded payloads, bundles
-│   └── provenance/        #   Build origin: toolchain and compiler-helper markers,
-│                          #     source-tree and VCS idents
-│   #
-│   # Routed OUT of metadata/binary/, because identity is not a format property:
-│   #   installer/  → well-known/  (Inno Setup, NSIS, WiX, InstallShield, 7-Zip SFX
-│   #                 are named products; the *fact* that a file is self-extracting
-│   #                 is layout/)
-│   #   framework/  → well-known/lib/ for the runtime's identity; keep only the
-│   #                 format-level consequence (e.g. "PE carries a CLR header")
-│   #   vendor/     → metadata/vendor/ (already the sanctioned home for OS/platform
-│   #                 vendors) or well-known/ for products
-│   #   signing/    → metadata/signed/   license/ → provenance/   toolchain/ → provenance/
-├── build/                 # How an artifact was BUILT or TRANSFORMED — never *who* the
-│   │                      #   tool is. Group by transform FUNCTION, not by specific tool:
-│   │                      #   the directory is an ML feature, so `bundler/` is one dense
-│   │                      #   signal across webpack/rollup/esbuild/parcel/vite, and the
-│   │                      #   specific tool is the trait NAME (`esbuild-bundled`). The
-│   │                      #   tool's IDENTITY as named software (e.g. "this binary IS
-│   │                      #   webpack/PuTTY") belongs in well-known/, never here.
-│   ├── bundler/           #   Module bundlers (webpack, rollup, esbuild, parcel, vite)
-│   ├── minifier/          #   Minifier / uglifier output patterns
-│   ├── transpiler/        #   Source-to-source transforms (babel, typescript, swc)
-│   ├── autotools/         #   GNU build family (autoconf, automake, libtool)
-│   ├── scaffold/          #   Project/code generators and templating
-│   ├── ci/                #   CI/CD pipeline fingerprints (github-actions, jenkins)
-│   └── ...                #   cmake, cargo, docker, conda, ecosystem
-├── document/              # Document internals (requires document parsing)
-│   ├── chm/               #   Compiled HTML Help (ITSF/ITSP/PMGL)
-│   ├── html/              #   HTML structure
-│   ├── office/            #   Office documents
-│   │   ├── macro/         #     VBA, embedded macros
-│   │   └── markup/        #     OOXML, ActiveMime structure
-│   ├── ole/               #   OLE compound documents
-│   ├── pdf/               #   PDF structure
-│   └── rtf/               #   RTF analysis
-├── file/                  # File-level observables (no deep parsing required)
-│   ├── catalog/           #   File/catalog identity and generated registries
-│   ├── encoded/           #   Encoded content presence (base64)
-│   ├── extension/         #   File extension classification
-│   ├── format/            #   Text/data format identification (JSON, makefile)
-│   ├── invisible-unicode/ #   Invisible Unicode text properties
-│   ├── magic/             #   Magic byte signatures
-│   │                      #   (no metrics/ — a measurement is not a subject; file text
-│   │                      #    shape belongs with profile/, entropy with the thing measured)
-│   ├── policy/            #   Policy/config text identities
-│   ├── profile/           #   Text profile and wrapper shapes
-│   └── string/            #   Neutral string identities
-├── font/                  # Font container structure (sfnt/WOFF/WOFF2/EOT)
-│   ├── container/         #   Format identity and header/table-directory validity
-│   └── layout/            #   Byte coverage: gaps, trailing data, oversized tables
-│                          #   File identity remains under file/{magic,extension};
-│                          #   masquerade/stowaway INTENT lives in objectives/
-├── hardening/             # Security hardening features (sandbox, seccomp, pledge)
-├── image/                 # Image-specific neutral measurements
-│                          #   (no metrics/ — pixel and channel statistics belong with the
-│                          #    image property they measure)
-│                          #   File identity remains under file/{magic,extension}
-├── media/                 # Media-container structure, shared across carriers
-│   ├── container/         #   Container identity and structural consistency
-│   └── layout/            #   Byte coverage: holes, trailing data, what fills them
-│                          #   Covers fonts, images, audio and video alike;
-│                          #   masquerade/stowaway INTENT lives in objectives/
-├── import/                # Dependencies/imports (auto-generated)
-│   ├── python/ npm/ ruby/ java/ go/ rust/ c/
-│   └── macho/ elf/ pe/   #   Binary format imports
-├── lang/                  # Language, compiler, encoding detection
-│   ├── compiled/          #   Compiled language detection (assembly, C, Go, Rust)
-│   ├── compiler/          #   Compiler identification
-│   │   ├── managed/       #     Managed runtimes (.NET, Delphi)
-│   │   ├── native/        #     Native toolchains (GCC, Clang, MSVC, MinGW)
-│   │   └── systems/       #     Systems language compilers (Go, Rust)
-│   ├── embedded/          #   Embedded language detection
-│   ├── encoded/           #   Encoded strings (unicode, wide)
-│   ├── generated/         #   Emitted by a code generator, not hand-written
-│   ├── javascript-features/ # JavaScript language features
-│   ├── scripted/          #   Scripted language detection (VBScript, Lua, Perl)
-│   ├── source/            #   Which language a source file is written in
-│   ├── upstream/          #   Part of a recognized upstream tree (Wine, ReactOS, Linux)
-│   └── ...                #   go-build, linking, optimization, security, shebang, version
-├── library/               # DEPRECATED — closed to new entries, migrating out.
-│   │                      #   A named library/framework/runtime is a fingerprint, so it
-│   │                      #   belongs in well-known/lib/ by the rule above; nothing here
-│   │                      #   is a neutral file-structure property. Do not add traits.
-│   │                      #   Migrate existing entries by what each matcher finds:
-│   │                      #     library/framework/runtime identity → well-known/lib/<function>/
-│   │                      #     a neutral capability (screenshot, download, symbol lookup)
-│   │                      #       → micro-behaviors/<category>/
-│   │                      #     intent-bearing behaviour → objectives/
-│   │                      #     build/transform output (bundled, minified) → metadata/build/
-│   │                      #   `library` leaves ALLOWED_METADATA once the last entry is gone.
-├── package/               # Package ecosystem metadata and project-hygiene facts
-│   ├── config/            #   Configuration file detection
-│   ├── contributors/      #   Contributor metadata
-│   ├── dependencies/      #   Dependency analysis, split by where the fact was read:
-│   │                      #     manifest/ (declared), lockfile/ (resolved), archive/ (shipped)
-│   │   └── manifest/      #     Facets are ordered; see "Choosing a dependency-manifest facet":
-│   │                      #     identity/ name-form/ source/ range/ reconciliation/ presence/ count/
-│   ├── documentation/     #   Documentation presence
-│   ├── error-handling/    #   Error handling patterns
-│   ├── files/             #   File counts and types
-│   ├── keywords/          #   Package keywords
-│   ├── license/           #   License detection
-│   ├── logging/           #   Logging patterns
-│   ├── maintainers/       #   Maintainer counts
-│   ├── manager/           #   Package-manager fingerprints (homebrew, composer) — the
-│   │                      #     distribution tool, distinct from the build transform (build/)
-│   ├── name/              #   Manifest name field  (each manifest field is its own
-│   ├── description/       #   Manifest description field   leaf, at the ML-visible
-│   ├── repository/        #   Manifest repository field    level -- there is no
-│   ├── author/            #   Manifest author field        `manifest/` container:
-│   ├── entrypoint/        #   Declared entry point         keywords/, license/,
-│   ├── runtime/           #   Declared runtime/engines     scripts/ and dependencies/
-│   ├── ...                #   homepage, version, vendor,   are manifest fields too,
-│   │                      #     publishing, workspace, …   so the level separated
-│   │                      #     nothing while spending the last visible segment.
-│   │                      #   Package metadata that is NOT a manifest field is read from
-│   │                      #     the package's contents or layout instead: files/,
-│   │                      #     documentation/, testing/, integrity/, scaffold/, tooling/.
-│   │                      #   (no metrics/ — a measurement is not a subject)
-│   │                      #   (no quality/ — a judgment, not a subject: whose quality, by
-│   │                      #    what standard? Its contents belong with the field or subject
-│   │                      #    they describe — manifest-field completeness -> manifest/,
-│   │                      #    version values -> versioning/, checksum manifests ->
-│   │                      #    integrity/, logging -> logging/, error handling ->
-│   │                      #    error-handling/ — and its benign-context suppressors are not
-│   │                      #    metadata at all: named software -> well-known/, the
-│   │                      #    suppressor itself -> a `crit: exception` composite)
-│   ├── scripts/           #   Package scripts
-│   ├── testing/           #   Testing detection
-│   │   ├── compiled/      #     Compiled-language frameworks
-│   │   ├── harness/       #     Runtime-specific test harnesses
-│   │   ├── presence/      #     Test presence indicators
-│   │   └── scripted/      #     Scripted-language frameworks
-│   └── versioning/        #   Version detection
-│       # NO `tooling/` — it was a grab-bag mixing build-output (→ build/),
-│       # software identities (→ well-known/), and quality facts (→ quality/).
-│       # See "Avoid grab-bag directories" below.
-├── permission/            # Declared permission and extension authority metadata
-│   │                      #   Neutral facts about what authority a manifest grants or
-│   │                      #   what extension APIs appear. Provider/ecosystem belongs
-│   │                      #   in filenames (browser.yaml, vscode.yaml), not dirs.
-│   │                      #   Abuse chains using these facts belong in objectives/.
-│   ├── activation/        #   Auto-activation and extension lifecycle triggers
-│   ├── active-tab/        #   Browser activeTab authority
-│   ├── alarm/             #   Timers/alarms extension authority
-│   ├── bookmark/          #   Bookmark access authority
-│   ├── capture/           #   Screen, tab, media, and display capture authority
-│   ├── clipboard/         #   Clipboard read/write authority
-│   ├── cookie/            #   Cookie read/write/watch authority
-│   ├── debugger/          #   Browser/debugger attachment authority
-│   ├── dom/               #   Page DOM script/style injection authority
-│   ├── download/          #   Download API authority
-│   ├── extension-api/     #   Generic extension host API context markers
-│   ├── extension-id/      #   Extension identifier lists/maps
-│   ├── history/           #   Browser history/top-sites authority
-│   ├── host/              #   Host/origin authority patterns and broad host access
-│   ├── identity/          #   OAuth/identity permission declarations
-│   ├── management/        #   Extension-management authority
-│   ├── manifest/          #   Extension manifest structure and manifest-only fields
-│   ├── network/           #   Request interception/filtering/modification authority
-│   ├── offscreen/         #   Offscreen document authority
-│   ├── runtime/           #   Runtime lifecycle callbacks and extension context
-│   ├── storage/           #   Extension storage authority
-│   ├── telemetry/         #   Extension telemetry/event reporting authority
-│   ├── uri/               #   URI handler and OAuth callback authority
-│   └── workspace/         #   Workspace/file access authority
-├── signed/                # Code signatures, certificates, entitlements
-│   ├── certificate/       #   Certificate chain string patterns
-│   ├── entitlements/      #   Code entitlements (macOS/iOS, Android)
-│   ├── platform/          #   Platform-signed binary composites (auto-generated)
-│   ├── trust-level/       #   Signing trust level (ad-hoc, developer, platform, app store)
-│   └── (auto-generated: platform::apple, developer::*, adhoc::unsigned)
-└── vendor/                # OS/platform vendor identification only
-    └── (per-vendor subdirs: apple, microsoft, netbsd, fsf, etc.)
-```
+Read the claim without the package name. If it still only says "steals
+credentials" or "runs a downloaded payload", that result owns the composite;
+the lifecycle hook (`metadata/package/scripts/lifecycle`) or package-manager
+call (`micro-behaviors/os/package-manager`) is referenced.
 
-### Metadata boundary rubric
+In precedence order:
 
-When placing a new metadata trait, use this tiebreaker table. Each row names the two most likely categories and the deciding question:
+1. `trojanized` — required modification or substitution of a legitimate input:
+   dependency or update substitution, build pipeline (`build-pipeline`; CI
+   authority abuse in `ci-pipeline`), configuration poisoning. A wholly
+   malicious package is not trojanized.
+2. `hidden-payload` — concealment that abuses package inspection or declared
+   contents (`remote-loader`, `native-extension`, `encoding`, …). Generic
+   obfuscation is `anti-static`; a full activation chain is a payload chain.
+3. `impersonation` — deceptive name, provenance, function or contents
+   (typosquat, dependency confusion, brand, clone). Mere name similarity is
+   metadata.
 
-| Category A | Category B | Deciding question |
-|-----------|-----------|-------------------|
-| `binary/` | `file/` | Does it require parsing binary headers (PE/ELF/Mach-O)? → `binary/`. Observable from filename/magic/size alone? → `file/` |
-| `binary/` | `document/` | Does it require a binary parser? → `binary/`. Does it require a document parser (OLE, OOXML, PDF objects)? → `document/` |
-| `binary/` | `lang/` | Is it about the binary's structure (sections, imports, metrics)? → `binary/`. Is it about what language/compiler produced it? → `lang/` |
-| `binary/<part>/` | `crit:` | Both a neutral measurement and a malformation are facts about the same part of the format, so both live with that part (`header/`, `section/`, `code/`, `symbols/`). How unusual the value is goes in `crit:` — `baseline` for a zero timestamp, `notable` for a far-future one — not in a `metrics/` vs `anomaly/` directory choice |
-| `document/` | `file/` | Does it require parsing document internals (OLE streams, OOXML parts, PDF objects)? → `document/`. Observable from header/extension alone? → `file/` |
-| `build/` | `lang/` | Is it about build orchestration (cmake, docker, CI/CD)? → `build/`. Is it about the language toolchain (gcc, rustc, delphi)? → `lang/` |
-| `metadata/build/` | `well-known/` | Is it the **output/shape a tool left in the file** (this code was *bundled*, *minified*, *transpiled*)? → `metadata/build/<function>`. Is it the **named tool/software being identified** (this *is* PuTTY / Wireshark / the webpack package)? → `well-known/{app,dual-use,tool,lib}/`. The transform is a metadata fact; the identity is a fingerprint. A named-software fingerprint in `metadata/` is the "matcher defines identity" violation. |
-| `metadata/build/` | `metadata/package/` | Is it evidence of a build/transform tool's output (bundled, minified, autotools-generated)? → `build/`. Is it a project-hygiene fact? → the `metadata/package/` subdirectory for that subject (`documentation/`, `testing/`, `config/`, `logging/`, `error-handling/`) — there is no `quality/` bucket |
-| `package/` | `well-known/lib/` | Is it about ecosystem-level metadata (fields, scripts, quality, testing)? → `package/`. Is it identifying a specific library/framework/runtime? → `well-known/lib/`. There is no third answer: `metadata/library/` is deprecated and closed, so never route a trait there |
-| `package/` | `permission/` | Is it ordinary package metadata (name, dependencies, files, scripts, quality)? → `package/`. Is it declared authority or extension API surface (browser/IDE extension permissions, host access, OAuth scopes, content scripts)? → `permission/` |
-| `dependencies/manifest/<facet>/` | each other | See [Choosing a dependency-manifest facet](#choosing-a-dependency-manifest-facet) — the facets overlap on purpose (every declaration has a name, a source and a version), so they are ordered and the first match wins |
-| `signed/` | `vendor/` | Is it about the cryptographic signature chain or entitlements? → `signed/`. Is it identifying an OS/platform vendor by strings/resources/patterns? → `vendor/` |
-| `vendor/` | `well-known/app/`, `well-known/dual-use/`, or `well-known/tool/` | Is it an OS/platform vendor or system userland marker (Apple, Microsoft, NetBSD, GNU/FSF)? → `vendor/`. Is it a specific well-known application or suite? → `well-known/app/`. Is its legitimate abuse-relevant function the reason analysts need the identity? → `well-known/dual-use/`. Is it a professional analyst/admin/developer tool? → `well-known/tool/` |
-| `vendor/` | `well-known/lib/` | Is it identifying the platform vendor that produced the file? → `vendor/`. Is it an well known third-party library/framework/runtime fingerprint (OpenSSL, zlib, FFmpeg, psutil, SharpShell)? → `well-known/lib/` |
+### MBC and ATT&CK correspondence
 
-### Choosing a dependency-manifest facet
+| Local objective | Catalog correspondence |
+|---|---|
+| `collection`, `credential-access`, `discovery`, `command-and-control`, `execution`, `exfiltration`, `impact`, `lateral-movement`, `persistence`, `privilege-escalation` | The same-named MBC objective and ATT&CK tactic; each mapping still needs a matching behavior or technique. |
+| `evasion` | MBC Defense Evasion and the applicable ATT&CK technique. |
+| `anti-analysis`, `anti-static` | MBC Anti-Behavioral Analysis (OB0001) and Anti-Static Analysis (OB0002); no ATT&CK tactic. |
+| `supply-chain` | No MBC objective. ATT&CK T1195 covers supported supply-chain compromise, not every package-borne attack. |
 
-`metadata/package/dependencies/` first splits by **where the dependency fact was
-read from** — `manifest/` (declared by the author), `lockfile/` (resolved by the
-installer), `archive/` (present in the built artifact). Read the path as a
-sentence: *a package's dependencies, as declared in its manifest, specifically
-the …*
+Placement and catalog mapping can differ: ingress tool transfer may map to MBC
+E1105 from a staging leaf.
 
-Under `manifest/`, one dependency entry satisfies several facets at once —
-`"@img/sharp-linux-x64": "^0.33"` has an identity, a name shape, a source and a
-version range. **The facets are therefore ordered, and the first one that
-describes what the matcher actually reads wins.** Ask the questions in order:
+## Artifact properties: `metadata/`
 
-1. **`identity/` — *which* package?** The matcher names one specific package
-   (`lodash`, `axum`, `child_process`). Test: rename the trait after the package
-   and nothing is lost. A trait that would stop working if the package were
-   renamed belongs here.
-2. **`name-form/` — what does the *name* look like?** The matcher reads the name
-   as a pattern, not as a particular package: a `-linux-x64` platform triple, a
-   `.js` suffix, a `lint`/`build` word. Test: it would match a package that does
-   not exist yet.
-3. **`source/` — where does it *resolve from*?** The matcher reads the
-   right-hand side as a location: a protocol (`git+ssh:`, `file:`, `workspace:`,
-   `catalog:`, `link:`, `portal:`, `github:`), a URL, a local path.
-4. **`range/` — *which version*?** The matcher reads the same right-hand side as
-   a version specifier: `*`, `latest`, `^1.2`. `source/` and `range/` both read
-   that field; the split is **where to fetch** versus **which release**.
-   `"pkg": "*"` is `range/`, `"pkg": "github:o/r"` is `source/`.
-5. **`reconciliation/` — declared versus actually *used*?** The only facet
-   allowed to read beyond the manifest: it compares the declaration against the
-   imports in the shipped code. Everything phantom/unused-dependency lives here.
-6. **`presence/` — is the field *there at all*?** Omitted, present, or an empty
-   object. No entry is examined. `npm-no-dependencies-field` is presence.
-7. **`count/` — *how many*?** The field is populated and the claim is
-   cardinality. `npm-dependency-fanout` is count, not presence.
+Classify the property or declaration asserted — not the parser, and not the
+file carrying it. A parser exposing a company name, API or credential does not
+change its meaning; a text matcher over a structured field is still about that
+field. Strings are *content*: a string evidencing a capability, objective or
+identity goes with that subject.
 
-Two consequences worth stating, because both were live mistakes before the
-split:
+| Level 1 | Level 2 (level 3 refines it) | Boundary |
+|---|---|---|
+| `arch` | Instruction-set or ABI target, by family | Parsed target fields (ELF `e_machine`); a word such as `mips64` in `.rodata` identifies nothing. Header-field validity is `binary/header`. |
+| `binary` | `header`, `section`, `symbols`, `code`, `instruction`, `resource`, `linking`, `layout`, `debug`, `provenance`; a property of that part | **Facts about a part, never what it means:** "three imports" → `symbols`; "imports `GetProcAddress`" → a capability; "exports impersonate `version.dll`" → an objective; "exports are libcurl's ABI" → `well-known/lib`. A part's measurement and malformation share its directory; `crit:` says how unusual. |
+| `build` | `bundler`, `minifier`, `transpiler`, `generated`, `ci`, `config`, `manifest`, `artifact`, `reproducible`, `vcs`, … by transform or pipeline function | What a tool left in the file (bundled, minified, transpiled), grouped by function; the tool goes in the trait name (`esbuild-bundled`). "This file *is* webpack" is `well-known/`; compiler attribution is `lang/compiler`. |
+| `document` | `pdf`, `office`, `rtf`, `html`, `ole`, `chm`; a parsed part or property | Structure, not the behavior of embedded code. Magic alone is `file`. |
+| `file` | `format`, `magic`, `extension`, `size`, `encoding` (*legacy: `encoded`*), `entropy`, `naming`, `profile`, `line`, `archive`, `invisible-unicode`; whole-file properties | A specific subject beats a generic text bucket. The file's own name and directory are `naming`; an archive member path is `archive`. `file/string` and `file/literal` are **closed**: move each rule to the subject it evidences. A context-only literal has no standalone behavior home; retain its placement hold until a supported contract or validated consumer representation exists. The current validator rejects new `file/string` IDs; equivalent `file/literal` enforcement remains an engine dependency. |
+| `hardening` | `build`, `layout`, `memory`, `mitigation`, `sandbox` | Absence is a value of a mitigation, not a "missing" subject. Using a security API is a capability; bypassing one, an objective. |
+| `image` | `pixel`, `segment`, `trailing`: decoded-image measurements, segment totals, trailing layout | Whole-file byte entropy is `file/entropy`. A metric name proves no color channel or end marker. Rendering and capture are capabilities. |
+| `font`, `media` | *Reserved:* font table and container validity; cross-carrier byte coverage | Whitelisted; create with the first supported rule. |
+| `import` | `builtin`, `package`, `framework`; engine-emitted `<lang>/<module>` nodes | A dependency reference, not library identity or proof of use. `import base64` supports both directions, so it is an import fact, not `data/decode`. |
+| `lang` | `source`, `compiled`, `scripted`, `compiler`, `runtime`, `version`, `encoding` (*legacy: `encoded`*), `natural`, `locale`, `generated`, `upstream` | "Built with compiler X" is here; "this file *is* compiler X" is `well-known/`. Code transformation is `build`; runtime reflection is `metaprogramming`. |
+| `package` | A manifest field or package role (below) | Properties of the distributed component, not its runtime behavior. |
+| `permission` | Declared authority by protected surface (`host`, `clipboard`, `storage`, `network`, …); grant scope | A hostname without grant context is not a permission; invoking an API is a capability. |
+| `registry` | Package-registry publication records: release history, reach, custody, listing claims | Not the Windows registry (`micro-behaviors/os/registry`). Reputation is not a verdict. |
+| `signed` | `certificate`, `entitlements`, `platform`, `trust-level` | A signer name is neither product identity nor proof of a valid chain. |
+| `vendor` | OS or platform vendor provenance (Apple, Microsoft, NetBSD, GNU) | Certificate fields are `signed`; manifest vendor fields are `package`; third-party products are `well-known/`. |
 
-- **`identity/` is not `name-form/`.** One names a package; the other names a
-  shape. `npm-dep-lodash` and `optional-native-linux-dep-name` look alike as
-  trait ids and are not the same kind of fact.
-- **A facet is not an ecosystem.** npm, Cargo and Gradle declarations of the
-  same kind share a facet and are separated by *filename*
-  (`identity/cargo.yaml`, `identity/npm.yaml`), per the technology-neutral
-  directory rule above.
+**`file/entropy`** is Shannon entropy over the whole analyzed byte sequence.
+Region, section, string and decoded-pixel entropy belong with those subjects.
+Entropy alone proves no encoding, encryption or hidden payload. The
+[image-property contract](taxonomy-migration/contracts/image-properties.md)
+covers decoded measurements and parser boundaries.
 
+**`package` level 2 follows the field:** `name`, `author`, `maintainers`,
+`vendor`, `description`, `license`, `homepage`, `repository`, `version`,
+`runtime`, `entrypoint`, `scripts`, `dependencies`, `ecosystem`, `manager`,
+`workspace`, `keywords`; there is no `manifest/` container. Non-field roles:
+`files` (members and layout), `documentation`, `testing` (by harness, fixture
+or assertion role, not language), `integrity` (checksums, content agreement),
+`config`, `publishing`.
+
+- `scripts/{lifecycle,build,command}`: the **declared trigger** decides, not
+  what the script does.
+- `dependencies/{manifest,lockfile,archive}`: declared, resolved or shipped.
+- `documentation/{claims,security-advisory,source}`: asserted properties,
+  advisory references, documentation location. A claim read from the
+  manifest's `description` field is `description/<subject>`.
+- `files/name` holds member-name patterns (a name suggesting a key is not a
+  key); `files/archive-member` holds parsed member structure. Parsed facts about
+  the scanned archive (encrypted members, duplicates, traversal segments) are
+  metadata; `micro-behaviors/data/archive` is for code that manipulates
+  archives.
+- A quality judgment (empty, suspicious, incomplete) is a value, not a subject:
+  there is no `quality/` or `tooling/`.
+
+**Dependency-manifest facets: the first that describes what the matcher reads
+wins.**
+
+1. `identity` — the manifest declares one specific package (`lodash`); renaming
+   the name changes the trait. This records the declaration, not proof that the
+   artifact implements that package.
+2. `name-form` — the name's shape (`-linux-x64`, a `.js` suffix); it would match
+   a package that does not exist yet.
+3. `source` — the right-hand side as a location (`git+ssh:`, `file:`,
+   `workspace:`, `github:`, a URL or path).
+4. `range` — the right-hand side as a version (`*`, `latest`, `^1.2`).
+5. `reconciliation` — declared versus imported (phantom or unused).
+6. `presence` — whether the field exists.
+7. `count` — how many entries.
+
+Ecosystems share a facet and differ by filename (`identity/npm.yaml`,
+`identity/cargo.yaml`).
+
+**Certificates: classify by the role the matcher reads.**
+
+| Matcher evidence | Home | Does not establish |
+|---|---|---|
+| Leaf signer distinguished-name fields | `signed/certificate/subject` | Product identity |
+| Issuer distinguished-name text | `signed/certificate/issuer/name` | That the named authority issued it |
+| Exact verified-chain thumbprint of a Microsoft code-signing CA | `signed/certificate/issuer/microsoft` | Microsoft authorship when the CA attests third parties |
+| Exact thumbprint of a Microsoft third-party component CA | `signed/certificate/issuer/attestation` | Microsoft platform provenance |
+| Presence, length or shape of chain entries | `signed/certificate/issuer/chain` | Any authority's identity |
+| Verification, digest integrity, nested signatures | `signed/certificate/signature` | Signer identity |
+| EKU, key usage, other constraints | `signed/certificate/security` | That the signature verifies |
+
+Trust comes from pinned CA thumbprints, never names. Installing or verifying a
+certificate is `micro-behaviors/crypto/certificate`.
+
+**Metadata tie-breakers:**
+
+| Choice | Deciding question |
+|---|---|
+| `binary` vs `file` | Executable or object anatomy → `binary`; whole-file format, extension, magic or size → `file`. |
+| `binary` vs `document` | Executable anatomy → `binary`; OLE, OOXML or PDF object structure → `document`. |
+| `binary` vs `lang` | Structure → `binary`; the producing language or compiler → `lang`. |
+| `build` vs `lang` | Orchestration (cmake, docker, CI) → `build`; language toolchain → `lang`. |
+| `build` vs `package` | Transform output → `build`; project hygiene → the `package` subject (`documentation`, `testing`, `config`, `logging`, `error-handling`). |
+| `package` vs `permission` | Ordinary fields and members → `package`; declared authority (permissions, host grants, OAuth scopes, content-script scope) → `permission`. |
+| `signed` vs `vendor` | Signature chain or entitlements → `signed`; vendor identified by strings or resources → `vendor`. |
+
+Engine-emitted IDs (imports, permissions, signers, browser-extension host
+grants) keep their producer schema. Reference them; never shadow them with YAML
+copies or move them without an engine change.
+
+## Known entities: `well-known/`
+
+An identity catalog, not a second behavior tree: a directory here says the
+analyzed artifact **is** that named thing. Depth is usually
+class/function/entity; skip the function level when it adds nothing.
+
+**Entry bar.** The entity is known by name outside this repository — at least
+one in a thousand developers or security engineers would recognize it — and its
+rule pays off across many samples. An obscure typosquat or one withdrawn
+release is an *instance* of a technique; the technique rule in `objectives/`
+catches it and the next hundred. A directory holding only a package-name match
+is an allowlist, not an identity: tighten the matcher that fired or add an
+exception.
+
+**Identity needs discriminating evidence.** A generic API, a dependency, an
+embedded implementation or a signer name does not show the artifact *is* the
+product; a family-specific configuration fingerprint does. No general-purpose
+traits here, even at low criticality. Identity never blanket-suppresses an
+entity's behaviors.
+
+**The first class that fits wins.** (`malware/supply-chain` is legacy: delivery
+does not choose a family's identity.)
+
+| Class | Admission | Level 2 |
+|---|---|---|
+| `malware` | A recognized malicious family, with family-specific evidence. A legitimate product's name cannot establish a malicious variant. | Defining role: `backdoor`, `botnet`, `downloader`, `dropper`, `exploit`, `keylogger`, `miner`, `ransomware`, `rat`, `rootkit`, `stealer`, `trojan` (only when nothing narrower fits), `virus`, `webshell`, `worm`. One per family, by its most distinctive purpose; actor attribution goes in descriptions. |
+| `unwanted` | A recognized PUA, adware or riskware family whose distribution or operation is itself unwanted. | The family directly; no `pua/`. |
+| `lib` | A library, framework or runtime. | Function: `ai`, `cloud`, `concurrency`, `crypto`, `data`, `datetime`, `development`, `format`, `media`, `native`, `network`, `observability`, `platform`, `runtime`, `stdlib`, `testing`, `ui`, `vendor-sdk`, `web`. |
+| `dual-use` | A legitimate product whose primary purpose is abuse-relevant. | `access-control`, `credentials`, `packaging`, `remote-admin`, `transfer`, `tunnel`. |
+| `game` | A game or platform, or a game-specific mod, cheat or anti-cheat. | The game, or an existing class. |
+| `tool` | A professional developer, administrator or analyst utility. | `browser`, `detection`, `development`, `forensics`, `media`, `offensive`, `packaging`, `reverse-engineering`, `sysadmin`. |
+| `app` | An end-user application, suite or platform component. | `ai`, `browser`, `browser-extension`, `communication`, `data`, `development`, `enterprise`, `finance`, `infrastructure`, `media`, `network`, `productivity`, `publishing`, `security`, `storage`, `system`, `utility`. |
+
+**Function collisions:**
+
+| Competing | Owner |
+|---|---|
+| `lib/testing` vs `lib/development` | Test execution, assertions, mocks, fixtures → testing; compilers, build, lint → development. |
+| `lib/format` vs `lib/data` vs `lib/media` | Parsing and serialization → format; query, storage, data models → data; audio, video, image codecs → media. |
+| `lib/network` vs `lib/web` vs `lib/ui` | Protocol or transport client → network; server or app framework → web; visual components → ui. JavaScript does not make all three web. |
+| `lib/cloud` vs `lib/vendor-sdk` | Cloud control-plane SDK → cloud, even for one provider; other single-vendor SDKs → vendor-sdk. |
+| `lib/platform` vs `lib/runtime` vs `lib/native` | OS or device integration → platform; language execution or FFI → runtime; libc, allocator, ABI → native. Being compiled does not make it native. |
+| `lib/stdlib` vs a domain | Extends or polyfills the language's own standard library (lodash, six) → stdlib; anything with its own domain keeps it. Small size is not stdlib. |
+| `app/development` vs `tool/development` | Integrated IDE → app; standalone compiler, build or CLI → tool. |
+| `app/security` vs `tool/{detection,forensics,offensive,reverse-engineering}` | Deployed end-user protection → app; analyst workflow → tool. |
+| `app/infrastructure` vs `app/network` vs `tool/sysadmin` | Deployment or control plane → infrastructure; ordinary network app → network; operator utility → sysadmin, unless dual-use wins. |
+
+Before adding an entity, search every bucket for its name and aliases; a
+classified entity moves only with its references.
+
+## Worked placements
+
+Cases where the deciding fact spans sections. Objective rows assume required
+evidence establishes the abuse. *mb* = `micro-behaviors/`, *obj* =
+`objectives/`, *meta* = `metadata/`.
+
+| Required observation | Home | Nearest alternative and deciding fact |
+|---|---|---|
+| Bare `memcpy` symbol in a malware sample | mb `mem/copy` | Attribution adds no family-specific evidence. |
+| `BASH_ENV` referenced inside a CI attack | mb `os/env/runtime` | Still runtime configuration; `cicd` needs CI-specific evidence. |
+| Attack harvests AWS secrets from environment variables | obj `credential-access/env/…` | The immediate source beats the cloud issuer. |
+| Attack extracts a browser secret from an OS keychain item | obj `credential-access/keychain/…` | The immediate store beats its browser consumer. |
+| Attack decrypts a browser password database with a keychain-derived key | obj `credential-access/browser/…` | The database is the final source; the key only unlocks it. |
+| Host and user profile sent through Telegram during npm preinstall | obj `exfiltration/stealer/system-info/profile` | The profile is the source; Telegram and the install hook are referenced context. `exfiltration/messaging/telegram` applies only without a narrower source. |
+| `Zone.Identifier` stream name | mb `fs/path/stream` | Removing Mark-of-the-Web needs modification evidence. |
+| Raw GitHub URL ending in `.png` | mb `communications/http/url/github` | A suffix proves neither response bytes nor steganography. |
+| Send email (B0020); victim abused to send spam (B0039) | mb `communications/email/send/…`; obj `impact/spam` | Legitimate bulk mail is the near miss for spam. |
+| Conditional execution (B0025) | mb `data/control-flow/branch` | Analysis-targeted gating is `anti-analysis`; an admitted activation guard is `execution/trigger`. |
+| Execution dependency (B0044) | meta `lang/runtime` or `package/dependencies` | A dependency shows neither process creation nor an environment check. |
+
+## Migration status and legacy branches
+
+The tree is mid-migration. While a transition is open:
+
+1. **New rules go in an admitted target home.** First confirm the validator you
+   run accepts the destination (`directory_whitelist.rs`) and its partition
+   (`REVIEWED_SPARSE_TAXONOMY_PARTITIONS`); a documented target may still need
+   either change, coordinated through the migration plan.
+2. **Directory references don't follow moves.** A composite referencing a
+   legacy directory misses rules added to its target. Find its consumers
+   (`rg 'legacy/path'`) and check which members each should select before
+   rewriting it: adding a target directory can broaden a composite or its
+   exclusions. Verify with positive and near-miss fixtures.
+3. **Moving rules is a migration batch:** account for every rule in the source;
+   preserve matchers and scope; update consumers, defaults, exception references
+   and external mappings together; record fixtures and corpus results.
+
+Applied so far: memory operations into
+`mem/{map,unmap,free,resize,copy,fill,compare,query,combined}`;
+direction-neutral codecs into `data/codec` and `data/compression`
+(`data/compress/combined` retired); `communications/http/ssl` into
+`communications/tls`. Acceptance evidence and known gaps are in the migration
+plan.
+
+### Migration map
+
+*Staged*: a reviewed batch in `taxonomy-migration/batches/`, not yet applied.
+*Partial*: some rules moved. *Open*: no batch.
+
+| Legacy home | Target home | How rules move | Status |
+|---|---|---|---|
+| mb `os/network/{forward,neighbors,qos,route}` | mb `network/<same>` | Same subject | Staged (B085, B092, B088, B093) |
+| mb `os/network/{connections,dns,share,status,tunnel}` | mb `network/<same>` | Same subject | Open |
+| mb `os/network/{mac_address,webextension}` | mb `network/interface`; by operation | MAC addresses are interface identity | Open |
+| mb `communications/ipc/irc` | mb `communications/irc/{command,handler}` | IRC is a network protocol | Staged (B082) |
+| mb `communications/http/url/*` (generic URL facts) | mb `communications/url/<facet>` | HTTP-specific facts stay | Open |
+| mb `crypto/symmetric/<alg>/{decrypt,…}`, `crypto/asymmetric/{encrypt,signature}` | mb `crypto/{encrypt,decrypt,sign,verify}` | Operations move; presence stays | encrypt and decrypt staged (B086, B087); sign and verify open |
+| mb `crypto/native`, `crypto/library/{provider,cng,cryptoapi}` | mb `crypto/provider` | Operations go to their own leaves | Open |
+| mb `crypto/library/*` (other children) | Primitive family, operation, `data/transaction`, `communications/blockchain`, `crypto/key` | By claim | Open |
+| mb `crypto/asymmetric/{key,ecdh}` | mb `crypto/key/{generate,import,export,exchange,representation}` | By key operation | Open |
+| mb `crypto/hash/{crc32,fnv}` | mb `data/checksum` | Noncryptographic | Open |
+| mb `data/source/*` | mb `metaprogramming/*`, `data/control-flow/*`, `data/property/*`; meta `*` | By claim | Open (closed to new rules) |
+| mb `data/encoded` | meta `file/encoding` or mb `data/decode/<scheme>` | Presence vs operation | Open |
+| mb `data/decode/{request,reflection,environment,native}-base64` | mb `data/decode/base64` | Origin is not an algorithm | Open |
+| mb `fs/shell-ops` | mb `fs/{read,write,delete/*,file/*}` | By operation | Open |
+| mb `fs/traversal`; `fs/enumerate` (non-inventory) | mb `fs/directory/traverse`; `fs/directory/readdir`, `fs/search` | Inventory stays in `fs/enumerate` | Open |
+| mb `fs/directory/mkdir` | mb `fs/directory/create` | Rename | Open |
+| mb `fs/memory/mmap`, `mem/alloc/map` | mb `mem/map` | Any backing | Partial |
+| mb `mem/c-runtime/functions`, `mem/alloc/{executable,heap,managed,…}` | mb `mem/{alloc,free,resize,copy,fill,compare}` | By operation; allocator only when established | Partial |
+| mb `mem/decompress` | mb `data/decompress/<algorithm>` | A data transform | Open |
+| mb `process/threading/*` | mb `process/{thread,sync,work}` | `queue` → `work`; locks → `sync` | Open |
+| mb `process/fork` | mb `process/create/fork` | Duplicate | Open |
+| mb `process/user` | mb `process/identity` or `os/user` | Current process vs principal administration | Open |
+| mb `process/create/{launch,direct,spawn,execv,spawnv,stdlib,wrapper,…}` | mb `process/create/<mechanism>` | [Process creation](#process-creation) | Open |
+| mb `process/lifecycle/runtime-init` | mb `process/lifecycle/initialize` | Rename | Open |
+| mb `process/interpreter/reflection` | mb `metaprogramming/reflection` | Code as code | Open |
+| mb `process/script` | The actual execution mechanism | A carrier is not a mechanism | Open |
+| mb `os/env/{enumeration,dump}`, `modify`, `{check,gate}`, `user-paths` | mb `os/env/{enumerate,write,test,path}` | Other topic leaves move to the subject they require | Open |
+| mb `os/service/driver` | mb `os/kernel/driver` | Drivers are not services | Open |
+| mb `dylib/library`, `ui/framework` | meta, a capability, or `well-known/lib`, by claim | Implementation containers | Open |
+| obj `command-and-control/dropper/{process-inject,image-map,module-load,script-eval,interpreter-stdin,file-exec}` | obj `execution/payload/<sink>` (admitted) or mb `process/deploy/<sink>` (neutral) | By sink; admission picks the tier | Open |
+| obj `command-and-control/dropper/staging/*`, `staging-xor`, `staged-loader` | obj `execution/staging/{reconstruct,extract,acquire,store}` | By operation | Open |
+| obj `command-and-control/dropper/*` (`delivery`, `execution`, `behavior` and the rest) | A payload sink, staging operation, C2 result or neutral capability | By claim | Open |
+| obj `collection/email-harvest` | obj `collection/email` | Rename | Open |
+| obj `credential-access/windows-registry` | obj `credential-access/registry` | Rename | Open |
+| obj `credential-access/{dump,theft,validation}` | obj `credential-access/<source or acquisition>` (`memory`, `registry`, …) | Dump is not memory | Open |
+| obj `evasion/process/injection` (mechanics only) | mb `process/inject/<mechanism>` | Rules showing concealment stay | Open |
+| obj `lateral-movement/social-engineering/spam` | obj `impact/spam` | An impact | Open |
+| obj `lateral-movement/delivery` | By mechanism: remote execution, admin shares, WMI, GPO, update service | Not email delivery | Open (needs a contract) |
+| obj `exfiltration/stealer/{network-config,process-list}` | obj `stealer/system-info/{network,process}` | Same source | Open |
+| obj `exfiltration/stealer/{surveillance,phish}` | obj `stealer/<source>` (`input`, `screen`, `audio`, …) | Purpose and method are not sources | Open |
+| obj `exfiltration/{sensitive-data,serialization}` | `collection` or `credential-access` (no send), `stealer/<source>` (chain), mb `data/serialize` (neutral) | By required send | Open |
+| obj `supply-chain/{install-hook,recon-exfil,credential-theft,metadata-anomaly}` | The required result's home, hook referenced | A trigger is not an objective | Open |
+| obj `anti-static/obfuscation/{binary-metrics,code-metrics,tools,multi-layer}` | meta `binary` or `file`, `well-known/`, or a named concealment | Measurements and identities are not concealment | Open |
+| meta `file/encoded`; `lang/encoded` | meta `file/encoding`; `lang/encoding` | Rename | Open |
+| meta whole-file byte-entropy rules under `image/*` | meta `file/entropy` | Decoded-image measurements stay | Open |
+| meta `file/{string,literal}/*` | The subject each string evidences; context-only predicates held pending validated representation | No new placements; literal validator enforcement pending | Partial (batches 047–080) |
+| meta `package/tooling`, `hardening/missing` | `build/*`, `well-known/*`, `package/<subject>`; the mitigation's own subject | Grab-bag and judgment names | Open |
+| meta `binary/{installer,framework,vendor,signing,license,toolchain}` | `well-known/`, `vendor`, `signed`, `binary/provenance`, `lang/compiler` | Identity is not a format property | Open |
+| `well-known/malware/supply-chain` | The family's defining role | Delivery does not choose identity | Open |
+
+Remove a legacy home's whitelist entry only after its last rule moves.
+
+**Why the targets changed:**
+
+| Change | What it fixes |
+|---|---|
+| Split C-runtime memory by operation; separate free and resize from alloc | Releasing memory is no longer filed as allocation, or by runtime. |
+| Consolidate memory mappings and local network resources | One resource, one home, whatever the OS API or backing store. |
+| Retire source-language, backend and synonymous launch branches | Equivalent observations stop getting different homes by implementation. |
+| Separate crypto operations from primitive presence; add `metaprogramming/reflection` | An unknown implementation or algorithm no longer forces an unsupported claim. |
+| Explicit broad transform operations and work scheduling | Unknown algorithms and worker reuse get homes without guessed methods or thread creation. |
+| Move payload activation to `execution`; keep control surfaces in C2 | A payload handoff no longer implies a command channel. |
+| Admission before payload routing; neutral `process/deploy` | Ordinary updaters stay neutral; preparation gains no execution claim. |
+| Install and build context as referenced facts; supply-chain only for trust violations | Credential theft and export keep one home across lifecycle phases. |
+| Keep clear names and variable depth | Effort goes to meaning, not uniformity. Wholesale resource-first renames, larger-cap exemptions and a fixed depth ceiling were rejected ([NEW_TAXONOMY_CHANGES.md](NEW_TAXONOMY_CHANGES.md)). |
+
+### Open checkpoints
+
+Resolve each in the migration manifest before moving the affected rules.
+
+| Checkpoint | Required resolution |
+|---|---|
+| Broad leaves vs the 100-rule cap | Collapsing today's broad parents ([reading paths](#reading-paths)) into leaves would breach the cap. Keep a split only with a complete partition that admits broad evidence, or record a size-policy decision. |
+| Level-3 branches | Name the children, their single axis, precedence and an incomplete-evidence example before migrating. |
+| Payload sinks | Decide `image-map` and `interpreter-stdin` before moving them. |
+| Broad staging profiles | Staging rules that fit no operation need a defined home; neither dropping the claim nor calling it activation is acceptable. |
+| Retained access | Choose a home for created accounts and authorized SSH keys, now in `persistence/login/{account,ssh}`. |
+| C2 `dns` and `trigger` | The target layout folds DNS control into `channel/<transport>` and admitted activation guards into `execution/trigger`; keep both leaves until a disposition is recorded. |
+| Cross-cutting discovery | Generate an algorithm/source/mechanism index from recorded facets, so an "AES" view finds both presence and operation rules. No engine change. |
+| RULES.md | Reconcile its blanket restriction on objective atomics with the evidence-based tier rule here. |
+
+### Migration guardrails
+
+- A branch contract states the subject, the children's question, admission and
+  exclusion criteria, and an example with a neighboring counterexample.
+- Two independent placement passes agree on the branch's examples, nearest
+  alternatives and broadest observations; disagreement fixes the contract, not
+  the sample.
+- Every new or relocated leaf has a positive fixture and a near miss for its
+  distinguishing claim. Test the required claim, not artificial exclusivity;
+  include a both-claims case where overlap is intended. Test exceptions for the
+  exact suppression they perform.
+- Acceptance: every old rule accounted for; references resolve; placement-only
+  moves preserve matching; fixtures and mapping reviews recorded; intentional
+  coverage changes evidenced separately; `make validate` passes.
 
 ## Reference
 
-### Trait ID Format
+### Trait IDs
 
 ```
 directory/path::trait-name
@@ -1606,17 +1058,13 @@ directory/path::trait-name
   directory      local ID
 ```
 
-**Reference patterns:**
-- `trait-name` — same directory (local)
-- `micro-behaviors/communications/http` — any trait in directory
-- `micro-behaviors/communications/http::curl-download` — exact match
-
-### Composite Rules
-
-Capabilities combine into objectives via composite rules:
+The directory path is the ID prefix; filenames never are. `trait-name` resolves
+in the same directory; `micro-behaviors/communications/http` matches every trait
+in that subtree except `exception` composites;
+`micro-behaviors/communications/http/client::curl-download` matches one trait.
 
 ```yaml
-# objectives/command-and-control/reverse-shell/combos.yaml
+# objectives/command-and-control/reverse-shell/fd-redirect/combos.yaml
 composite_rules:
   - id: reverse-shell
     desc: "Reverse shell pattern"
@@ -1627,20 +1075,21 @@ composite_rules:
       - id: micro-behaviors/process/create/shell
 ```
 
-### Example Classifications
+### MBC and ATT&CK identifiers
 
-| Code Pattern | Tier | Path | Criticality |
-|--------------|------|------|-------------|
-| `socket()` call | Capability | `micro-behaviors/communications/socket/create` | notable |
-| `eval()` call | Capability | `micro-behaviors/process/create/eval/dynamic` | notable |
-| Process hollowing | Capability | `micro-behaviors/process/hollow` | suspicious |
-| Screenshot API | Capability | `micro-behaviors/hardware/display/screenshot` | notable |
-| Screenshot + timer + upload | Objective | `objectives/collection/screenshot` | suspicious |
-| Reverse shell pattern | Objective | `objectives/command-and-control/reverse-shell` | hostile |
-| Cobalt Strike beacon | Known | `well-known/malware/rat/cobalt-strike` | hostile |
-
-### MBC Identifiers
-
-- **ATT&CK Techniques**: `T1234` or `T1234.001` (sub-technique)
-- **MBC Behaviors**: `B0001` (behavior), `C0015` (micro-behavior)
-- **MBC Enhanced**: `E1234` (ATT&CK technique with MBC enhancements)
+- ATT&CK techniques `T1234`, sub-techniques `T1234.001`; MBC behaviors `B0001`,
+  micro-behaviors `C0015`, enhanced ATT&CK techniques `E1234`.
+- Assign each ID from the rule's required evidence, not its directory, filename
+  or neighbors. A detached install-hook launch is not B0024; a chat send is not
+  B0020; product masquerade is not B0039. Prefer the parent ATT&CK technique
+  when the evidence does not support a sub-technique.
+- Use a file-level mapping default only when every rule in the file proves the
+  behavior. `mbc:` is scalar; never write a placeholder `none`. Record further
+  justified IDs in the migration review index.
+- Distinct evasion and escalation claims keep distinct rules even when they
+  share injection mechanics.
+- Review against the local MBC catalog
+  ([summary](../src/mbc-markdown/mbc_summary.md),
+  [overview](../src/mbc-markdown/README.md),
+  [mapping guidance](../src/mbc-markdown/yfaq/README.md)), and record its
+  revision in the migration manifest.

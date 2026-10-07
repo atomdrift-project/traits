@@ -31,7 +31,7 @@ traits:
     # module-resolution hijacks — e.g. `PYTHONPATH=.claude/skills/<name>` or
     # `sys.path` entries under ~/.openclaw/workspace/.
     not:
-      - regex: '(?i)["''=/]\s*\.(build|claude(-plugin)?|openclaw|hermes|codex|gemini|reference|venv|virtualenv|tox|nox|local|config|cache|github|gitlab|circleci|vscode|idea|husky|yarn|pnpm|devcontainer|bin|acp)\b'
+      - regex: '(?i)["''=/]\s*\.(build|claude(-plugin)?|openclaw|hermes|codex|gemini|reference|venv|virtualenv|tox|nox|local|config|cache|github|gitlab|circleci|vscode|idea|husky|yarn|pnpm|devcontainer|bin|acp|pysite)\b'
       # Libtool's in-tree `.libs` directory is a normal native-extension
       # build output, not a hidden module-resolution implant.
       - regex: '(?i)[\\/]\.libs\b'
@@ -46,6 +46,11 @@ traits:
 
   # Match the parsed import/call nodes so help text and comments containing
   # `--import ~/.../.mailx/...` cannot become a module-resolution finding.
+  # The leading ./, ../ or / is required: a hidden directory is only
+  # addressable as a path segment, so a bare `.tld/` run split out of a URL
+  # (e.g. `.com/` from an https:// host in embedded fixture text) is not a
+  # module path. A bare `.name/` specifier is a package name, never a
+  # relative hidden-directory reference.
   - id: require-from-hidden-path
     desc: Requires a hidden module path
     crit: notable
@@ -57,7 +62,9 @@ traits:
       exact: require
       arg:
         kind: string
-        regex: '^((\.\.?/)|/)?\.[\w-]{1,20}/'
+        regex: '^(\.\.?/|/)\.[\w-]{1,20}/'
+    unless:
+      - id: metadata/package/files/dependency::ceraph-package-path
 
   - id: import-from-hidden-path
     desc: Imports a hidden module path
@@ -67,16 +74,16 @@ traits:
     if:
       type: symbol
       kind: import
-      regex: '^((\.\.?/)|/)?\.[\w-]{1,20}/'
+      regex: '^(\.\.?/|/)\.[\w-]{1,20}/'
     # Well-known project/agent/IDE dotdirs are conventional layout, not
     # module-resolution hijacks (e.g. importing from .claude-plugin/ or
     # ~/.openclaw/workspace libs).
     not:
-      - regex: '(^|/)\.(claude(-plugin)?|openclaw|hermes|codex|gemini|github|gitlab|circleci|vscode|idea|config|husky|yarn|pnpm|changeset|well-known|storybook|next|nuxt|svelte-kit|react-router|devcontainer|bin)/'
+      - regex: '(^|/)\.(claude(-plugin)?|openclaw|hermes|codex|gemini|github|gitlab|circleci|vscode|idea|config|husky|yarn|pnpm|changeset|well-known|storybook|next|nuxt|svelte-kit|react-router|devcontainer|bin|ceraph)/'
       # Build-output dotdirs are generated layout, not a hijack: a template
       # that ships `import registry from "../.generated/actions-registry.js"`
       # imports its own codegen, the same way .next/ or .nuxt/ above do.
-      - regex: '(^|/)\.(generated|output|cache|turbo|vite|astro|parcel-cache|angular)/'
+      - regex: '(^|/)\.(generated|output|cache|turbo|vite|astro|parcel-cache|angular|metadata)/'
 
 composite_rules:
   # `sys.path.<insert|append|extend>(<literal hidden path>)` — Python.
@@ -85,10 +92,9 @@ composite_rules:
     crit: suspicious
     conf: 0.93
     for: [python]
-    near_lines: 1
     all:
       - id: micro-behaviors/os/module/search-path::sys-path-mutate
-      - id: micro-behaviors/fs/path/location::hidden-dir-literal
+      - id: micro-behaviors/os/module/search-path::sys-path-hidden-dir-entry
     unless:
       - id: well-known/app/system/cowork-flow::cowork-flow-hook-context
       - id: metadata/package/testing/presence/harness::test-directory
@@ -109,6 +115,10 @@ composite_rules:
       - id: metadata/build/minifier::js-webpack-bundle-minified
       - id: metadata/build/minifier::js-webpack-minified-module-call
 
+  # Search-order hijack is a path-list mutation (sys.path, module.paths,
+  # NODE_PATH/PYTHONPATH). A static import or require of a relative
+  # dot-directory (`import … from "./.setup/chunk.mjs"`) is bundler layout;
+  # those atoms stay notable and do not by themselves convict.
   - id: module-resolution-hijack
     desc: Module resolution hijack
     crit: suspicious
@@ -117,8 +127,6 @@ composite_rules:
       - id: sys-path-hijack-hidden
       - id: node-module-paths-hijack-hidden
       - id: env-path-hijack-hidden
-      - id: require-from-hidden-path
-      - id: import-from-hidden-path
     downgrade:
       any:
         - id: metadata/build/bundler/asset::js-large-module-bundle
@@ -129,3 +137,5 @@ composite_rules:
       - id: metadata/package/testing/presence/harness::test-directory
       # require('../.cache/bootcode') is the sandbox's own prebundled bootstrap.
       - id: metadata/package/files/dependency::postman-sandbox-package-path
+      # Ceraph runtime loads its media registries and testid config from .ceraph/
+      - id: metadata/package/files/dependency::ceraph-package-path

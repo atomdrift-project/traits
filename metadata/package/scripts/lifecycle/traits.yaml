@@ -40,6 +40,9 @@ traits:
     - id: metadata/package/files/dependency::node-modules-path
     - id: well-known/lib/format/xmljs::libxmljs-native-addon-context
     - id: metadata/package/scripts/lifecycle::npm-install-native-addon-build
+    - id: metadata/package/completeness::npm-source-native-addon-wrapper
+    - id: metadata/package/completeness::npm-tree-sitter-grammar-install
+    - id: well-known/lib/development/tree-sitter-grammar-npm::tree-sitter-grammar-npm-package
     if:
       type: value
       path: scripts.install
@@ -65,14 +68,22 @@ traits:
       regex: '^\s*$|^\s*(echo|true|:)\s+[^;&|]{0,200}\s*$'
       not:
       - regex: '\$\(|`'
+  - id: postinstall-runs-bumper-installer
+    desc: postinstall runs bumper-guard installer script
+    crit: notable
+    conf: 0.99
+    if:
+      type: value
+      path: scripts.postinstall
+      substr: src/installers/postinstall.js
   - id: npm-inert-postinstall-script
-    desc: Inert postinstall echo/no-op command
+    desc: Inert or empty postinstall script
     crit: notable
     conf: 0.98
     if:
       type: value
       path: scripts.postinstall
-      regex: '^\s*(echo|true|:)\s+[^;&|]{0,200}\s*$'
+      regex: '^\s*$|^\s*(echo|true|:)\s+[^;&|]{0,200}\s*$'
       not:
       - regex: '\$\(|`'
   - id: npm-postinstall-console-log-only
@@ -82,9 +93,9 @@ traits:
     if:
       type: value
       path: scripts.postinstall
-      regex: '^\s*node\s+-e\s+["'']console\.log\([^;]*\);["'']\s*$'
+      regex: '^\s*node\s+-e\s+["''][^;]*console\.log\([^;]*\);?[^;]*["'']\s*$'
       not:
-      - regex: '(?i)(fetch|https?://|child_process|execSync|exec\(|spawn|curl|wget|require\(|process\.env)'
+      - regex: '(?i)(fetch|https?://|child_process|execSync|exec\(|spawn|curl|wget|require\(|eval\()'
   - id: raw-preinstall-key
     desc: Raw package metadata has preinstall script key
     crit: notable
@@ -151,16 +162,6 @@ traits:
       type: value
       path: scripts.postinstall
       substr: stackpath.bootstrapcdn.com/twitter-bootstrap
-  - id: preinstall-curl
-    desc: curl command in preinstall script
-    crit: suspicious
-    conf: 0.95
-    unless:
-    - id: metadata/package/scripts/lifecycle::preinstall-runtime-guard-help
-    if:
-      type: value
-      path: scripts.preinstall
-      substr: curl
   - id: preinstall-curl-data-urlencode
     desc: curl with data-urlencode in preinstall script
     crit: suspicious
@@ -169,18 +170,39 @@ traits:
       type: value
       path: scripts.preinstall
       substr: "--data-urlencode"
+  - id: preinstall-echo-script
+    desc: Preinstall script is a simple echo command
+    crit: notable
+    conf: 0.95
+    if:
+      type: value
+      path: scripts.preinstall
+      regex: '^\s*echo\s+[^;&|]{0,200}$'
   - id: preinstall-hostname
     desc: hostname in preinstall script
     crit: suspicious
     conf: 0.9
+    unless:
+      - id: preinstall-echo-script
     if:
       type: value
       path: scripts.preinstall
       substr: hostname
+  - id: preinstall-npm-whoami-auth
+    desc: npm whoami auth gate in preinstall script
+    crit: notable
+    conf: 0.92
+    if:
+      type: value
+      path: scripts.preinstall
+      substr: "npm whoami"
   - id: preinstall-whoami
-    desc: whoami in preinstall script
+    desc: shell whoami in preinstall script
     crit: suspicious
     conf: 0.9
+    unless:
+      - id: preinstall-npm-whoami-auth
+      - id: preinstall-echo-script
     if:
       type: value
       path: scripts.preinstall
@@ -280,7 +302,7 @@ traits:
     if:
       type: value
       path: scripts.install
-      regex: '(?i)\b(node-gyp|node-waf)\b'
+      regex: '(?i)^(node-gyp-build|prebuild-install|node-pre-gyp)(\s|$)|\b(node-gyp|node-waf)\b'
   - id: composer-post-install-cmd
     desc: Composer post-install command hook
     crit: notable
@@ -405,9 +427,12 @@ composite_rules:
     crit: component
     for: [package.json, npm, tar, zip, whl, python-sdist]
     desc: Package has install hooks
+    unless:
+      - id: well-known/lib/development/tree-sitter-grammar-npm::tree-sitter-grammar-npm-package
+      - id: metadata/package/completeness::npm-source-native-addon-wrapper
     any:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
       - id: has-install-script
   - id: composer-lifecycle-hook
     desc: Composer declares an install-time lifecycle hook
@@ -452,15 +477,15 @@ composite_rules:
     crit: suspicious
     conf: 0.95
     all:
-    - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
-    - id: metadata/package/scripts/lifecycle::preinstall-curl
+    - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+    - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
     - id: metadata/package/scripts/lifecycle::preinstall-curl-data-urlencode
   - id: npm-preinstall-info-exfil
     desc: preinstall script exfiltrates system info to external endpoint
     crit: suspicious
     conf: 0.98
     all:
-    - id: objectives/supply-chain/install-hook/scripts/declaration::has-preinstall
+    - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
     - id: metadata/package/scripts/lifecycle::preinstall-hostname-whoami-pwd
     any:
     - id: metadata/package/scripts/lifecycle::preinstall-oast-endpoint

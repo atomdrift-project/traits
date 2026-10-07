@@ -50,6 +50,23 @@ traits:
       pattern: "?? ?? ?? ?? 0E 17 0E 0A"
       offset_range: [-36, -28]
 
+  - id: upx400-amd64-packheader-body
+    desc: UPX 4.00 AMD64 PackHeader body
+    crit: notable
+    conf: 0.99
+    if:
+      type: hex
+      pattern: "?? ?? ?? ?? 0E 16 ?? ??"
+      offset_range: [-36, -28]
+
+  - id: upx-sf-net-url
+    desc: UPX project URL
+    crit: notable
+    conf: 0.99
+    if:
+      type: text
+      substr: 'http://upx.sf.net'
+
   - id: trailing-packheader-magic
     desc: Canonical trailing UPX PackHeader magic
     crit: notable
@@ -58,6 +75,21 @@ traits:
       type: hex
       pattern: 55 50 58 21
       offset_range: [-36, -32]
+
+  # The canonical PackHeader at EOF-36 with its version byte intact. Stock
+  # UPX 4.x ends a packed ELF with a loader marker -- UPX! then zero bytes --
+  # eleven bytes *before* that header, so a zero-run matcher reading the tail
+  # window sees the marker and not the header. A file whose real header still
+  # carries a version has not had its control fields zeroed.
+  - id: intact-trailing-packheader
+    desc: Trailing UPX PackHeader with non-zero version
+    crit: notable
+    conf: 0.99
+    if:
+      type: raw
+      regex: 'UPX![\x01-\xff]'
+      # The whole five-byte match must fit: magic at EOF-36, version at -32.
+      offset_range: [-36, -31]
 
   # p_info (immediately after l_info) carries the original image size; UPX
   # normally writes p_filesize/p_blocksize non-zero for a packed ELF. All
@@ -89,7 +121,7 @@ composite_rules:
     all:
       - id: zeroed-pinfo-size-fields
       - id: objectives/anti-static/pack/detect::upx-magic-raw
-      - id: objectives/anti-static/pack/detect::no-section-headers
+      - id: metadata/binary/section/header::no-section-headers
     unless:
       - id: objectives/anti-static/pack/detect::upx-tool-basename
 
@@ -104,35 +136,56 @@ composite_rules:
       # cybench "packed-away" ships the header-corrupted UPX artifact itself
       # as the challenge solution.
       - id: well-known/lib/ai/inspect-evals::eval-corpus-context
+      # Stock UPX 4.x output: the zero run is the loader marker ahead of an
+      # intact header (trufflehog's release binaries, among many).
+      - id: intact-trailing-packheader
+
+  - id: upx-provenance-indicator
+    desc: UPX provenance indicator
+    crit: component
+    conf: 0.99
+    any:
+      - id: objectives/anti-static/pack/detect::upx-banner
+      - id: upx-sf-net-url
+      - id: upx-400-version
 
   - id: corrupted-upx400-packheader-magic
     desc: ELF corrupts UPX 4.00 PackHeader magic to block unpacking
     crit: hostile
     conf: 0.99
     all:
+      - id: metadata/binary/section/header::no-section-headers
+      - id: upx-provenance-indicator
+    any:
       - id: upx400-arm-packheader-body
-      - id: upx-400-version
-      - id: objectives/anti-static/pack/detect::upx-banner
+      - id: upx400-amd64-packheader-body
     unless:
       - id: trailing-packheader-magic
+      - id: objectives/anti-static/pack/detect::upx-magic-raw
 
   # Stock UPX on ELF32 often strips the section table and leaves a trailing
-  # PackHeader. Pair that shape with high entropy so a tagged but unpacked
-  # object file does not inherit the hostile reading.
+  # PackHeader. This confirms an intact packed layout, not hostile intent;
+  # anti-unpacking tamper has separate rules above.
   - id: upx-sectionless-high-entropy-elf
     desc: Sectionless high-entropy trailing UPX ELF
-    crit: hostile
+    crit: notable
     conf: 0.96
     all:
       - id: trailing-packheader-magic
       - id: metadata/binary/section/header::elf32-zero-section-header-offset
       - id: metadata/binary/layout/entropy::high-overall-entropy-70
+    unless:
+      - id: metadata/binary/framework::upx-tool-basename
+      - id: well-known/tool/sysadmin/unetbootin/
 
   - id: upx-static-sectionless-banner-elf
     desc: Static sectionless ELF with a UPX banner
-    crit: hostile
+    crit: notable
     conf: 0.95
     all:
       - id: objectives/anti-static/pack/detect::upx-banner
       - id: metadata/binary/linking/static::static-linked-heuristic
       - id: metadata/binary/section/header::elf32-zero-section-header-offset
+    unless:
+      - id: metadata/binary/framework::upx-tool-basename
+      - id: well-known/tool/sysadmin/unetbootin/

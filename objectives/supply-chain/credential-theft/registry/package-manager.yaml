@@ -156,23 +156,6 @@ traits:
   if:
     type: text
     regex: 'Path\s*\(.{0,50}\.ssh/id_[a-z0-9_]{2,16}.{0,40}\)\.read_'
-- id: js-homedir-cred
-  desc: JS directly reads package credential file
-  crit: suspicious
-  conf: 0.85
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: '(?i)(^|[^\w$])(readFile(Sync)?|createReadStream)\s*\([^)]{0,80}(\.npmrc|\.git-credentials)'
-  not:
-  - substr: "homedir(), '.npmrc'"
-  - substr: "path.join(homedir(), '.npmrc')"
-  - substr: "HOME']}/.npmrc"
-  - substr: "userconfig: { default: path.join(os.homedir(), '.npmrc') }"
-  - substr: "configNames: { default: ['npmrc', '.npmrc'] }"
-  unless:
-  - id: well-known/app/ai/coding-agent/qwen-code::qwen-code-bundle-text
-  - id: well-known/app/ai/coding-agent/acuvo-code::official-package-context
 - id: js-env-home-cred-npmrc
   desc: npmrc credential path marker
   crit: component
@@ -210,6 +193,7 @@ traits:
   conf: 0.9
   for: [shell]
   unless:
+  - id: metadata/package/testing/corpus/
   - id: well-known/tool/development/aube::aube-package-test-fixture
   if:
     type: text
@@ -218,10 +202,14 @@ traits:
   - substr: 'cat << EOF > "$HOME/.npmrc"'
   - regex: 'cat\s+<<\s*EOF\s*>\s*"\$HOME/\.npmrc"'
   - regex: 'cat\s*<<\s*\w+\s*>\s*"\$HOME/\.npmrc"'
+  # Backup-restore merges (`cat .npmrc.bak >> .npmrc`) rebuild local build
+  # config; they read a backup, not the live credential file.
+  - regex: '\.npmrc\.bak\b'
 - id: shell-cat-pypirc
   desc: Shell reads .pypirc file
   crit: suspicious
   conf: 0.9
+  for: [shell]
   unless:
     - id: well-known/tool/detection/agent-glovebox::archive-context
   if:
@@ -231,6 +219,7 @@ traits:
   desc: Shell reads .netrc file
   crit: notable
   conf: 0.9
+  for: [shell]
   if:
     type: text
     regex: cat\s+[^<\n]{0,30}\.netrc
@@ -238,6 +227,7 @@ traits:
   desc: Shell reads .git-credentials file
   crit: suspicious
   conf: 0.9
+  for: [shell]
   unless:
   - id: metadata/package/testing/
   - id: well-known/tool/detection/tool-guard-core::defensive-attack-corpus-context
@@ -328,12 +318,15 @@ traits:
     type: text
     regex: 'createReadStream\s*\([^)]{0,60}\.npmrc[\s\S]{0,120}axios\s*\.\s*(post|put|request)\s*\('
 - id: js-npmrc-to-http
-  desc: JS sends .npmrc via http.request
+  desc: npmrc reference near an HTTP request
   crit: suspicious
   conf: 0.9
-  for: [javascript, typescript]
+  for:
+  - javascript
+  - typescript
   unless:
   - id: well-known/tool/development/aube::aube-package-test-fixture
+  - id: metadata/package/testing/presence/fixture::defanged-disabled-effect-context
   if:
     type: text
     regex: \.npmrc[\s\S]{0,300}http\.request
@@ -353,20 +346,6 @@ traits:
   if:
     type: text
     regex: \.netrc[\s\S]{0,300}http\.request
-- id: js-creds-to-axios--rx-13
-  desc: Cargo credentials path marker
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    regex: '(^|[./\\''"`])\.cargo/credentials\b'
-- id: js-creds-to-axios--rx-14
-  desc: RubyGems credentials path marker
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    regex: '(^|[./\\''"`])\.gem/credentials\b'
 - id: pypirc-base64-encode
   desc: .pypirc base64 encoded
   crit: suspicious
@@ -387,7 +366,7 @@ composite_rules:
   attack: T1195.002,T1552.001,T1041
   scope: archive
   all:
-  - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+  - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
   - id: objectives/exfiltration/serialization::js-npmrc-http-post
 - id: js-npmrc-to-fetch
   desc: JS references an npm credentials file near fetch
@@ -428,9 +407,9 @@ composite_rules:
   - id: py-pathlib-netrc
   - id: py-pathlib-aws-creds
   - id: py-pathlib-ssh-private-key
-  downgrade:
-    any:
-    - id: metadata/package/testing/presence/harness/
+  unless:
+  - id: metadata/package/testing/
+  - id: well-known/tool/detection/
 - id: shell-cat-cred
   desc: Shell reads credential file
   crit: suspicious
@@ -476,11 +455,12 @@ composite_rules:
     - id: well-known/lib/cloud/aws-sdk-js::aws-sdk-js-v3-bundle
     - id: well-known/lib/cloud/aws-sdk-js::aws-sdk-js-v3-imds-provider
 - id: npmrc-base64-encode
-  desc: Encodes NPM registry credentials as Base64
+  desc: Reads NPM config near Base64 encoding
   crit: suspicious
   conf: 0.9
   all:
   - id: js-env-home-cred-npmrc
+  - id: micro-behaviors/fs/read/file/full::file-content-read-operation
   any:
   - id: micro-behaviors/data/encode/base64::base64-encoding
   - id: micro-behaviors/data/encode/base64::btoa-symbol
@@ -542,7 +522,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/install-hook/scripts/credential::script-credential-dotfile
   - id: micro-behaviors/communications/http/post::npm-script-node-http-post
-  - id: objectives/supply-chain/install-hook/package/manifest::postinstall-hook-key
+  - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
   - id: well-known/dual-use/tunnel/ngrok::npm-script-ngrok-free-domain
 - id: cargo-credential-theft
   desc: Cargo credential theft
@@ -576,7 +556,7 @@ composite_rules:
   all:
   - id: micro-behaviors/os/env/ci-credentials
   any:
-  - id: objectives/supply-chain/credential-theft/env::py-env-to-post
+  - id: micro-behaviors/communications/http/request/body::python-environment-http-body-flow
   - id: micro-behaviors/communications/http/request/credentials::js-env-http-send
   - id: micro-behaviors/communications/http/request/credentials::shell-filtered-env-stdin-http-upload
   unless:
@@ -689,6 +669,6 @@ composite_rules:
   crit: component
   conf: 0.9
   any:
-  - id: objectives/supply-chain/credential-theft/registry::js-creds-to-axios--rx-13
-  - id: objectives/supply-chain/credential-theft/registry::js-creds-to-axios--rx-14
+  - id: micro-behaviors/fs/path/secret-config::cargo-credentials-path-marker
+  - id: micro-behaviors/fs/path/secret-config::rubygems-credentials-path-marker
   - id: micro-behaviors/fs/path/token::git-credentials

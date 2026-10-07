@@ -10,13 +10,18 @@ traits:
   if:
     type: text
     regex: '__import__\([^\)\n]{0,50}__import__\('
+# The type the defineClass(name, b, off, len, ProtectionDomain) overload
+# takes; the class-definition composites below use it as a loader leg. Self
+# path lookups are micro-behaviors/process/info/selfpath::java-protection-domain.
 - id: java-protectiondomain
-  desc: Java ProtectionDomain
-  crit: notable
+  desc: ProtectionDomain type reference
+  crit: component
   for: [java, class]
   if:
     type: text
     substr: ProtectionDomain
+  unless:
+    - id: well-known/tool/development/build/gradle-wrapper::gradle-wrapper-package-class
 - id: java-reverse
   desc: Java reverse() call
   crit: notable
@@ -30,15 +35,6 @@ traits:
   unless:
   - type: basename
     regex: \.([cm]?js|jsx|tsx?|mjs)$
-- id: dotnet-assembly-load
-  desc: .NET Assembly.Load
-  crit: notable
-  platforms:
-  - windows
-  for: [pe, csharp]
-  if:
-    type: text
-    substr: Assembly.Load
 - id: dotnet-assembly-loadfrom
   desc: .NET Assembly.LoadFrom
   crit: notable
@@ -48,50 +44,21 @@ traits:
   if:
     type: text
     substr: Assembly.LoadFrom
-- id: dotnet-activator-createinstance
-  desc: .NET Activator.CreateInstance
-  crit: notable
-  platforms:
-  - windows
-  for: [pe, csharp]
-  if:
-    type: text
-    substr: Activator.CreateInstance
-- id: dotnet-type-gettype
-  desc: .NET Type.GetType
-  crit: notable
-  platforms:
-  - windows
-  for: [pe, csharp]
-  if:
-    # Anchored: a bare substring also matched `Type.GetTypeCode(typeof(T))`,
-    # a compile-time type-code switch that resolves nothing dynamically.
-    type: text
-    regex: '\bType\.GetType\s*\('
-- id: dotnet-methodinfo-invoke
-  desc: .NET MethodInfo.Invoke
-  crit: notable
-  platforms:
-  - windows
-  for: [pe, csharp]
-  if:
-    type: text
-    substr: MethodInfo.Invoke
 - id: go-plugin-open
   desc: Go plugin.Open dynamic load
-  crit: suspicious
+  crit: notable
   if:
     type: text
     substr: plugin.Open
 - id: go-plugin-lookup
   desc: Go plugin.Lookup
-  crit: suspicious
+  crit: notable
   if:
     type: text
     substr: plugin.Lookup
 - id: go-plugin-symbol
   desc: Go plugin.Symbol
-  crit: suspicious
+  crit: notable
   if:
     type: text
     substr: plugin.Symbol
@@ -109,31 +76,7 @@ composite_rules:
   - id: python-import-chain
   - id: micro-behaviors/process/interpreter/python::dunder-import-call
   unless:
-  - id: well-known/lib/runtime/scripted/python-runtime::python-runtime
-- id: java-load-or-find
-  desc: Java loadClass or findClass
-  crit: component
-  for: [java, class]
-  any:
-  - id: micro-behaviors/data/source/dynamic/reflect::java-loadclass
-  - id: micro-behaviors/data/source/dynamic/reflect::java-findclass
-- id: java-defineclass-dynamic
-  desc: Dynamic class definition from bytecode
-  crit: suspicious
-  conf: 0.95
-  for: [class]
-  all:
-  - id: micro-behaviors/data/source/dynamic/reflect::java-defineclass
-  - id: java-load-or-find
-  any:
-  - id: micro-behaviors/data/source/dynamic/reflect::java-classloader
-  - id: micro-behaviors/data/source/dynamic/reflect::java-class-forname
-  - id: java-protection-domain
-  - id: micro-behaviors/data/embedded/payload/resource::java-getresourceasstream
-  unless:
-  - id: micro-behaviors/data/string/library::javassist
-  - id: well-known/lib/runtime/scripted/mozilla-rhino::rhino-package-class
-  - id: well-known/lib/format/jaxb-runtime::jaxb-runtime-this-class
+  - id: micro-behaviors/process/sync/mutex::cpython-gil-ensure
 - id: java-protection-domain
   desc: Java ProtectionDomain reference
   crit: component
@@ -149,34 +92,19 @@ composite_rules:
   all:
   - id: micro-behaviors/data/embedded/payload/resource::java-getresourceasstream
   - id: micro-behaviors/data/source/dynamic/reflect::java-defineclass
-  - id: java-load-or-find
+  - id: micro-behaviors/metaprogramming/reflection::java-load-or-find
   - id: java-protection-domain
-- id: java-invoke-or-getmethod
-  desc: Java invoke or getMethod
-  crit: component
-  for: [java, class]
-  any:
-  - id: micro-behaviors/data/source/dynamic/reflect::java-method-invoke
-  - id: micro-behaviors/data/source/dynamic/reflect::java-class-getmethod-bytecode
-- id: java-reflective-invoke
-  desc: Reflective method invocation in bytecode
-  crit: notable
-  conf: 0.9
-  for: [class]
-  all:
-  - id: micro-behaviors/data/source/dynamic/reflect::jvm-reflect-method-class-ref
-  - id: java-invoke-or-getmethod
   unless:
-  # The Gradle wrapper's whole job is to download a distribution and invoke
-  # its main reflectively.
-  - id: well-known/tool/development/build/gradle-wrapper::gradle-wrapper-package-class
+  - id: micro-behaviors/metaprogramming/generation::javassist
+  - id: micro-behaviors/metaprogramming/generation::cglib
+  - id: micro-behaviors/metaprogramming/generation::byte-buddy
 - id: java-string-reversal
   desc: String reversal deobfuscation technique
   crit: suspicious
   conf: 0.85
   for: [java, class]
   all:
-  - id: micro-behaviors/data/string/library::java-stringbuilder
+  - id: micro-behaviors/data/string/concat::java-stringbuilder
   - id: java-reverse
   - id: micro-behaviors/data/string/conversion::tostring-token
 # One ordinary reflection call is not evasion: dependency injection, config
@@ -193,17 +121,17 @@ composite_rules:
   - windows
   for: [pe, csharp]
   any:
-  - id: dotnet-assembly-load
+  - id: micro-behaviors/process/interpreter/reflection/resolve::assembly-load-text
   - id: dotnet-assembly-loadfrom
-  - id: dotnet-activator-createinstance
-  - id: dotnet-type-gettype
-  - id: dotnet-methodinfo-invoke
+  - id: micro-behaviors/process/interpreter/reflection/runtime::activator-createinstance-token
+  - id: micro-behaviors/process/interpreter/reflection/resolve::type-gettype-call
+  - id: micro-behaviors/process/interpreter/reflection/dispatch::methodinfo-invoke-text
   unless:
   - id: metadata/binary/resource/
   - id: well-known/tool/reverse-engineering/ilspy::ilspy-component
 - id: go-plugin
   desc: Go plugin dynamic loading
-  crit: suspicious
+  crit: notable
   conf: 0.9
   any:
   - id: go-plugin-open

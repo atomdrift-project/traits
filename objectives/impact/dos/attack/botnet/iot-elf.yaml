@@ -48,6 +48,13 @@ traits:
     if:
       type: text
       word: HTTP2_FLOOD
+  - id: https-flood-attack-label
+    desc: HTTPS_FLOOD attack command label
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      word: HTTPS_FLOOD
 
   # Stripped IoT binaries often omit the symbols that native-flood rules use.
   # Keep this as a high-count vocabulary atom: one protocol label can belong to
@@ -61,24 +68,6 @@ traits:
   # TCP-ACT / TCP-SO on top. Anchoring on the verb keeps the Mirai/Gafgyt mode
   # table (UDP-FLOOD, ACK-FLOOD, TCP-STOMP, DNS-AMP, SYN-BYPASS) and leaves the
   # protocol half open so novel prefixes in future variants still match.
-  - id: native-ddos-mode-vocabulary
-    desc: Native DDoS mode label cluster
-    crit: suspicious
-    conf: 0.96
-    if:
-      type: text
-      regex: '\b[A-Z0-9]{2,8}-(FLOOD|STOMP|AMP|BYPASS)\b'
-    # GCC's control-flow optimizer uses JUMP-BYPASS as an internal diagnostic
-    # label. It is not an attack mode and must not satisfy this vocabulary.
-    not:
-      - exact: JUMP-BYPASS
-      # ByteDance cronet emits the request header X-TT-BYPASS-DP. The matched
-      # span is the TT-BYPASS token inside that header, not a flood-mode verb.
-      - exact: TT-BYPASS
-
-  # Used by compact Mirai-derived clients as the controller-selected plain
-  # UDP flood verb. Unlike generic "udp" vocabulary, this concatenated mode
-  # name has no ordinary protocol meaning.
   - id: udpplain-flood-command
     desc: UDP plain-flood tasking command
     crit: suspicious
@@ -88,30 +77,6 @@ traits:
       type: text
       exact: udpplain
       section: rodata
-
-  - id: source-engine-query-payload
-    desc: Source Engine query payload
-    crit: suspicious
-    conf: 0.94
-    attack: T1498.001
-    if:
-      type: text
-      substr: TSource Engine Query
-    unless:
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      - id: well-known/game/mod::dmtl-linux-mod-tool
-
-  - id: source-engine-query-marker
-    desc: Source Engine query-family payload marker
-    crit: suspicious
-    conf: 0.86
-    attack: T1498.001
-    if:
-      type: text
-      substr: TSource Engine
-    unless:
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      - id: well-known/game/mod::dmtl-linux-mod-tool
 
   - id: xor54-source-engine-query-payload
     desc: XOR-0x54-obfuscated Source Engine query payload
@@ -182,6 +147,32 @@ traits:
       type: text
       regex: 'STOP.{0,200}%15s %63s %d %d|%15s %63s %d %d.{0,200}STOP'
 
+  # Hex bytes, not extracted text: the string extractor drops the GRE run on
+  # packed uClibc builds (it sits between binary attack-table bytes and
+  # never reaches the text corpus), while the adjacent GTCP run extracts
+  # normally. A byte pattern sees both; both labels stay symmetric.
+  - id: gre-flood-status-label
+    desc: GRE flood in-progress status label
+    crit: suspicious
+    conf: 0.98
+    attack: T1498.001
+    if:
+      type: hex
+      section: ".rodata"
+      # "FLOODING GRE"
+      pattern: "46 4C 4F 4F 44 49 4E 47 20 47 52 45"
+
+  - id: gtcp-flood-status-label
+    desc: GTCP flood in-progress status label
+    crit: suspicious
+    conf: 0.98
+    attack: T1498.001
+    if:
+      type: hex
+      section: ".rodata"
+      # "FLOODING GTCP"
+      pattern: "46 4C 4F 4F 44 49 4E 47 20 47 54 43 50"
+
 composite_rules:
   - id: udpplain-c2-flood-bot
     desc: C2-tasked UDP plain-flood bot
@@ -218,8 +209,8 @@ composite_rules:
     attack: T1498.001
     mbc: B0030
     all:
-      - id: native-ddos-mode-vocabulary
-      - id: source-engine-query-payload
+      - id: objectives/impact/dos/attack/flood::native-ddos-mode-vocabulary
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
       - id: metadata/arch/iot::arm
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
@@ -255,7 +246,7 @@ composite_rules:
     mbc: B0030
     platforms: [linux]
     all:
-      - id: source-engine-query-payload
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
       - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
       - id: metadata/arch/iot::exotic-arch
       - id: metadata/binary/linking/static::static-linked-heuristic
@@ -278,13 +269,24 @@ composite_rules:
       - type: trait
         id: micro-behaviors/communications/http/message::http2-preface
 
+  - id: http2-underscore-flood-iot-bot
+    desc: HTTP/2 IoT bot with underscore-named flood tasking
+    crit: hostile
+    conf: 0.99
+    attack: T1498.001
+    mbc: B0030
+    all:
+      - id: udp-flood-attack-label
+      - id: https-flood-attack-label
+      - id: micro-behaviors/communications/http/message::http2-preface
+
   - id: source-query-anti-analysis-ddos-bot
     desc: Source query payload with debugger and CPU checks
     crit: hostile
     conf: 0.98
     attack: T1498.001
     all:
-      - id: source-engine-query-payload
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
       - id: micro-behaviors/os/sysinfo/platform/kernel::ptrace-debugger
       - id: micro-behaviors/os/sysinfo/cpu::sys-devices
     any:
@@ -300,7 +302,7 @@ composite_rules:
     attack: T1498.001,T1082,T1106
     mbc: B0030
     all:
-      - id: source-engine-query-marker
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: micro-behaviors/os/sysinfo/cpu::sys-devices
       - id: micro-behaviors/fs/proc/system::system-stat
       - id: micro-behaviors/process/create/direct::arm-eabi-execve
@@ -309,17 +311,18 @@ composite_rules:
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
-  - id: source-query-arm-cipher-ddos-bot
-    desc: Static ARM Source-query bot with stream-cipher support
+  - id: source-query-cipher-ddos-bot
+    desc: Static Source-query bot with stream-cipher support
     crit: hostile
     conf: 0.99
     attack: T1498.001,T1027
     mbc: B0030
     all:
-      - id: source-engine-query-marker
-      - id: metadata/arch/iot::arm
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: metadata/binary/linking/static::elf-needed-libs-zero
+    any:
       - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha-salsa-constant
+      - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha20-block-constant-native
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
@@ -330,7 +333,7 @@ composite_rules:
     attack: T1498.001,T1106
     mbc: B0030
     all:
-      - id: source-engine-query-marker
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: metadata/arch/iot::mips
       - id: metadata/binary/linking/static::elf-needed-libs-zero
       - id: objectives/lateral-movement/brute-force/iot-creds::iot-default-credential-token-cluster
@@ -341,19 +344,27 @@ composite_rules:
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
-  - id: xor54-source-query-mips-ddos-bot
-    desc: Static MIPS watchdog bot with an encoded Source-query flood payload
+  # The XOR-0x54 string table (VSE payload, /proc/net/tcp, watchdog paths)
+  # is shared by every architecture build of the same Mirai fork, so the
+  # architecture is carried only by which direct-socket syscall atom fires:
+  # a MIPS-only form left the PowerPC build of the same bot without it.
+  - id: xor54-source-query-static-ddos-bot
+    desc: Static watchdog bot with encoded VSE flood
     crit: hostile
     conf: 0.99
-    attack: T1016,T1498.001,T1106
+    attack: T1498.001,T1106
     mbc: B0030
     all:
       - id: xor54-source-engine-query-payload
-      - id: metadata/arch/iot::mips
       - id: metadata/binary/linking/static::elf-needed-libs-zero
-      - id: micro-behaviors/communications/socket/syscall::mips-direct-network-syscalls
-      - id: micro-behaviors/fs/proc/info/path::proc-net-tcp-xor
       - id: micro-behaviors/fs/path/device/special::watchdog-device
+    any:
+      - id: micro-behaviors/communications/socket/syscall::mips-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::ppc-socketcall-network-io
+      - id: micro-behaviors/communications/socket/syscall::arm-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::arm-oabi-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::nios2-network-io-syscalls
+      - id: micro-behaviors/communications/socket/syscall::m68k-socketcall-wrapper
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
@@ -364,7 +375,7 @@ composite_rules:
     attack: T1498.001,T1059
     mbc: B0030
     all:
-      - id: source-engine-query-marker
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: metadata/binary/linking/static::elf-needed-libs-zero
       - id: micro-behaviors/fs/path/device/terminal::dev-ptmx
       - id: micro-behaviors/os/random/crypto::urandom
@@ -382,7 +393,7 @@ composite_rules:
     attack: T1498.001,T1027
     mbc: B0030
     all:
-      - id: source-engine-query-marker
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: metadata/binary/linking/static::elf-needed-libs-zero
       - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha-salsa-constant
       - id: micro-behaviors/fs/path/device/terminal::dev-ptmx
@@ -403,7 +414,7 @@ composite_rules:
     crit: suspicious
     conf: 0.96
     any:
-      - id: source-engine-query-payload
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
       - id: source-engine-query-xor18
       - id: xor07-source-engine-query-payload
       - id: xor29-source-engine-query-payload
@@ -428,12 +439,32 @@ composite_rules:
     attack: T1498.001
     mbc: B0030
     all:
-      - id: native-ddos-mode-vocabulary
+      - id: objectives/impact/dos/attack/flood::native-ddos-mode-vocabulary
       - id: metadata/arch/iot::arm
       - id: metadata/binary/linking/static::elf-needed-libs-zero
       - id: well-known/lib/native/uclibc::static-uclibc-string-tables
       - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-network-syscalls
       - id: micro-behaviors/communications/ip/literal::external-ipv4-host-literal-binary
+  # Stripped static MIPS builds that dial out with raw socket syscalls and
+  # retain a /bin/sh path match many IoT botnet droppers even when they omit
+  # Mirai credential tables, Source-query markers, or watchdog strings.
+  - id: static-mips-syscall-network-iot-bot
+    desc: Static stripped MIPS IoT bot with raw socket syscalls
+    crit: hostile
+    conf: 0.97
+    attack: T1071,T1106
+    mbc: B0030
+    platforms: [linux]
+    arch: [mips]
+    all:
+      - id: metadata/arch/iot::mips
+      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: metadata/hardening/missing::stripped-binary
+      - id: micro-behaviors/communications/socket/syscall::mips-socket-operation
+      - id: micro-behaviors/os/syscall/raw::mips-direct-syscall-instruction
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+    unless:
+      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   - id: mirai-iot-ddos-bot
     desc: Mirai IoT bot with DDoS and raw-IP control
     crit: hostile
@@ -454,12 +485,13 @@ composite_rules:
     platforms: [linux]
     all:
       - id: metadata/arch/iot::mips
-      - id: objectives/persistence/system/service/systemd::native-unit-authoring
+      - id: micro-behaviors/os/service/unit-field::native-unit-template
     any:
       - id: xor29-source-engine-query-payload
       - id: xor07-source-engine-query-payload
-      - id: source-engine-query-payload
-
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
+    unless:
+      - id: source-query-mips-syscall-ddos-bot
   - id: persistent-arm-source-query-bot
     desc: Persistent ARM IoT bot with encoded Source-query flood payload
     crit: hostile
@@ -471,7 +503,7 @@ composite_rules:
       - id: xor29-source-engine-query-payload
       - id: metadata/arch/iot::arm
       - id: micro-behaviors/communications/socket/syscall::arm-direct-network-syscalls
-      - id: objectives/persistence/system/service/systemd::native-unit-authoring
+      - id: micro-behaviors/os/service/unit-field::native-unit-template
 
   - id: xor18-source-query-shell-ddos-bot
     desc: XOR18 Source-query shell DDoS bot
@@ -499,7 +531,7 @@ composite_rules:
     all:
       - id: objectives/discovery/system/fingerprint/network::speedtest-bandwidth-profiling
     any:
-      - id: source-engine-query-payload
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
       - id: source-engine-query-xor18
       - id: objectives/impact/dos/gaming-platform::gaming-platform-ddos
       - id: micro-behaviors/os/firewall/iptables::iptables-accept-dport
@@ -518,8 +550,8 @@ composite_rules:
     conf: 0.96
     all:
       - id: target-port-duration-format
-      - id: objectives/command-and-control/botnet/iot::bot-heartbeat-endpoint
-      - id: objectives/command-and-control/botnet/iot::bot-command-poll-endpoint
+      - id: objectives/command-and-control/botnet/polling::bot-heartbeat-endpoint
+      - id: objectives/command-and-control/botnet/polling::bot-command-poll-endpoint
     any:
       - id: stop-attack-command
 
@@ -533,7 +565,7 @@ composite_rules:
       - id: iot-ddos-attack-vector-set
       - id: objectives/impact/dos/gaming-platform::gaming-platform-ddos
       - id: micro-behaviors/communications/ip/literal::direct-ip-http-client
-      - id: objectives/command-and-control/dropper/delivery/download::shell-silent-hardcoded-download-staging
+      - id: micro-behaviors/communications/http/download/curl::shell-silent-ip-download
     needs: 3
 
   - id: source-query-rival-service-killer
@@ -544,5 +576,37 @@ composite_rules:
     mbc: B0030
     platforms: [linux]
     all:
-      - id: source-engine-query-marker
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: objectives/impact/degrade/rival-bot/competitor::embedded-bot-rival-killer
+
+  - id: gre-gtcp-flood-status-bot
+    desc: Static ARM bot reporting GRE and GTCP flood status
+    crit: hostile
+    conf: 0.99
+    attack: T1498.001
+    mbc: B0030
+    platforms: [linux]
+    all:
+      - id: gre-flood-status-label
+      - id: gtcp-flood-status-label
+      - id: metadata/arch/iot::arm
+      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: micro-behaviors/fs/path/device/special::watchdog-device
+
+  - id: source-query-watchdog-ddos-bot
+    desc: Source Engine query DDoS bot with watchdog suppression
+    crit: hostile
+    conf: 0.99
+    attack: T1498.001,T1562.001
+    mbc: B0030
+    platforms: [linux]
+    all:
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
+      - id: micro-behaviors/fs/path/device/special::multi-watchdog-device-cluster
+    any:
+      - id: metadata/arch/iot::arm
+      - id: objectives/lateral-movement/brute-force/iot::busybox-applet-probe
+      - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/

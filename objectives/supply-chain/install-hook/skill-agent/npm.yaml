@@ -43,6 +43,11 @@ composite_rules:
   # Bundled skill text is less dangerous than mutable remote instructions, but
   # writing it into an agent's trusted instruction tree during npm install is
   # still an implicit configuration change with no explicit CLI action.
+  # "Bundled" needs a bundle: archive scope otherwise pools an install hook
+  # (native-binary bootstrap), an agent-directory string (a generator's
+  # documented output dir, a bundled UI), and an unrelated copy call (the
+  # native loader) from three different files -- Nx 23.x tripped exactly
+  # that. The archive must actually ship a skill for the hook to write.
   - id: postinstall-writes-bundled-agent-skill
     desc: Install hook writes bundled AI-agent skills
     crit: suspicious
@@ -50,12 +55,13 @@ composite_rules:
     for: [javascript, typescript, package.json, npm]
     scope: archive
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
       - id: micro-behaviors/fs/path/agent-config/directory::ai-agent-skill-install-directory
+      - id: metadata/package/agent-skill::agent-skill-archive-member
     any:
       - id: micro-behaviors/fs/write/file/target::writes-agent-skill-markdown
       - id: micro-behaviors/fs/write/file/target::writes-agent-skill-tree
-      - id: micro-behaviors/fs/file/copy::js-copyfile-sync-import
+      - id: micro-behaviors/fs/file/copy::js-copyfile-sync-call
       - id: micro-behaviors/fs/file/copy::node-cp-sync-call
     unless:
       # A defensive agent sandbox ships its own skill sources and a
@@ -67,10 +73,27 @@ composite_rules:
       - id: well-known/tool/development/agent/ai-cli/pantheon::archive-context
       # Installing shipped skills is expected for a package whose own manifest
       # declares that its purpose is to provide an AI development harness.
-      - id: metadata/package/description/function::description-ai-coding-harness
-      - id: metadata/package/description/function::description-ai-development-tool
+      - id: metadata/package/description/function::agent-tool-purpose-description-context
+      # An AI workflow CLI for an agent harness likewise declares agent
+      # setup as its product behavior.
       # Shared agent-rules scaffolds ship bundled skills and sync them on install.
       - id: metadata/package/scaffold::agent-rules-distribution-context
+      - id: well-known/app/ai/coding-agent/0xray::archive-context
+      - id: well-known/app/ai/coding-agent/novahiz::archive-context
+      - id: great-cto-noop-postinstall-context
+
+  # The npm package's only lifecycle entrypoint is an inert placeholder. Its
+  # separate CLI clones and enables the Claude Code plugin only when invoked.
+  - id: great-cto-noop-postinstall-context
+    desc: great-cto no-op npm lifecycle context
+    crit: exception
+    conf: 0.99
+    for: [javascript, package.json, npm]
+    scope: outer
+    all:
+      - id: well-known/tool/development/agent/ai-cli/great-cto::package-name
+      - id: well-known/tool/development/agent/ai-cli/great-cto::postinstall-command
+      - id: well-known/tool/development/agent/ai-cli/great-cto::noop-postinstall-stub
 
   - id: postinstall-registers-ai-agent-skill
     desc: npm install hook registers global AI agent skill
@@ -80,7 +103,7 @@ composite_rules:
     scope: archive
     near_bytes: 12000
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
       - id: micro-behaviors/process/create/agent::npx-skills-add-global-command-text
     any:
       - id: ai-agent-skill-registration-action
@@ -103,7 +126,7 @@ composite_rules:
     scope: archive
     attack: "T1195.002,T1105"
     all:
-      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
       - id: micro-behaviors/communications/http/request/client::js-fetch-implementation-call
       - id: micro-behaviors/communications/mcp::mcp-client-reads-resources
       - id: micro-behaviors/fs/write/file/target::writes-agent-skill-tree
@@ -117,19 +140,19 @@ composite_rules:
     scope: archive
     attack: "T1195.002,T1105"
     all:
-      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
       - id: micro-behaviors/communications/mcp::mcp-client-authenticated-resource-fetch
       - id: micro-behaviors/fs/write/file/target::writes-agent-skill-tree
       - id: micro-behaviors/fs/path/agent-config/directory::ai-agent-skill-install-directory
 
   - id: postinstall-modifies-global-agent-config
     desc: npm install hook modifies global AI-agent configuration
-    crit: suspicious
+    crit: notable
     conf: 0.98
     for: [javascript, typescript, package.json, npm]
     scope: archive
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
     any:
       # Hook protocol wiring is one spelling; direct writes to a cluster of
       # AI-agent config directories are another (for example Codex's provider
@@ -142,10 +165,13 @@ composite_rules:
       # reads that as an install hook touching global agent config.
       - id: well-known/tool/detection/agent-glovebox::archive-context
       - id: well-known/app/ai/knowledge/context-tree::package-context
-      # A package explicitly described as an AI coding harness is expected to
-      # install its shipped agent configuration and skills.
       - id: metadata/package/description/function::description-ai-coding-harness
+      - id: metadata/package/description/function::description-ai-coding-orchestrator
       - id: metadata/package/description/function::description-ai-development-tool
+      - id: metadata/package/description/function::description-ai-workflow-cli
+      # Documented shell-safety guards may best-effort wire agent hooks via
+      # their own binary rather than writing into ~/.claude or ~/.codex.
+      - id: objectives/supply-chain/install-hook/remote-binary::npm-postinstall-verified-native-binary-bootstrap
       # An installed macOS application bundle is not a package awaiting
       # installation: a scripts.postinstall in a manifest shipped inside a
       # built .app is a development-time leftover no consumer's package
@@ -186,4 +212,11 @@ composite_rules:
       # config while preparing an agent request.  That is not an npm install
       # hook or a supply-chain registration of the consumer's global config.
       - id: objectives/credential-access/dev-tools/ai::mcp-server-install-context
+      - id: metadata/package/description/function::description-claude-code-agent-tool
+      - id: metadata/package/description/function::description-mcp-server
+      - id: well-known/app/ai/coding-agent/amicus::archive-context
+      - id: well-known/app/ai/coding-agent/amicus::claude-register-module
       - id: metadata/package/testing/harness/runtime/
+      # typeset-mcp's explicit install registers its localhost bridge.
+      - id: well-known/app/ai/tool-server/typeset-mcp::official-package
+      - id: well-known/app/ai/coding-agent/karajan-code::archive-context

@@ -20,6 +20,7 @@ traits:
   - id: well-known/app/utility/cmdchamp/
   - id: metadata/file/catalog/identity::linux-ptrace-system-header
   - id: metadata/file/naming::generated-attack-map-context
+  - id: metadata/file/extension/identity::markdown-file-basename
   platforms:
   - linux
   - macos
@@ -30,6 +31,20 @@ traits:
   conf: 0.7
   if:
     type: string_literal
+    substr: PT_DENY_ATTACH
+  unless:
+  - id: well-known/app/ai/coding-agent/localcode::localcode-ai-coding-assistant
+  - id: well-known/app/ai/coding-agent/localcode::debugger-hardening-entrypoint
+  platforms:
+  - macos
+- id: pt-deny-attach-source
+  desc: PT_DENY_ATTACH ptrace anti-debug in source
+  crit: suspicious
+  mbc: B0001.m01
+  conf: 0.85
+  for: [c, cpp, objectivec, swift]
+  if:
+    type: text
     substr: PT_DENY_ATTACH
   unless:
   - id: well-known/app/ai/coding-agent/localcode::localcode-ai-coding-assistant
@@ -67,6 +82,10 @@ traits:
   if:
     type: text
     substr: libmscordaccore.so
+# A trace hook means a debugger or tracer is attached; exiting on it hides
+# the program from dynamic analysis. Both statement and expression forms
+# (`run() if not sys.gettrace() else exit()`) count; the exit must sit inside
+# the gated branch, not merely follow a handler that inspected the hook.
 - id: python-trace-check-abort
   desc: Python debugger check abort branch
   crit: suspicious
@@ -76,13 +95,23 @@ traits:
     type: tree-sitter
     language: python
     query: |
-      (if_statement
-        condition: (_) @condition
-        consequence: (_) @body
-        (#match? @condition "get[_]?trace|\\bf_trace\\b")
-        (#match? @body "_crash|os\\._exit|sys\\.exit|SystemExit"))
+      [
+        (if_statement
+          condition: (_) @condition
+          consequence: (_) @body
+          (#match? @condition "get[_]?trace|\\bf_trace\\b")
+          (#match? @body "_crash|os\\._exit|sys\\.exit|SystemExit|(^|[^.\\w])(exit|quit)\\s*\\("))
+        ((conditional_expression) @expr
+          (#match? @expr "get[_]?trace|\\bf_trace\\b")
+          (#match? @expr "os\\._exit|sys\\.exit|(^|[^.\\w])(exit|quit)\\s*\\("))
+      ]
   unless:
     - id: metadata/build/scaffold::python-unrendered-bootloader-template
+    - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+    - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
+    - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
+    - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
+    - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
 composite_rules:
 - id: overlay-debugger-process-launcher
   for: [pe]
@@ -181,6 +210,18 @@ composite_rules:
   - id: metadata/binary/framework::dotnet-ilasm-coreclr-binary
   - id: metadata/file/string/identity::chrome-crashpad-handler-basename
 
+- id: python-aliased-trace-check-abort
+  desc: Python exits via an aliased debugger check
+  crit: suspicious
+  conf: 0.93
+  for: [python]
+  near_lines: 20
+  all:
+    - id: micro-behaviors/process/debug/detect::python-trace-hook-alias
+    - id: micro-behaviors/process/exit/terminate::python-conditional-exit-expression
+  unless:
+    - id: python-trace-check-abort
+    - id: metadata/build/scaffold::python-unrendered-bootloader-template
 - id: python-multi-platform-anti-debug-abort
   desc: Python multi-platform debugger abort
   crit: hostile

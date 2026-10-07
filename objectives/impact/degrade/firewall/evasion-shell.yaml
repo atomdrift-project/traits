@@ -5,28 +5,6 @@ defaults:
   platforms:
     - unix
 traits:
-  - id: iptables-policy-accept
-    desc: iptables policy set to ACCEPT
-    crit: suspicious
-    conf: 0.95
-    unless:
-      - id: well-known/app/infrastructure/replicated-kurl/
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      - id: objectives/impact/degrade/firewall::openvpn-sample-firewall-script
-      - id: metadata/package/testing/presence/harness::test-directory
-    if:
-      type: text
-      regex: iptables\s+(-P|--policy)\s+(INPUT|OUTPUT)\s+ACCEPT
-  - id: ip6tables-policy-accept
-    desc: ip6tables policy set to ACCEPT
-    crit: suspicious
-    conf: 0.95
-    unless:
-      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-      - id: metadata/package/testing/presence/harness::test-directory
-    if:
-      type: text
-      regex: ip6tables\s+(-P|--policy)\s+(INPUT|OUTPUT)\s+ACCEPT
   - id: ufw-disable
     desc: UFW firewall disabled
     crit: suspicious
@@ -63,6 +41,11 @@ traits:
       - type: text
         regex: '(?i)\b(exclusive[ \t]+scope|firewall_scope.{0,40}exclusive)\b'
       - id: well-known/tool/detection/innerwarden::innerwarden-defensive-tool-context
+      # A script that stops agent processes and removes their /opt install
+      # tree and temp artifacts is uninstalling the tool that installed the
+      # rules -- the same administration workflow in reverse, not degradation
+      # of a host the author does not own.
+      - id: agent-teardown-cleanup-script
     if:
       type: text
       regex: nft\s+flush\s+ruleset
@@ -74,20 +57,42 @@ traits:
       - windows
     if:
       type: text
-      regex: netsh.{0,50}firewall.{0,30}(off|disable)
+      # Match the disable grammar, not the co-occurrence: permission denylists
+      # and docs name "netsh advfirewall" beside other tools' verbs ("ufw
+      # disable"), which a flat span read as a firewall disable.
+      regex: netsh\s+(advfirewall\s+set\s+\S+\s+state\s+off|firewall\s+set\s+opmode\s+disable)\b
+    not:
+      # Baseline scanners quote netsh output ("profile off:") when reporting a
+      # disabled firewall, not when issuing a disable command.
+      - regex: 'profile off'
     unless:
-      - id: well-known/app/system/samba::samba-source-tree
+      - id: objectives/impact/degrade/firewall::recognized-firewall-admin-source
       - id: well-known/app/infrastructure/ansible::ansible-collections-wheel-context
-      - id: well-known/app/ai/agent-runtime/aui-agent-builder/
+      - id: metadata/package/tooling::azure-agentbaker-tree
       - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
       # Ansible's win_psexec module documents this command as an EXAMPLE of a
       # task an operator may run remotely; managing the firewall is the point.
       - id: well-known/app/infrastructure/ansible::ansible-module-source-context
-      - id: well-known/app/security/itop-vpn::benign-context
+      - id: recognized-network-management
       - id: well-known/app/system/iobit::advanced-systemcare-component-context
       - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
       - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
 composite_rules:
+  # An uninstall/cleanup script for an installed agent: it stops agent
+  # processes and clears both the tool's /opt install tree and its temp
+  # artifacts. A ruleset flush inside that workflow is the tool removing what
+  # it installed (or handing the ephemeral runner back clean), not an attacker
+  # degrading host protection.
+  - id: agent-teardown-cleanup-script
+    desc: Teardown script removes agent install tree
+    crit: exception
+    conf: 0.95
+    for: [shell]
+    all:
+      - id: micro-behaviors/fs/delete/directory::opt-directory-recursive-delete
+      - id: micro-behaviors/process/terminate/command::pkill
+      - id: micro-behaviors/fs/delete/file/command::delete-rm-hardcoded
+
   # These recognized administration products intentionally own or inspect
   # firewall configuration. Their product identity is valid only as a
   # suppressor for the generic degradation interpretation.
@@ -102,25 +107,12 @@ composite_rules:
       - id: well-known/app/security/itop-vpn::benign-context
       - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-node-provisioning-context
 
-  - id: iptables-policy-accept-any
-    desc: iptables policy set to ACCEPT
-    crit: suspicious
-    conf: 0.95
-    any:
-      - id: iptables-policy-accept
-      - id: ip6tables-policy-accept
-    unless:
-      - id: recognized-network-management
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      - id: metadata/package/testing/presence/harness::test-directory
   - id: firewall-disabled
     desc: System firewall disabled
     crit: suspicious
     conf: 0.95
     mbc: F0004
     any:
-      - id: iptables-policy-accept
-      - id: ip6tables-policy-accept
       - id: ufw-disable
       - id: micro-behaviors/os/firewall/firewalld::firewalld-stop
       - id: nft-flush
@@ -169,11 +161,11 @@ composite_rules:
     platforms: [linux, android]
     for: [elf]
     all:
-      - id: objectives/impact/degrade/firewall::iptables-policy-accept
+      - id: micro-behaviors/os/firewall/iptables::iptables-policy-accept
       - id: micro-behaviors/os/firewall/iptables::iptables-flush-flag
       - id: micro-behaviors/os/firewall/iptables::iptables-delete-chain-flag
       - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
       - id: micro-behaviors/fs/proc/info/path::process-inspection-path-cluster
       - id: micro-behaviors/process/terminate/command::kill-force
-      - id: micro-behaviors/process/enumerate/proc::cpuminer-process-name
-      - id: micro-behaviors/process/enumerate/proc::minerd-process-name
+      - id: micro-behaviors/process/info/name::cpuminer-process-name
+      - id: micro-behaviors/process/info/name::minerd-process-name

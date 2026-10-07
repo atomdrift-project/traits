@@ -50,15 +50,6 @@ traits:
     if:
       type: text
       regex: '(?i)\bnet(\.exe)?\s+stop\s+[''"]?SQLAgent\$VEEAMSQL[A-Za-z0-9_.-]*'
-  - id: sharedaccess-service-name
-    desc: References SharedAccess firewall service
-    crit: notable
-    conf: 0.94
-    platforms: [windows]
-    for: [powershell, pe, python, javascript]
-    if:
-      type: text
-      word: SharedAccess
   - id: sharedaccess-net-service-target
     desc: Net command targets SharedAccess
     crit: notable
@@ -100,21 +91,6 @@ traits:
     downgrade:
       any:
         - id: metadata/binary/installer/family/
-  - id: kill-mysql-stop
-    desc: MySQL service stop command
-    crit: suspicious
-    conf: 0.82
-    if:
-      type: text
-      regex: (?i)\b(systemctl stop|service mysql stop)\b.{0,40}\b(mysql|mysqld)\b
-    unless:
-      - id: metadata/lang/source/
-      - id: metadata/package/testing/presence/harness::python-test-file
-      - id: metadata/package/testing/presence/harness::python-test-file-content
-      - id: well-known/lib/ui/ace-editor
-      - id: sysv-service-lifecycle
-    not:
-      - regex: '(?i)stop:\s+mysql'
   - id: kill-postgres-kill
     desc: PostgreSQL process termination command
     crit: notable
@@ -177,6 +153,9 @@ traits:
     desc: MongoDB process termination command
     crit: suspicious
     conf: 0.5
+    unless:
+      - type: text
+        regex: '\bkillall_mci\b'
     if:
       type: text
       regex: (?i)\b(killall|pkill|taskkill)\b[\s"'`=-]{0,8}[^\n]{0,22}\b(mongod|mongodb)\b
@@ -358,41 +337,13 @@ composite_rules:
       any:
         - id: metadata/binary/installer/family/
 
-  - id: systemd-service-stop-disable
-    desc: Systemd service stop and disable
-    crit: suspicious
-    conf: 0.9
-    platforms: [unix]
-    for: [shell, python, javascript]
-    all:
-      - id: micro-behaviors/os/service/stop::systemctl-stop
-      - id: micro-behaviors/os/service/configure::systemctl-disable
-    unless:
-      - id: well-known/app/system/olares
-      - id: well-known/app/infrastructure/skypilot::skypilot-source-file
-      - id: well-known/dual-use/tunnel/shadowsocks-libev::shadowsocks-libev-source
-      - id: well-known/app/infrastructure/nuzur/
-      - id: well-known/tool/development/ci/osbuild-composer::osbuild-composer-test-script-context
-      - id: metadata/build/package/maintainer-scripts::package-preuninstall-script-path
-      # Stopping the firewalld SERVICE is firewall degradation (T1562.004) and is
-      # already scored under objectives/impact/degrade/firewall/; counting the
-      # same systemctl call again as availability impact (T1489) double-reports.
-      - id: micro-behaviors/os/firewall/firewalld::firewalld-stop
-    # An app (un)installing its OWN service emits the target as a templating
-    # placeholder/variable rather than a hardcoded victim service name. That is
-    # lifecycle management, not impact -> drop suspicious to notable. Referenced
-    # by name so it resolves at the leaf file (survives archive roll-up).
-    downgrade:
-      any:
-        - id: micro-behaviors/os/service/control::systemctl-templated-target
-        - id: metadata/package/files/system-package::dpkg-maintainer-script
   - id: kill-mysql
     desc: MySQL service termination
-    crit: suspicious
+    crit: notable
     conf: 0.6
     any:
       - id: micro-behaviors/process/terminate/command::taskkill-mysql-process
-      - id: kill-mysql-stop
+      - id: micro-behaviors/os/service/stop::mysql-service-stop-command
     unless:
       - id: metadata/lang/source/
       - id: sysv-service-lifecycle
@@ -498,7 +449,7 @@ composite_rules:
     for: [powershell, pe, python, javascript]
     all:
       - id: sc-config-start-disabled
-      - id: sharedaccess-service-name
+      - id: micro-behaviors/os/service/name::sharedaccess-service-name
     any:
       - id: net-stop
       - id: sc-stop

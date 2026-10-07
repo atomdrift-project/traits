@@ -22,7 +22,7 @@ composite_rules:
     scope: leaf
     all:
       - id: metadata/package/files/included::setup-py-basename
-      - id: objectives/command-and-control/dropper/execution/eval::remote-exec-text
+      - id: objectives/command-and-control/dropper/script-eval/response-eval::remote-exec-text
 
   - id: pypi-setup-root-home-file-read
     for: [python, python-sdist]
@@ -55,7 +55,11 @@ composite_rules:
       - id: micro-behaviors/os/env/read::python-os-getenv-call
   - id: setup-code-execution
     desc: Code execution during package installation
-    crit: hostile
+    # A custom install hook may launch a compiler or another fixed build tool.
+    # The hook is notable and deserves review, but subprocess use alone does
+    # not establish a supply-chain backdoor. Remote and concealed payload
+    # shapes are covered by the hostile composites below.
+    crit: suspicious
     conf: 0.95
     attack: "T1195.002"
     mbc: "E1059.006"
@@ -64,18 +68,21 @@ composite_rules:
       - id: metadata/build/package/recipe/setup-hooks::setuptools-run-override
     any:
       # Direct execution
-      - id: micro-behaviors/process/interpreter/python::exec-builtin
-      - id: micro-behaviors/process/interpreter/python::eval-builtin
-      - id: micro-behaviors/process/interpreter/python::compile-builtin
+      - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
+      - id: micro-behaviors/process/interpreter/eval/direct::eval-builtin
+      - id: micro-behaviors/process/interpreter/eval/compile::compile-builtin
       # Process creation
       - id: micro-behaviors/process/create/subprocess::process-execution
       # Obfuscated execution
-      - id: objectives/anti-static/obfuscation/eval/scripting::builtins-obfuscation
+      - id: objectives/anti-static/obfuscation/eval/scripting/reflection::builtins-obfuscation
     downgrade:
-      # Legitimate setup.py may check versions with eval
+      # Legitimate setup.py may check versions with eval or drive a build toolchain
       any:
         - id: metadata/package/testing/
         - id: metadata/signed/platform/
+        - id: micro-behaviors/process/create/shell/build::make-toolchain-invocation
+        - id: micro-behaviors/process/create/shell/build::make-toolchain-shell-format
+        - id: micro-behaviors/process/create/shell/build::build-script-toolchain-invocation
   - id: pypi-encoded-install-subprocess-dropper
     for: [python, python-sdist]
     desc: PyPI install executes base64-encoded subprocess hook
@@ -96,7 +103,7 @@ composite_rules:
     scope: outer
     all:
       - id: setup-code-execution
-      - id: objectives/anti-static/obfuscation/eval/scripting::python-decode-decrypt-dynamic-exec
+      - id: objectives/anti-static/obfuscation/eval/scripting/decode::python-decode-decrypt-dynamic-exec
 
   - id: setup-import-url-fetch
     desc: setup.py fetches a URL while loading
@@ -108,3 +115,21 @@ composite_rules:
     all:
       - id: metadata/build/pip::root-setup-py
       - id: micro-behaviors/communications/http/request/client::python-column0-requests-get
+
+  # setup-code-execution above only catches a setuptools cmdclass override.
+  # The common real shape is a top-level `exec(zlib.decompress(b64decode(...)))`
+  # in the setup.py body (Deep-Live-Cam), which runs during metadata resolution
+  # and sdist build before any consumer import. Pairing the setup.py build entry
+  # with an exec of a decompressed/decoded blob detects that install-time
+  # detonation without assuming a package name, endpoint, or verb.
+  - id: setup-py-executes-packed-blob
+    desc: setup.py executes a concealed packed payload
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1059.006,T1027
+    mbc: "E1059.006,B0024"
+    scope: file
+    for: [python, python-sdist]
+    all:
+      - id: metadata/build/pip::root-setup-py
+      - id: objectives/anti-static/obfuscation/payload/code-in-data::decompressed-code-executed

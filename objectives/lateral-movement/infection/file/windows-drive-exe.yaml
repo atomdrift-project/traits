@@ -8,14 +8,6 @@ defaults:
   size_max: 20971520
 
 traits:
-  - id: skip-program-files-dir
-    desc: Skips Program Files during file walk
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      regex: '(?i)\\program files(\s*\(x86\))?\\'
-      section: ".rdata"
 
   - id: skip-recycle-bin-dir
     desc: Skips Recycle Bin during file walk
@@ -41,7 +33,7 @@ composite_rules:
     crit: hostile
     conf: 0.97
     all:
-      - id: objectives/anti-static/obfuscation/payload/self-read::self-read-file-import-chain-ansi
+      - id: micro-behaviors/fs/read/file/handle::ansi-module-path-file-io-import-set
       - id: micro-behaviors/fs/traversal/drives::get-logical-drives-text
       - id: micro-behaviors/fs/traversal/drives::get-drive-type
       - id: micro-behaviors/fs/enumerate/directory::find-file-walker
@@ -50,12 +42,12 @@ composite_rules:
       - id: micro-behaviors/fs/read/file/handle::read-file
       - id: micro-behaviors/fs/write/file/handle::write-file
     any:
-      - id: skip-program-files-dir
+      - id: micro-behaviors/fs/path/system::program-files-dir-path
       - id: skip-recycle-bin-dir
       - id: skip-system-volume-info-dir
     needs: 2
     unless:
-      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft
       - id: metadata/signed/leaf::microsoft-corporation
       - id: metadata/binary/installer/family/
 
@@ -66,9 +58,30 @@ composite_rules:
     all:
       - id: objectives/impact/infect/terms::computer-done-for-taunt
       - id: micro-behaviors/process/create/exec::shell-execute-a
-      - id: metadata/file/string/process-name::notepad-exe-name
+      - id: micro-behaviors/process/info/name::notepad-exe-name
       - id: metadata/binary/layout/overlay::overlay-over-30pct
       - id: metadata/binary/layout/ratio::multiple-pe-embedded
     unless:
-      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft
       - id: metadata/signed/leaf::microsoft-corporation
+
+  # Worm-style staging without an executable mask or self-read: enumerate
+  # fixed drives with the extended find APIs, write out payload files, and
+  # reset their timestamps so the fresh drops blend in. No legitimate
+  # installer, backup tool, or signed system binary does all four at once.
+  - id: drive-walker-timestomp-stager
+    desc: Drive walker stages timestomped files
+    crit: hostile
+    conf: 0.96
+    attack: T1091,T1070.006
+    all:
+      - id: micro-behaviors/fs/traversal/drives::get-logical-drives-text
+      - id: micro-behaviors/fs/enumerate/directory::find-file-walker-wide-ex
+      - id: micro-behaviors/fs/file/timestamp::set-file-time
+      - id: micro-behaviors/fs/write/file/handle::write-file
+    unless:
+      - id: metadata/signed/platform::microsoft
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/binary/installer/family/
+      # API provider DLLs export every leg; they implement, not stage.
+      - id: micro-behaviors/fs/file/timestamp::export-set-file-time

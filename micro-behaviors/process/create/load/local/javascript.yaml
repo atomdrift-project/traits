@@ -28,16 +28,6 @@ traits:
     if:
       type: text
       regex: "require\\s*\\(\\s*['\"][^'\"]{1,60}/selector-parser['\"]\\s*\\)"
-  - id: cjs-local-require-call
-    desc: CommonJS local-module require call
-    crit: notable
-    if:
-      type: symbol
-      kind: call
-      exact: require
-      arg:
-        kind: string
-        regex: '^\./[^"'']{1,80}$'
   - id: try-local-require-catch-text
     desc: Source text contains a try-wrapped local require
     crit: notable
@@ -82,11 +72,30 @@ traits:
     desc: Top-level method call on require result
     crit: notable
     if:
-      type: text
-      regex: '(?m)^\s*(const|let|var)\s+\w+\s*=\s*require\s*\(.{1,80}\)\s*;?[ \t]*\n[ \t]*\w+\.\w+\s*\('
-    not:
-      - substr: 'Object.defineProperty'
-      - substr: '__createBinding'
+      # The receiver must be the variable the require was assigned to: a
+      # bare `word.word(` on the next line also matches unrelated calls
+      # such as `console.warn(`. Text regexes cannot bind the two
+      # identifiers (no backreferences), so this uses a tree-sitter query
+      # with (#eq?) instead.
+      type: tree-sitter
+      query: |
+        (program
+          [(lexical_declaration
+             (variable_declarator
+               name: (identifier) @recv
+               value: (call_expression
+                 function: (identifier) @req_function)))
+           (variable_declaration
+             (variable_declarator
+               name: (identifier) @recv
+               value: (call_expression
+                 function: (identifier) @req_function)))]
+          (expression_statement
+            (call_expression
+              function: (member_expression
+                object: (identifier) @recv_obj)) @method_call)
+          (#eq? @req_function "require")
+          (#eq? @recv @recv_obj))
   - id: top-level-require-immediate-call
     desc: Immediate method call on require result
     crit: notable
@@ -100,6 +109,18 @@ traits:
     if:
       type: text
       regex: '(?m)^\s*\(\s*require\s*\(.{1,80}\)\s*\)\s*\('
+  # `load("name", JSON.stringify(x))?.name(...)`: a helper fetches a named
+  # module using serialized caller data as its second argument, then calls a
+  # method on whatever came back. matrix-ops-core passes the matrix a caller
+  # hands to solve() as the password of an encrypted module, so the payload
+  # only exists for the one input its author chose.
+  - id: json-keyed-named-lookup-call
+    desc: Invokes named-lookup result keyed by JSON input
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '\w\(\s*["''][\w-]{2,40}["'']\s*,\s*JSON\.stringify\([\s\S]{0,120}?\)\s*\)\s*\?\.\s*\w+\('
 
 composite_rules:
   - id: cjs-caught-local-require
@@ -108,7 +129,7 @@ composite_rules:
     conf: 0.96
     near_lines: 2
     all:
-      - id: cjs-local-require-call
+      - id: micro-behaviors/os/module/require::cjs-local-require-call
       - id: try-local-require-catch-text
   # A local require guarded by try/catch with a swallowed error is common,
   # ordinary defensive coding (optional postinstall prompts, platform-specific
@@ -132,5 +153,5 @@ composite_rules:
     near_bytes: 1024
     all:
       - id: micro-behaviors/ui/window/insert-html::browser-create-script-element
-      - id: micro-behaviors/ui/window/dom-access::dom-template-text-assignment
-      - id: micro-behaviors/ui/window/dom/tree::browser-append-child
+      - id: micro-behaviors/data/collection/dom::dom-template-text-assignment
+      - id: micro-behaviors/data/collection/dom::append-child-reference

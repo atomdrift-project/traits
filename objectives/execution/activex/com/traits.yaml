@@ -49,10 +49,10 @@ traits:
     attack: T1027
   - id: activex-object-aliased-constructor
     desc: ActiveXObject via local alias
-    crit: suspicious
+    crit: notable
     conf: 0.95
-    # JScript can hide the COM constructor itself by assigning ActiveXObject
-    # to a generated local name before invoking that name with a decoded ProgID.
+    # Aliasing the COM constructor is useful triage context, but is not hostile
+    # by itself; composites add decoded ProgIDs or hidden execution behavior.
     if:
       type: text
       regex: '\b\w+\s*=\s*ActiveXObject\s*;'
@@ -80,16 +80,18 @@ traits:
       regex: '(?is)\b\w+\s*\.\s*Run\s*\([^)]{1,100},\s*\(1\+-1\),\s*\w+\s*\)'
     attack: T1059.007
   - id: activex-indirect-environment-staging
-    desc: Obfuscated COM default staging
+    desc: COM default-property staging assignment
     crit: notable
     conf: 0.95
     if:
       type: text
       # JScript COM default-property syntax permits assignments such as
-      # `env("randomName") = encodedChunk`. Require an environment-like
-      # receiver so C++ calls such as boost::python::arg_("name") = value
-      # are not treated as script staging.
-      regex: '\b(env|environment)\s*\(\s*["''][A-Za-z0-9_$]{8,40}["'']\s*\)\s*=\s*[A-Za-z_$]\w*\b'
+      # `env("randomName") = encodedChunk`.  In JavaScript a call-shaped
+      # assignment target is only valid against a COM default property, so
+      # any identifier receiver matches: droppers alias the Environment
+      # object to a generated name before staging.  The quoted 8-40 char
+      # name keeps ordinary short-keyed calls out.
+      regex: '\b[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*["''][A-Za-z0-9_$]{8,40}["'']\s*\)\s*=\s*[A-Za-z_$]'
     attack: T1027,T1059.007
   - id: js-length-bound-string-grow
     desc: Grows string past a length bound
@@ -121,7 +123,7 @@ traits:
     desc: Builds ActiveX ProgID from fragments
     crit: suspicious
     conf: 0.94
-    for: [javascript, html, elixir, scala, ruby]
+    for: [javascript, html, elixir, scala]
     attack: T1027
     if:
       type: text
@@ -150,8 +152,8 @@ composite_rules:
       - id: metadata/file/format/markup::hta-application-element
       - id: objectives/evasion/process/hidden/execution::hidden-hta-window
       - id: micro-behaviors/os/com/automation::activex-object-variable-progid
-      - id: micro-behaviors/data/encode/char-code::fromcharcode-call
-      - id: micro-behaviors/data/source/property/computed::js-computed-call-false-third-argument
+      - id: micro-behaviors/data/decode/charset::fromcharcode-call
+      - id: micro-behaviors/data/control-flow/dispatch::js-computed-call-false-third-argument
       - id: micro-behaviors/process/create/load/remote-code::js-computed-document-member-argument
     near_bytes: 4096
 
@@ -164,7 +166,7 @@ composite_rules:
     for: [javascript]
     all:
       - id: micro-behaviors/data/decode/custom::js-alphabet-coded-decoder-source
-      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-alias-assignment
+      - id: micro-behaviors/process/interpreter/eval/indirect::js-eval-alias-assignment
       - id: micro-behaviors/process/interpreter/jscript::activex-object
       - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
     near_bytes: 16384
@@ -236,7 +238,7 @@ composite_rules:
     # class and then launching an invisible process is the JScript dropper
     # signature; the constructor alternatives cover equivalent alias shapes.
     all:
-      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: micro-behaviors/data/control-flow/dispatch::run-zero-boolean-arguments
     any:
       - id: activex-object-computed-progid
       - id: micro-behaviors/os/com/automation::activex-object-variable-progid
@@ -252,9 +254,12 @@ composite_rules:
     attack: T1027,T1059.001,T1059.007
     all:
       - id: activex-object-aliased-constructor
-      - id: activex-indirect-environment-staging
+      # A single COM default-property assignment is not payload staging. The
+      # cluster requires the many encoded environment entries used as a carrier.
+      - id: micro-behaviors/os/env/modify::encoded-call-assignment-cluster
       - id: micro-behaviors/data/decode/xor::charcode-modulo-key-index
       - id: micro-behaviors/process/info/selfpath::wscript-scriptfullname
+      - id: micro-behaviors/data/control-flow/dispatch::run-zero-boolean-arguments
   - id: wsh-aliased-activex-hidden-runner
     for: [javascript, html]
     desc: Obfuscated ActiveX object launches a hidden child process
@@ -274,7 +279,7 @@ composite_rules:
     all:
       - id: micro-behaviors/process/interpreter/jscript::createobject-call
       - id: micro-behaviors/os/env/modify::wsh-environment-indexed-staging
-      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: micro-behaviors/data/control-flow/dispatch::run-zero-boolean-arguments
       - id: micro-behaviors/process/info/selfpath::wscript-scriptfullname
       # The decoder may terminate in unescape() or in a computed
       # String.fromCharCode() call with an XOR byte mask.
@@ -302,7 +307,7 @@ composite_rules:
     for: [vbs]
     all:
       - id: micro-behaviors/fs/write/content::create-text-file-method-name
-      - id: objectives/command-and-control/dropper/execution/fileless::ps-irm-pipeline-eval
+      - id: objectives/command-and-control/dropper/script-eval/response-pipeline::ps-irm-pipeline-eval
       - id: micro-behaviors/process/create/shell/wsh::shellexecute-method-call
       - id: micro-behaviors/process/create/shell/lang::powershell-keyword
   - id: vbs-obfuscated-com-hidden-powershell
@@ -313,8 +318,8 @@ composite_rules:
     for: [vbs]
     all:
       - id: objectives/anti-static/obfuscation/string/concat::vbs-createobject-concat
-      - id: micro-behaviors/process/create/shell/wsh::hidden-window-run
-      - id: objectives/command-and-control/dropper/execution/wsh::wsh-split-powershell-path
+      - id: micro-behaviors/process/create/hidden::run-zero-style-argument
+      - id: objectives/command-and-control/dropper/file-exec/command/script-host-download::wsh-split-powershell-path
     unless:
       - id: metadata/package/testing/harness/runtime/
   - id: js-obfuscated-activex-savetofile
@@ -326,11 +331,11 @@ composite_rules:
     all:
       - id: micro-behaviors/os/com/automation::activex-object-variable-progid
       - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
-      - id: objectives/anti-static/obfuscation/syntax::js-wscript-bracket-member-access
+      - id: micro-behaviors/data/property/access::wscript-bracket-member-access
     any:
       - id: objectives/anti-static/obfuscation/string/conceal::js-interspersed-question-marks
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
-      - id: micro-behaviors/data/source/property/computed::js-computed-decoder-call-prefix
+      - id: micro-behaviors/data/control-flow/dispatch::js-function-indexed-call-prefix
   - id: wsh-self-reading-xor-file-stager
     desc: WSH script reads itself, decodes content, and stages a hidden command
     crit: hostile
@@ -342,7 +347,7 @@ composite_rules:
       - id: micro-behaviors/fs/read/file/handle::open-text-file-read
       - id: micro-behaviors/data/decode/custom::js-hex-xor-character-decode
       - id: micro-behaviors/fs/write/content::create-text-file-api
-      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: micro-behaviors/data/control-flow/dispatch::run-zero-boolean-arguments
   - id: obfuscated-wsh-payload-write-and-run
     desc: Obfuscated WSH script writes and runs a payload
     crit: hostile
@@ -352,10 +357,10 @@ composite_rules:
     all:
       - id: micro-behaviors/os/com/automation::activex-object-variable-progid
       - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
-      - id: objectives/anti-static/obfuscation/syntax::js-wscript-bracket-member-access
+      - id: micro-behaviors/data/property/access::wscript-bracket-member-access
       - id: micro-behaviors/process/create/shell/wsh::js-run-string-table-token
-      - id: micro-behaviors/data/source/property/computed::js-computed-decoder-call-prefix
-      - id: micro-behaviors/data/source/property/computed::js-arithmetic-falsy-final-flags
+      - id: micro-behaviors/data/control-flow/dispatch::js-function-indexed-call-prefix
+      - id: micro-behaviors/data/control-flow/dispatch::js-arithmetic-falsy-final-flags
   - id: obfuscated-activex-network-payload-stager
     desc: Obfuscated ActiveX download stager
     crit: hostile
@@ -366,9 +371,9 @@ composite_rules:
     all:
       - id: micro-behaviors/data/decode/custom::js-indexof-charat-lookup
       - id: micro-behaviors/process/interpreter/jscript::activex-object-decoder-progid
-      - id: micro-behaviors/data/source/property/computed::js-decoded-false-flag-call
+      - id: micro-behaviors/data/control-flow/dispatch::js-function-indexed-false-flag-call
       - id: micro-behaviors/fs/write/file/stream::js-savetofile-dynamic-path-mode-2
-      - id: micro-behaviors/data/source/property/computed::js-computed-hidden-flag-call
+      - id: micro-behaviors/data/control-flow/dispatch::js-computed-zero-false-call
   - id: wsh-powershell-base64-stager
     desc: WSH writes a Base64-decoded batch payload and runs PowerShell
     crit: hostile
@@ -379,19 +384,21 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/jscript::activex-object
       - id: micro-behaviors/fs/write/file/stream::adodb-stream
       - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run
-      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+      - id: micro-behaviors/process/create/flags::execution-policy-bypass
   - id: wsh-base64-adodb-hidden-dropper
-    desc: WSH decodes Base64, writes an executable, and runs it hidden
+    desc: WSH Base64 decode and hidden process dropper
     crit: hostile
     conf: 0.99
     attack: T1027,T1059.007,T1140,T1564.003
     mbc: B0023,B0032
     for: [javascript, vbs]
     all:
-      - id: micro-behaviors/data/decode/base64::msxml-node-typed-value
-      - id: micro-behaviors/fs/write/stream::adodb-save-to-file
-      - id: micro-behaviors/process/create/shell/wsh::wsh-run-hidden-window-text
+      - id: micro-behaviors/data/property/access::msxml-node-typed-value
       - id: micro-behaviors/process/interpreter/jscript::activex-object
+      - id: micro-behaviors/data/control-flow/dispatch::run-hidden-or-falsy-arguments
+    any:
+      - id: micro-behaviors/fs/write/stream::adodb-save-to-file
+      - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
   - id: activex-unicode-unescape-heap-spray
     desc: ActiveX next to Unicode unescape payload
     crit: hostile
@@ -466,7 +473,7 @@ composite_rules:
     crit: hostile
     conf: 0.95
     attack: T1203,T1027
-    for: [javascript, html, elixir, scala, ruby]
+    for: [javascript, html, elixir, scala]
     all:
       - id: concatenated-activex-progid
       - id: micro-behaviors/process/interpreter/jscript::activex-object

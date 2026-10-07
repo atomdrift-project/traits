@@ -26,6 +26,11 @@ traits:
   # Require the variable name itself to identify a device. A bare variable is
   # not evidence of one: repository tests use names such as `$HASH1FILE` while
   # deliberately corrupting a small regular file with count=1/conv=notrunc.
+  # Canonical variable-device dd trait: absorbs the former
+  # objectives/impact/wipe/disk/dd::shell-dd-zero-variable-device, whose
+  # uppercase-only unbraced pattern matched the same evidence (`of="$DISK"`)
+  # and double-counted one behavior as two suspicious findings. The `\s*`
+  # around `=` preserves its spaced-operand coverage (`of = $DISK`).
   - id: dd-zero-to-device-var
     desc: dd zero-fills device-named shell variable
     crit: suspicious
@@ -33,19 +38,32 @@ traits:
     for: [shell]
     if:
       type: text
-      regex: 'dd\s+if=/dev/zero\s+of=["'']?\$\{?\w*(dev|disk|drive|swap)\w*\}?["'']?'
+      regex: 'dd\s+if=/dev/zero\s+of\s*=\s*["'']?\$\{?\w*(dev|disk|drive|swap)\w*\}?["'']?'
       case_insensitive: true
       not:
         - regex: '\$\{?\w*file\w*\}?'
     unless:
       - id: well-known/tool/detection/agent-glovebox::archive-context
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      # Provisioning swap (`dd ... of="$SWAP"` followed by mkswap/swapon)
+      # formats new swap; a wiper swapoffs and destroys, never formats.
+      - type: text
+        substr: mkswap
+      - id: metadata/package/testing/presence/harness/
       # Early-boot root assembly. dracut's dmsquash-live-root zeroes and
       # recreates the live overlay, OpenWrt's emmc.sh sysupgrade clears the
       # boot partition, and Ubuntu's user-setup-encrypted-swap wipes swap
       # before encrypting it -- destructive by design, on a device the
       # operator selected, at a point where no real root exists yet.
       - id: well-known/tool/sysadmin/initramfs/
+      - id: well-known/app/infrastructure/rook/
+      - type: text
+        substr: '_dd if=/dev/zero'
+      - id: well-known/app/storage/clonezilla/
+      # USB boot-media installers wipe partition prefixes before writing images.
+      - id: well-known/app/utility/ventoy::disk-installer-context
+      # OpenWrt preinit/extroot provisioning formats the device's own
+      # overlay partitions at first boot.
+      - id: micro-behaviors/fs/path/config/system::openwrt-firmware-component-context
 
   # A short loop variable may still hold a device enumerated elsewhere in the
   # script. Keep the write as a component so only the device-target composite
@@ -67,18 +85,6 @@ traits:
     if:
       type: text
       regex: 'xargs\s+.{0,100}dd\s+.{0,100}/dev/u?random'
-
-  - id: lang-mounts-dev-scan
-    desc: Scans mount table for /dev devices
-    crit: notable
-    conf: 0.9
-    for: [scripts, source]
-    if:
-      type: text
-      regex: '/proc/mounts[\s\S]{0,400}/dev/'
-    unless:
-      - id: well-known/app/infrastructure/docker::source-tree
-      - id: well-known/app/infrastructure/docker::docker-source-archive-context
 
   - id: go-openfile-block-dev
     desc: Go OpenFile opens a block device RW
@@ -349,7 +355,7 @@ composite_rules:
     for: [zig]
     near_bytes: 4000
     all:
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
       - id: dd-zero-device-format-source
       - id: micro-behaviors/process/create/direct::zig-child-init
       - id: objectives/command-and-control/dropper/staging/temp::zig-bin-sh-c
@@ -362,7 +368,7 @@ composite_rules:
     scope: file
     near_lines: 80
     all:
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
       - id: dd-zero-device-format-source
       - id: micro-behaviors/process/create/exec::child-process-execution
 
@@ -374,7 +380,7 @@ composite_rules:
     scope: file
     near_lines: 80
     all:
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
       - id: dd-zero-dynamic-output-source
       - id: micro-behaviors/process/create/exec::child-process-execution
 
@@ -389,7 +395,7 @@ composite_rules:
     scope: file
     near_lines: 80
     all:
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
       - id: micro-behaviors/fs/write/file/shell::dd-zero-input-command
       - id: micro-behaviors/process/create/exec::child-process-execution
 
@@ -401,7 +407,7 @@ composite_rules:
     scope: file
     near_lines: 80
     all:
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
       - id: dd-zero-dynamic-device-argv
     any:
       - id: micro-behaviors/process/create/exec::child-process-execution
@@ -426,7 +432,7 @@ composite_rules:
     for: [go]
     near_lines: 40
     all:
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
       - id: micro-behaviors/fs/write/file/shell::go-dd-large-dynamic-output
       - id: micro-behaviors/process/create/exec::child-process-execution
 
@@ -455,20 +461,22 @@ composite_rules:
       - id: micro-behaviors/fs/enumerate/device::block-device-path-enumeration
       - id: micro-behaviors/hardware/block/device::dev-sd
       - id: micro-behaviors/fs/path/device/storage::unix-block-device-path
-      - id: lang-mounts-dev-scan
+      - id: micro-behaviors/fs/proc/mounts::proc-mounts-dev-path-scan
 
   - id: block-device-destructive
     desc: Destructive overwrite of a block device
     crit: suspicious
     conf: 0.9
     unless:
-      # Ginkgo e2e specs are ordinary .go files, so go-test-file misses them.
-      - id: metadata/package/testing/compiled::ginkgo-spec-file
+      # Red-team eval banks quote wipe payloads as labeled test inputs in a
+      # testing corpus (which also covers ginkgo specs and harness paths);
+      # that data is not an executed wipe.
+      - id: metadata/package/testing/
       - id: metadata/file/policy/identity::enforced-dangerous-action-approval
       - id: well-known/tool/detection/ai-guardrail/
+      - id: metadata/package/documentation/source/
     any:
       - id: objectives/impact/wipe/disk/dd::dd-destructive
-      - id: objectives/impact/wipe/disk/dd::shell-dd-zero-variable-device
       - id: dd-zero
       - id: dd-random
       - id: shred-dev
@@ -494,15 +502,14 @@ composite_rules:
     # argument combine into a fictitious disk wipe.
     near_lines: 20
     unless:
-      # Ginkgo e2e specs are ordinary .go files, so go-test-file misses them.
-      - id: metadata/package/testing/compiled::ginkgo-spec-file
-      - id: metadata/package/testing/presence/harness::go-test-file
+      # Red-team eval banks quote wipe payloads as labeled test inputs in a
+      # testing corpus (which also covers ginkgo specs and harness paths);
+      # that data is not an executed wipe.
+      - id: metadata/package/testing/
       - id: well-known/lib/development/waveloom::waveloom-source-archive-context
       - id: metadata/file/policy/identity::enforced-dangerous-action-approval
-      # A README showing the reader how to flash a board is instructions:
-      # u-boot's doc/README.rockchip spells out `dd if=/dev/zero of=/dev/...`
-      # and ships inside QEMU's vendored roms tree.
-      - id: metadata/package/documentation/source::readme-any-basename
+      # Worked examples in documentation:
+      - id: metadata/package/documentation/source/
       # QEMU emulates storage hardware, so its own source opens and
       # overwrites block devices -- subprojects/libvduse/libvduse.c is the
       # userspace block-device backend.
@@ -519,6 +526,9 @@ composite_rules:
       # old GPT/MBR signatures before laying down new Ceph OSD partitions on
       # it. A genuine wiper never repartitions its target afterward.
       - id: micro-behaviors/fs/disk/partition::shell-repartitions-disk
+      # OpenWrt preinit/extroot provisioning formats the device's own
+      # overlay partitions at first boot.
+      - id: micro-behaviors/fs/path/config/system::openwrt-firmware-component-context
     all:
       - id: block-device-target
     any:
@@ -542,7 +552,9 @@ composite_rules:
     crit: hostile
     conf: 0.95
     unless:
+      - id: metadata/package/testing/presence/harness::test-directory
       - id: metadata/file/policy/identity::enforced-dangerous-action-approval
+      - id: well-known/tool/detection/ai-guardrail/
     all:
       - id: block-device-target
       - id: shred-dev
@@ -554,6 +566,7 @@ composite_rules:
     conf: 0.95
     unless:
       - id: metadata/file/policy/identity::enforced-dangerous-action-approval
+      - id: well-known/tool/detection/ai-guardrail/
     all:
       - id: block-device-target
       - id: blkdiscard-dev

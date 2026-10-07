@@ -11,6 +11,17 @@ defaults:
 
 traits:
 
+  # Retain text-level sink evidence for JavaScript carried inside JSON or
+  # command strings; callers that execute asset bytes supply the source link.
+  - id: js-function-ctor-call-text
+    desc: JavaScript Function constructor in source text
+    crit: notable
+    for: [javascript, typescript, json]
+    conf: 0.82
+    if:
+      type: text
+      regex: '\b(new\s+)?Function\s*\('
+
   - id: module-compile-marker
     desc: Node Module._compile runtime-code method
     crit: notable
@@ -33,6 +44,18 @@ traits:
       type: encoded
       encoding: hex
       exact: _compile
+
+  # Obfuscators route Module._compile through a computed call on a fresh
+  # Module instance. Match the constructor plus the two-argument invocation
+  # in text so megabyte ciphertext literals cannot defeat tree-sitter.
+  - id: node-new-module-computed-invocation
+    desc: new Module invoked via bracket notation
+    crit: notable
+    conf: 0.94
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'new Module\s*\(.{0,40}\).{0,800}\[.{0,120}\]\(\s*\w+\s*,\s*\w+\s*\)'
 
   - id: js-async-function-constructor
     desc: JavaScript AsyncFunction compiles code
@@ -120,6 +143,37 @@ traits:
     if:
       type: text
       regex: 'new\s+Function\s*\(\s*[''\"]require[''\"][^\n)]{1,120}\)\s*\(\s*require\s*\)'
+  # Same invocation when the parameter name is itself computed, e.g.
+  # javascript-obfuscator's `new Function(_0xdec(0x2cc4,'k')+'re', code)(require)`:
+  # the literal "require" is gone but the call still hands require to the body.
+  - id: js-function-constructor-any-args-require-invocation
+    desc: Generated function invoked with Node require
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'new\s+Function\s*\([^\n;]{1,200}\)\s*\(\s*require\s*\)'
+  # The parameter name is assembled (`decoder() + "re"`) so the literal
+  # `require` form above never sees it. The call still passes Node's require.
+  - id: js-function-constructor-split-require
+    desc: Builds require param then calls it
+    crit: suspicious
+    conf: 0.96
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'new\s+Function\s*\(.{0,160}\+\s*[''\"]re[''\"]\s*,.{0,40}\)\s*\(\s*require\s*\)'
+  # `new(decoder())(param, body)(require)` — Function itself is a decoded
+  # value, so the `new Function` spelling never appears.
+  - id: js-computed-constructor-require-call
+    desc: Computed constructor invoked with require
+    crit: suspicious
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'new\s*\([^;]{0,120}\)\s*\([^;]{0,80}\)\s*\(\s*require\s*\)'
   - id: js-function-constructor-commonjs-wrapper
     desc: Function constructor takes CommonJS parameters
     crit: notable
@@ -128,6 +182,14 @@ traits:
     if:
       type: text
       regex: 'new\s+Function\s*\(\s*[''"]require[''"]\s*,\s*[''"]module[''"]\s*,\s*[''"]exports[''"]'
+  - id: js-commonjs-synthetic-module-run
+    desc: Function runs via synthetic module object
+    crit: notable
+    conf: 0.94
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\{\s*exports:\s*\{\s*\}\s*\}[\s\S]{0,120}\w+\s*\(\s*\w+\s*,\s*\w+\s*,\s*\w+\.exports\s*\)'
   - id: js-function-constructor
     desc: Constructs a JavaScript function dynamically
     crit: notable
@@ -190,6 +252,66 @@ traits:
     unless:
       - id: metadata/build/minifier::js-large-minified-bundle
 
+  # The Function-constructor signature without the word `Function`: an
+  # alias called with an empty parameter list string and a body, whose
+  # result is called at once -- `v8('', x8)(...)`. The alias is usually
+  # fetched as a computed member (`fn[decoded]`) so neither `Function` nor
+  # `constructor` survives as a literal. A curried helper taking `''` first
+  # is possible, so this stays notable; obfuscation around it decides intent.
+  - id: js-empty-param-constructor-invoke
+    desc: Alias called as Function('', body)()
+    conf: 0.8
+    if:
+      type: text
+      regex: '\b[\w$]{1,24}\(\s*(''''|"")\s*,\s*[\w$]{1,24}\s*\)\s*\('
+
+  # Two fragments of the Function-constructor bootstrap that never writes
+  # `Function`: the constructor is fetched through a computed index on the
+  # decoder function (`var ctor = fn[decoded]` -- the index decodes to
+  # "constructor"), the empty parameter list lives in a variable
+  # (`var param = '';`), the fetched value is copied to a second alias
+  # (`var alias = ctor;`) and that alias is called as `alias(param,
+  # fn(encoded))` so the body arrives as a decoder call. Emitted by stagers
+  # whose whole script is a seeded string-shuffle decoder; the composite
+  # below re-joins the fragments and obfuscation composites add intent.
+  - id: js-index-fetch-empty-string
+    desc: Computed-index assignment near empty string
+    crit: component
+    conf: 0.9
+    for: [javascript, typescript, html]
+    if:
+      type: text
+      regex: '=\w+\[\w+\];[^;]{0,80}?(''|\"\");'
+  - id: js-alias-copy-builder-call
+    desc: Identifier copy precedes two-argument call
+    crit: component
+    conf: 0.9
+    for: [javascript, typescript, html]
+    if:
+      type: text
+      regex: '=\w+;[^;]{0,80}?\w+\(\w+,\w+\('
+
+  - id: js-function-then-require-call
+    desc: Builds a function then passes require
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'new\s+Function\s*\([^;]{0,80}\)\s*;[^;]{0,60}\(\s*require\s*\)'
+  - id: js-dom-event-handler-variable-code
+    desc: DOM event handler executes variable code
+    conf: 0.97
+    attack: T1059.007
+    if:
+      # setAttribute("onchange", code) asks the browser to compile the second
+      # argument as JavaScript. Match a parsed call so comments and examples
+      # cannot stand in for execution.
+      type: tree-sitter
+      language: javascript
+      kind: call
+      regex: '\.setAttribute\s*\(\s*["'']on[a-z]{3,20}["'']\s*,\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\)'
+
 composite_rules:
   - id: js-async-function-variable-code
     desc: AsyncFunction compiles variable-supplied code
@@ -200,3 +322,19 @@ composite_rules:
     all:
       - id: js-async-function-constructor-alias
       - id: js-asyncfunction-code-variable
+
+  # Re-joins the two fragments of the computed-index Function-constructor
+  # bootstrap described above: index fetch + empty parameter list, then the
+  # alias copy and the two-argument builder call whose body argument is a
+  # decoder call. Each fragment alone is ordinary code; the chain within one
+  # small window is the obfuscator spelling of `Function('', decodedBody)`.
+  - id: js-computed-index-constructor-build
+    desc: Computed-index alias builds decoded function
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript, html]
+    attack: T1059.007
+    near_bytes: 256
+    all:
+      - id: js-index-fetch-empty-string
+      - id: js-alias-copy-builder-call

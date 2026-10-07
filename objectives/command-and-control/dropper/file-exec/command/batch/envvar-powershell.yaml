@@ -1,0 +1,104 @@
+defaults:
+  attack: "T1027, T1059.001, T1105"
+  platforms: [windows]
+  for: [batch]
+
+traits:
+  - id: short-env-cmd-fragments
+    desc: Short envvar cmd fragments
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)%![A-Z0-9]%m\^%![A-Z0-9]%'
+
+  - id: short-env-powershell-fragments
+    desc: Short envvar PowerShell fragments
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)o\^w\^%![A-Z0-9]%r\^sh'
+
+  - id: short-env-downloadstring
+    desc: Short envvar DownloadString
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)oa\^%![A-Z0-9]%S\^tri\^%![A-Z0-9]%'
+
+  - id: short-env-iex
+    desc: Short envvar IEX fragment
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\^I\^%![A-Z0-9]%X\^'
+
+  - id: batch-ps1-url-assignment
+    desc: Batch assigns PS1 URL
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)set\s+[A-Z0-9_!]{4,}\s*=\s*''?https?://.{1,60}\.Ps1''?'
+  - id: batch-powershell-web-download
+    desc: Batch PowerShell downloads from the web
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)powershell(\.exe)?\s+-command.{0,20}Invoke-WebRequest\b[^\r\n]{0,200}https?://'
+    unless:
+      # Fetching nuget.exe from Microsoft's own CDN is how a .cmd bootstraps
+      # the NuGet CLI before restore; PowerToys' cmdpal NugetWrapper.cmd is
+      # the canonical form. The URL is the whole exemption -- the shape
+      # (download an exe to TEMP and run it) is identical to a dropper's.
+      - id: metadata/package/manager::nuget-org-bootstrap-url
+  # Notable for the same reason as `batch-start-executable-payload` below:
+  # unzipping with PowerShell is what a build script or an app's tool
+  # bootstrapper does. WinMerge 2.16.56 ships two -- Plugins/Commands/
+  # DownloadFiles.bat and Plugins/Commands/Java/java.bat -- that fetch an
+  # optional plugin dependency and expand it into %APPDATA%\WinMerge\Commands.
+  # The dropper claim belongs to `batch-webrequest-archive-executable-dropper`,
+  # which pairs this with the download and the launch.
+  - id: batch-powershell-archive-extract
+    desc: Batch invokes PowerShell to extract an archive
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\bpowershell(\.exe)?\s+-command\s+["'']?\s*Expand-Archive\b'
+
+composite_rules:
+  - id: batch-hidden-policy-bypass-webclient-iex
+    desc: Batch runs a hidden policy-bypassed PowerShell web response
+    crit: hostile
+    conf: 0.98
+    attack: T1059.001,T1105,T1564.003
+    all:
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::webclient-eval-followon
+      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+      - id: micro-behaviors/process/create/flags::powershell-policy-bypass-flag
+    any:
+      - id: micro-behaviors/communications/ip/literal::batch-public-ip-literal
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::downloadstring-cleartext-http-url
+  - id: short-envvar-powershell-downloadstring
+    desc: Short-envvar PowerShell stager
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: short-env-cmd-fragments
+      - id: short-env-powershell-fragments
+      - id: short-env-downloadstring
+      - id: short-env-iex
+      - id: batch-ps1-url-assignment
+  - id: batch-webrequest-archive-executable-dropper
+    desc: Batch downloads, extracts, and launches an executable payload
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: batch-powershell-web-download
+      - id: batch-powershell-archive-extract
+      - id: micro-behaviors/process/create/shell/command-mode::start-executable-command

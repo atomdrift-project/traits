@@ -13,16 +13,6 @@ defaults:
   attack: T1555.003
   crit: suspicious
 traits:
-  - id: window-dot-ethereum
-    desc: window.ethereum access
-    crit: notable
-    conf: 0.6
-    if:
-      type: text
-      substr: window.ethereum
-    unless:
-      - id: well-known/lib/web/nextjs::next-server-build-path
-      - id: well-known/lib/cloud/supabase::auth-js-web3-module
   - id: window-bracket-ethereum
     desc: window["ethereum"] access
     crit: notable
@@ -110,7 +100,7 @@ traits:
   # constants: drainer kits invoke runmask/newdlocal/checkethereumw as
   # identifiers, which a string-literal matcher never sees.
   - id: runmask-function
-    desc: runmask MetaMask drainer routine
+    desc: runmask drainer-kit routine name
     crit: suspicious
     conf: 0.8
     if:
@@ -119,7 +109,7 @@ traits:
     unless:
       - id: metadata/lang/source::yara-rule-source
   - id: newdlocal-function
-    desc: newdlocal wallet drainer routine
+    desc: newdlocal drainer-kit routine name
     crit: suspicious
     conf: 0.8
     if:
@@ -128,7 +118,7 @@ traits:
     unless:
       - id: metadata/lang/source::yara-rule-source
   - id: checkethereumw-function
-    desc: checkethereumw drainer probe routine
+    desc: checkethereumw drainer-kit probe name
     crit: suspicious
     conf: 0.8
     if:
@@ -146,15 +136,13 @@ traits:
     unless:
     - id: well-known/lib/development/vscode-webview::acquire-vscode-api
     - id: metadata/build/
-  - id: set-approval-for-all
-    desc: NFT setApprovalForAll method invocation
-    conf: 0.85
-    crit: suspicious
-    if:
-      type: text
-      regex: '\.\s*setApprovalForAll\s*\('
-    unless:
-      - id: well-known/lib/crypto/
+  # `setApprovalForAll` itself moved to
+  # micro-behaviors/data/transaction/authorize/ : the blanket-approval call is
+  # a neutral ERC-721/1155 protocol verb (every marketplace and wrapper
+  # performs it -- the official ENS deploy tasks approve their own NameWrapper,
+  # for one), so its invocation is notable capability evidence, not a
+  # credential-access claim. Drainer weight comes from converging it with a
+  # second independent indicator below.
   - id: xsdk-main-bootstrap
     desc: XSDK bootstrap entrypoint call
     crit: suspicious
@@ -196,7 +184,7 @@ composite_rules:
     crit: notable
     conf: 0.75
     any:
-      - id: window-dot-ethereum
+      - id: micro-behaviors/communications/blockchain/client::window-ethereum-reference
       - id: window-bracket-ethereum
   - id: ethereum-request
     desc: Ethereum wallet request API
@@ -221,7 +209,8 @@ composite_rules:
       - id: erc20-approve
       - id: erc20-transfer
       - id: erc20-transferFrom
-      - id: set-approval-for-all
+      - id: micro-behaviors/data/transaction/authorize::erc721-set-approval-for-all-call
+      - id: micro-behaviors/data/transaction/authorize::erc721-set-approval-for-all-selector
   - id: drainer-function-names
     desc: Suspicious wallet drainer function names
     conf: 0.9
@@ -244,24 +233,36 @@ composite_rules:
       - id: function-drain
       - id: function-steal
       - id: function-grab
+  # One indicator is not a drainer signal: a blanket approval call or a
+  # max-uint constant appears in every marketplace SDK and contract-admin
+  # script. Require two independent indicators to converge.
   - id: drainer-indicator
-    desc: Wallet drainer indicators
+    desc: Converging wallet drainer indicators
     conf: 0.85
     any:
       - id: drainer-function-names
       - id: max-uint256-approval
-      - id: set-approval-for-all
+      - id: micro-behaviors/data/transaction/authorize::erc721-set-approval-for-all-call
+      - id: micro-behaviors/data/transaction/authorize::erc721-set-approval-for-all-selector
+    needs: 2
     unless:
-  - id: wallet-connect-bootstrap
-    desc: External wallet drainer bootstrap
-    crit: suspicious
-    conf: 0.96
-    all:
-      - id: jsdelivr-jh5o-loader
-      - id: xsdk-assignment
+  - id: xsdk-bootstrap-signal
+    desc: XSDK bootstrap call or wallet-connect config
+    crit: notable
+    conf: 0.9
     any:
       - id: xsdk-main-bootstrap
       - id: xsdk-wallet-connect-fragment
+  - id: wallet-connect-bootstrap
+    desc: External XSDK wallet-connect bootstrap
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: xsdk-assignment
+      - id: xsdk-bootstrap-signal
+    any:
+      - id: jsdelivr-jh5o-loader
+      - id: micro-behaviors/communications/http/url/cdn::jsdelivr-npm-script-url
   - id: solana-wallet-drainer-config
     desc: Encoded Solana wallet drainer config
     crit: hostile

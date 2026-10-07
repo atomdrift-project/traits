@@ -47,15 +47,18 @@ traits:
   - type: value
     path: "scripts.postinstall"
     substr: "--transpile-only"
-- id: postinstall-runs-init-js
-  desc: postinstall runs init.js
-  crit: suspicious
-  conf: 0.96
+- id: preinstall-runs-shell-local-script
+  desc: preinstall runs local shell script
+  crit: notable
+  conf: 0.95
   attack: "T1195.002"
   if:
     type: value
-    path: "scripts.postinstall"
-    exact: "node init.js"
+    path: "scripts.preinstall"
+    regex: "^(bash|sh)\\s+(\\./)?[A-Za-z0-9_./-]{1,120}\\.sh$"
+  unless:
+  - id: metadata/package/files/dependency::node-modules-path
+  - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
 - id: postinstall-runs-shell-local-script
   desc: postinstall runs local shell script
   crit: suspicious
@@ -65,14 +68,6 @@ traits:
     type: value
     path: "scripts.postinstall"
     regex: "^(bash|sh)\\s+(\\./)?[A-Za-z0-9_./-]{1,120}\\.sh$"
-  unless:
-  - id: metadata/package/files/dependency::node-modules-path
-  - type: value
-    path: "name"
-    exact: "civicrm"
-  - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
-  - id: well-known/lib/runtime/scripted/electron::electron-webpack-main-entrypoint
-  - id: well-known/tool/development/vscode-extension/antigravity-cockpit::antigravity-cockpit-dev-postinstall-context
 - id: postinstall-node-script-suppressed
   desc: postinstall runs suppressed Node script
   crit: notable
@@ -84,14 +79,6 @@ traits:
     regex: "^node\\s+(\\./)?[A-Za-z0-9_./-]{1,120}\\.(c?js|mjs)\\s*\\|\\|\\s*true$"
   unless:
   - id: metadata/package/files/dependency::node-modules-path
-- id: postinstall-js-file
-  desc: JavaScript file named npm postinstall hook
-  crit: notable
-  conf: 0.84
-  for: [javascript, typescript]
-  if:
-    type: path
-    regex: 'postinstall\.(c?js|mjs)$'
 - id: postinstall-runs-inject-js
   desc: postinstall runs injector script
   crit: suspicious
@@ -103,15 +90,6 @@ traits:
     regex: "^node\\s+(\\./)?scripts/inject\\.(c?js|mjs)$"
   unless:
   - id: metadata/package/files/dependency::node-modules-path
-- id: inject-js-basename
-  desc: JavaScript injector filename
-  crit: notable
-  conf: 0.8
-  for: [javascript, typescript]
-  if:
-    type: path
-    basename: true
-    regex: '(?i)(^|[\\/])inject\.(c?js|mjs)$'
 - id: postinstall-notify-js
   desc: postinstall runs notify.js script
   crit: suspicious
@@ -141,6 +119,12 @@ traits:
     path: "scripts"
     regex: "\"(preinstall|postinstall|install)\":\".{0,220}/\\.[ac-z]"
   unless:
+  # `.config` is a user configuration parent directory, not a hidden target
+  # file. This command copies its own visible Markdown command into OpenCode's
+  # documented user-level command directory.
+  - type: value
+    path: "scripts[*]"
+    regex: '(?i)commands/\*\.md.{0,180}/opencode/command'
   # Build pipelines commonly place generated CSS/assets below a dot-prefixed
   # scratch directory. That is not hidden-payload staging when the same hook
   # creates the directory and invokes a stylesheet/build tool for the output.
@@ -197,7 +181,7 @@ composite_rules:
   scope: outer
   for: [package.json, npm, tar]
   all:
-  - id: postinstall-runs-init-js
+  - id: metadata/package/scripts/lifecycle::postinstall-runs-init-js
   - id: metadata/package/files/package-json::files-array-present
   unless:
   - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
@@ -221,11 +205,12 @@ composite_rules:
   # whose install.js is stripped at build time) would otherwise borrow an
   # unrelated package's files list and read as dead-hook staging.
   all:
-  - id: objectives/supply-chain/install-hook/scripts/hook-file::companion-loader-hook-with-files-list
+  - id: micro-behaviors/os/package-manager/hook-install::bundled-install-script-hook-with-files-list
   unless:
-  - id: objectives/supply-chain/install-hook/scripts/hook-file::hook-script-filename
-  - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
+  - id: metadata/package/files/included::npm-archive-root-companion-loader-member
   - id: metadata/package/files/package-json::files-list-companion-loader
+  - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
+  - id: metadata/file/archive::npm-package-parse-error
 - id: tiny-postinstall-missing-init-js-loader
   desc: Tiny package ships dead postinstall init.js loader
   crit: hostile
@@ -234,7 +219,7 @@ composite_rules:
   all:
   - id: postinstall-missing-init-js-payload
   - id: metadata/package/freeform::pkg-skeleton-small
-  - id: objectives/supply-chain/hidden-payload/staging::no-build-script
+  - id: objectives/supply-chain/hidden-payload/staging/loader::no-build-script
   any:
   - id: metadata/package/dependencies/manifest/presence::npm-no-runtime-dependencies
   - id: metadata/package/dependencies/manifest/presence::npm-no-deps-at-all
@@ -261,7 +246,7 @@ composite_rules:
   attack: "T1552.004"
   mbc: "E1552"
   all:
-  - id: objectives/supply-chain/install-hook/scripts/declaration::has-postinstall
+  - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
   - id: objectives/supply-chain/install-hook/scripts/credential::postinstall-ssh-key-dump-pipeline
   any:
   - id: micro-behaviors/fs/path/private-key::keys
@@ -282,15 +267,107 @@ composite_rules:
   - id: well-known/app/ai/coding-agent/omnius/
   # A request body upgrades this preparatory callback shape to the bundled
   # install-hook host-profile beacon.
-  - id: micro-behaviors/communications/http/request/client::node-http-request-stream-body
+  - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
 
-- id: postinstall-webhook-notify
-  desc: postinstall notify script posts to webhook.site
+- id: preinstall-shell-obfuscated-curl-exfil
+  desc: Preinstall shell script obfuscated curl POST exfil
   crit: hostile
   conf: 0.97
   attack: "T1195.002,T1041"
-  for: [package.json, javascript, zip]
+  mbc: "E1041"
+  for: [npm, package.json, shell]
+  scope: archive
+  all:
+  - id: preinstall-runs-shell-local-script
+  - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+  - id: micro-behaviors/communications/http/curl::sh-letter-var-http-client-rebuild
+  - id: micro-behaviors/communications/http/curl::sh-curl-post-backtick-data
+  - id: micro-behaviors/communications/url/reference::shell-http-url-reference
+
+- for:
+  - package.json
+  - javascript
+  - zip
+  id: postinstall-webhook-notify
+  desc: postinstall notify script posts to webhook.site
+  crit: hostile
+  conf: 0.97
+  attack: T1195.002,T1041
   scope: archive
   all:
   - id: postinstall-notify-js
-  - id: objectives/exfiltration/oob/endpoint::webhook-site-uuid-path
+  - id: micro-behaviors/communications/url/host::webhook-site-uuid-path
+
+- id: postinstall-hook-script-http-ip-callback-file
+  desc: Lifecycle hook script HTTP GETs literal IP URL
+  crit: suspicious
+  conf: 0.94
+  attack: T1195.002,T1041
+  scope: file
+  for: [javascript, typescript]
+  all:
+    - id: metadata/package/files/lifecycle::install-js-basename
+    - id: micro-behaviors/communications/http/request/client::http-get-dup
+    - id: micro-behaviors/communications/ip/literal::http-ip-url
+
+- id: postinstall-hook-script-http-ip-profile-post-file
+  desc: Lifecycle hook script POSTs host profile to IP URL
+  crit: suspicious
+  conf: 0.96
+  attack: T1195.002,T1041,T1082
+  mbc: E1041
+  scope: file
+  for: [javascript, typescript]
+  all:
+    - id: micro-behaviors/communications/ip/literal::http-ip-url
+    - id: micro-behaviors/os/sysinfo/hostname::node-inline-os-hostname-call
+    - id: micro-behaviors/fs/path/self::json-install-path-and-cwd-keys
+    - id: micro-behaviors/communications/http/request/dynamic::node-scheme-selected-http-post-body
+  any:
+    - id: metadata/package/files/lifecycle::install-js-basename
+    - id: metadata/package/files/included::beacon-js-basename
+
+- id: postinstall-hook-script-encoded-ip-callback-file
+  desc: Lifecycle hook script URI-encodes and HTTP GETs IP
+  crit: suspicious
+  conf: 0.94
+  attack: T1195.002,T1041
+  scope: file
+  for: [javascript, typescript]
+  all:
+    - id: metadata/package/files/lifecycle::install-js-basename
+    - id: micro-behaviors/data/encode/url::encode-uri-component-call
+    - id: micro-behaviors/communications/http/request/client::http-get-dup
+    - id: micro-behaviors/communications/ip/literal::http-ip-url
+
+- id: postinstall-hook-script-http-ip-post-callback-file
+  desc: Lifecycle hook script POSTs JSON to literal IP
+  crit: suspicious
+  conf: 0.95
+  attack: T1195.002,T1041
+  scope: file
+  for: [javascript, typescript]
+  all:
+    - id: metadata/package/files/lifecycle::install-js-basename
+    - id: micro-behaviors/communications/ip/literal::http-ip-url
+    - id: micro-behaviors/communications/http/request/verb::post-method-text
+    - id: micro-behaviors/data/serialize/json::json-stringify-call
+    - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
+  any:
+    - id: micro-behaviors/os/sysinfo/hostname::node-inline-os-hostname-call
+    - id: micro-behaviors/os/sysinfo/platform/runtime::process-cwd-call
+
+- id: postinstall-hook-script-credential-theft-file
+  desc: Lifecycle hook script targets stored credentials
+  crit: suspicious
+  conf: 0.88
+  attack: T1195.002,T1552
+  scope: file
+  for: [javascript, typescript]
+  all:
+    - id: metadata/package/files/lifecycle::install-js-basename
+  any:
+    - id: micro-behaviors/fs/read/file/full::history-reference-with-file-read
+    - id: objectives/credential-access/env/dotenv::dotenv-credentials-theft
+    - id: objectives/credential-access/ssh/key::slash-dot-ssh
+    - id: objectives/credential-access/shell/history::powershell-history-theft

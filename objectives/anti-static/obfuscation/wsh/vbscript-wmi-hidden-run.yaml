@@ -19,30 +19,6 @@ traits:
     if:
       type: text
       regex: '(?i)\bExecute\s+"[^"\r\n]{1,50}"\s*\+'
-  - id: vbs-hidden-wscript-run
-    desc: VBScript hidden WScript run
-    crit: suspicious
-    conf: 0.94
-    if:
-      type: text
-      regex: '(?i)\.Run\s*\([^,\r\n]{1,80},\s*0\)'
-    unless:
-      - id: well-known/app/communication/thunderbird::firefox-omni-runtime-path
-  - id: vbs-createobject-variable-arg
-    desc: VBScript CreateObject variable argument
-    crit: suspicious
-    conf: 0.88
-    if:
-      type: text
-      regex: '(?i)(^|[^.\w])CreateObject\s*\(\s*[A-Za-z_]\w{1,30}(\s*\([^)]{0,80}\))?\s*\)'
-
-  # `"w"&D&"sc"&D&"ri"&D&"pt.s"&D&"he"&D&"ll"` -- a ProgID chopped into two- and
-  # three-character pieces and glued back together with a variable (usually an
-  # empty string) between each one. The only thing this defeats is a scanner
-  # looking for the literal `WScript.Shell` / `Scripting.FileSystemObject`, so
-  # the shape is the intent. Ordinary VBScript that builds strings from parts
-  # uses markup or punctuation in the fragments (`"<td>" & v & "</td>"`), which
-  # the word-and-dot character class here does not accept.
   - id: vbs-splintered-string-concat
     desc: String rebuilt from short quoted fragments
     crit: suspicious
@@ -50,6 +26,10 @@ traits:
     if:
       type: text
       regex: '(?i)"[\w.]{1,4}"\s*&\s*\w{1,9}\s*&\s*"[\w.]{1,4}"\s*&\s*\w{1,9}\s*&'
+    not:
+      # "WND" & vbTab & "PATH" & vbTab & ...: a delimited record header, not
+      # a ProgID glued around an empty-string variable.
+      - regex: '(?i)&\s*vb(Tab|Cr|Lf|CrLf|NewLine)\s*&'
     unless:
       # A compiler's own test corpus is deliberately malformed: dotnet-roslyn's
       # src/Compilers/VisualBasic/Test/ exists to feed the VB parser inputs that
@@ -86,17 +66,9 @@ traits:
 
   # `For i = 0 To 255` is how Info-ZIP's VB sample walks a 256-byte
   # buffer. The RC4 inference is the composite with the split and XOR legs.
-  - id: vbs-rc4-sbox-loop
-    desc: VBScript loop from 0 to 255
-    crit: notable
-    conf: 0.94
-    if:
-      type: text
-      regex: '(?i)\bFor\s+[A-Za-z_]\w*\s*=\s*0\s+To\s+255\b'
-
-  - id: vbs-rc4-byte-split
-    desc: VBScript splits an encoded byte stream
-    crit: suspicious
+  - id: vbs-split-on-space
+    desc: VBScript splits a variable on spaces
+    crit: component
     conf: 0.94
     if:
       type: text
@@ -124,8 +96,8 @@ composite_rules:
     crit: suspicious
     conf: 0.98
     all:
-      - id: vbs-rc4-sbox-loop
-      - id: vbs-rc4-byte-split
+      - id: micro-behaviors/data/control-flow/loop::vbs-byte-range-loop
+      - id: vbs-split-on-space
       - id: vbs-rc4-xor-hex-byte
 
   - id: vbs-rc4-hidden-powershell-stage
@@ -137,7 +109,7 @@ composite_rules:
     all:
       - id: vbs-rc4-like-byte-decoder
       - id: vbs-split-powershell-exe-name
-      - id: micro-behaviors/process/create/shell/wsh::hidden-window-run
+      - id: micro-behaviors/process/create/hidden::run-zero-style-argument
       - id: micro-behaviors/os/com/automation::wscript-shell-literal
 
   # Split a delimited blob, then rebuild characters with Mid -> ChrW: the
@@ -173,18 +145,19 @@ composite_rules:
       - id: vbs-chrw-decoder-helper
       - id: vbs-execute-concat-code
       - id: micro-behaviors/os/wmi/query::wmi-impersonation-moniker
-      - id: vbs-hidden-wscript-run
+      - id: micro-behaviors/process/create/hidden::run-zero-style-argument
   - id: vbs-concat-hidden-runner-obfuscation
     desc: VBScript concat-obfuscated hidden runner
     crit: hostile
     conf: 0.97
+    for: [vbs]
     all:
       - id: vbs-execute-concat-code
-      - id: vbs-hidden-wscript-run
+      - id: micro-behaviors/process/create/hidden::run-zero-style-argument
     any:
       - id: micro-behaviors/process/create/shell/wsh::wscript-shell-process-run
-      - id: objectives/command-and-control/dropper/execution/wsh::wsh-high-byte-obfuscated-script
-      - id: objectives/anti-static/obfuscation/string/fragmentation::script-host-line-bloat
+      - id: objectives/command-and-control/dropper/file-exec/command/script-host-download::wsh-high-byte-obfuscated-script
+      - id: metadata/file/line::vbs-long-average-lines
     needs: 1
   - id: vbs-concat-hidden-shellexecute-loader
     for: [vbs]
@@ -215,7 +188,7 @@ composite_rules:
     attack: T1027,T1059.005
     all:
       - id: vbs-execute-concat-code
-      - id: vbs-hidden-wscript-run
+      - id: micro-behaviors/process/create/hidden::run-zero-style-argument
       - id: micro-behaviors/os/com/automation::wscript-shell-literal
       - id: micro-behaviors/process/io/wsh::wsh-process-output-readall
   - id: vbs-obfuscated-xor-payload-loader
@@ -225,6 +198,15 @@ composite_rules:
     conf: 0.98
     attack: "T1027,T1059.005"
     all:
-      - id: vbs-createobject-variable-arg
-      - id: objectives/command-and-control/dropper/execution/wsh::wsh-vbs-xor-payload-decode
-      - id: micro-behaviors/process/create/shell/wsh::wsh-run-call-expression-argument
+      - id: micro-behaviors/os/com/automation::vbs-computed-createobject
+      - id: objectives/command-and-control/dropper/file-exec/command/script-host-download::wsh-vbs-xor-payload-decode
+      - id: micro-behaviors/data/control-flow/dispatch::run-call-expression-argument
+
+  - id: vbs-xor-subtraction-evaluated-stage
+    desc: VBScript evaluates subtract-XOR decoded stage
+    crit: suspicious
+    conf: 0.95
+    for: [vbs]
+    all:
+      - id: micro-behaviors/data/arithmetic::vbs-xor-subtraction-byte-rounds
+      - id: micro-behaviors/process/interpreter/eval/direct::executeglobal-variable

@@ -156,11 +156,18 @@ traits:
   size_min: 1200
   if:
     type: text
-    regex: 127\.0\.0\.1\s+\S+\.[a-z]{2,6}\b
+    regex: '(?m)^[ \t]*127\.0\.0\.1[ \t]+[\w-]{1,63}\.[\w.-]{2,190}[ \t]*(#[^\r\n]{0,512})?$'
   not:
   - substr: sample HOSTS file used by Microsoft TCP/IP for Windows.
   - substr: '#-iris-'
   - substr: '/Windows/system32/drivers/etc/hosts, on Linux: /etc/hosts'
+  # A loopback alias for a cluster-local name is service discovery, not
+  # domain blocking. sigstore/scaffolding's getting-started.md maps its
+  # kind cluster's *.svc names to 127.0.0.1 so local tools can reach
+  # in-cluster services — the entries enable access rather than deny it,
+  # and .svc is not a public suffix anyone is being blocked from. The
+  # trailing boundary also covers the FQDN form (*.svc.cluster.local).
+  - regex: '127\.0\.0\.1\s+\S+\.svc\b'
 - id: localhost-security-redirect-a
   desc: Localhost redirects Norton or McAfee domain
   crit: suspicious
@@ -194,7 +201,7 @@ traits:
   size_min: 1200
   if:
     type: text
-    regex: 0\.0\.0\.0\s+\S+\.[a-z]{2,6}\b
+    regex: '(?m)^[ \t]*0\.0\.0\.0[ \t]+[\w-]{1,63}\.[\w.-]{2,190}[ \t]*(#[^\r\n]{0,512})?$'
   not:
   - substr: sample HOSTS file used by Microsoft TCP/IP for Windows.
   - substr: '#-iris-'
@@ -221,7 +228,13 @@ traits:
   conf: 0.9
   if:
     type: text
-    regex: (?i)(MALWARE|AV[- ]?BLOCK|SECURITY[- ]?BLOCK)\b
+    # Bare `MALWARE` matched any binary carrying the word (IoT bot
+    # anti-analysis tables contain the sandbox marker "malware.analysis"),
+    # so the malware alternative requires blocklist phrasing around it.
+    # The token must sit in a `#` comment, as hosts-file section markers do:
+    # unanchored, `AVBlock` matched MSVC RTTI names (`.?AVBlock@spv@@`) and
+    # "Security block:" matched a .NET IEHost error message.
+    regex: '(?i)#[^\n#]{0,12}\b((AV|SECURITY)[- ]?BLOCK|MALWARES?[- ]?(BLOCKS?|LIST|DOMAINS?))'
 - id: hosts-stevenblack-token
   desc: Hosts StevenBlack marker token
   crit: notable
@@ -413,14 +426,6 @@ traits:
   if:
     type: literal
     regex: '^127\.0\.0\.1\s+[A-Za-z0-9.-]*(antimalware|security|telemetry|abuse)'
-- id: script-etc-hosts-path
-  desc: Script references the hosts file
-  crit: notable
-  conf: 0.8
-  for: [lua, shell, python, perl, ruby, php]
-  if:
-    type: text
-    substr: /etc/hosts
 - id: localhost-mining-pool-redirect
   desc: Localhost redirect of a mining pool
   crit: notable
@@ -429,15 +434,6 @@ traits:
   if:
     type: text
     regex: '127\.0\.0\.1\s+\S{0,48}(minexmr|supportxmr|minergate|nanopool|hashvault|slushpool)\.'
-- id: shell-append-etc-hosts
-  desc: Shell appends the hosts file
-  crit: notable
-  conf: 0.86
-  for: [shell]
-  if:
-    type: text
-    regex: '>>\s*/etc/hosts'
-
 composite_rules:
 - id: localhost-security-vendor-redirect
   desc: Localhost redirects an antivirus domain
@@ -688,11 +684,11 @@ composite_rules:
   for: [lua, shell, python, perl, ruby, php, scripts]
   near_lines: 20
   all:
-    - id: script-etc-hosts-path
+    - id: micro-behaviors/fs/path/config/system::config-hosts
     - id: localhost-mining-pool-redirect
   any:
     - id: micro-behaviors/fs/write/file/handle::lua-open-append-mode
-    - id: shell-append-etc-hosts
+    - id: micro-behaviors/fs/write/file/target::hosts-file-append
 - id: windows-hosts-overwrite-download
   # hosts-file-path (micro-behaviors/fs/path/config/system) is scoped to
   # [scripts, binaries] and structurally cannot fire on CSharp source, so it

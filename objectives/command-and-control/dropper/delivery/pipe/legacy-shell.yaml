@@ -1,0 +1,214 @@
+defaults:
+  platforms: [unix]
+  for: [shell]
+traits:
+# curl-pipe-install-sh-url relocated to
+# micro-behaviors/os/package-manager/installer-script::curl-install-sh-pipe —
+# fetching a vendor install.sh into a pipe is the documented install idiom.
+- id: printf-wget-pipe-bash-loader
+  desc: printf-built wget pipe bash loader
+  crit: suspicious
+  conf: 0.9
+  attack: T1105
+  if:
+    type: text
+    regex: 'printf\s+["''][\s\S]{0,320}\bwget\b[\s\S]{0,240}\|\s*bash\b'
+  unless:
+  # Defensive repository checks often print changed source into grep and keep
+  # the dangerous pipeline only as a regex that causes the check to fail.
+  - type: text
+    substr: hidden-logic self-scan
+- id: random-sleep-fetch-loop
+  desc: randomized sleep fetch loop
+  crit: suspicious
+  conf: 0.88
+  attack: T1027
+  if:
+    type: text
+    regex: 'while\s+true\s*;?\s*do[\s\S]{0,160}sleep\s+\$\(\(\s*RANDOM\s*%[\s\S]{0,260}\bwget\b'
+composite_rules:
+# The toolchain/installer pipe contexts shared by the fetch-exec composites
+# below, grouped once so each composite stays under the suppression limit.
+# Members are the recognized upstream install methods themselves (notable
+# traits or narrower exceptions).
+- id: recognized-toolchain-bootstrap-context
+  desc: Recognized toolchain bootstrap installer context
+  crit: exception
+  conf: 0.95
+  any:
+  - id: well-known/tool/packaging/ghcup::ghcup-bootstrap-pipe
+  - id: well-known/tool/development/cli/dev-cli/npm-toolchain::npm-install-script-path
+  - id: well-known/app/system/omarchy::source-tree
+  - id: well-known/tool/packaging/chsrc::chsrc-source-installer-context
+  - id: well-known/app/infrastructure/kubeblocks::build-tool-installer-context
+  - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-shell-bootstrap
+  - id: well-known/tool/sysadmin/kubernetes/k3d::k3d-install-sh-pipe
+- id: curl-pipe-obvious-installer
+  desc: Remote install.sh piped into shell
+  crit: notable
+  conf: 0.86
+  for: [shell, python, javascript, typescript, ruby, go, rust]
+  all:
+  - id: micro-behaviors/os/package-manager/installer-script::curl-install-sh-pipe
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  unless:
+  - id: micro-behaviors/os/package-manager/installer-script::installer-script
+  - id: metadata/file/extension/identity::markdown-file-basename
+  - id: well-known/tool/development/aube::aube-lifecycle-scanner-source
+  - id: well-known/app/ai/coding-agent/vtcode::install-script-url
+  - id: well-known/app/ai/coding-agent/vtcode::vtcode-agent-package
+  - id: recognized-official-install-script
+- id: recognized-official-install-script
+  desc: Recognized official CLI install context
+  crit: exception
+  conf: 0.99
+  for: [python, javascript, typescript, ruby, go, rust, shell]
+  any:
+  - id: well-known/tool/development/cli/dotenvx::dotenvx-install-script-url
+  - id: well-known/tool/development/cli/abra::abra-install-script-url
+  - id: well-known/tool/development/cli/scc::scc-install-script-url
+  - id: well-known/app/ai/coding-agent/opencode::opencode-install-script-url
+  - id: well-known/app/ai/coding-agent/factory-droid::factory-droid-install-script-url
+  - id: well-known/app/ai/coding-agent/forge::forge-install-script-url
+  - id: well-known/tool/development/vscode-extension/snowflake::coco-cli-terminal-install-command
+  - id: well-known/tool/packaging/nix::nixos-install-script-url
+- id: shell-fetch-exec-bash
+  desc: Shell script downloads and executes via pipe to bash
+  crit: hostile
+  conf: 0.98
+  attack: T1105
+  unless:
+  - id: recognized-toolchain-bootstrap-context
+  - id: metadata/build/archive::source-archive-member
+  # See shell-fetch-exec-wget: a Dockerfile RUN line piping a fetched
+  # installer into bash is build-time tool provisioning.
+  - id: metadata/build/docker::dockerfile-basename
+  # cybench challenge resources carry real dropper scripts verbatim.
+  - id: well-known/lib/ai/inspect-evals::eval-corpus-context
+  all:
+  - id: micro-behaviors/process/create/shell/spawn::bash-exec
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  - id: micro-behaviors/communications/http/download/wget::wget-silent-stdout
+# Quiet curl-to-shell execution alone is also an installer idiom, not proof
+# of hostile delivery. Its structural observation lives at
+# micro-behaviors/process/create/shell/pipeline::curl-response-shell-stdin.
+# The old shell-fetch-exec-curl wrapper added no intent-specific evidence.
+- id: shell-fetch-exec-wget
+  desc: Shell script downloads via wget and executes via pipe
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  # wget -O- for a JSON API piped to grep, plus a later curl|sh installer,
+  # is not wget-to-shell. Require the wget stdout and shell pipe on the same
+  # command cluster.
+  near_lines: 4
+  unless:
+  - id: metadata/build/archive::source-archive-member
+  - id: well-known/tool/packaging/chsrc::chsrc-source-installer-context
+  - id: well-known/app/infrastructure/kubeblocks::build-tool-installer-context
+  # A container image recipe provisioning upstream tooling with
+  # `wget -O- <url> | sh` is the ordinary build-time install idiom, not a
+  # dropper.  The atomic wget-pipe-* traits already exempt Dockerfiles.
+  - id: metadata/build/docker::dockerfile-basename
+  # Official cluster/get-kube.sh: usage comments show wget|bash; real
+  # downloads write kubernetes.tar.gz then extract.
+  - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-shell-bootstrap
+  all:
+  - id: micro-behaviors/communications/http/download/wget::wget-silent-stdout
+  - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  any:
+  - id: micro-behaviors/process/create/shell/spawn::bash-exec
+  - id: micro-behaviors/process/interpreter/shell::bin-sh
+- id: generated-wget-bash-loop-loader
+  desc: Generated wget bash loop loader
+  crit: hostile
+  conf: 0.97
+  attack: T1105
+  all:
+  - id: printf-wget-pipe-bash-loader
+  - id: random-sleep-fetch-loop
+  - id: micro-behaviors/process/create/local-exec::world-writable-local-path-exec
+  - id: micro-behaviors/process/create/local-exec::execute-dot-slash-literal
+  - id: micro-behaviors/fs/delete/directory::shell-recursive-delete
+  any:
+  - id: objectives/evasion/indicator-removal/logs::history-c
+  - id: micro-behaviors/process/daemonize/detach::background-ampersand-hidden
+- id: makeself-hidden-base64-loader
+  desc: Hidden temporary base64 payload loader
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: micro-behaviors/data/decode/command::base64-decode-to-file
+  - id: micro-behaviors/process/create/local-exec::hidden-tmp-background-exec
+  - id: micro-behaviors/process/daemonize/detach::nohup-hidden-output
+  - id: micro-behaviors/data/decode/base64::base64-d-cmd
+
+# The three legs -- a curl-pipe-shell, `uname -s`/`uname -m` to pick a
+# platform, and a dynamically built command -- are also the definition of a
+# portable install script: rustup, nvm, Homebrew, Deno and uv all ship
+# exactly this. What separates the vendor's installer from the attacker's is
+# that the vendor *publishes* the pipe command, because users are meant to run
+# it: oh-my-pi's scripts/install.sh carries
+# `# Usage: curl -fsSL .../install.sh | sh` and lean-ctx's lists three such
+# lines. The corpus dropper it is matched against advertises nothing -- it
+# gates on a hidden marker file and pipes a relay URL to sh.
+- id: shell-os-gated-pipe-loader
+  desc: OS-gated curl pipe shell loader
+  crit: hostile
+  conf: 0.99
+  # The third leg used to be micro-behaviors/process/interpreter/eval/direct::shell-dynamic-command-execution,
+  # whose `any:` includes micro-behaviors/data/runtime/keywords::pipe-to-shell -- the
+  # same `| sh` text that already satisfies leg one. With that restatement the rule
+  # convicted on two observations, "a curl|sh exists somewhere" plus "uname is called
+  # somewhere", which is every published OS-detecting installer: rustup, nvm,
+  # Homebrew, and clawdbot-go's own 748-line install.sh, where the uname branch at
+  # line 161 picks a release asset and the unrelated `curl … | sh` at line 301
+  # installs a third-party CLI.
+  #
+  # What the rule is named for is a loader whose OS gate *feeds* the pipeline, so
+  # require the three observations to sit together in one script: the platform
+  # fingerprint, a fetch whose URL comes from a variable, and the pipe into a shell.
+  # In a dropper stub that is a handful of adjacent lines (`case $(uname -s)` sets
+  # RELAY, `curl "$RELAY" | sh` runs it); in a real installer the fingerprint and any
+  # curl|sh are hundreds of lines apart and the piped URL is a literal.
+  scope: file
+  near_bytes: 400
+  all:
+  - id: objectives/command-and-control/dropper/delivery/pipe::curl-pipe-shell
+  - id: micro-behaviors/os/sysinfo/platform/arch::sh-uname-fingerprint
+  - id: micro-behaviors/communications/http/download/shell::fetch-command-with-var
+  unless:
+  - id: metadata/build/archive::source-archive-member
+  - id: recognized-toolchain-bootstrap-context
+  - id: micro-behaviors/process/create/shell/pipeline::documented-curl-pipe-usage
+
+- id: shell-rot13-eval-loader
+  desc: Shell decodes text before dynamic execution
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: micro-behaviors/data/string/replace::shell-echo-tr-transform
+  - id: micro-behaviors/process/interpreter/eval/direct::shell-evaluates-variable-command
+  - id: micro-behaviors/process/create/shell/command-string::sh-c-exec
+# package-doc-curl-shell-delivery was removed: its `all:` was the canonical
+# curl-pipe atom AND a second copy of the same matcher, so it restated one
+# observation as a C2/dropper finding on every source tarball whose README
+# documents an installer. Its own comment conceded it established neither
+# execution nor a malicious endpoint. The atom itself now carries that fact at
+# micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text.
+# A cross-platform stager keeps one remote-script pipeline per OS and picks
+# between them at runtime (runtime.GOOS, sys.platform): `curl … | cmd` for
+# Windows beside `curl … | sh` for Unix. Windows installers ship `irm | iex`
+# or a downloaded package, never a cmd pipe, so the pairing is the dropper.
+- id: per-os-remote-script-pipelines
+  desc: Holds remote-script pipes for Windows and Unix
+  crit: hostile
+  conf: 0.95
+  attack: T1059.003,T1059.004,T1105
+  platforms: [windows, unix]
+  for: [python, javascript, typescript, go, rust, ruby, php, java]
+  all:
+  - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-cmd-literal
+  # Literal surface where one is parsed; raw text for Ruby (heredocs).
+  - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
+

@@ -1,6 +1,6 @@
-# Recognized software installers fetched over HTTP and run -- `install.sh`
-# and `get-*.sh` piped to a shell, the ClickHouse and linuxdeploy
-# installers, release-asset downloads. These describe an installer, which
+# Recognized software installers fetched over HTTP and run -- `install.sh`,
+# `*-installer.sh` and `get-*.sh` piped to a shell, the ClickHouse and
+# linuxdeploy installers, release-asset downloads. These describe an installer, which
 # is why they live here and not in process/create/shell/pipeline/: that
 # directory holds the curl|sh *detection* traits, and rules that suppress
 # on a recognized installer have curl|sh in their own evidence.
@@ -37,9 +37,10 @@ traits:
       regex: '(?i)--silent\b[^\n]{0,80}--eula\s+accept|--eula\s+accept[^\n]{0,80}--silent\b'
   # Installer-vs-dropper line: a remote script PIPED into a shell is the
   # universal install idiom (golangci-lint, helm, rustup, kustomize, kubevela,
-  # …). What separates a legitimate installer from a `curl $C2/api | bash`
-  # dropper is the fetched script's NAME: legitimate installers fetch a
-  # conventionally-named `install.sh` / `get-*` / `setup_*` script, a path
+  # CodSpeed's `codspeed-runner-installer.sh`, …). What separates a
+  # legitimate installer from a `curl $C2/api | bash` dropper is the fetched
+  # script's NAME: legitimate installers fetch a conventionally-named
+  # `install.sh` / `*-installer.sh` / `get-*` / `setup_*` script, a path
   # malware almost never uses for its payload. These atoms recognize that
   # benign shape so the C2/dropper objectives can DOWNGRADE (not suppress) the
   # generic curl|bash signal — an unknown URL stays suspicious, a named
@@ -51,7 +52,19 @@ traits:
     for: [shell, github-actions, makefile, dockerfile, powershell]
     if:
       type: text
-      regex: '(curl|wget)\b[^\n|]{0,200}/install[\w.-]*\s*\|\s*(bash|sh)\b'
+      regex: '(curl|wget)\b[^\n|]{0,200}/(install|[\w.-]*-installer)[\w.-]*\s*\|\s*(bash|sh)\b'
+  # Relocated from objectives/command-and-control/dropper/delivery/pipe,
+  # where it was `curl-pipe-install-sh-url`. Covers the same idiom quoted in
+  # help text and install hints of non-shell sources (huggingface_hub prints
+  # `curl -LsSf https://hf.co/cli/install.sh | bash`).
+  - id: curl-install-sh-pipe
+    desc: curl/wget install.sh output piped
+    crit: notable
+    conf: 0.86
+    for: [shell, python, javascript, typescript, ruby, go, rust]
+    if:
+      type: text
+      regex: '(curl|wget)(\.exe)?\s+[^\n|]{0,160}/install\.sh[^\n|]{0,80}\|'
   - id: getter-script-pipe
     desc: get/setup-named remote script piped to a shell
     crit: baseline
@@ -68,6 +81,24 @@ traits:
     if:
       type: text
       regex: '(curl https://clickhouse\.com \| sh)'
+  - id: rustup-installer-pipe
+    desc: rustup installer piped to shell
+    crit: notable
+    conf: 0.98
+    for: [scripts, build, source, github-actions]
+    if:
+      type: text
+      regex: 'https?://(sh\.rustup\.rs|static\.rust-lang\.org/rustup(\.sh)?)[^\n|]{0,80}\|\s*(bash|sh)\b'
+    unless:
+      - id: metadata/file/format/structured::serialized-news-article-catalog
+  - id: browser-use-profile-installer-pipe
+    desc: browser-use profile installer piped to shell
+    crit: notable
+    conf: 0.98
+    for: [scripts, build, source, github-actions]
+    if:
+      type: text
+      regex: 'https?://browser-use\.com/profile\.sh[^\n|]{0,80}\|\s*(bash|sh)\b'
   # Microsoft's documented Dev Tunnels CLI bootstrap: aka.ms short links for
   # the install script and the platform zip/exe. Same vendor-installer shape
   # as the ClickHouse pipe above.
@@ -116,10 +147,15 @@ traits:
     desc: appimagetool AppImage packaging command
     crit: notable
     conf: 0.96
-    for: [shell]
+    for:
+      - shell
+      - scripts
+      - source
+      - javascript
+      - typescript
     if:
       type: text
-      regex: '(^|[/\s])\.?/?appimagetool\b|--appimage-extract\b'
+      regex: '(?i)(^|[/\s"''`])\.?/?appimagetool\b|--appimage-extract\b'
 
   - id: sha256sums-verification-reference
     desc: Installer references SHA256SUMS verification

@@ -25,14 +25,40 @@ traits:
       type: text
       regex: '(?im)^ *if +(not +)?exist +.{1,240} +(copy|xcopy|robocopy) +\S'
 
+  # Copies from a substring-stripped path (`copy %M:TOKEN=% ...`): the source
+  # only materializes after cmd removes every TOKEN occurrence, so static
+  # readers never see what is staged. Stripping to empty is the tell --
+  # substitutions that replace text (`%X:a=b%`) do not match. Rarely
+  # legitimate, so suspicious rather than notable.
+  - id: batch-copy-stripped-source
+    desc: Copy source uses substring-removal expansion
+    crit: suspicious
+    conf: 0.85
+    for: [batch]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*(copy|xcopy)[ \t]+[^\r\n]{0,40}%[A-Za-z_]\w*:[A-Za-z0-9_]{3,}=%'
+
   - id: cmd-binary-file-concatenation
     desc: Copy /b joins fragments into executable
     crit: notable
     conf: 0.98
-    for: [text, batch, cmd, powershell]
+    for: [batch, cmd, powershell]
     if:
       type: text
-      regex: '(?im)^!?\s*copy[^\r\n]{0,24}/b\s+[^\r\n]{1,200}\+[^\r\n]{1,200}\.exe\b'
+      regex: '(?im)^\s*copy[^\r\n]{0,24}/b\s+[^\r\n]{1,200}\+[^\r\n]{1,200}\.exe\b'
+
+  # In an FTP command script, a leading ! sends the copy through the local
+  # command shell. Keep this separate from generic text: manuals often show
+  # the same copy syntax as an example without performing the operation.
+  - id: ftp-local-binary-file-concatenation
+    desc: FTP copy joins binary data into executable
+    crit: notable
+    conf: 0.98
+    for: [text, batch, cmd]
+    if:
+      type: text
+      regex: '(?im)^![ \t]*copy[^\r\n]{0,24}/b\s+[^\r\n]{1,200}\+[^\r\n]{1,200}\.exe\b'
 
   - id: cmd-wildcard-script-concatenation
     desc: Joins wildcard fragments into script
@@ -102,3 +128,32 @@ traits:
     if:
       type: text
       regex: '(?im)^set\s+[a-z]{2,6}[0-9]{8,}='
+
+composite_rules:
+  # Relocated from objectives/.../dropper/execution/windows-loader
+  # (self-copy-relaunch-loader, suspicious). Every leg is an ordinary Win32
+  # file/process import and nothing binds the copy source to the module path
+  # or the spawned image to the copy, so this is the API set a self-copying
+  # relauncher needs -- and equally what installers, updaters and .NET
+  # Framework tools (WFServicesReg.exe) import. Loader and Elex composites
+  # reference it and supply the staging evidence.
+  - id: self-copy-relaunch-api-set
+    desc: Imports self-copy and relaunch APIs
+    conf: 0.94
+    for: [pe, dll]
+    attack: T1129
+    all:
+      - id: micro-behaviors/fs/file/copy::copyfile-w
+      - id: micro-behaviors/process/create/spawn::create-process-w
+      - id: micro-behaviors/fs/path/check::get-module-filename
+      - id: micro-behaviors/fs/delete/file/library::deletefile-w
+      - id: micro-behaviors/fs/file/open::file-create-win
+      - id: micro-behaviors/fs/file/handle::set-file-pointer
+      - id: micro-behaviors/fs/write/file/handle::write-file
+      - id: micro-behaviors/time/query::get-tick-count
+    unless:
+      - id: metadata/lang/compiled::autoit-compiled-script
+      - id: well-known/tool/
+      - id: well-known/app/system/iobit::iobit-component-context
+      # madExcept restart/send-report paths use copy + relaunch primitives.
+      - id: well-known/lib/native/madexcept/

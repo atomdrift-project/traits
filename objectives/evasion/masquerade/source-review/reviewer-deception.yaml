@@ -39,19 +39,18 @@ traits:
       regex: 'function\s+\w{0,24}(filter|format|saniti)\w{0,24}\s*\(\s*\$'
 
   - id: credential-compared-to-absence-literal
-    desc: Credential compared to an absence word
+    desc: Password compared to an absence word
     crit: suspicious
     conf: 0.93
     for: [c, cpp, text]
-    # A password or username tested against the literal string "NULL", "nil",
-    # "none" or "undefined". Every one of those is a word for *no value*, and
-    # that is the point: the line reads as a check for a missing credential
-    # while actually accepting one specific credential. Real absence checks
-    # compare against a null pointer or an empty string, never against the
-    # spelling of the word.
+    # A password tested against the literal string "NULL", "nil" or "none".
+    # A username comparison to "none" can be an ordinary no-account sentinel
+    # (for example, Plan 9's `none` user), and does not establish a password
+    # bypass. Real password absence checks compare against a null pointer or an
+    # empty string, never against the spelling of the word.
     if:
       type: text
-      regex: '\bstr\w{0,4}cmp\s*\([^;\n]{0,32}(pass|user|login)\w{0,4}\s*,\s*"(NULL|nil|none)"'
+      regex: '\bstr\w{0,4}cmp\s*\([^;\n]{0,32}pass(wd|word)?\w{0,4}\s*,\s*"(NULL|nil|none)"'
       case_insensitive: true
     unless:
       # Parser unit tests assert that a missing credential came back as the
@@ -76,17 +75,6 @@ traits:
       type: text
       regex: '==[^;\n]{0,60}&&[^;\n]{0,20}(->|\.)(e|s|fs)?[ug]id\s*=\s*0'
 
-  - id: errno-assignment-statement
-    desc: Assigns a negative errno constant
-    crit: notable
-    conf: 0.85
-    for: [c, cpp, text]
-    # `retval = -EINVAL;`. Counted rather than located: two of these in a row
-    # means the first one never survives.
-    if:
-      type: text
-      regex: '^[+\s]*\w{1,16}\s*=\s*-E[A-Z]{2,10}\s*;'
-    count_min: 2
 
   - id: constant-defined-from-request-value
     desc: Defines a constant from request input
@@ -110,6 +98,8 @@ traits:
       - regex: '(?i)\$_SERVER\W{1,3}(TEMP|TMP|DOCUMENT_ROOT|PATH|SystemRoot)\b'
 
   - id: constant-defined-from-literal
+    unless:
+      - id: metadata/package/testing/corpus::inert-security-input-module
     desc: Defines a constant from a literal
     crit: notable
     conf: 0.85
@@ -129,7 +119,7 @@ traits:
 
   - id: next-byte-hex-compare
     desc: Next byte compared to hex value
-    crit: notable
+    crit: component
     conf: 0.85
     for: [c, cpp, text]
     # `p_buf[i+1] == 0x29`. Two adjacent bytes tested against fixed values is
@@ -138,17 +128,6 @@ traits:
       type: text
       regex: '\[\s*\w{1,6}\s*\+\s*1\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
 
-  - id: character-class-helper-call
-    desc: Calls a character-class helper
-    crit: notable
-    conf: 0.85
-    for: [c, cpp, text]
-    if:
-      type: text
-      # No leading \b: projects wrap these as `vsf_sysutil_isspace`, and an
-      # underscore is a word character, so a boundary anchor never matches the
-      # wrapped form -- which is the form that actually appears.
-      regex: 'is(space|alpha|digit)\w{0,4}\s*\('
 
   - id: base64-decoded-command-default
     desc: Command name decoded from base64
@@ -164,6 +143,16 @@ traits:
       regex: '\$\{[A-Za-z_]\w{0,20}:-[^}]{0,30}base64\s+-d'
 
 composite_rules:
+  - id: adjacent-byte-hex-signature-check
+    desc: Adjacent input bytes compared to fixed values
+    crit: notable
+    conf: 0.9
+    for: [c, cpp, text]
+    near_lines: 4
+    all:
+      - id: indexed-byte-hex-compare
+      - id: next-byte-hex-compare
+
   - id: execution-sink-named-as-sanitiser
     desc: Exec sink named as a data sanitiser
     crit: hostile
@@ -192,7 +181,7 @@ composite_rules:
     # magic credential written to be skimmed past.
     all:
       - id: credential-compared-to-absence-literal
-      - id: objectives/command-and-control/backdoor/auth-bypass::credential-field-comparison
+      - id: micro-behaviors/os/security/auth/password::strcmp-password-field
     unless:
       - id: metadata/package/testing/
 
@@ -221,7 +210,7 @@ composite_rules:
       - id: objectives/privilege-escalation/elevation-control/setuid/source::privilege-field-assigned-in-condition
     any:
       - id: comparison-then-assignment-in-one-condition
-      - id: errno-assignment-statement
+      - id: micro-behaviors/os/exception/error-handling::negative-errno-assignment-repeated
     unless:
       - id: metadata/package/testing/
 
@@ -275,9 +264,8 @@ composite_rules:
     # and it generalises to any signature check smuggled into a byte loop
     # whose stated purpose is character classification.
     all:
-      - id: indexed-byte-hex-compare
-      - id: next-byte-hex-compare
-      - id: character-class-helper-call
+      - id: adjacent-byte-hex-signature-check
+      - id: micro-behaviors/data/string/case::ctype-class-test-call
     unless:
       - id: metadata/package/testing/
 
@@ -358,5 +346,5 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/shell/native::c-debug-system-macro-wrapper
     any:
-      - id: objectives/command-and-control/backdoor/dispatch/shell::debug-macro-system-wrapper
-      - id: objectives/command-and-control/backdoor/dispatch/shell::source-tree-debug-macro-command-trigger
+      - id: objectives/command-and-control/backdoor/dispatch/shell/source::debug-macro-system-wrapper
+      - id: objectives/command-and-control/backdoor/dispatch/shell/source::source-tree-debug-macro-command-trigger

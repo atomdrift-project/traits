@@ -72,7 +72,20 @@ traits:
     conf: 0.9
     if:
       type: text
-      regex: 'cmdclass[\s\S]{0,200}[''"]build_py[''"]\s*:'
+      regex: 'cmdclass[\s\S]{0,200}[''"]build_py[''"]\s*:\s*[A-Za-z_][A-Za-z0-9_.]*'
+    not:
+      # A cmdclass that re-registers the stock build_py under its own name
+      # changes nothing, so it is not a custom command (e.g. a vendored
+      # sub-package setup.py mapping {"build_py": build_py} verbatim). The
+      # not: pattern must fit inside the if: match span, hence the short form.
+      - regex: 'build_py[''"]\s*:\s*build_py\b'
+    unless:
+      # Same test-tree policy as setup-cmdclass-install: setuptools' own
+      # test_editable_install.py and test_sdist.py register
+      # `cmdclass={'build_py': ...}` to exercise the packaging machinery, but
+      # test-tree code never runs at install time, so it declares no live
+      # hook. A real setup.py ships at the package root, never under tests/.
+      - id: metadata/package/testing/presence/harness::test-directory-path
   - id: setup-cmdclass-egg-info
     desc: setup() defines custom egg_info command
     conf: 0.9
@@ -241,6 +254,24 @@ traits:
     if:
       type: text
       regex: 'class\s+\w+\s*\(\s*BuildHookInterface\s*\)\s*:[\s\S]{0,420}def\s+initialize\s*\('
+  - id: setup-command-subclass
+    desc: Class extends an install or build command
+    conf: 0.86
+    if:
+      type: text
+      regex: '(?m)^\s*class\s+\w+\s*\(.{0,80}\b(install|build(_ext)?)\b.{0,80}\)\s*:'
+  - id: setup-call-near-subprocess
+    desc: setup() call near subprocess usage
+    conf: 0.85
+    size_max: 30000
+    if:
+      type: text
+      regex: (?m)^[ \t]*(setuptools\.)?setup\s*\([\s\S]{0,500}subprocess\.
+    downgrade:
+      any:
+      - id: metadata/package/testing/presence/harness::pytest-module
+    unless:
+    - id: well-known/app/ai/browser-agent/open-webui-computer/
 
 composite_rules:
   # A build/egg-info hook may call a local helper to stage files before the
@@ -257,13 +288,32 @@ composite_rules:
     all:
       - id: run-override-calls-helper
 
+  # Any command class setuptools dispatches while pip builds or installs the
+  # package, overridden. Broader than python-install-hook (which keys on the
+  # install command): build_py and develop run at `pip install` too.
+  - id: python-build-or-install-command-override
+    desc: setup.py overrides a build or install command
+    crit: notable
+    conf: 0.9
+    any:
+      - id: cmdclass-install-phase-override
+      - id: setup-cmdclass-build-py
+      - id: setup-cmdclass-install
+      - id: setup-cmdclass-develop
+      - id: setup-cmdclass-egg-info
+      - id: setuptools-build-py-run-override
+      - id: setuptools-run-override
+      - id: setuptools-egg-info-run-override
+
   - id: python-install-hook
     desc: Python package custom lifecycle hook
     crit: notable
     conf: 0.9
     any:
       - id: setup-cmdclass-install
+      - id: setup-cmdclass-build-py
       - id: setuptools-run-override
+      - id: setuptools-build-py-run-override
       - id: setuptools-egg-info-run-override
       - id: metadata/package/files/wheel-sdist::install-class-inherit
 

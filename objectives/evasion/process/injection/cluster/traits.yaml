@@ -13,27 +13,39 @@ composite_rules:
     mbc: B0033
     all:
       - id: metadata/binary/symbols/version-proxy::version-proxy-api-export-set
-      - id: objectives/evasion/masquerade/trust::unsigned-pe-microsoft-version-claim
+      - id: metadata/signed/trust-level::unsigned-pe-microsoft-version-fields
       - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
       - id: micro-behaviors/os/api-resolution/hash-based::multiplicative-hash-loop
       - id: micro-behaviors/os/api-resolution/manual::truncated-native-injection-api-table
       - id: micro-behaviors/os/api-resolution/manual::clr-host-api-table
 
-  # Notable, not exception: an exception composite is not emitted, so a host
-  # rule's unless cannot see it. Any notable identity in either directory is
-  # enough for this broad API co-occurrence.
-  - id: gflags-or-devshell-identity
-    desc: GFlags or REG DevShell identity
+  # Notable, not exception: host rules need the identity signal to be emitted
+  # before an unless can see it. Each product legitimately inspects or edits
+  # another process as part of its debugger/development function.
+  - id: gflags-devshell-or-ollydbg-identity
+    desc: GFlags, DevShell, or OllyDbg identity
     crit: notable
     conf: 0.99
     any:
       - id: well-known/tool/sysadmin/gflags/
       - id: well-known/app/development/reg-devshell/
+      - id: well-known/tool/reverse-engineering/ollydbg/
+  # Same folding pattern: SQLite amalgamations and the JRuby runtime both ship
+  # injection-family APIs as implementation plumbing. One reference states that
+  # semantic once and keeps the chain rule inside its suppression budget.
+  - id: sqlite-or-jruby-plumbing-identity
+    desc: SQLite or JRuby bundled runtime identity
+    crit: notable
+    conf: 0.99
+    any:
+      - id: well-known/lib/data/sqlite::sqlite-version-string
+      - id: well-known/lib/runtime/scripted/jruby/
 
   - id: executable-memory-injection-chain
     desc: Executable allocation and injection chain
     crit: hostile
     conf: 0.92
+    scope: file
     attack: T1055
     mbc: B0033
     all:
@@ -41,16 +53,9 @@ composite_rules:
       - id: micro-behaviors/mem/protect/modify::non-pagespeed-memory-protection
       - id: objectives/evasion/process/injection/memory/
     unless:
-      - id: well-known/lib/data/sqlite::sqlite-version-string
-      # developer-shell-application and gflags-tool-identity are exception
-      # composites, which are not emitted and so cannot suppress this rule.
-      # The notable atoms in those directories can. Folded into one reference
-      # so Google Chrome's ProductName still fits the written budget.
-      - id: gflags-or-devshell-identity
-      - id: well-known/lib/runtime/scripted/jruby/
-      # GFlags legitimately edits and inspects process-debugging state. Its
-      # identity cannot suppress a concrete decoder, but it does make this
-      # broad API co-occurrence insufficient evidence of injection by itself.
+      # Debuggers, bundled runtimes, chrome.exe, al-khaser and DirectSkin --
+      # see executable-memory-injection-known-benign-context.
+      - id: executable-memory-injection-known-benign-context
       # Grouped: both of these were utility apps that hook or inject into
       # another process as their function (a translation overlay, a locale
       # shim). One directory reference states that semantic once instead of
@@ -65,14 +70,30 @@ composite_rules:
       # This identity also requires a full import surface, which a small
       # implant claiming to be a system DLL does not have.
       - id: objectives/anti-static/obfuscation/binary-metrics/shape::legitimate-microsoft-versioned-pe
-      # chrome.exe allocates executable JIT pages and imports the injection
-      # family for the sandbox. ProductName is the version resource.
-      - id: well-known/tool/browser::chrome-product-name
     downgrade:
       any:
         - id: well-known/lib/runtime/native-platform/mozilla-nspr/
         - id: well-known/app/system/drivers/
         - id: well-known/lib/data/sqlite/
+
+  - id: executable-memory-injection-known-benign-context
+    desc: Recognized software with executable-memory injection plumbing
+    crit: exception
+    conf: 0.95
+    scope: file
+    any:
+      - id: sqlite-or-jruby-plumbing-identity
+      - id: gflags-devshell-or-ollydbg-identity
+      # chrome.exe allocates executable JIT pages and imports the injection
+      # family for the sandbox. ProductName is the version resource.
+      - id: well-known/tool/browser::chrome-product-name
+      # al-khaser exercises allocation and injection primitives as its
+      # published test suite, not as an attack chain.
+      - id: well-known/tool/offensive/frameworks::al-khaser-benign-context
+      # DirectSkin patches its own hook entry points and installs UI hooks to
+      # apply application skinning; this is a code-hooking library, not an
+      # executable payload written into another process.
+      - id: well-known/lib/ui/stardock-directskin::directskin-control-identity
 
   - id: memory-injection-pattern
     desc: Memory protection and injection API cluster
@@ -92,36 +113,3 @@ composite_rules:
       # AOT stub) legitimately calls VirtualProtect and carries W^X mov-immediate
       # byte sequences (JIT/AOT page management), not injection.
       - id: metadata/signed/leaf::imagemagick-studio-llc
-
-  - id: memory-injection-recognized-marker
-    desc: Recognized memory-injection API context
-    crit: notable
-    conf: 0.9
-    any:
-      - id: well-known/app/system/drivers/dpinst::microsoft-dpinst-driver-installer
-      - id: well-known/tool/reverse-engineering/lordpe::lordpe-tool
-      - id: well-known/game/steam::valve-corp-binary
-      - id: well-known/lib/runtime/scripted/spidermonkey::spidermonkey-js-engine
-      - id: well-known/lib/runtime/native-platform/mozilla-nspr::nspr-library
-      - id: well-known/tool/sysadmin/jvm::jdk-attach-library
-      - id: well-known/app/system/drivers/canon::canon-inkjet-printer-driver-binary
-      - id: well-known/lib/platform/easyhook::easyhook-library
-      - id: well-known/lib/data/sqlite::sqlite-tcl-extension-library
-      - id: well-known/lib/data/sqlite::sqlite-version-string
-      # WinRAR SFX stubs and native modules carry W^X mov-immediate byte
-      # sequences and call VirtualProtect for legitimate decompression/UI, plus
-      # a clbcatq.dll DLL-hardening list — not memory injection.
-      - id: well-known/tool/sysadmin/winrar::winrar-component
-      - id: well-known/lib/media/skia::node-canvas-native-addon
-      - id: well-known/lib/runtime/scripted/luajit::runtime-context
-      - id: well-known/lib/ai/picovoice::pvrecorder-native-addon-path
-      - id: well-known/dual-use/access-control/licensing::native-license-manager-context
-      - id: well-known/tool/reverse-engineering/oep-finder::human-oep-finder
-      - id: well-known/tool/reverse-engineering/oep-finder::get-oep-export
-      - id: well-known/tool/reverse-engineering/oep-finder::unpacker-helper-api-pattern
-      - id: well-known/tool/reverse-engineering/x64dbg::x64dbg-release-component
-      - id: well-known/tool/reverse-engineering/scylla::scylla-unpacker
-      - id: well-known/app/utility/ventoy::plugson-binary
-      - id: well-known/app/system/weamp-pagespeed::native-pagespeed-library
-      - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
-      - id: metadata/signed/platform::microsoft

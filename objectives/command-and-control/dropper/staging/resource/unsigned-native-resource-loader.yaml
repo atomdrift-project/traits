@@ -1,0 +1,120 @@
+defaults:
+  crit: hostile
+  platforms: [windows]
+  for: [pe]
+  attack: T1027.009,T1055,T1105
+  mbc: B0032
+
+composite_rules:
+  - id: resource-memory-loader-with-endpoint
+    desc: Resource loader stages executable memory with endpoint data
+    conf: 0.98
+    all:
+      - id: micro-behaviors/data/embedded/payload/resource::pe-resource-load-lock-chain
+      - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-pe-resource-string
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/script/
+      - id: metadata/lang/compiler/managed/
+      - id: metadata/binary/installer/builder::advanced-installer-bootstrapper
+      - id: well-known/tool/reverse-engineering/
+      - id: well-known/app/utility/glary-utilities::glarysoft-signed-component-context
+      - id: well-known/app/utility/lunatranslator::lunatranslator-hook-context
+
+  - id: resource-loader-with-runtime-decoder
+    desc: Resource loader combines runtime decoding and memory execution
+    conf: 0.97
+    all:
+      - id: micro-behaviors/data/embedded/payload/resource::pe-resource-load-lock-chain
+      - id: micro-behaviors/data/string/case::ascii-case-fold-lookup-table
+      - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
+      - id: micro-behaviors/process/create/thread::create-thread
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/script/
+      - id: metadata/lang/compiler/managed/
+      - id: metadata/binary/installer/builder::advanced-installer-bootstrapper
+      - id: well-known/app/utility/glary-utilities::glarysoft-signed-component-context
+      - id: well-known/app/utility/lunatranslator::lunatranslator-hook-context
+  - id: resource-anti-debug-memory-loader
+    desc: Resource anti-debug memory loader
+    conf: 0.98
+    attack: T1027.009,T1055,T1622
+    all:
+      - id: metadata/signed/trust-level::unsigned
+      - id: micro-behaviors/data/embedded/payload/resource::pe-resource-full-extraction
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/mem/query::virtualquery
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    unless:
+      - id: well-known/lib/runtime/managed/mono::managed-runtime-native-library
+      # API bindings expose resource/memory/debug APIs without loading a payload.
+      - id: well-known/lib/native/pywin32::pywin32-binding-module
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/
+      - id: metadata/binary/framework/
+      - id: well-known/app/
+      - id: well-known/tool/
+
+  - id: unsigned-manual-pe-resource-loader
+    desc: Unsigned PE manually parses opaque resources behind an anti-debug gate
+    conf: 0.99
+    attack: T1027.009,T1620,T1622,T1105
+    all:
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/binary/resource/size::oversized-low-entropy-rsrc
+      - id: micro-behaviors/data/embedded/payload/header::x64-manual-pe-header-walk
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+      - id: micro-behaviors/fs/write/file/handle::write-file
+
+  - id: fake-gui-embedded-resource-stager
+    desc: Fake GUI imports with embedded resource PE
+    conf: 0.97
+    attack: T1036.005,T1027.009,T1105
+    all:
+      - id: metadata/binary/symbols/fake-windows::gui-import-cluster-beginpaint
+      - id: metadata/binary/symbols/fake-windows::gui-import-cluster-getactivewindow
+      - id: metadata/binary/layout/embedded::pe-embedded
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: micro-behaviors/data/embedded/payload/resource::pe-magic-in-rsrc
+    unless:
+      - id: metadata/binary/installer/
+      - id: metadata/signed/platform/
+      - id: well-known/tool/
+      - id: well-known/app/
+      - id: well-known/lib/
+
+  # Reactor and similar protectors ship a native mscoree host that decrypts
+  # managed payloads from high-entropy resources; pairing the ANSI resource
+  # API chain with CLR hosting and an anti-debug import separates crypter
+  # stubs from signed product builds that read their own resources.
+  - id: unsigned-clr-anti-debug-resource-stager
+    desc: Unsigned CLR host anti-debug resource loader
+    conf: 0.97
+    attack: T1027.009,T1620,T1622
+    all:
+      - id: objectives/command-and-control/dropper/staging/resource::pe-resource-api-loader-ansi
+      - id: metadata/binary/framework::mscoree-name
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: micro-behaviors/process/debug/detect::is-debugger-present-import
+    unless:
+      - id: metadata/binary/installer/
+      - id: metadata/signed/platform/
+      - id: well-known/tool/
+      - id: well-known/app/
+      - id: well-known/lib/
+
+  - id: unsigned-clr-dominant-section-resource-stager
+    desc: Unsigned CLR anti-debug loader with dominant code section
+    conf: 0.98
+    attack: T1027.009,T1620,T1622
+    all:
+      - id: unsigned-clr-anti-debug-resource-stager
+      - id: metadata/binary/section/ratio::largest-section-at-least-90-percent
+    unless:
+      - id: metadata/binary/installer/
+      - id: metadata/signed/platform/
+      - id: well-known/tool/
+      - id: well-known/app/
+      - id: well-known/lib/

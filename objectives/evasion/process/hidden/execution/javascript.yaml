@@ -14,7 +14,9 @@ traits:
     for: [javascript, html, vbs, text, data, mp3]
     if:
       type: text
-      regex: '(?i)<hta:application[^>]{0,180}showintaskbar\s*=\s*["'']?no\b'
+      regex: '(?i)<hta:application\b[\s\S]{0,800}?showintaskbar\s*=\s*["'']?no\b'
+    unless:
+      - id: metadata/package/tooling::contools-script-path
   - id: hta-windowstate-hidden
     desc: HTA requests a minimized window
     crit: suspicious
@@ -23,36 +25,44 @@ traits:
     for: [javascript, html, vbs, text, data, mp3]
     if:
       type: text
-      regex: '(?i)<hta:application[^>]{0,180}windowstate\s*=\s*["'']?(minimize|hidden)\b'
-  - id: window-offscreen-resize
-    desc: Window moves off-screen or shrinks
-    crit: suspicious
-    conf: 0.9
+      regex: '(?i)<hta:application\b[\s\S]{0,800}?windowstate\s*=\s*["'']?(minimize|hidden)\b'
+  - id: window-moveto-standalone-negative
+    desc: moveTo with standalone negative coordinate
+    crit: component
+    conf: 0.85
     platforms: [windows]
     for: [javascript, html, vbs, text, data, mp3]
     if:
       type: text
-      # HTA JScript calls moveTo/resizeTo as bare window methods. A dotted
-      # receiver (canvas i.moveTo) is a drawing call, so only window. or
-      # a non-dot prefix counts.
+      # HTA JScript calls moveTo as a bare window method. A dotted receiver
+      # (canvas i.moveTo) is a drawing call, so only window. or a non-dot
+      # prefix counts. The negative must stand alone as a coordinate: the
+      # minus has to follow an opening paren, comma, or whitespace, because
+      # centering arithmetic subtracts a dialog width
+      # (moveTo((screen.width-385)/2)) and that subtrahend only looks like
+      # an off-desktop coordinate.
+      regex: '(?i)(\bwindow\.|[^.\w])(moveTo\(([^):]{0,20}[\s,(])?-[1-9]\d+)'
+  - id: window-moveto-large-coordinate
+    desc: moveTo with large off-desktop coordinate
+    crit: component
+    conf: 0.85
+    platforms: [windows]
+    for: [javascript, html, vbs, text, data, mp3]
+    if:
+      type: text
       # A large second coordinate (moveTo(1,9999)) parks the window off the
       # desktop the same way a negative one does. Four-digit screen sizes
       # such as 1080 stay put because the second number has to start at 2.
-      regex: '(?i)(\bwindow\.|[^.\w])(moveTo\([^):]{0,20}(-\d+|,[2-9]\d{3})|resizeTo\([01],\s*[01])'
-    unless:
-      - id: metadata/file/extension/identity::declaration-file-extension
-  - id: raw-window-offscreen-resize
-    desc: Raw script moves window off-screen
-    crit: notable
-    conf: 0.9
+      regex: '(?i)(\bwindow\.|[^.\w])(moveTo\([^):]{0,20},[2-9]\d{3})'
+  - id: window-resizeto-trivial
+    desc: resizeTo to a trivial size
+    crit: component
+    conf: 0.85
     platforms: [windows]
-    for: [html, text, data]
+    for: [javascript, html, vbs, text, data, mp3]
     if:
-      type: raw
-      regex: '(?is)window\.(resizeTo|moveTo)\s*\(.{0,120}(-\d+|0\s*,\s*0)'
-    unless:
-      - id: metadata/package/testing/presence/harness::test-directory-path
-
+      type: text
+      regex: '(?i)(\bwindow\.|[^.\w])(resizeTo\([01],\s*[01])'
   - id: js-global-error-suppression
     desc: Script swallows every runtime error
     crit: suspicious
@@ -69,6 +79,19 @@ traits:
       regex: '(?i)\bwindow\.onerror\s*=\s*function[^)]{0,20}\)\s*\{\s*return\s+true'
 
 composite_rules:
+  - id: window-offscreen-resize
+    desc: Window moves off-screen or shrinks
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [javascript, html, vbs, text, data, mp3]
+    any:
+      - id: window-moveto-standalone-negative
+      - id: window-moveto-large-coordinate
+      - id: window-resizeto-trivial
+    unless:
+      - id: metadata/file/extension/identity::declaration-file-extension
+      - id: metadata/package/tooling::contools-script-path
   - id: hidden-hta-window
     desc: HTA window hides or minimizes
     crit: suspicious
@@ -90,8 +113,18 @@ composite_rules:
     for: [html]
     all:
       - id: objectives/evasion/process/hidden/execution::hidden-hta-window
-      - id: objectives/command-and-control/dropper/execution/exec-download::hta-hex-xor-string-decoder
+      - id: micro-behaviors/data/decode/custom::hta-hex-xor-string-decoder
       - id: micro-behaviors/data/encode/base64::large-string-assignment
+
+  - id: hidden-hta-encoded-script-execution
+    desc: Hidden HTA executes encoded script payload
+    crit: hostile
+    conf: 0.98
+    attack: "T1027,T1059.007,T1564.003"
+    for: [html]
+    all:
+      - id: hidden-hta-window
+      - id: objectives/anti-static/obfuscation/syntax::html-vbscript-encode-payload
 
   - id: offscreen-hta-obfuscated-wmi-loader
     desc: Off-screen HTA launches an obfuscated hidden WMI command
@@ -113,12 +146,12 @@ composite_rules:
     for: [vbs, mp3]
     all:
       - id: hidden-hta-window
-      - id: micro-behaviors/os/autorun/scheduled::register-task-definition
+      - id: micro-behaviors/os/autorun/control::register-task-definition
       - id: micro-behaviors/os/autorun/scheduled::task-scheduler-newtask-call
       - id: micro-behaviors/os/autorun/scheduled::task-scheduler-time-trigger-call
       - id: micro-behaviors/os/autorun/scheduled::task-scheduler-action-create-call
-      - id: objectives/anti-static/obfuscation/wsh::vbs-createobject-variable-arg
-      - id: objectives/command-and-control/dropper/execution/wsh-reconstruct::vbs-hex-fragment-accumulator
+      - id: micro-behaviors/os/com/automation::vbs-computed-createobject
+      - id: objectives/command-and-control/dropper/staging/encoded/script::vbs-hex-fragment-accumulator
 
   # The loader that never declares itself an HTA.
   #

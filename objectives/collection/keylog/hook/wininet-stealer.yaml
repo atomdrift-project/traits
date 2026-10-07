@@ -17,16 +17,18 @@ composite_rules:
   - id: wininet-keyboard-hook-stealer
     desc: Keyboard hook exfiltrates over WinInet
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/client/wininet::dynamic-wininet-api-set--internetopenurla
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/lib/platform/mfc::mfc-runtime-basename
       - id: metadata/binary/installer/family/
   - id: wininet-keyboard-hook-enum-windows
-    desc: Hook-chain API, window enumeration and WinInet
+    desc: Keylogger label with hook and WinInet APIs
     crit: suspicious
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/hardware/input/keyboard/label::keylogger-identity-label
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/ui/window/enumerate::enum-windows
       - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
     unless:
@@ -37,10 +39,17 @@ composite_rules:
     crit: suspicious
     conf: 0.86
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      # A generic Windows event hook may be WH_GETMESSAGE or a mouse hook.
+      # CallNextHookEx plus a worker thread does not establish key capture.
+      - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/process/create/thread::create-thread
     unless:
       - id: metadata/signed/platform/
+      # Installer toolchains and installer binaries combine hook imports with
+      # worker threads as a matter of course (Delphi VCL pulls the hook API
+      # surface into every GUI installer); a keylogger claim needs more.
+      - id: metadata/binary/installer/
       # signal-desktop-verified-context is an exception composite, so it never
       # suppressed this rule. The Electron host and chrome.dll both carry the
       # multi-marker runtime; that is the keyboard hook for the browser shell.
@@ -49,12 +58,13 @@ composite_rules:
       - id: well-known/app/productivity/notepad-plus-plus/
       - id: well-known/tool/sysadmin/conemu/
       - id: well-known/lib/media/videolan/
-      - id: well-known/lib/media/sdl::sdl3-dll-basename
-      - id: well-known/game/playnite::reference-binary
-      - id: metadata/binary/installer/plugin::known-nsis-plugin-basename
+      # Qt5Core and SDL install a hook from a worker thread for input dispatch.
+      - id: keyboard-hook-toolkit-runtime
+      - id: well-known/lib/platform/browser-automation/drivers/selenium::selenium-ie-driver-embedded-context
 
   - id: runkey-async-key-taskmgr
-    desc: Run-key implant polls keys and kills Taskmgr
+    desc: Run-key, key polling, and Taskmgr indicators
+    crit: suspicious
     attack: T1056.001,T1547.001,T1112
     all:
       - id: micro-behaviors/os/registry/keys::currentversion-run
@@ -67,30 +77,39 @@ composite_rules:
   - id: keyboard-hook-http-post
     desc: Keyboard hook posts harvested data over HTTP
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/post::native-post-request-line
     unless:
       - id: metadata/signed/platform/
   - id: keyboard-hook-form-post
     desc: Keyboard hook posts form-urlencoded data
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/post::form-urlencoded-post-template
     unless:
       - id: metadata/signed/platform/
   - id: keyboard-hook-winsock-client
-    desc: Keyboard hook talks over a Winsock client
+    desc: Keylogger label, hook-chain and Winsock APIs
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/hardware/input/keyboard/label::keylogger-identity-label
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
     unless:
       - id: metadata/signed/platform/
-      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
-      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-gup-updater
+      - id: well-known/lib/platform/mfc::mfc-runtime-basename
+      - id: well-known/app/productivity/notepad-plus-plus/
+      - id: well-known/lib/ui/sciter/
+      - id: metadata/binary/debug::pdb-remcos-backdoor-tree
+      - id: metadata/package/tooling::everything-binary
+      - id: well-known/lib/platform/browser-automation/drivers/selenium::selenium-ie-driver-embedded-context
+      - id: well-known/dual-use/remote-admin/tightvnc::tightvnc-viewer-verified-identity
+      # Stripped FFmpeg player builds (ffplay.exe + fftools code paths) use
+      # hooks for media-key handling and Winsock for streaming, not theft.
+      - id: well-known/lib/media/ffmpeg::ffmpeg-player-binary-context
   - id: keyboard-hook-form-header
     desc: Keyboard hook builds a form-urlencoded POST
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/post::form-urlencoded-header-pe
     unless:
       - id: metadata/signed/platform/
@@ -102,37 +121,52 @@ composite_rules:
     # over a large x86 image. The hook string has to sit with that push.
     near_bytes: 1048576
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/process/create/flags::x86-create-no-window-immediate
     unless:
       - id: metadata/signed/platform/
       - id: well-known/tool/sysadmin/conemu/
+      - id: metadata/package/tooling::cpuz-binary
+      - id: well-known/tool/reverse-engineering/cff-explorer/
+      - id: inno-setup-vcl-runtime
+      # Trion uses the ordinary Windows hook/message APIs for its serial
+      # terminal UI. The nearby no-window flag bytes are unrelated to a hidden
+      # keylogging thread (the proximity window spans almost the whole image).
+      - id: well-known/app/utility/trion::trion-application-context
+      - id: keyboard-hook-winsock-client
   - id: keyboard-hook-openurl
     desc: Keyboard hook downloads via InternetOpenUrl
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/client/wininet::internet-open-url
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/lib/platform/mfc::mfc-runtime-basename
+      - id: metadata/binary/debug::pdb-remcos-backdoor-tree
+      - id: keyboard-hook-winsock-client
   - id: keyboard-hook-cleartext-url
     desc: Keyboard-hook-capable binary has an HTTP client and cleartext URL
-    # Toolchain banners can contain documentation URLs; require a network
-    # client as well as the hook API before treating the URL as suspicious.
+    # Toolchain banners can contain documentation URLs; require an HTTP
+    # client as well as the hook API. A raw Winsock client does not establish
+    # that it sends HTTP to a nearby URL.
     crit: suspicious
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/communications/http/url/scheme::cleartext-http-url
     any:
       - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
       - id: micro-behaviors/communications/http/client/winhttp::winhttp-send-request
-      - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
       - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file-import
     unless:
       - id: metadata/signed/platform/
+      # PyScripter and Notepad++ ship in the recognized desktop-input group.
+      - id: recognized-desktop-input-known-benign-context
       - id: well-known/app/communication/signal::signal-desktop-verified-context
       - id: well-known/lib/runtime/scripted/electron::chromium-engine-capability-context
-      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
-      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-gup-updater
+      - id: metadata/package/tooling::everything-binary
+      - id: metadata/package/tooling::cpuz-binary
+      - id: well-known/lib/platform/browser-automation/drivers/selenium::selenium-ie-driver-embedded-context
+      - id: well-known/lib/crypto/msal/
   - id: dll-hook-wininet-openurl
     desc: Keyboard-hook DLL downloads via InternetOpenUrl
     all:
@@ -155,14 +189,13 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/http/client/wininet::wininet-http-flow
       - id: micro-behaviors/communications/http/client/winhttp::winhttp-send-request
-      - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
       - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file-import
     unless:
       - id: metadata/signed/platform/
   - id: hook-export-wininet
     desc: HookOff export plus InternetOpenUrl downloader
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::hookoff-export-text
+      - id: micro-behaviors/ui/window/hook::hookoff-export-text
       - id: micro-behaviors/communications/http/client/wininet::internet-open-url
     unless:
       - id: metadata/signed/platform/
@@ -171,7 +204,7 @@ composite_rules:
   - id: winsta-keyboard-hook-keystate
     desc: Window-station hook plus key-state capture
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::set-windows-hook
+      - id: micro-behaviors/ui/window/hook::set-windows-hook
       - id: micro-behaviors/hardware/input/keyboard/poll::get-keyboard-state
       - id: micro-behaviors/ui/window/station::open-window-station
     unless:
@@ -179,7 +212,7 @@ composite_rules:
   - id: winsta-keyboard-hook-toascii
     desc: Window-station hook translates keystrokes
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::call-next-hook-ex
+      - id: micro-behaviors/ui/window/hook::call-next-hook-ex
       - id: micro-behaviors/hardware/input/keyboard/layout::to-ascii-str
       - id: micro-behaviors/ui/window/station::open-window-station
     unless:
@@ -188,49 +221,81 @@ composite_rules:
   - id: desktop-keyboard-hook-keystate
     desc: Alternate-desktop hook reads keyboard state
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::set-windows-hook
+      - id: micro-behaviors/ui/window/hook::set-windows-hook
       - id: micro-behaviors/hardware/input/keyboard/poll::get-keyboard-state
       - id: micro-behaviors/ui/window/station::open-desktop-a
     unless:
       - id: metadata/signed/platform/
+  - id: keyboard-hook-toolkit-runtime
+    desc: GUI toolkit keyboard dispatch thread
+    crit: exception
+    conf: 0.9
+    any:
+      - id: well-known/lib/media/sdl::sdl3-dll-basename
+      - id: well-known/lib/ui/qt::qt5-core-binary
+      - id: well-known/lib/ui/sciter::sciter-api-export
+      - id: well-known/lib/ui/codejock::xtreme-toolkit-pro-runtime-component
+      - id: well-known/lib/platform/mfc::mfc-runtime-basename
   # These recognized desktop runtimes and applications legitimately install
   # keyboard hooks while reading key state. Keep their identity evidence in a
   # reusable exception instead of making the detection fight a long allowlist.
   # Strong Wine and VideoLAN identities replace their former broad directory
   # suppressors so a lone weak marker cannot silence the keylogger signal.
-  - id: recognized-desktop-input-software
+  - id: recognized-desktop-input-known-benign-context
     desc: Recognized desktop software with input-hook behavior
     crit: exception
     conf: 0.99
     any:
       - id: well-known/lib/platform/wine::wine-builtin-dll-marker
+      - id: well-known/app/development/pyscripter::official-binary
       - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
       - id: well-known/lib/native/pywin32::pywin32-module-basename
-      - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
+      - id: well-known/app/productivity/notepad-plus-plus/
       - id: well-known/lib/media/videolan::videolan-codec-lib
       - id: well-known/lib/media/sdl::sdl3-dll-basename
       - id: well-known/game/playnite::reference-binary
       - id: well-known/lib/platform/mfc::mfc-runtime-basename
       - id: well-known/lib/ui/tcl-tk::tcl-tk-runtime-basename
       - id: well-known/tool/sysadmin/console::openconsole-basename
+  # Inno Setup's Delphi VCL runtime (setup stub, IDE) installs thread-local
+  # WH_GETMESSAGE/WH_MSGFILTER hooks on its own UI thread -- no WH_KEYBOARD or
+  # WH_KEYBOARD_LL, so no other process's keystrokes reach it. The Inno Setup
+  # identity directory names the setup stub (JR.Inno.Setup manifest) and the
+  # IDE (product/manifest). Kept apart from recognized-desktop-input-known-benign-context
+  # so the hidden-thread rule can use it without inheriting that list's weight;
+  # the directory reference keeps it inside the suppression budget.
+  - id: inno-setup-vcl-runtime
+    desc: Inno Setup runtime or IDE with VCL UI hooks
+    crit: exception
+    conf: 0.98
+    any:
+      - id: well-known/tool/packaging/inno-setup/
   - id: hook-keyboard-state
     desc: Keyboard hook also samples GetKeyboardState
     crit: suspicious
     conf: 0.9
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::set-windows-hook
+      - id: micro-behaviors/ui/window/hook::set-windows-hook
+      # GUI message hooks often coexist with ordinary keyboard-state reads;
+      # require evidence that the installed hook is actually a keyboard hook.
+      - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
       - id: micro-behaviors/hardware/input/keyboard/poll::get-keyboard-state
     unless:
       - id: metadata/signed/platform/
-      - id: recognized-desktop-input-software
+      - id: recognized-desktop-input-known-benign-context
+      - id: metadata/package/tooling::cpuz-binary
+      - id: metadata/package/tooling::everything-binary
+      - id: metadata/package/tooling::lite-xl-binary
+      - id: inno-setup-vcl-runtime
 
   - id: hook-to-ascii
     desc: Keyboard hook translates keys via ToAscii
     all:
-      - id: micro-behaviors/hardware/input/keyboard/hook::set-windows-hook
+      - id: micro-behaviors/ui/window/hook::set-windows-hook
       - id: micro-behaviors/hardware/input/keyboard/layout::to-ascii-str
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/platform/wine/
+      - id: well-known/app/development/pyscripter::official-binary
       - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
       - id: well-known/lib/media/videolan/

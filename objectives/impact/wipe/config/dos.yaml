@@ -1,0 +1,92 @@
+# CMOS-killer stub as appended to an infected DOS SYS driver (strategy
+# routine redirected past the clean body): on the trigger day it zeroes CMOS
+# registers 10h-3Fh through ports 70h/71h — OUT 70h selects the register, a
+# zeroed AL goes out 71h, the loop steps through the range — then reboots
+# through the reset vector. The hardware configuration (drive types, boot
+# order) is destroyed, so the host cannot boot.
+defaults:
+  platforms: [unix, windows]
+  for: [dos_com, static-lib, data]
+  size_max: 65536
+  attack: T1490
+traits:
+  - id: dos-cmos-zero-fill-iteration
+    desc: DOS writes zeros across CMOS registers
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: hex
+      pattern: "E6 70 [0-3] 2A C0 E6 71 [0-4] 40 3C 40 72"
+
+  # Direct CMOS-port access with a date/time gate. CMOS register 07h is the
+  # day and register 02h is the minute.
+  - id: dos-cmos-day8-minute47-trigger
+    desc: CMOS trigger is day 8, minute 47
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: hex
+      pattern: "B0 07 E8 ?? ?? 3C 08 75 ?? B0 02 E8 ?? ?? 3C 47 75"
+
+  # Clears floppy type, hard-disk type, base memory, and extended memory
+  # CMOS registers, then recomputes the 10h-2Dh checksum and writes 2Eh/2Fh.
+  - id: dos-cmos-clear-hardware-config-checksum
+    desc: DOS clears CMOS device and memory sizes
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: hex
+      pattern: "B8 10 00 E8 ?? ?? B0 12 E8 ?? ?? B0 17 E8 ?? ?? B0 18 E8 ?? ?? 99 B0 10 50 E8 ?? ?? 03 D0 58 FE C0 3C 2E 75 ?? 8A E6 E8 ?? ?? 8A E2 B0 2F E6 70 8A C4 E6 71 C3"
+
+  - id: dos-cmos-register-wipe-loop
+    desc: DOS writes CMOS registers in a loop
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: hex
+      pattern: "E6 70 [0-3] E6 71 [0-8] E2"
+    unless:
+      - id: well-known/app/system/limine::limine-boot-image-context
+
+  - id: dos-cmos-status-register-access
+    desc: DOS accesses CMOS status register
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: hex
+      pattern: "B0 0A E6 70"
+    unless:
+      - id: well-known/app/system/limine::limine-boot-image-context
+composite_rules:
+  - id: dos-cmos-loop-wiper
+    desc: DOS loop wipes CMOS configuration
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: dos-cmos-register-wipe-loop
+      - id: dos-cmos-status-register-access
+  - id: dos-cmos-nvram-wipe-reboot
+    desc: DOS zeroes CMOS hardware configuration and reboots
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: dos-cmos-zero-fill-iteration
+      - id: micro-behaviors/os/event/shutdown::dos-reset-vector-reboot-jump
+  # The same wipe gated on the RTC date: the stub polls INT 1Ah AH=04h and
+  # only runs the zero-fill on the trigger day, a logic bomb rather than an
+  # immediate wiper.
+  - id: dos-date-gated-cmos-bomb
+    desc: Date-triggered CMOS destruction payload
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/time/query::dos-bios-rtc-date-read
+      - id: dos-cmos-nvram-wipe-reboot
+
+  - id: dos-date-gated-cmos-config-destruction
+    desc: DOS date gate erases CMOS device configuration
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: dos-cmos-day8-minute47-trigger
+      - id: dos-cmos-clear-hardware-config-checksum

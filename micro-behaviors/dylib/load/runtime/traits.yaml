@@ -4,6 +4,15 @@ defaults:
     - macos
     - windows
 traits:
+  - id: python-pyd-extension-string
+    desc: Python code references a native module suffix
+    crit: notable
+    conf: 0.88
+    for: [python]
+    if:
+      type: text
+      regex: '["''][^"''\n]{0,60}[A-Za-z0-9_]\.pyd["'']'
+
   - id: apr-dso-load-reference
     desc: References APR dynamic shared-object loading API
     crit: notable
@@ -95,6 +104,8 @@ traits:
     if:
       type: symbol
       exact: LoadLibrary
+    unless:
+      - id: well-known/lib/network/grpc-ruby::grpc-ruby-native-loader-source
   - id: go-lazy-dll-load
     desc: Go syscall.NewLazyDLL DLL load
     crit: notable
@@ -203,7 +214,7 @@ traits:
       - id: metadata/binary/symbols/count::many-imports
       - id: metadata/binary/code/complexity::many-functions
       - id: metadata/binary/installer/family/
-      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft
       # Go's Windows syscall runtime imports LoadLibraryW even when the
       # program never performs dynamic library loading itself.
       - id: metadata/lang/runtime::go-runtime-marker
@@ -263,11 +274,11 @@ traits:
     downgrade:
       any:
         - id: metadata/binary/framework/
-        - id: metadata/signed/platform::microsoft-windows
+        - id: metadata/signed/platform::microsoft
         - id: metadata/lang/compiler/managed::borland-section-code
   - id: load-library-ex-w
     desc: LoadLibraryExW API reference
-    crit: baseline
+    crit: notable
     conf: 0.95
     attack: T1574.002
     for:
@@ -278,11 +289,12 @@ traits:
       type: symbol
       exact: LoadLibraryExW
     unless:
+      - id: metadata/lang/compiler/systems::go-binary-comp
       - id: metadata/binary/symbols/count::many-imports
       - id: metadata/binary/framework::electron-desktop-runtime
       - id: metadata/binary/installer/family/
       - id: metadata/binary/installer/script/
-      - id: metadata/signed/platform::microsoft-windows
+      - id: metadata/signed/platform::microsoft
       - type: basename
         exact: WebView2Loader.dll
     downgrade:
@@ -306,22 +318,6 @@ traits:
       any:
         - id: metadata/signed/platform/
         - id: metadata/binary/symbols/count::many-exports
-  - id: dlclose
-    desc: Dynamic library unload
-    crit: notable
-    conf: 0.8
-    attack: T1574.006
-    for:
-      - elf
-      - macho
-    if:
-      type: symbol
-      exact: dlclose
-    downgrade:
-      any:
-        - id: metadata/file/string/identity::system-shell-basename
-    unless:
-      - id: metadata/lang/compiler/generated/
   - id: dlerror
     desc: Dynamic linker error handling
     crit: notable
@@ -414,6 +410,20 @@ traits:
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+  # A ctypes loader call used as a bare statement: `_ct.CDLL(path)` with the
+  # returned handle never bound. Nothing can be called through the library
+  # afterwards, so the only effect is the loader's own initialisation code
+  # (DllMain / constructors). Text-matched so aliased modules (`import
+  # ctypes as _ct`) are covered, which the exact symbol matchers above miss.
+  - id: ctypes-load-handle-discarded
+    desc: ctypes library load with handle discarded
+    crit: notable
+    conf: 0.85
+    attack: T1129
+    for: [python]
+    if:
+      type: text
+      regex: '(?m)^[ \t]*[\w.]{0,40}\b(CDLL|WinDLL|OleDLL|PyDLL)\s*\([^\n]{1,120}\)[ \t]*$'
   - id: loadlibrary-keyword
     desc: LoadLibrary named as a string, not called
     crit: notable
@@ -476,14 +486,14 @@ traits:
       type: text
       substr: loadReplacementClass
   - id: webkit-framework
-    desc: WebKit framework linked
+    desc: WebKit framework path
     crit: notable
     conf: 0.9
     for:
       - macho
     if:
       type: text
-      substr: WebKit
+      substr: WebKit.framework/
 composite_rules:
   - id: objc-messaging-hook
     desc: ObjC method swizzle with messaging hook
@@ -552,7 +562,7 @@ composite_rules:
     all:
       - id: micro-behaviors/dylib/lookup::dlsym-symbol
     any:
-      - id: dlclose
+      - id: micro-behaviors/dylib/load/unload::dlclose
       - id: dlerror
     unless:
       - id: metadata/file/string/identity::system-shell-basename
@@ -569,7 +579,7 @@ composite_rules:
     any:
       - id: dlopen
       - id: micro-behaviors/dylib/lookup::dlsym-symbol
-      - id: dlclose
+      - id: micro-behaviors/dylib/load/unload::dlclose
       - id: dlerror
   - id: nsbundle-dynamic
     desc: NSBundle and dynamic loader APIs

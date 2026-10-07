@@ -13,30 +13,14 @@ defaults:
   attack: T1195.002
   mbc: B0024
 traits:
-- id: xor-charcode-decode-func
-  desc: XOR charCodeAt decode function
-  crit: notable
-  conf: 0.85
-  attack: T1027
-  if:
-    type: text
-    regex: "charCodeAt\\s*\\([^)]{0,30}\\)\\s*\\^\\s*[^;]{1,40}"
-  unless:
-  - id: metadata/lang/compiler/systems::go-binary
-  - id: metadata/file/magic/identity::macho-32
-  - id: metadata/file/magic/identity::macho-64
-- id: xor-fromcharcode-rebuild
-  desc: XOR fromCharCode string rebuild
-  crit: notable
-  conf: 0.85
-  attack: T1027
-  if:
-    type: text
-    regex: "String\\.fromCharCode\\s*\\([^)]{0,60}\\^"
-  unless:
-  - id: metadata/lang/compiler/systems::go-binary
-  - id: metadata/file/magic/identity::macho-32
-  - id: metadata/file/magic/identity::macho-64
+# NOTE: the generic charCodeAt-XOR and fromCharCode-XOR decode atoms used to
+# live here. Their matchers describe neutral string-decoding capabilities, not
+# install-hook behavior, so they fired on unrelated loaders (e.g. a browser
+# EtherHiding stager) under a supply-chain feature. The charCodeAt form
+# duplicates micro-behaviors/data/encode/xor::js-charcode-xor-operation and is
+# referenced canonically below; the fromCharCode form duplicates
+# micro-behaviors/data/encode/char-code::fromcharcode-xor-rebuild and is
+# referenced canonically too.
 - id: modular-key-index
   desc: Modular arithmetic key index
   crit: suspicious
@@ -65,7 +49,7 @@ composite_rules:
   all:
   - id: metadata/package/scripts/lifecycle::install-hooks
   - id: micro-behaviors/process/create/load/local::cjs-caught-local-require
-  - id: objectives/anti-static/obfuscation/imports::node-charcode-decoded-require
+  - id: objectives/anti-static/obfuscation/imports/concealment::node-charcode-decoded-require
   - id: micro-behaviors/data/control-flow/error-handling::catch-before-await-or-require
 - id: xor-string-decode-infra
   desc: XOR string decoding infrastructure in an install hook
@@ -81,8 +65,8 @@ composite_rules:
   scope: archive
   for: [javascript, typescript, package.json, npm]
   all:
-  - id: xor-charcode-decode-func
-  - id: xor-fromcharcode-rebuild
+  - id: micro-behaviors/data/encode/xor::js-charcode-xor-operation
+  - id: micro-behaviors/data/encode/char-code::fromcharcode-xor-rebuild
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-loop
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-charcode-assignment
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-byte-array-xor-modulo-key-loop
@@ -122,8 +106,8 @@ composite_rules:
   - id: metadata/package/scripts/lifecycle::install-hooks
   needs: 2
   any:
-  - id: xor-charcode-decode-func
-  - id: xor-fromcharcode-rebuild
+  - id: micro-behaviors/data/encode/xor::js-charcode-xor-operation
+  - id: micro-behaviors/data/encode/char-code::fromcharcode-xor-rebuild
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-loop
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-xor-charcode-assignment
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-byte-array-xor-modulo-key-loop
@@ -132,29 +116,42 @@ composite_rules:
   - id: objectives/anti-static/obfuscation/string/encoding::js-strong-obfuscation
   - id: micro-behaviors/data/encode/xor::js-xor-dynamic-char-at
   - id: objectives/anti-static/obfuscation/string/reconstruct::js-xor-numeric-array-string-reconstruction
+- id: arithmetic-decoder-fromcharcode-evidence
+  desc: fromCharCode decoder evidence present
+  crit: component
+  any:
+  - id: micro-behaviors/data/decode/charset::fromcharcode-call
+  - id: micro-behaviors/data/decode/charset::fromcharcode-text-in-large-source
+- id: arithmetic-decoder-charcode-evidence
+  desc: charCode arithmetic decoder evidence present
+  crit: component
+  any:
+  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
+  - id: micro-behaviors/data/decode/custom::js-modulo-alphabet-caesar-decoder
 - id: arithmetic-encoded-dropper
-  desc: Arithmetic-decoded payload executed via Function constructor
+  desc: Install hook executes arithmetic-decoded payload
   # Sibling of obfuscated-postinstall-dropper for the arithmetic/Caesar decoder
   # family (rot-n via charCodeAt + fromCharCode), wired into a dynamic execution
   # sink. Triangle of `encoded array literal + custom decoder + Function/eval`
   # only exists to ship and execute a hidden payload.
   crit: hostile
   conf: 0.96
-  attack: T1027
+  attack: T1195.002,T1027,T1059.007
   mbc: B0032
   near_lines: 60
   all:
-  - id: micro-behaviors/data/encode/char-code::fromcharcode-call
-  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
+  - id: objectives/supply-chain/install-hook/scripts/hook-file::hook-script-filename
+  - id: arithmetic-decoder-fromcharcode-evidence
+  - id: arithmetic-decoder-charcode-evidence
   any:
   - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
   - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
   unless:
-  - id: metadata/package/testing/
+  - id: metadata/package/testing/harness/runtime/
   - id: well-known/tool/detection/security-scanner/
   - id: well-known/tool/detection/llm-scanner/
-  - id: metadata/build/
+  - id: metadata/build/minifier::intentional-obfuscated-javascript-artifact-context
 - id: self-cleaning-dropper
   desc: Self-cleaning obfuscated dropper
   crit: hostile
@@ -173,7 +170,7 @@ composite_rules:
   for: [package.json, npm, javascript]
   scope: archive
   all:
-  - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+  - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
   - id: micro-behaviors/crypto/symmetric/xor/loop::js-byte-array-xor-modulo-key-loop
   - id: objectives/evasion/self-delete/file/script::node-self-delete
   - id: objectives/evasion/self-delete/file/script::manifest-swap
@@ -210,66 +207,47 @@ composite_rules:
   - id: micro-behaviors/process/create/spawn::shell-obfuscated-dynamic
   - id: micro-behaviors/process/create/spawn::windowshide-obfuscated-true
   - id: micro-behaviors/communications/http/post::post
-# Shai-Hulud shape: a package whose install hook executes a local Node script,
-# and that script is a bundled, obfuscated eval-dropper (single megabyte line +
-# Caesar/char-code self-decoder feeding eval). The two halves live in different
-# archive entries (package.json + index.js), so this is archive-scoped — the
-# per-file obfuscated-dropper composites above cannot bridge them, and the
-# megabyte minified blob is otherwise suppressed by js-large-minified-bundle.
-# What makes a megabyte obfuscated eval blob hostile is that npm runs it on
-# install: no legitimate build step ships a Caesar-ciphered eval payload as its
-# preinstall target.
-- id: preinstall-obfuscated-bundle-dropper
-  desc: Preinstall executes obfuscated bundled eval dropper
+# Obfuscation markers must live in the preinstall script itself. Archive pooling
+# used to let a benign hook plus an unrelated vendored bundle (Prisma Studio,
+# dd-trace) satisfy the composite; conversely, when the preinstall target is
+# the large one-line blob, `js-large-minified-bundle` in `unless:` suppressed
+# the real dropper (nebula-sdk preinstall.cjs).
+- id: preinstall-script-obfuscated-loader
+  desc: Preinstall script has multiple concealment or loader markers
+  crit: suspicious
+  conf: 0.96
+  attack: T1027
+  scope: file
+  all:
+    - id: metadata/package/files/included::preinstall-js-basename
+  any:
+    - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
+    - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
+    - id: metadata/file/function::constant-return-functions-dominate-file
+    - id: metadata/file/padding::near-zero-whitespace-source
+    - id: metadata/import/builtin::child-process-module-reference
+    - id: metadata/file/line::single-long-line-outlier
+  needs: 2
+  unless:
+    - id: objectives/supply-chain/install-hook/scripts/hook-file::npm-install-hook-gzip-payload-dropper
+# Caesar/char-code decoder inside a Function constructor, wired to child_process
+# in the same packed preinstall script. The decoder and execution sink are text-
+# mode evidence because the megabyte one-liner exceeds the JS parser guard.
+- id: preinstall-modular-caesar-function-dropper
+  desc: Preinstall runs modular Caesar Function constructor loader
   crit: hostile
-  conf: 0.97
+  conf: 0.98
+  attack: T1195.002,T1027,T1059.007
+  mbc: B0024,B0032
   for: [javascript, typescript, package.json, npm]
   scope: archive
-  # The execution sink used to be required as `js-eval-call-expression-arg`, an
-  # AST-symbol match. The megabyte packed droppers this rule targets exceed the
-  # JS parser's scanner-state guard (AST unavailable) and reach their sink
-  # through `Function(decode(...))()` rather than a literal `eval(...)`, so that
-  # leg never matched the payload and the whole composite missed its own class.
-  # The obfuscated-payload evidence (packed-dropper composite, XOR numeric-array
-  # reconstruction, charcode arithmetic) is all text-mode and AST-independent,
-  # and each is real obfuscation rather than plain minification, so a preinstall
-  # that runs a local Node script carrying any of it is the install-time dropper.
   all:
   - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
-  any:
-  - id: objectives/supply-chain/hidden-payload/eval::packed-single-line-eval-dropper
-  - id: objectives/supply-chain/hidden-payload/eval::megabyte-charcode-packed-payload
-  - id: objectives/supply-chain/hidden-payload/eval::packed-charcode-indirect-eval-loader
-  - id: objectives/anti-static/obfuscation/string/reconstruct::js-xor-numeric-array-string-reconstruction
-  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
-  - id: micro-behaviors/data/decode/custom::fromcharcode-map-array
-  needs: 1
-  # `scope: archive` pools evidence file-agnostically, so a completely
-  # unrelated bundled/minified JS file elsewhere in the package can supply
-  # the only obfuscation leg while an entirely benign preinstall script
-  # (a bare Node-version gate) supplies the hook leg. Prisma's own
-  # build/studio.js (Prisma Studio's bundled frontend) triggers
-  # charcodeat-arithmetic through ordinary vendored string-width/Unicode
-  # helper code -- its actual scripts/preinstall-entry.js just requires a
-  # tiny esbuild-bundled Node-version check with no decode/eval sink at
-  # all. Named directly (not via the js-any-bundle-output aggregator,
-  # which expands past the suppression budget): a large minified bundle
-  # is not obfuscation.
+  - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
+  - id: micro-behaviors/data/decode/custom::js-modulo-alphabet-caesar-decoder
+  - id: metadata/import/builtin::child-process-module-reference
   unless:
-  - id: metadata/build/minifier::js-large-minified-bundle
-  # `metadata/file/line::javascript-line-over-20000` (bare
-  # `text.max_line_length >= 20000`,
-  # crit: component) used to sit in this list. It has no ratio/context check,
-  # so it fires on any ordinary single-line bundler output -- and this
-  # composite pools `scope: archive`, meaning a legitimate preinstall script
-  # anywhere in the package convicts the whole thing the moment ANY unrelated
-  # vendored dependency happens to ship as a one-line minified bundle. dd-trace
-  # vendors jsonpath-plus (26KB, one line) and meriyah (154KB, one line) this
-  # way -- ordinary esbuild/rollup output, nowhere near its own preinstall.js.
-  # A component-level bare metric was never strong enough to stand alone as
-  # the sole qualifying leg of a hostile, archive-pooled composite; the
-  # remaining legs are all real obfuscation techniques (decode loops, eval
-  # sinks, charcode transforms), which is what "obfuscated" actually means.
+  - id: metadata/build/minifier::intentional-obfuscated-javascript-artifact-context
 # obfuscator.io-packed install hook. A package whose install lifecycle runs a
 # bundled script, and that script is obfuscator.io output (string-array
 # rotation + decoder dispatch, hex/dollar name mangling). Unlike the eval- and
@@ -288,7 +266,7 @@ composite_rules:
   for: [javascript, typescript, package.json, npm]
   scope: archive
   all:
-  - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+  - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
   any:
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::advanced-array-shuffling
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::strong-js-obfuscation
@@ -305,6 +283,34 @@ composite_rules:
     - id: metadata/package/testing/harness/runtime/
     - id: metadata/package/testing/presence/fixture::test-filename-pattern
 
+# String-table runtime plus a concealed HTTP client in an install hook. The
+# sibling dropper above needs one of the strong-obfuscation markers
+# (array-shuffling, strong, concealed-runtime), which a base64-table variant
+# does not reach: its rotation guard and hex mangling stay below that bar
+# while every require target and URL sits inside the string table. When that
+# same table also hides the HTTP client and URL itself
+# (lower-first-base64-http-client-table), the concealed network stage supplies
+# the missing specificity instead: an install hook running string-array
+# obfuscated code that hides who it talks to. The Function-eval sibling
+# (lower-first-base64-http-function-loader) covers the in-memory sink; this
+# covers the hook context, where staging to disk and spawning needs no eval
+# leg to be hostile.
+- id: install-hook-concealed-http-client-dropper
+  desc: Install hook runs obfuscated script hiding its HTTP client
+  crit: hostile
+  conf: 0.97
+  attack: "T1195.002,T1105,T1027.002"
+  for: [javascript, typescript, package.json, npm, zip, tar]
+  scope: archive
+  all:
+  - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
+  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::javascript-obfuscator-string-array-runtime
+  - id: micro-behaviors/communications/url/encoded::lower-first-base64-http-client-table
+  unless:
+    # Same test-context carve-out as the sibling above.
+    - id: metadata/package/testing/harness/runtime/
+    - id: metadata/package/testing/presence/fixture::test-filename-pattern
+
 # This archive rule adds the npm trust-boundary crossing: package installation
 # invokes a concealed retrieval-and-open stage without an application entry
 # point or user action. Its behavioral legs are intentionally flattened because
@@ -318,7 +324,24 @@ composite_rules:
   for: [javascript, typescript, package.json, npm]
   scope: archive
   all:
-  - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+  - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+  - id: micro-behaviors/communications/http/request/computed::js-computed-http-object-call
+  - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
+  - id: micro-behaviors/process/create/shell/bridge::js-exec
+  - id: micro-behaviors/process/create/launch::string-table-cross-platform-file-openers
+  - id: micro-behaviors/fs/path/extension::js-executable-filename-literal
+  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling-with-string-table-rotation
+# Preinstall twin of the postinstall remote opener above (MALFEX-style dual hooks).
+- id: npm-preinstall-hook-remote-file-opener-dropper
+  desc: npm preinstall hook runs concealed remote file opener
+  crit: hostile
+  conf: 0.995
+  attack: "T1195.002,T1027,T1059.007,T1105"
+  mbc: "B0024,B0032"
+  for: [javascript, typescript, package.json, npm]
+  scope: archive
+  all:
+  - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
   - id: micro-behaviors/communications/http/request/computed::js-computed-http-object-call
   - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
   - id: micro-behaviors/process/create/shell/bridge::js-exec
@@ -336,7 +359,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/install-hook/scripts/local-script::install-runs-node-local-script
   - id: micro-behaviors/process/create/load/local::cjs-caught-local-require
-  - id: objectives/anti-static/obfuscation/imports::node-charcode-decoded-require
+  - id: objectives/anti-static/obfuscation/imports/concealment::node-charcode-decoded-require
 - id: install-hook-swallowed-charcode-helper
   desc: Install hook ships an obfuscated swallowed local helper
   crit: hostile
@@ -351,4 +374,4 @@ composite_rules:
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-variable-names
   unless:
   # A decoded domain export is the more specific concealed-sidecar shape.
-  - id: micro-behaviors/data/source/property/identity::commonjs-domain-like-export
+  - id: micro-behaviors/os/module/export::commonjs-domain-like-export

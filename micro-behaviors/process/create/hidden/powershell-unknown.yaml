@@ -7,7 +7,8 @@ traits:
     crit: suspicious
     conf: 0.9
     attack: T1059.001
-    for: [data, batch, oledoc, javascript, typescript]
+    for: [scripts, source]
+    platforms: [windows, unix]
     if:
       type: text
       # Raw text is not syntax-aware, so require the following argument to
@@ -16,69 +17,37 @@ traits:
       regex: '\bpowershell(\.exe)?\b[^\r\n]{0,180}\s-(EncodedCommand|enc)\b\s+["'']?[A-Za-z0-9+/]{16,}'
       case_insensitive: true
     unless:
+      - id: ansible-encoded-command-context
+      - id: metadata/package/testing/corpus/
       - type: path
         regex: '^Azure\.Core\.[0-9][^/]*\.nupkg/lib/net10\.0/Azure\.Core\.dll$'
       - id: metadata/package/testing/presence/harness::tests-path-filename
-      - id: well-known/app/infrastructure/ansible::ansible-python-package-path
-      - id: well-known/app/infrastructure/ansible::ansible-powershell-context
       - id: well-known/app/system/businessdev-albuild/
       - id: well-known/app/system/colorscripts-enhanced::package-context
       - id: well-known/lib/runtime/scripted/bun-runtime::runtime-context
-      # Same carve-out as `encodedcommand-flag-js` below: sindresorhus/open
+      # Same carve-out as the interpreter's `encodedcommand-flag-js`: sindresorhus/open
       # launches `powershell -EncodedCommand` as its Windows URL-opening
       # plumbing. A rollup/esbuild bundle of it (vite dist chunks, Electron
       # app bundles) is typed `javascript`, so the raw text rule sees the
       # full invocation and this `for:` list reaches it.
       - id: well-known/lib/runtime/scripted/sindresorhus-open::sindresorhus-open-library
       - id: well-known/tool/development/agent/anthropic-claude-agent::claude-agent-sdk-bundle-runtime-marker
-  - id: encodedcommand-flag-native
-    desc: PowerShell EncodedCommand flag in native script
+  - id: encodedcommand-exec-js
+    desc: JavaScript exec calls PowerShell EncodedCommand
     crit: notable
-    conf: 0.86
-    attack: T1059.001
-    for: [data, batch, powershell, oledoc]
-    if:
-      type: text
-      # The flag must stand alone on the command line (preceded by start or
-      # whitespace), not be the tail of a hyphenated identifier such as
-      # `sanitize-reasoning-enc`.
-      regex: '(?i)(^|\s)-(EncodedCommand|enc)\b'
-    unless:
-      - id: well-known/tool/development/editor/vscode/
-      - id: metadata/signed/platform::microsoft
-      - id: well-known/app/enterprise/microsoft-office-support::microsoft-office-support-bundle-context
-      - type: path
-        regex: '^Azure\.Core\.[0-9][^/]*\.nupkg/lib/net10\.0/Azure\.Core\.dll$'
-      - id: well-known/app/infrastructure/ansible::ansible-python-package-path
-      - id: well-known/app/infrastructure/ansible::ansible-powershell-context
-      - id: well-known/app/system/businessdev-albuild/
-      - id: well-known/app/system/colorscripts-enhanced::package-context
-  # String/template literals only — JSDoc/type-doc mentions of the flag are not
-  # command construction. OpenCode Swarm embeds EncodedCommand in sandbox wrappers.
-  - id: encodedcommand-flag-js
-    desc: PowerShell EncodedCommand flag in script literal
-    crit: notable
-    conf: 0.86
+    conf: 0.9
     attack: T1059.001
     platforms: [unix, windows]
     for: [javascript, typescript]
     if:
-      type: literal
-      # Standalone -EncodedCommand (or -enc preceded by command whitespace)
-      # in JS/TS string literals. Requiring preceding whitespace for -enc avoids
-      # false positives on isolated '-enc' filename/media suffixes.
-      regex: '(?i)(^|\s)-EncodedCommand\b|\s-enc\b'
+      type: symbol
+      kind: call
+      exact: exec
+      arg:
+        kind: string
+        substr: powershell -enc
     unless:
-      - id: well-known/app/ai/coding-agent/opencode-swarm/
-      - id: well-known/tool/development/editor/vscode/
-      # sindresorhus/open shells out to `powershell -EncodedCommand` on
-      # Windows specifically to avoid the quoting bugs its own docs describe
-      # (the `#double-quotes-on-windows` caveat is in the same file). The
-      # identity already existed and already matched -- it was simply not
-      # referenced here. Vendored into Electron apps everywhere; Tabby
-      # 1.0.233 ships it at node_modules/open/index.js.
       - id: well-known/lib/runtime/scripted/sindresorhus-open::sindresorhus-open-library
-      - id: well-known/tool/development/agent/anthropic-claude-agent::claude-agent-sdk-bundle-runtime-marker
   - id: hidden-process-object
     desc: Hidden .NET process launch object
     crit: notable
@@ -126,6 +95,25 @@ traits:
     if:
       type: text
       regex: 'powershell-encoded[\s\S]{0,200}EncodedCommand \(obfuscated payload\)'
+  # An agent or runtime's startup options document disallowed execution flags.
+  # That description is not a launch.
+  - id: powershell-flags-disallowed-doc
+    desc: Disallowed PowerShell flags documentation
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)powershellFlags[\s\S]{0,300}-EncodedCommand'
+  # Diagnostic error logging redacts/omits -EncodedCommand parameter.
+  - id: encodedcommand-diagnostic-redaction
+    desc: PowerShell diagnostic redacts EncodedCommand
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '-EncodedCommand[^\n]{0,80}<omitted>'
   # Chromium cookie import unprotects a blob with a local DPAPI helper.
   - id: windows-dpapi-unprotect-helper
     desc: PowerShell DPAPI unprotect helper
@@ -146,6 +134,103 @@ traits:
     if:
       type: text
       regex: '-EncodedCommand[\s\S]{0,60}WINDOWS_PROCESS_OWNER_SCRIPT_B64'
+  # Local helper accesses Windows Credential Manager via P/Invoke Add-Type.
+  - id: windows-credential-manager-encoded-helper
+    desc: PowerShell Windows Credential Manager helper
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'DotenvxCredentialManager[\s\S]{0,120}CRED_TYPE_GENERIC'
+
+  # Local helper queries Windows system resource metrics via CIM/WMI.
+  - id: windows-resource-query-encoded-helper
+    desc: PowerShell Windows resource query helper
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'Get-CimInstance\s+Win32_OperatingSystem[\s\S]{0,300}TotalVisibleMemorySize'
+
+  # electron-builder builds a powershell -EncodedCommand argv so Node can
+  # launch npm/pnpm/yarn .cmd shims without shell:true (CVE-2024-27980).
+  - id: electron-builder-cmd-shim-encoded-argv
+    desc: electron-builder EncodedCommand cmd-shim argv
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'buildPowerShellEncodedArgs[\s\S]{0,500}-EncodedCommand'
+
+  # Local helper queries Windows default browser ProgId via PowerShell.
+  - id: windows-browser-query-encoded-helper
+    desc: PowerShell default browser query helper
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)UrlAssociations[\\/]+http[\\/]+UserChoice[\s\S]{0,300}-EncodedCommand'
+
+  # Test harness drives window-control.ps1 via PowerShell -EncodedCommand to
+  # control windows for screenshot assertions.
+  - id: windows-window-control-encoded-helper
+    desc: PowerShell window-control test helper
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'window-control\.ps1[\s\S]{0,1000}-EncodedCommand'
+  # A command guard defines a detector for the encoded-flag spellings (e.g.
+  # /^-e(?:c|nc\w*)?$/) and verdicts matches instead of launching anything.
+  # Malware names the flag to use it; only a guard names its spellings to
+  # recognize them.
+  - id: command-guard-encoded-flag-detector
+    desc: Command guard detects encoded-flag spellings
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\(\?:c\|nc[\\]w\*'
+  # A command parser decodes base64 as UTF-16LE — the EncodedCommand codec
+  # direction — to inspect someone else's command (then verdicts or
+  # re-parses it). Droppers encode or execute; only an analyzer decodes
+  # UTF-16LE text it did not produce.
+  - id: encodedcommand-decode-for-analysis
+    desc: Decodes base64 as UTF-16LE for analysis
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\.from\([^()]{0,40}base64[^()]{0,8}\)\.toString\([^()]{0,16}utf16le'
+
+  - id: powershell-hidden-bypass-encoded-command
+    desc: PowerShell hidden bypass encoded command
+    crit: suspicious
+    conf: 0.99
+    attack: T1059.001,T1027,T1564.003
+    for: [scripts, pe, dll, elf, macho, wasm, oledoc, ooxml]
+    unless:
+      - id: well-known/tool/offensive/reconprobe/
+      - id: well-known/tool/offensive/impacket::source-tree-member
+    if:
+      type: text
+      regex: '(?i)powershell.{0,560}-W\s+Hidden.{0,320}-Exec\s+Bypass.{0,320}-Enc\b'
+
+  - id: windows-keep-awake-powershell-helper
+    desc: Windows SetThreadExecutionState keep-awake
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)SetThreadExecutionState[\s\S]{0,200}Wait-Process'
 
 composite_rules:
   - id: encodedcommand-invocation-source
@@ -155,7 +240,7 @@ composite_rules:
     attack: T1059.001
     all:
       - id: micro-behaviors/process/create/shell/interpreter::powershell-process-call
-      - id: encodedcommand-flag-native
+      - id: micro-behaviors/process/interpreter/powershell/command::encodedcommand-flag-native
     near_lines: 1
   # Union of the `any:` legs' own for: -- the composite otherwise inherited
   # just [powershell] from the file default, even though encodedcommand-
@@ -170,16 +255,54 @@ composite_rules:
     any:
       - id: encodedcommand-invocation-raw
       - id: encodedcommand-invocation-source
-      - id: encodedcommand-flag-js
+      - id: micro-behaviors/process/interpreter/powershell/command::encodedcommand-flag-js
+      - id: encodedcommand-exec-js
     unless:
+      - id: metadata/package/testing/corpus/
+      # Markdown code examples can be content-sniffed as JavaScript, which
+      # indexes fenced commands as string literals. They are not invocations.
+      - id: metadata/file/extension/identity::markdown-file-basename
+      - id: encodedcommand-known-benign-context
+  # JavaScript tooling that builds an EncodedCommand for a fixed, recognizable
+  # helper script, or that names the flag only to classify or block it.
+  - id: encodedcommand-known-benign-context
+    desc: Recognized EncodedCommand helper tooling
+    crit: exception
+    conf: 0.92
+    for: [javascript, typescript]
+    any:
       - id: well-known/tool/development/agent/anthropic-claude-agent::claude-agent-sdk-package
       - id: command-classifier-encodedcommand-doc
+      - id: powershell-flags-disallowed-doc
+      - id: micro-behaviors/process/create/shell/guard::command-filter-blocklist
       - id: windows-dpapi-unprotect-helper
       - id: libreoffice-owner-encoded-helper
-    downgrade:
-      scope: archive
-      any:
-        - id: well-known/tool/development/agent/anthropic-claude-agent::claude-agent-sdk-package
+      - id: windows-credential-manager-encoded-helper
+      - id: windows-resource-query-encoded-helper
+      - id: windows-browser-query-encoded-helper
+      - id: windows-window-control-encoded-helper
+      - id: electron-builder-cmd-shim-encoded-argv
+      - id: well-known/lib/runtime/scripted/powershell-utils::powershell-utils-encoded-command-launcher
+      - id: well-known/app/ai/coding-agent/vivus-agent::vivus-agent-package
+      - id: well-known/app/ai/coding-agent/symbiot::symbiot-package
+      - id: well-known/app/ai/coding-agent/workflow-ai::workflow-ai-package-context
+      # LobeChat's local-file-shell builds the flag for the user's own local
+      # pwsh calls (utf16le-base64 script passing, per Ansible/VS Code
+      # practice); the package path marks the shell library, not a payload.
+      - id: well-known/app/ai/coding-agent/lobehub::lobechat-local-file-shell-package
+      - id: well-known/app/ai/coding-agent/github-copilot-runtime::github-copilot-app-bundle
+      - id: well-known/app/ai/coding-agent/command-code::command-code-package-context
+      - id: well-known/lib/runtime/scripted/sindresorhus-open::sindresorhus-open-library
+      - id: encodedcommand-diagnostic-redaction
+      - id: well-known/app/ai/coding-agent/evomap::evomap-evolver-package
+      - id: well-known/app/ai/coding-agent/aiterm-mcp::aiterm-mcp-package
+      - id: well-known/app/ai/coding-agent/supercode::supercode-powershell-helper-context
+      - id: command-guard-encoded-flag-detector
+      - id: encodedcommand-decode-for-analysis
+      - id: well-known/tool/development/cli/volter-supercode::supercode-terminal-import
+      - id: well-known/tool/development/cli/volter-supercode::teams-package-reference
+      - id: well-known/app/ai/coding-agent/ezcoder::ezcoder-package-context
+      - id: windows-keep-awake-powershell-helper
   - id: encodedcommand-bypass
     desc: PowerShell encoded command with bypass
     crit: suspicious
@@ -204,3 +327,12 @@ composite_rules:
       - id: create-no-window
       - id: windowstyle-hidden
     needs: 2
+
+  - id: ansible-encoded-command-context
+    for: [scripts, source]
+    platforms: [windows, unix]
+    desc: Ansible package or PowerShell wrapper
+    crit: exception
+    any:
+    - id: well-known/app/infrastructure/ansible::ansible-python-package-path
+    - id: well-known/app/infrastructure/ansible::ansible-powershell-context

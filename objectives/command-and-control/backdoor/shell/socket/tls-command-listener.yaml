@@ -39,15 +39,21 @@ traits:
       regex: '(?is)tls\.(read|recv).{0,500}(subprocess|child_process)'
   - id: socket-command-dispatch
     desc: Socket receive precedes shell execution
+    attack: T1059.004
     crit: suspicious
     conf: 0.95
     for: [shell, python, javascript, c, cpp, elf, macho, pe]
     if:
       type: text
-      regex: '(?s)(socket|accept).{0,700}\brecv\s*\(.{0,400}(shell=True|/bin/sh|\bsystem\s*\()'
+      # `[\s(=s]\.?system\(` keeps os.system() and a bare C/Perl system() but
+      # not a method on another object: `platform.system()` is OS detection.
+      regex: '(?s)(socket|accept).{0,700}recv\(.{0,400}(shell=True|bin/sh|[\s(=s]\.?system\()'
     unless:
       # pwntools ships syscall tables and shellcraft templates as reference data.
       - id: well-known/tool/offensive/pwntools::pwntools-distribution
+      # ldap3 imports platform.system and mentions recv() in a timeout comment.
+      - type: path
+        regex: ldap3/strategy/base\.py
 
 composite_rules:
   - id: tls-command-dispatch
@@ -58,7 +64,6 @@ composite_rules:
       - id: tls-ssl-command-dispatch
       - id: tls-mbedtls-command-dispatch
       - id: tls-script-command-dispatch
-      - id: socket-command-dispatch
 
   - id: tls-command-listener
     for: [elf, macho, pe, c]
@@ -107,3 +112,16 @@ composite_rules:
       - id: micro-behaviors/communications/socket/dial::python-dial
       - id: micro-behaviors/process/create/shell-subprocess::shell-true
       - id: micro-behaviors/process/daemonize/detach::python-fork-new-session
+
+  - id: tls-reverse-command-shell
+    for: [c, cpp, elf, macho, pe]
+    desc: Outbound TLS channel executes remote shell commands
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: tls-command-dispatch
+    any:
+      - id: micro-behaviors/communications/socket/ssl::openssl-ssl-connect-function
+      - id: micro-behaviors/communications/socket/connect::connect-symbol
+      - id: micro-behaviors/communications/socket/connect::connect-import
+    near_lines: 100

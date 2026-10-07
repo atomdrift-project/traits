@@ -1,0 +1,53 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: T1140
+  mbc: B0023
+composite_rules:
+  - id: capi-file-payload-decrypt-loader
+    desc: CryptoAPI file decryption with executable memory staging
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/crypto/library/cryptoapi::crypt-acquire-context
+      - id: micro-behaviors/crypto/library/cryptoapi::crypt-import-key
+      - id: micro-behaviors/crypto/library/cryptoapi::crypt-decrypt
+      - id: micro-behaviors/fs/file/open::file-create-win
+      - id: micro-behaviors/fs/read/file/handle::read-file
+      - id: micro-behaviors/mem/protect/modify::executable-memory-staging
+      - id: micro-behaviors/process/create/thread::create-thread
+    downgrade:
+      any:
+        - id: metadata/binary/installer/family/
+        - id: metadata/binary/vendor::is-microsoft-named
+        # Endpoint-security vendors legitimately ship CryptoAPI-based
+        # signed-payload decrypt loaders (downloaded definition/module files).
+        - id: metadata/signed/leaf::nortonlifelock-inc.
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/tool/reverse-engineering/frida/
+      # SAP HANA's native client uses CryptoAPI for normal database/TLS
+      # support; it is not a staged payload loader.
+      - id: well-known/lib/data/sap-hana/
+      - id: well-known/lib/runtime/scripted/php-runtime::runtime-binary-context
+      # AtHocAFRC decrypts signed application/config data with its own legacy
+      # CryptoAPI helper; it is not a staged payload loader.
+      - id: well-known/app/enterprise/athoc::athocafrc-legacy-module-context
+
+  - id: capi-inline-pe-memory-loader
+    desc: CryptoAPI-decrypted PE staged in executable memory
+    crit: hostile
+    conf: 0.98
+    attack: T1140,T1620
+    all:
+      - id: micro-behaviors/crypto/library/cryptoapi::capi-keyed-buffer-crypto-chain
+      - id: micro-behaviors/mem/protect/modify::executable-memory-staging
+      - id: micro-behaviors/data/embedded/payload/header::inline-pe-header-validation-sequence
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/lib/platform/advanced-installer::advanced-installer-helper-context
+
+  # Some native loaders derive a CryptoAPI key rather than import one. Keep
+  # the full hash/decrypt cluster explicit because high-export decoy DLLs can
+  # intentionally suppress the generic key-derivation aggregate.

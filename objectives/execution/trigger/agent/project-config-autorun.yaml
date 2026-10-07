@@ -28,15 +28,6 @@ defaults:
   mbc: B0024
 
 traits:
-  - id: agent-sessionstart-hook-command
-    desc: Agent SessionStart hook runs a command
-    crit: notable
-    conf: 0.9
-    if:
-      type: value
-      path: hooks.SessionStart[*].hooks[*].command
-      regex: '\S'
-
   - id: agent-hook-command-editor-config-dir
     desc: Agent hook runs script from editor dir
     crit: suspicious
@@ -64,7 +55,7 @@ traits:
 
   - id: ide-task-command-claude-cursor-dir
     desc: IDE task runs Claude or Cursor script
-    crit: suspicious
+    crit: notable
     conf: 0.94
     if:
       type: value
@@ -73,7 +64,7 @@ traits:
 
   - id: ide-task-command-agent-dir-extra
     desc: IDE task runs other agent-dir script
-    crit: suspicious
+    crit: notable
     conf: 0.94
     if:
       type: value
@@ -82,9 +73,10 @@ traits:
 
   - id: ide-task-command-setup-mjs
     desc: IDE task runs setup.mjs
-    # Keyv / Mini Shai-Hulud style: folderOpen launches `node …/setup.mjs`,
-    # which then bootstraps a temp Bun runtime over an opaque sidecar.
-    crit: suspicious
+    # `setup.mjs` is an attacker-chosen filename, not a payload property.  The
+    # command is useful triage context; suspicion comes from an automatic
+    # cross-tool trigger or from behavior in the referenced script.
+    crit: notable
     conf: 0.95
     if:
       type: value
@@ -93,7 +85,7 @@ traits:
 
   - id: agent-hook-command-setup-mjs
     desc: Agent hook runs setup.mjs
-    crit: suspicious
+    crit: notable
     conf: 0.95
     if:
       type: value
@@ -106,73 +98,63 @@ composite_rules:
   # source so the behavior survives a switch from JavaScript to Python or a
   # shell heredoc. Proximity keeps unrelated config strings from assembling a
   # cross-tool autorun.
-  - id: source-agent-session-editor-payload
-    desc: Agent session hook runs editor payload
+  - id: source-agent-session-editor-script
+    desc: Source defines agent hook to editor script
     crit: suspicious
     conf: 0.96
     for: [javascript, typescript, python, shell]
     all:
       - id: micro-behaviors/communications/ipc/agent-hook::agent-sessionstart-config-key
-      - id: micro-behaviors/communications/ipc/agent-hook::agent-hook-command-key
+      - id: micro-behaviors/data/format/json::json-string-command-field
       - id: micro-behaviors/fs/path/config/app::vscode-project-setup-path
     near_bytes: 480
 
-  - id: source-folderopen-agent-payload
-    desc: Folder-open task runs agent payload
+  - id: source-folderopen-agent-script
+    desc: Source defines folder-open agent script
     crit: suspicious
     conf: 0.96
     for: [javascript, typescript, python, shell]
     all:
       - id: metadata/permission/activation::vscode-task-folder-open-activation
-      - id: micro-behaviors/communications/ipc/agent-hook::agent-hook-command-key
+      - id: micro-behaviors/data/format/json::json-string-command-field
       - id: micro-behaviors/fs/path/agent-config/directory::claude-config-directory
     near_bytes: 480
 
   - id: reciprocal-editor-agent-autorun-chain
-    desc: Defines reciprocal editor-agent autorun payloads
+    desc: Defines reciprocal editor-agent autorun chain
     crit: hostile
     conf: 0.98
     for: [javascript, typescript, python, shell]
     all:
-      - id: source-agent-session-editor-payload
-      - id: source-folderopen-agent-payload
+      - id: source-agent-session-editor-script
+      - id: source-folderopen-agent-script
     unless:
       - id: well-known/tool/detection/threat-intel/
 
   - id: ide-task-command-agent-config-dir
     desc: IDE task runs script from agent dir
-    crit: suspicious
+    crit: notable
     conf: 0.94
     any:
       - id: ide-task-command-claude-cursor-dir
       - id: ide-task-command-agent-dir-extra
 
 
-  - id: agent-session-hook-setup-mjs-payload
-    desc: Agent session hook runs setup.mjs dropper
-    crit: hostile
-    conf: 0.97
-    all:
-      - id: agent-sessionstart-hook-command
-      - id: agent-hook-command-setup-mjs
-    unless:
-      - id: metadata/package/testing/presence/harness/
-
-  - id: agent-session-hook-project-config-payload
-    desc: Agent session hook runs repository config payload
+  - id: agent-session-hook-cross-tool-script
+    desc: Agent session hook runs cross-tool config script
     crit: suspicious
     conf: 0.95
     all:
-      - id: agent-sessionstart-hook-command
+      - id: micro-behaviors/communications/ipc/agent-hook::agent-sessionstart-hook-command
       - id: agent-sessionstart-project-config-script
     unless:
       - id: metadata/package/testing/presence/harness/
       - id: well-known/tool/detection/agent-glovebox::archive-context
       - id: well-known/tool/detection/agent-glovebox::glovebox-hook-settings-context
 
-  - id: ide-autorun-cross-tool-payload
-    desc: IDE open task runs agent-dir payload
-    crit: hostile
+  - id: ide-folder-open-cross-tool-script
+    desc: IDE folder-open runs cross-tool config script
+    crit: suspicious
     conf: 0.96
     all:
       - id: metadata/permission/activation::vscode-task-folder-open-activation
@@ -182,15 +164,5 @@ composite_rules:
     any:
       - id: ide-task-command-claude-cursor-dir
       - id: ide-task-command-agent-dir-extra
-    unless:
-      - id: metadata/package/testing/presence/harness/
-
-  - id: ide-autorun-setup-mjs-payload
-    desc: IDE open task runs setup.mjs dropper
-    crit: hostile
-    conf: 0.97
-    all:
-      - id: metadata/permission/activation::vscode-task-folder-open-activation
-      - id: ide-task-command-setup-mjs
     unless:
       - id: metadata/package/testing/presence/harness/

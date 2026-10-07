@@ -108,7 +108,90 @@ traits:
       type: text
       regex: '(?i)\bsms_?send\b'
 
+  - id: android-dex-firebase-realtime-endpoint
+    desc: DEX contains a Firebase Realtime Database URL
+    crit: notable
+    conf: 0.97
+    for: [dex]
+    if:
+      type: text
+      substr: firebaseio.com
+
+  - id: android-dex-sms-json-path
+    desc: DEX contains an SMS JSON collection path
+    crit: notable
+    conf: 0.95
+    for: [dex]
+    if:
+      type: text
+      exact: SMS.json
+
+  - id: android-dex-firebase-sms-messages-path
+    desc: DEX contains an SMS messages collection path
+    crit: component
+    conf: 0.95
+    for: [dex]
+    if:
+      type: text
+      word: messages
+
+  - id: android-dex-firebase-sms-sender-field
+    desc: DEX contains an SMS sender record field
+    crit: component
+    conf: 0.95
+    for: [dex]
+    if:
+      type: text
+      word: sender
+
+  - id: android-dex-firebase-sms-body-field
+    desc: DEX contains an SMS body record field
+    crit: component
+    conf: 0.95
+    for: [dex]
+    if:
+      type: text
+      word: message
+
+  - id: android-dex-firebase-value-write
+    desc: DEX references Firebase value-write API
+    crit: component
+    conf: 0.95
+    for: [dex]
+    if:
+      type: text
+      word: setValue
+
 composite_rules:
+  - id: android-dex-firebase-sms-message-exfil
+    desc: Android DEX uploads received SMS records to Firebase
+    crit: hostile
+    conf: 0.99
+    attack: T1636.004,T1041
+    mbc: F0004
+    for: [dex]
+    all:
+      - id: micro-behaviors/os/message/intent::android-dex-sms-pdu-message-read
+      - id: android-dex-firebase-realtime-endpoint
+      - id: android-dex-firebase-sms-messages-path
+      - id: android-dex-firebase-sms-sender-field
+      - id: android-dex-firebase-sms-body-field
+      - id: android-dex-firebase-value-write
+
+  # A manifest that grants both SMS read and INTERNET is the declaration every
+  # SMS client, backup tool and 2FA companion ships. The grant pair is a
+  # collection-capability signal only — the stealer verdict needs the
+  # message-collection source and transport composites below.
+  - id: android-utf8-sms-network-grant
+    desc: UTF-8 manifest grants SMS read and INTERNET
+    crit: notable
+    conf: 0.95
+    for: [apk, zip, xml, data]
+    scope: outer
+    all:
+      - id: micro-behaviors/os/privilege/manifest::read-sms-utf8-manifest
+      - id: micro-behaviors/os/privilege/manifest::internet-utf8-manifest
+
   - id: android-compact-sms-tokens
     desc: Paired compact Android read/send SMS tokens
     crit: notable
@@ -173,6 +256,13 @@ composite_rules:
     unless:
       - id: well-known/app/communication/sms-forwarder::smsforwarder-application
       - id: well-known/app/communication/sms-forwarder::smsforwarder-source-package
+      # TextSecure (Signal's predecessor) is an SMS client: its whole purpose
+      # is sending, receiving and reading messages, so the manifest grants the
+      # full SMS cluster. Identity is the format-mandated package attribute
+      # (member files) plus the source namespace (archive context), not a
+      # renameable label.
+      - id: well-known/app/communication/signal::textsecure-manifest-package
+      - id: well-known/app/communication/signal::textsecure-android-archive-context
 
   - id: android-sms-loader-permission-cluster
     desc: Android staged loader requests SMS control
@@ -221,7 +311,7 @@ composite_rules:
       - id: micro-behaviors/ui/window/overlay::android-system-error-overlay-window
 
   - id: android-evasive-sms-spyware
-    for: [android_apk, zip, java, kotlin]
+    for: [android_apk, zip, java, kotlin, elf]
     desc: Android SMS/phone spyware evades archive and runtime analysis
     crit: hostile
     conf: 0.96
@@ -232,7 +322,7 @@ composite_rules:
       - id: android-sms-phone-permission-cluster
       - id: objectives/anti-static/pack/archive::apk-heavy-path-traversal
     any:
-      - id: objectives/anti-analysis/tool-detect/process::frida-component-process-name
+      - id: well-known/tool/reverse-engineering/frida::frida-component-name
       - id: objectives/anti-analysis/debugger-detect/check::unix-tracerpid-debugger-check
 
   # Accessibility plus SEND/READ SMS and boot persistence is the banker
@@ -290,3 +380,78 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/socket/dial::net-dial-text
       - id: micro-behaviors/communications/http/websocket::websocket-upgrade-header
+
+  # Intercepted inbound SMS content posted to a remote collector over HTTP
+  # is the exfil half of lightweight SMS stealers (Corp MDM reports sender,
+  # body and timestamp for every new message). Kept at suspicious rather
+  # than hostile: SMS backup and sync tools upload message content the user
+  # asked them to move, so the destination's ownership — invisible in source
+  # — is what separates backup from theft.
+  - id: android-sms-http-report
+    desc: Android intercepted SMS content reported over HTTP POST
+    crit: suspicious
+    conf: 0.93
+    for: [java, kotlin]
+    all:
+      - id: micro-behaviors/os/message/intent::android-sms-message-collection-source
+      - id: micro-behaviors/communications/http/post::jvm-urlconnection-post-source
+
+  # DEX does not inherit the Java/Kotlin source rules: the SMS and network
+  # APIs are present as descriptors/method strings. Pair the compiled-Dalvik
+  # observations directly so a single-file DEX is analyzed on its own.
+  - id: android-dex-sms-http-report
+    desc: Android DEX reads SMS sender and body and posts request data
+    crit: suspicious
+    conf: 0.96
+    for: [dex]
+    all:
+      - id: micro-behaviors/os/message/intent::android-dex-sms-pdu-message-read
+      - id: micro-behaviors/communications/http/post::jvm-urlconnection-post-dex
+
+  # A hard-coded Firebase Realtime Database endpoint paired with the SMS
+  # reader and an HTTP POST is direct evidence that received messages leave
+  # the device for an app-controlled collector.
+  - id: android-dex-sms-firebase-exfil
+    desc: Android DEX posts received SMS content to Firebase
+    crit: hostile
+    conf: 0.99
+    attack: T1636.004,T1041
+    mbc: F0004
+    for: [dex]
+    all:
+      - id: android-dex-sms-http-report
+      - id: android-dex-firebase-realtime-endpoint
+      - id: android-dex-sms-json-path
+
+  # An app that both harvests inbound SMS content and dials unconditional
+  # call-forwarding codes has no legitimate use: the first leg steals
+  # one-time passcodes and recovery codes, the second reroutes the victim's
+  # voice calls (including verification callbacks) to an attacker number.
+  # The pair is the Corp MDM forward_on shape, generalized past its package
+  # name, C2 host and endpoint paths to the MMI codes every variant must dial.
+  - id: android-sms-intercept-call-divert-spyware
+    desc: Android SMS-stealing implant diverts calls via MMI forwarding codes
+    crit: hostile
+    conf: 0.97
+    attack: T1636.004
+    mbc: F0004
+    for: [java, kotlin]
+    all:
+      - id: micro-behaviors/os/message/intent::android-sms-message-collection-source
+      - id: micro-behaviors/communications/messaging/divert::android-mmi-forward-dial
+
+  # The same interception paired with both stealth legs — launcher-icon
+  # suppression plus a foreground service that keeps the collector alive —
+  # is the hidden-resident spyware shape: nothing about the combination
+  # serves a user-visible feature.
+  - id: android-sms-spyware-hidden-persistence
+    desc: Android SMS interceptor hides its icon and persists in foreground
+    crit: hostile
+    conf: 0.97
+    attack: T1636.004,T1628.001
+    mbc: F0004
+    for: [java, kotlin]
+    all:
+      - id: micro-behaviors/os/message/intent::android-sms-message-collection-source
+      - id: objectives/evasion/process/hidden/launcher::android-launcher-component-disable
+      - id: micro-behaviors/os/service/daemon::android-start-foreground-call

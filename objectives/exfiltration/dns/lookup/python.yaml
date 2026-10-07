@@ -31,10 +31,10 @@ composite_rules:
     scope: leaf
     near_bytes: 4096
     all:
-      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
+      - id: micro-behaviors/communications/dns/resolver::getaddrinfo
       - id: micro-behaviors/communications/dns/label::python-dns-query-reference
       - id: micro-behaviors/data/encode/hex::python-bytes-hex-call
-      - id: micro-behaviors/data/source/arithmetic::lsb-bit-mask-source
+      - id: micro-behaviors/data/arithmetic::lsb-bit-mask-source
     any:
       - id: objectives/credential-access/files/config::developer-credential-file-read
       - id: micro-behaviors/fs/path/secret-config::ssh-config-artifact
@@ -51,11 +51,11 @@ composite_rules:
     scope: leaf
     near_lines: 30
     all:
-      - id: micro-behaviors/communications/dns/lookup/resolver::hostname-specific-lookup
+      - id: micro-behaviors/communications/dns/resolver::hostname-specific-lookup
       # A resolver call plus a sensitive path is not enough to establish DNS
       # exfiltration: service discovery and API clients do exactly that.  DNS
       # exfil requires evidence that data is being placed into the DNS channel.
-      - id: dns-exfil-data-channel
+      - id: micro-behaviors/communications/dns/label::python-length-prefixed-label-loop
     any:
       # Sensitive data sources
       - id: micro-behaviors/os/env/secret-name::credential-env-read
@@ -80,26 +80,6 @@ composite_rules:
       - id: micro-behaviors/os/sysinfo/platform/host::platform-uname
       - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
 
-  # Data must be encoded into, or manually assembled as, a DNS name.  Keep
-  # this as a named component so the hostile rule above cannot be satisfied by
-  # a plain lookup of a hostname or service endpoint.
-  - id: dns-exfil-data-channel
-    desc: Data encoded into a DNS query channel
-    crit: component
-    conf: 0.9
-    any:
-      - id: objectives/exfiltration/dns/ast::dns-label-manual-construction
-      - id: objectives/exfiltration/dns/ast::subdomain-exfil-pattern
-      - id: objectives/exfiltration/dns/prep::subdomain-data-encoding
-  # TCP DNS exfiltration via subdomain encoding
-  - id: tcp-dns-subdomain-exfil
-    desc: TCP DNS exfiltration via subdomain encoding
-    crit: hostile
-    conf: 0.95
-    all:
-      - id: micro-behaviors/communications/dns/connect::tcp-dns-connect
-      - id: objectives/exfiltration/dns/prep::subdomain-data-encoding
-  # CI/CD targeted DNS exfiltration
   - id: cicd-dns-exfil
     desc: CI/CD environment exfiltrated via DNS
     crit: hostile
@@ -127,10 +107,13 @@ composite_rules:
     near_lines: 30
     all:
       - id: micro-behaviors/communications/dns/label::python-dynamic-dns-label
-      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
+      - id: micro-behaviors/communications/dns/resolver::getaddrinfo
     any:
       - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
-      - id: micro-behaviors/os/env/read::python-os-getenv-call
+      - id: micro-behaviors/os/sysinfo/hostname::python-os-uname-nodename
+      - id: micro-behaviors/process/user/query::python-getpass-user
+      - id: micro-behaviors/process/user/query::os-getlogin-python
+      - id: micro-behaviors/os/env/user-info::python-user-identity-env-reference
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: well-known/tool/detection/security-scanner/
@@ -151,4 +134,21 @@ composite_rules:
     for: [javascript, typescript]
     all:
       - id: micro-behaviors/communications/dns/label::uuid-label-hostname
-      - id: micro-behaviors/communications/dns/lookup/resolver::dns-lookup-call
+      - id: micro-behaviors/communications/dns/resolver::dns-lookup-call
+
+# The non-UUID spelling of the same channel: the looked-up name is computed
+# (short random IDs plus sanitized platform/host/version labels joined into
+# a dotted name) rather than carrying a UUID label. Requiring the hostname
+# call plus a computed lookup name keeps fixed-hostname service lookups
+# (dynDNS updaters resolve literals) out of scope.
+  - id: js-host-identity-dns-beacon
+    desc: Host identity leaves as DNS query labels
+    crit: hostile
+    conf: 0.94
+    mbc: B0030
+    for: [javascript, typescript]
+    near_lines: 60
+    all:
+      - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+      - id: micro-behaviors/communications/dns/resolver::dns-lookup-call
+      - id: micro-behaviors/communications/dns/resolver::dns-lookup-dynamic-name

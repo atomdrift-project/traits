@@ -65,10 +65,11 @@ traits:
       # GRUB/EFI module cleanup performed by image builders.
       regex: rm\s+-rf\s+/boot(/\*|\s|$)|shutil\.rmtree.{0,50}["']/boot["']
     unless:
-      - id: well-known/tool/detection/security-scanner::defensive-dangerous-command-doc
+      - id: metadata/package/documentation/source::defensive-dangerous-command-doc
       - id: metadata/package/testing/presence/path::xml-testdata-directory-path
       - id: well-known/dual-use/tunnel/tailscale::tailscale-source-token
   - id: root-wipe
+    for: [scripts, -python, binaries]
     desc: Root filesystem wipe attempt
     crit: suspicious
     conf: 0.95
@@ -78,31 +79,61 @@ traits:
       # A following prose word (for example, "rm -rf / which translates...")
       # describes the command rather than terminating one. Python rmtree calls
       # are covered by the dedicated structured trait below.
-      regex: 'rm\s+-rf\s+/(\*|\s+--no-preserve-root|\s*[;&|]|\s*$)'
+      regex: 'rm\s+-rf\s+/(\*(\s|$|[;&|)"''])|\s+--no-preserve-root|\s*[;&|]|\s*$)'
     unless:
       # Code that quotes `rm -rf` in order to forbid it -- an agent's system
       # prompt or its permission registry -- is the guard, not the wipe.
-      - id: micro-behaviors/process/create/shell/guard::destructive-command-prohibited-prose
-      - id: micro-behaviors/process/create/shell/guard::destructive-command-denied-prose
+      - id: micro-behaviors/process/create/shell/guard/
       - id: metadata/file/policy/identity::agent-tool-permission-ruleset
       - id: well-known/tool/development/vscode-extension/tencent-codebuddy::codebuddy-marker
       # Scanner and guard unit tests assert the wipe is detected or blocked
       # (inline #[cfg(test)] corpora as well as tests/ fixtures).
       - id: metadata/package/testing/
-      - type: text
-        substr: Sanitizes the command string to prevent shell injection.
-      - id: micro-behaviors/process/create/shell/guard::destructive-action-prohibition-phrase
+      - id: metadata/package/documentation/source::defensive-dangerous-command-doc
       - id: well-known/tool/detection/
       - id: objectives/supply-chain/trojanized/app/debug-probe/
-  - id: macos-system-delete
-    desc: macOS system directory deletion
+      - id: well-known/app/ai/coding-agent/
+      - type: path
+        regex: '(?i)(^|[\\/])tests?[\\/]'
+  # Python comments and deny-pattern literals are not executed commands.
+  - id: python-root-wipe-command
+    desc: Python launches a root deletion command
     crit: suspicious
     conf: 0.95
-    platforms:
-      - macos
+    for: [python]
+    attack: T1561
     if:
-      type: string_literal
-      regex: rm\s+-rf.{0,50}(/System|/Library/System)|shutil\.rmtree.{0,50}/System
+      type: symbol
+      kind: call
+      regex: '^(os\.(system|popen)|subprocess\.(run|call|Popen|check_call|check_output))$'
+      arg:
+        kind: string
+        regex: 'rm\s+-rf\s+/(\*(\s|$|[;&|)"''])|\s+--no-preserve-root|\s*[;&|]|\s*$)'
+    unless:
+      - id: metadata/package/testing/
+  - id: shell-rm-rf-macos-system-path
+    desc: rm targets the macOS system root path
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      # The target must be the macOS root itself (/System, /Library/System),
+      # not a path that merely ends in one: cross toolchains refresh a
+      # staging sysroot from a fresh SDK (`rm -rf .../sys-root/System`),
+      # which deletes build staging, not the running system.
+      regex: rm\s+-rf\s+["']?/(System|Library/System)(/|\*|\s|["']|$)
+  - id: python-rmtree-macos-system-path
+    desc: rmtree targets the macOS system root path
+    crit: component
+    conf: 0.9
+    for: [python]
+    if:
+      type: symbol
+      kind: call
+      substr: rmtree
+      arg:
+        kind: string
+        regex: '^/(System|Library/System)(/|$)'
   - id: rmtree-call
     desc: rmtree critical path deletion
     crit: notable
@@ -122,9 +153,17 @@ traits:
       - windows
     if:
       type: text
-      regex: \b(rmdir|rd|remove)\b[^\r\n]{0,50}[Ss]ystem32|\bdel\b[^\r\n]{0,50}[Ss]ystem32\\[^sS]
+      # The rmdir/rd/remove branch captures the rest of the path so the
+      # nested-file exclusion below can see it.
+      regex: \b(rmdir|rd|remove)\b.{0,40}[Ss]ystem32\S{0,40}|\bdel\b.{0,40}[Ss]ystem32\\[^\n"]{0,24}
       not:
         - regex: '@%systemroot%\\system32\\[^",<]+,-[0-9]+'
+        - substr: .lnk
+        # A named file two or more folders below System32 (an mIRC bot
+        # removing its own staged `Setup\drona\mirc.reg`) is one file in a
+        # private staging folder, not System32 deletion. Wildcards, System32
+        # itself, `drivers\x.sys` and `drivers\etc\hosts` still match.
+        - regex: '(?i)system32\\[^\\\s*]+\\[^\\\s*]+\\[^\\\s*]+\.[a-z0-9]{1,4}'
     unless:
       - id: well-known/app/ai/agent-runtime/aui-agent-builder/
       - id: well-known/lib/native/pywin32::pywin32-binding-module
@@ -143,19 +182,11 @@ traits:
     unless:
       - id: well-known/lib/ai/unsloth::unsloth-package-context
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+      # Agent safety scanners quote destructive commands (mklink + del) as
+      # detection corpus; CodeBuddy's headless CLI carries those guards.
+      - id: well-known/app/ai/coding-agent/codebuddy::codebuddy-headless-context
       - id: well-known/app/ai/agent-runtime/aui-agent-builder/
       - id: well-known/lib/native/pywin32::pywin32-binding-module
-  - id: windows-recursive-delete-rd
-    desc: Windows recursive deletion via rmdir/rd
-    crit: notable
-    if:
-      type: text
-      regex: r(d|mdir)\s+/s
-      platforms:
-        - windows
-    unless:
-      - type: basename
-        exact: build-pty4j-libpty.bat
   - id: windows-recursive-delete-target-windir
     desc: Windows recursive deletion target WINDIR
     crit: notable
@@ -176,17 +207,6 @@ traits:
         - windows
     unless:
       - id: metadata/file/string/application-name::microsoft-activation-script-benign-context
-  - id: windows-recursive-delete-del
-    desc: Windows forced quiet file deletion
-    crit: notable
-    if:
-      type: text
-      regex: del\s+/f\s+/q
-      platforms:
-        - windows
-    downgrade:
-      any:
-        - id: objectives/evasion/self-delete/file/script::timeout-del-self
   - id: windows-shutdown-reboot-now
     desc: Immediate Windows reboot command
     crit: notable
@@ -207,7 +227,7 @@ traits:
     desc: Deletes every executable in the directory
     crit: notable
     conf: 0.88
-    for: [batch, static-lib]
+    for: [batch, static-lib, text]
     if:
       type: text
       regex: '(?i)\bdel\s+\*\.exe\b'
@@ -223,7 +243,7 @@ traits:
     desc: Deltree names a whole drive wildcard
     crit: notable
     conf: 0.93
-    for: [batch, static-lib]
+    for: [batch, static-lib, text]
     if:
       type: text
       regex: '(?i)\bdeltree\s+[A-Za-z]:\\\*\.\*'
@@ -231,10 +251,21 @@ traits:
     desc: Quiet flag on a drive-wide deltree
     crit: suspicious
     conf: 0.94
-    for: [batch, static-lib]
+    for: [batch, static-lib, text]
     if:
       type: text
       regex: '(?i)\bdeltree\s+[A-Za-z]:\\\*\.\*\s*/[yq]\b'
+  - id: windows-windir-delete
+    desc: Deletes the Windows system directory
+    crit: suspicious
+    conf: 0.95
+    platforms:
+      - windows
+    if:
+      type: text
+      regex: '(?i)\b(deltree|rd|rmdir)\b.{0,30}([a-z]:\\(windows|winnt)|%WINDIR%|%SYSTEMROOT%)\b'
+    unless:
+      - id: metadata/package/testing/
 composite_rules:
   - id: ruby-vmware-drive-wipe
     desc: Wipes a drive when VMware is present
@@ -258,7 +289,7 @@ composite_rules:
     conf: 0.88
     for: [scripts, -shell, -jcl]
     all:
-      - id: micro-behaviors/process/create/shell/guard::destructive-action-prohibition-phrase
+      - id: metadata/file/line::destructive-action-prohibition-phrase
       - id: micro-behaviors/fs/delete/directory::rm-rf
     near_lines: 2
   - id: systemroot-delete-then-reboot
@@ -291,10 +322,27 @@ composite_rules:
     desc: Quietly deletes an entire drive tree
     crit: hostile
     conf: 0.97
-    for: [batch, static-lib]
+    for: [batch, static-lib, text]
     all:
       - id: deltree-drive-wildcard-path
       - id: deltree-drive-wildcard-quiet
+  - id: deltree-system-directory-wipe
+    desc: Deltree recursively deletes the Windows directory
+    crit: hostile
+    conf: 0.98
+    for: [batch]
+    all:
+      - id: micro-behaviors/fs/delete/directory::windows-deltree-recursive
+      - id: windows-windir-delete
+  - id: macos-system-delete
+    desc: macOS system directory deletion
+    crit: suspicious
+    conf: 0.95
+    platforms:
+      - macos
+    any:
+      - id: shell-rm-rf-macos-system-path
+      - id: python-rmtree-macos-system-path
   - id: windows-system32-delete
     desc: Windows System32 directory deletion
     crit: suspicious
@@ -320,7 +368,7 @@ composite_rules:
     platforms:
       - windows
     all:
-      - id: windows-recursive-delete-rd
+      - id: micro-behaviors/fs/delete/directory::windows-rd-recursive
       - id: windows-recursive-delete-target
   - id: windows-recursive-delete-del-path
     desc: Windows recursive delete via del with target
@@ -329,7 +377,7 @@ composite_rules:
     platforms:
       - windows
     all:
-      - id: windows-recursive-delete-del
+      - id: micro-behaviors/fs/delete/file/command::cmd-del-force-quiet
       - id: windows-recursive-delete-target
   - id: windows-recursive-delete-target
     desc: Windows recursive deletion target directories

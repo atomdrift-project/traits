@@ -5,7 +5,7 @@ defaults:
   for: [binaries]
 traits:
   - id: minimal-strings
-    desc: Binary has very few readable
+    desc: Binary has very few readable strings
     crit: suspicious
     conf: 0.7
     size_min: 51200
@@ -19,6 +19,38 @@ traits:
       any:
         - id: metadata/binary/section/label::upx-section
     unless:
+      - id: string-sparse-by-construction
+  - id: string-sparse-dll
+    desc: DLL with code but minimal strings
+    crit: suspicious
+    conf: 0.75
+    for:
+      - dll
+    size_min: 65536
+    if:
+      type: metrics
+      field: binary.string_count
+      max: 15
+    not:
+      - regex: \.(tar\.gz|tgz|zip)$
+    unless:
+      - id: metadata/signed/unknown::.net-dac
+      - id: metadata/binary/framework::electron-desktop-runtime
+      - type: basename
+        regex: \.(node|asar|map|svg|ttf|pak|bin|dat)$
+      - id: metadata/signed/certificate/identity::open-source-developer-leaf-subject
+      - id: metadata/binary/resource/
+      - id: metadata/binary/symbols/compat::zero-import-count
+      - id: metadata/binary/vendor/
+composite_rules:
+  # Binaries whose low string count is a property of what they are, not of
+  # runtime string decoding or a concealed import table. Shared by the
+  # low-string-count rules here and in imports/concealment.
+  - id: string-sparse-by-construction
+    desc: Binary is string-sparse by construction
+    crit: component
+    conf: 0.9
+    any:
       # When PE sections extend beyond EOF, the low count reflects a truncated
       # fixture rather than runtime string decoding or encrypted text.
       - id: metadata/binary/section/ratio::pe-section-overflow-present
@@ -36,50 +68,19 @@ traits:
       - id: metadata/signed/platform/
       - id: well-known/tool/development/toolchain/darling/
       - id: metadata/binary/resource/firmware/
-  - id: string-sparse-dll
-    desc: DLL with code but minimal strings
-    crit: suspicious
-    conf: 0.75
-    for:
-      - dll
-    size_min: 65536
-    if:
-      type: metrics
-      field: binary.string_count
-      max: 15
-    not:
-      - regex: \.(tar\.gz|tgz|zip)$
-    unless:
-      - id: metadata/signed/platform::.net-dac
-      - id: metadata/binary/framework::electron-desktop-runtime
-      - type: basename
-        regex: \.(node|asar|map|svg|ttf|pak|bin|dat)$
-      - id: metadata/signed/developer::open-source-developer
-      - id: metadata/binary/resource/
-      - id: metadata/binary/symbols/compat::zero-import-count
-      - id: metadata/binary/vendor/
-composite_rules:
-  - id: string-concealment-comp
-    desc: String obfuscation via runtime decryption
-    crit: suspicious
-    conf: 0.9
-    all:
-      - id: metadata/binary/section/prose::tiny-cstring-section
-      - id: micro-behaviors/process/create/shell/
-      - id: micro-behaviors/communications/socket/create/
-    unless:
-      - id: well-known/lib/runtime/scripted/python-runtime::python-runtime
-      - id: metadata/binary/framework/
-      - id: metadata/binary/installer/sfx::freearc-sfx
-      - id: well-known/lib/platform/browser-automation/
-      - id: well-known/app/infrastructure/pipewire::pw-container-binary
-      # Runtime string decryption conceals plaintext, so genuinely obfuscated
-      # binaries retain almost no human-readable sentence-like strings. Benign
-      # native daemons that merely import system()/socket() and have a small
-      # rodata ratio (e.g. /bin/pw-container) still carry many readable error
-      # and log messages; require near-absence of sentence strings to fire.
-      - id: metadata/binary/section/prose::sentence-strings-20-plus
-
+      # Relocatable objects (.o / Go .syso, embedded eBPF/libbpf skeletons) are
+      # string-sparse bytecode, not a concealed standalone payload. Keyed on
+      # ET_REL: cleave reports BPF e_machine as "unknown".
+      - id: metadata/binary/header/identity::elf-relocatable-object
+      # Test binaries included with parser/format libraries are deliberately
+      # chosen fixtures, not concealed application payloads.
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: metadata/package/testing/presence/harness::binary-test-directory
+      - id: well-known/tool/reverse-engineering/arwen::source-tree-path
+      # A Python C-extension entry stub (one PyInit export forwarding to the
+      # implementation library) is string-sparse because it is almost empty,
+      # not because it decodes strings or hides imports at runtime.
+      - id: metadata/binary/symbols/exports::python-extension-stub
   - id: minimal-strings-recognized-marker
     desc: Minimal strings recognized marker
     crit: baseline
@@ -88,8 +89,8 @@ composite_rules:
       # Relocatable object files (ET_REL=1), including embedded eBPF/BPF
       # objects, are not packed standalone executables.
       - id: metadata/binary/header/identity::elf-relocatable-object
-      - id: objectives/anti-static/obfuscation/imports::low-strings-package-extension
-      - id: objectives/anti-static/obfuscation/imports::low-strings-data-extension
+      - id: metadata/file/extension/asset::packaged-asset-extension
+      - id: metadata/file/extension/asset::data-file-extension
       - id: well-known/lib/runtime/scripted/electron::electron-enable-logging-env
       - id: metadata/binary/framework::electron-desktop-runtime
       - id: metadata/signed/platform::apple

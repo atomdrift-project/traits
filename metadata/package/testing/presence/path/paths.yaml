@@ -13,6 +13,28 @@ traits:
     type: path
     basename: true
     regex: '^t[0-9]{4}-.+\.sh$'
+# The MySQL/MariaDB/Percona test suite. `test-directory-path` cannot take the
+# hyphenated name without breaking its 64-byte cap. Collation suites print
+# every character beside its own hex encoding (`c<U+FEFF>c ... 63EFBBBF63`),
+# so invisible code points sit between letters by design.
+- id: mysql-test-directory-path
+  platforms: [unix, windows]
+  desc: File in a MySQL-family mysql-test tree
+  crit: baseline
+  conf: 0.95
+  for: [text, markdown, source, scripts]
+  if:
+    type: path
+    regex: '(^|/)mysql-test[\\/]'
+- id: test-runner-directory-path
+  platforms: [unix, windows]
+  desc: Test runner directory path
+  crit: baseline
+  conf: 0.95
+  for: [python]
+  if:
+    type: path
+    regex: '(^|/)test_runner[\\/]'
 # A source or package distribution that ships its own test suite carries it
 # near the archive root (`tests/`, `pkg-1.2/test/`, `foo/src/tests/`). Several
 # archive-abuse rules reference this as a benign context — parser regression
@@ -43,7 +65,7 @@ traits:
   desc: File in test fixture directory
   crit: baseline
   conf: 0.95
-  for: [javascript, typescript, python, text, tar, zip, 7z]
+  for: [javascript, typescript, python, shell, text, tar, zip, ruby]
   if:
     type: path
     dirname: true
@@ -76,6 +98,17 @@ traits:
     type: path
     dirname: true
     regex: 'efi[\\/]testdata'
+    case_insensitive: true
+- id: pe-adversarial-test-path
+  platforms: [unix, windows]
+  desc: PE in adversarial test path
+  crit: baseline
+  conf: 0.95
+  for: [pe]
+  if:
+    type: path
+    dirname: true
+    regex: 'samples[\\/]adversarial'
     case_insensitive: true
 - id: openssl-test-binary-path
   platforms: [unix, windows]
@@ -131,12 +164,22 @@ traits:
     dirname: true
     substr: test/resources
     case_insensitive: true
+- id: dotnet-test-resources-path
+  platforms: [unix, windows]
+  desc: .NET test project Resources folder path
+  crit: notable
+  conf: 0.95
+  for: [pe, dll, nupkg, vsix]
+  if:
+    type: path
+    substr: .Tests/Resources
+    case_insensitive: true
 - id: test-fixture-directory-name
   platforms: [unix, windows]
   desc: Test fixtures directory name
   crit: baseline
   conf: 0.95
-  for: [python, javascript, typescript]
+  for: [javascript, typescript, python, shell, text, tar, zip]
   if:
     type: path
     dirname: true
@@ -147,7 +190,7 @@ traits:
   desc: File in a tests/data directory
   crit: baseline
   conf: 0.95
-  for: [go, python, javascript, typescript, html]
+  for: [python, javascript, go, pe, dll, zip]
   if:
     type: path
     dirname: true
@@ -161,7 +204,8 @@ traits:
   for: [python]
   if:
     type: path
-    regex: '(^|[\\/])testenv[\\/]curl\.py$'
+    dirname: true
+    regex: '(^|[\\/])testenv$'
 - id: definitelytyped-test-directory-source-path
   platforms: [unix, windows]
   desc: DefinitelyTyped test directory source path
@@ -231,8 +275,12 @@ traits:
     regex: '(^|[\\/])examples([\\/]|$)'
 - id: shell-tests-testdata-path
   platforms: [unix, windows]
-  desc: Shell .test.sh fixture source
-  crit: baseline
+  desc: Shell .test.sh regression-suite basename
+  # Notable, not baseline: the basename asserts the file's whole purpose
+  # (a shell regression suite), which is program identity an analyst wants
+  # surfaced in a diff — and it is the anchor leg of the shell test-suite
+  # benign context below.
+  crit: notable
   conf: 0.95
   for: [shell]
   if:
@@ -451,11 +499,11 @@ traits:
   platforms: [linux, macos, windows]
   crit: baseline
   conf: 0.98
-  for: [powershell, csharp, pe, systemd]
+  for: [powershell, csharp, pe, systemd, rar, markdown, go]
   if:
     type: path
     dirname: true
-    regex: '[\\/]testdata[\\/]'
+    regex: '[\\/]testdata([\\/]|$)'
     case_insensitive: true
 - id: benign-testdata-directory-path
   desc: File in benign test-data directory
@@ -498,7 +546,7 @@ traits:
   for: [go, text, zip]
   if:
     type: path
-    regex: '(^|[\\/])(benchdata|benchmarks?)([\\/]|$)'
+    regex: '(^|[\\/])_?(benchdata|benchmarks?)([\\/]|$)'
     case_insensitive: true
 - id: xml-testdata-directory-path
   platforms: [windows, unix]
@@ -599,6 +647,19 @@ traits:
     type: path
     basename: true
     regex: '\.ztst$'
+# Security libraries ship labeled CVE proof-of-concepts under samples/exploits/;
+# the path is the anchor for suppressing heap-spray unescape findings in those
+# reference scripts.
+- id: exploit-sample-directory-path
+  platforms: [unix, windows]
+  desc: File in bundled exploit sample directory
+  crit: notable
+  conf: 0.95
+  for: [binaries, scripts, source, data, text, markdown, gem, tar, tar.gz, zip]
+  if:
+    type: path
+    case_insensitive: true
+    regex: '[\\/]exploits[\\/]'
 
 composite_rules:
 - id: test-spec-path-benign-context
@@ -649,3 +710,29 @@ composite_rules:
   - id: benchdata-directory-path
   - id: test-suite-directory-path
   - id: test-harness-directory-path
+# A shell regression suite named by the platform's own `*.test.sh`
+# convention. Bats and the plain `foo.test.sh` convention keep per-case
+# functions, staged HOME/work trees and constant-style token fixtures, so
+# bypass-flag and credential strings in them are assertion data, not agent
+# launches. Both a content leg and the basename are required: neither alone
+# separates a suite from a launcher script.
+- id: shell-test-suite-context
+  platforms: [unix, windows]
+  desc: Shell .test.sh regression-suite context
+  crit: exception
+  conf: 0.9
+  for: [shell]
+  all:
+  - id: shell-tests-testdata-path
+  - id: metadata/package/testing/harness/fixture::multiple-token-assignments
+- id: bundled-cve-exploit-sample-context
+  platforms: [unix, windows]
+  desc: Bundled CVE exploit sample with advisory citation
+  crit: exception
+  conf: 0.95
+  for: [binaries, scripts, source, ruby, javascript, typescript, html, python]
+  all:
+    - id: exploit-sample-directory-path
+  any:
+    - id: metadata/file/string/security::cve-identifier
+    - id: metadata/package/documentation/security-advisory::zdi-identifier

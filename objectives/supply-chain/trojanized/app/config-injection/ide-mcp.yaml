@@ -26,16 +26,6 @@ traits:
       type: text
       substr: ".kiro"
 
-  - id: python-path-open-write-mode
-    desc: Python pathlib open write mode
-    crit: notable
-    conf: 0.84
-    ref: sha256:a709234609a3c0423f68d9ebc1c219f349879cb4f29786d2d5e797e6b098cfd3
-    for: [python]
-    if:
-      type: text
-      regex: '\.open\(["'']w["'']\)'
-
   - id: python-mcp-config-backup-rename
     desc: Python backs up MCP config
     crit: notable
@@ -58,6 +48,10 @@ composite_rules:
       - id: micro-behaviors/fs/write/file/full::js-file-write
     any:
       - id: objectives/supply-chain/install-hook
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-raw-preinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: objectives/supply-chain/hidden-payload
       - id: objectives/exfiltration
       - id: objectives/credential-access
@@ -97,6 +91,10 @@ composite_rules:
       - id: micro-behaviors/fs/write/file/full::js-file-write
     any:
       - id: objectives/supply-chain/install-hook
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-raw-preinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: objectives/supply-chain/hidden-payload
       - id: objectives/exfiltration
       - id: objectives/credential-access
@@ -117,7 +115,7 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/mcp::mcp-server-command-schema
       - id: micro-behaviors/data/serialize/object::json-dump
-      - id: python-path-open-write-mode
+      - id: micro-behaviors/fs/write/file/mode::python-pathlib-open-write
     any:
       - id: micro-behaviors/fs/path/agent-config/mcp::claude-mcp-json-target
       - id: micro-behaviors/fs/path/agent-config/mcp::codex-mcp-toml-target
@@ -161,6 +159,7 @@ composite_rules:
       - id: well-known/tool/detection/
       - id: well-known/tool/development/autohq::autohq-cli-package
       - id: well-known/tool/development/autohq::autohq-cli-source-marker
+      - id: well-known/tool/development/meshcode::meshcode-cli-source-marker
       - id: well-known/app/infrastructure/puppetmaster::python-package-source
 
   - id: python-multi-agent-mcp-config-writer
@@ -236,36 +235,6 @@ composite_rules:
   # Codex twin of the redirect above: overriding model_provider in config.toml
   # and planting OPENAI_API_KEY into the Codex auth store routes Codex's traffic
   # and key through a chosen server. Dual-use (relay tools), so suspicious.
-  - id: codex-provider-credential-hijack
-    for: [javascript]
-    desc: Writes Codex provider credential override
-    crit: suspicious
-    conf: 0.85
-    all:
-      - id: micro-behaviors/data/llm/wire-marker::model-provider-field
-      - id: micro-behaviors/os/env/ai-provider::openai-api-key-name-reference
-      - id: micro-behaviors/fs/path/token::codex-auth-json
-      - id: micro-behaviors/fs/write/file/full::js-file-write
-    unless:
-      - id: well-known/tool/detection/
-
-  - id: codex-forced-mirror-cli-reinstall
-    for: [javascript]
-    desc: Force-installs Codex CLI from mirror
-    crit: suspicious
-    conf: 0.86
-    all:
-      - id: objectives/command-and-control/dropper/delivery/execute-download::npm-global-force-install
-      - id: objectives/command-and-control/dropper/delivery/execute-download::npm-registry-mirror-override
-      - id: micro-behaviors/os/env/ai-provider::openai-api-key-name-reference
-    unless:
-      - id: well-known/tool/detection/
-      - id: metadata/package/testing/presence/fixture::test-filename-pattern
-      - id: metadata/package/testing/presence/fixture::test-underscore-js-filename
-
-  # Endpoint+token redirect is dual-use; ALSO planting a SessionStart lifecycle
-  # hook into the same agent config is not — a benign API "router" never injects
-  # a session hook. The pair is a trojanized config-injection backdoor.
   - id: ai-agent-config-hijack-with-hook
     for: [javascript]
     desc: Hijacks AI CLI config, injects session hook
@@ -280,40 +249,6 @@ composite_rules:
 
   # Endpoint+token rewrite plus a SessionStart hook, without requiring the
   # exact path.join(os.homedir(), ...) spelling some installers avoid.
-  - id: ai-agent-session-hook-endpoint-swap
-    for: [shell, python, javascript]
-    desc: Session hook plus Anthropic endpoint swap
-    crit: hostile
-    conf: 0.9
-    all:
-      - id: micro-behaviors/communications/ipc/agent-hook::agent-session-hook--sessionstart
-      - id: micro-behaviors/os/env/ai-provider::anthropic-base-url-variable
-      - id: micro-behaviors/os/env/ai-provider::anthropic-auth-token-variable
-      - id: micro-behaviors/fs/path/agent-config/directory::claude-config-directory
-    unless:
-      - id: well-known/tool/detection/
-      - id: metadata/package/tooling::claude-agent-hook-env-integration-context
-      - id: metadata/package/testing/presence/fixture::test-filename-pattern
-      - id: metadata/package/testing/presence/fixture::test-underscore-js-filename
-      - id: metadata/package/testing/presence/path::test-fixture-directory-path
-      - id: metadata/package/testing/presence/test-home::test-home-directory-path
-
-  # Codex credential hijack that also force-reinstalls the CLI from a mirror
-  # is past a dual-use relay: the chosen version is pinned by --force.
-  - id: codex-hijack-forced-cli-reinstall
-    for: [javascript]
-    desc: Codex hijack force-reinstalls CLI from mirror
-    crit: hostile
-    conf: 0.9
-    all:
-      - id: codex-provider-credential-hijack
-      - id: objectives/command-and-control/dropper/delivery/execute-download::npm-global-force-install
-      - id: objectives/command-and-control/dropper/delivery/execute-download::npm-registry-mirror-override
-    unless:
-      - id: well-known/tool/detection/
-      - id: metadata/package/testing/presence/fixture::test-filename-pattern
-      - id: metadata/package/testing/presence/fixture::test-underscore-js-filename
-
   - id: mcp-token-exfiltration
     for: [javascript]
     desc: JWT-decoding MCP config with credential theft or exfiltration

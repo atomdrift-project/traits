@@ -26,30 +26,6 @@ defaults:
   mbc: B0030
 
 traits:
-  - id: php-assert-call
-    desc: Calls PHP assert
-    crit: notable
-    conf: 0.9
-    # Notable rather than component: in PHP before 8 a string argument to
-    # assert is executed, so the call is a code-execution sink wherever it
-    # appears, and a hostile composite needs at least one leg that carries
-    # weight on its own.
-    if:
-      type: text
-      regex: '@?\bassert\s*\('
-
-  - id: server-superglobal-read
-    desc: Reads the server superglobal
-    crit: notable
-    conf: 0.85
-    # `$_SERVER` only. This used to accept `$_REQUEST` as well and then reported
-    # every `$_REQUEST['x']` as "reads the server superglobal", which is both
-    # wrong to a reader and a second copy of
-    # micro-behaviors/communications/http/request/superglobal::request-dup — the
-    # composites below reference that instead.
-    if:
-      type: text
-      regex: '\$_SERVER\s*\['
 
   - id: wp-referer-read
     desc: Reads the WordPress referer
@@ -59,45 +35,27 @@ traits:
       type: text
       regex: '\bwp_get_referer\s*\('
 
+  - id: assert-direct-request-input-argument
+    desc: PHP assert directly receives request input
+    crit: notable
+    conf: 0.96
+    # Match the argument inside the assert call AST node. A nearby request read
+    # and an unrelated `assert(false)` are not an eval sink.
+    if:
+      type: tree-sitter
+      language: php
+      kind: call
+      regex: '(?is)\bassert\s*\(\s*@?\s*(\$_(SERVER|GET|POST|REQUEST)\s*\[|wp_get_referer\s*\()'
+
 composite_rules:
   - id: assert-evaluates-request-input
     desc: assert evaluates request input
+    # The assert leg is a parsed PHP call, so text-typed files cannot satisfy it.
+    for: [php]
     crit: hostile
     conf: 0.96
-    # Same line: the request value is the argument, not merely nearby. That is
-    # what separates a backdoor from a plugin that happens to assert something
-    # and also happens to read a header elsewhere in the file.
-    near_lines: 1
     all:
-      - id: php-assert-call
-    any:
-      - id: server-superglobal-read
-      - id: wp-referer-read
-      - id: micro-behaviors/communications/http/request/superglobal::get-post-param-access
-      - id: micro-behaviors/communications/http/request/superglobal::request-dup
+      - id: micro-behaviors/data/control-flow/assert::php-assert-call
+      - id: assert-direct-request-input-argument
     unless:
       - id: metadata/package/testing/
-      # A type assertion is not an eval sink: `assert(is_string($v))`.
-      - id: metadata/lang/scripted::assert-predicate-argument
-
-  # Some historical WordPress backdoors put the header check and assert on
-  # different lines, so the line-local rule above misses them.  A string
-  # assert fed by the server superglobal is still an execution sink; keep this
-  # broader variant separate so future formatting changes do not hide it.
-  - id: assert-evaluates-server-input
-    desc: assert evaluates server input
-    crit: hostile
-    conf: 0.95
-    # Keep the broad historical form line-local enough to avoid pooling an
-    # ordinary assertion with unrelated server-header reads elsewhere in a
-    # large PHP library file.
-    near_lines: 20
-    all:
-      - id: php-assert-call
-    any:
-      - id: server-superglobal-read
-      - id: micro-behaviors/communications/http/request/superglobal::request-dup
-    unless:
-      - id: metadata/package/testing/
-      # A type assertion is not an eval sink: `assert(is_string($v))`.
-      - id: metadata/lang/scripted::assert-predicate-argument

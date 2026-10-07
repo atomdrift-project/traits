@@ -79,13 +79,16 @@ traits:
       type: text
       regex: '(?im)^\s*credentials\s*:\s*(#.{0,120})?$'
 
+  # An empty `username:`/`password:` line is any YAML mapping, or a SQL loop
+  # label (`password: LOOP` in MariaDB's parser.result). A phishlet credential
+  # mapping opens with its own key/search/type fields on the next line.
   - id: phishlet-username-field
     desc: Phishlet username mapping key
     crit: notable
     conf: 0.96
     if:
       type: text
-      regex: '(?i)^\s*username\s*:\s*$'
+      regex: '(?im)^\s*username\s*:\s*\n\s*(key|search|type)\s*:'
 
   - id: phishlet-password-field
     desc: Phishlet password mapping key
@@ -93,30 +96,32 @@ traits:
     conf: 0.96
     if:
       type: text
-      regex: '(?i)^\s*password\s*:\s*$'
+      regex: '(?im)^\s*password\s*:\s*\n\s*(key|search|type)\s*:'
 
   - id: phishlet-credential-post-types
     desc: Phishlet contains two POST capture types
     # A bare `type: post` is common configuration syntax. Requiring two within
     # the credential mapping and proxy-host composites gives it meaning.
+    # Line-anchored so inline JS object fields such as `{ type: "post" }` in
+    # processor config do not read as Evilginx credential-capture mappings.
     crit: notable
     conf: 0.96
     count_min: 2
     if:
       type: text
-      regex: '\btype\s*:\s*[''"]?post[''"]?'
+      regex: '(?im)^\s+type\s*:\s*[''"]?post[''"]?\s*$'
 
   - id: phishlet-substitution-section
     desc: Phishlet response-rewrite section
-    crit: suspicious
+    crit: notable
     conf: 0.96
     if:
       type: text
-      regex: '(?i)^\s*sub_filters\s*:'
+      regex: '(?im)^[ \t]*sub_filters[ \t]*:'
 
   - id: phishlet-search-replace-fields
     desc: Phishlet content search and replacement
-    crit: suspicious
+    crit: notable
     conf: 0.94
     if:
       type: text
@@ -128,9 +133,31 @@ traits:
     conf: 0.98
     if:
       type: text
-      regex: '(?i)^\s*js_inject\s*:'
+      regex: '(?im)^[ \t]*js_inject[ \t]*:'
+
+  - id: phishlet-script-tag-replacement
+    desc: Phishlet replacement inserts a script tag
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\btriggers_on\s*:.{0,180}\breplace\s*:.{0,180}<script\b[^>]{0,120}\bsrc\s*='
 
 composite_rules:
+  # Injection into a proxy that captures authentication cookies gives the
+  # operator control over the genuine login flow (including MFA). Require the
+  # cookie-capture schema; ordinary response rewriting is insufficient.
+  - id: phishlet-session-script-injection
+    desc: Session-capturing proxy injects login scripts
+    crit: hostile
+    conf: 0.99
+    attack: T1539,T1557
+    all:
+      - id: phishlet-session-cookie-relay
+    any:
+      - id: phishlet-script-tag-replacement
+      - id: phishlet-javascript-injection-section
+
   - id: phishlet-credential-fields
     desc: Phishlet username and password fields
     crit: notable

@@ -28,6 +28,9 @@ traits:
   - id: well-known/tool/detection/proxy-sandbox
   - id: well-known/app/storage/akm::akm-stash-safety-sensitive-dirs
   - id: objectives/credential-access/theft/keywords::kiro-auth-token-filename
+  # Amazon Q Developer (AI coding assistant) keeps its MCP server config under
+  # ~/.aws/amazonq/mcp.json — an agent-config path, not AWS credential access.
+  - id: micro-behaviors/fs/path/agent-config/mcp::amazonq-mcp-json-path
 - id: aws-access-key
   desc: AWS access key ID pattern
   conf: 0.85
@@ -36,13 +39,12 @@ traits:
     # Require an AWS-specific field name so MinIO, Ceph, and other S3-compatible
     # test credentials named e.g. MINIO_ACCESS_KEY are not called AWS keys.
     regex: '(?i)\baws[_-]access[_-]key([_-]id)?\b\s*[:=]\s*["'']?AKIA[0-9A-Z]{16}'
+  not:
+  - substr: AKIAIOSFODNN7EXAMPLE
+  - regex: AKIA[0-9A-Z]{12}EXAMPLE
+  - substr: AKIAI6X4TYCIXM2B7MUQ
+  - substr: HONEYTOKEN
   unless:
-  - type: text
-    substr: AKIAIOSFODNN7EXAMPLE
-  - type: text
-    regex: AKIA[0-9A-Z]{12}EXAMPLE
-  - type: text
-    substr: AKIAI6X4TYCIXM2B7MUQ
   - id: metadata/package/testing/
   - id: well-known/tool/development/toolchain/go-toolchain::go-module-source-path
   - id: well-known/tool/detection/redaction::sensitive-data-scanner
@@ -238,22 +240,6 @@ traits:
   if:
     type: text
     regex: '\.get\s*\(\s*["'']refresh_token["'']\s*\)'
-- id: python-token-set-add
-  desc: Python adds token to set
-  crit: notable
-  conf: 0.82
-  for: [python]
-  if:
-    type: text
-    regex: '\.add\s*\(\s*token\s*\)'
-- id: python-print-token
-  desc: Python prints token variable
-  crit: notable
-  conf: 0.82
-  for: [python]
-  if:
-    type: text
-    regex: '\bprint\s*\(\s*token\s*\)'
 - id: windows-token-broker-tbres-cache
   desc: Reads Token Broker .tbres cache file
   crit: suspicious
@@ -300,13 +286,15 @@ traits:
   conf: 0.94
   if:
     type: text
-    regex: 'api_key\s*=\s*["'']AIzaSy[A-Za-z0-9_-]{20,}["'']'
+    # Word-boundary anchored so a compound settings field (default_api_key,
+    # maps_api_key) is app config, not an api_key assignment by the code itself.
+    regex: '\bapi_key\s*=\s*["'']AIzaSy[A-Za-z0-9_-]{20,}["'']'
 - id: gemini-api-key-assigned
   desc: Assigns a Gemini API key literal
   conf: 0.94
   if:
     type: text
-    regex: 'api_key\s*=\s*["'']AQ\.Ab8[A-Za-z0-9_-]{12,}["'']'
+    regex: '\bapi_key\s*=\s*["'']AQ\.Ab8[A-Za-z0-9_-]{12,}["'']'
 - id: url-api-key-query
   desc: URL query carries an API key
   crit: notable
@@ -314,14 +302,6 @@ traits:
   if:
     type: text
     regex: '[?&]api-key=[A-Za-z0-9-]{20,}'
-- id: python-client-https-literal
-  desc: Client call takes an HTTPS literal
-  crit: notable
-  conf: 0.86
-  for: [python]
-  if:
-    type: text
-    regex: 'Client\(\s*["'']https?://'
 - id: python-client-api-key-arg
   desc: Client constructor takes an API key
   crit: notable
@@ -410,7 +390,7 @@ composite_rules:
   scope: file
   all:
     - id: url-api-key-query
-    - id: python-client-https-literal
+    - id: micro-behaviors/communications/http/request/client::python-client-url-literal
 - id: python-client-ships-api-key
   desc: Client is constructed with an API key
   crit: hostile
@@ -444,7 +424,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/request/credentials::js-token-header-from-variable
   any:
   - id: github-classic-pat
-  - id: metadata/file/string/credential::github-fine-grained-pat
+  - id: micro-behaviors/os/security/auth/secret::github-fine-grained-pat
 - id: js-recursive-cloud-credential-scan
   desc: Recursive cloud credential path scan
   crit: notable
@@ -458,7 +438,7 @@ composite_rules:
   all:
   - id: micro-behaviors/fs/directory/traverse::node-recursive-dirent-walk
   any:
-  - id: metadata/file/string/cloud::gcp-default-credentials
+  - id: micro-behaviors/fs/path/credential::gcp-default-credentials
   - id: objectives/discovery/cloud/metadata::metadata-harvesting
 - id: js-ci-container-aware-cloud-credential-scan
   desc: CI/container-aware cloud credential scan
@@ -498,8 +478,8 @@ composite_rules:
   - id: micro-behaviors/fs/enumerate/directory::python-json-glob
   - id: micro-behaviors/fs/file/open::generic-dup
   any:
-  - id: python-token-set-add
-  - id: python-print-token
+  - id: micro-behaviors/data/source/syntax/credential::python-token-variable-set-add
+  - id: micro-behaviors/data/source/syntax/credential::python-token-variable-print
 - id: jvm-cloud-metadata-token-harvest
   desc: JVM class harvests two clouds' metadata tokens
   crit: hostile
@@ -546,7 +526,7 @@ composite_rules:
   - python
   - shell
   all:
-  - id: metadata/file/string/cloud::azure-managed-identity-token-path
+  - id: micro-behaviors/communications/http/services/azure::azure-managed-identity-token-path
   any:
   - id: micro-behaviors/communications/http/request/configuration::azure-imds-object-header
   - id: micro-behaviors/communications/http/request/configuration::azure-imds-cli-header
@@ -559,6 +539,7 @@ composite_rules:
   - id: well-known/lib/cloud/azure-identity::package-path
   - id: metadata/package/scripts/lifecycle::azure-imds-benign-context
   - id: well-known/lib/data/mongodb::mongodb-js-driver-bundle
+  - id: metadata/package/tooling::azure-agentbaker-tree
 - id: aws-credential-theft
   for: [shell, python, javascript, ruby, perl]
   desc: AWS credential theft
@@ -577,8 +558,9 @@ composite_rules:
   - id: micro-behaviors/fs/read/file
   near_bytes: 512
   any:
-  - id: metadata/file/string/cloud::gcp-default-credentials
+  - id: micro-behaviors/fs/path/credential::gcp-default-credentials
   unless:
+  - id: metadata/package/testing/corpus/
   - id: objectives/discovery/cloud/metadata/
   - id: metadata/binary/layout/size::massive-executable
   - id: well-known/app/security/eeg-security/
@@ -591,7 +573,7 @@ composite_rules:
   conf: 0.96
   attack: T1552.007
   all:
-  - id: micro-behaviors/os/container/runtime::serviceaccount-files
+  - id: micro-behaviors/fs/path/token::serviceaccount-token-path
   any:
   - id: micro-behaviors/os/container/runtime::api-enumeration
   - id: micro-behaviors/os/container/exec::pod-exec

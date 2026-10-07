@@ -5,52 +5,22 @@ defaults:
   conf: 0.9
 
 traits:
-  - id: npm-compressed-wrapper-parse-error
-    desc: npm gzip wrapper parse error
-    crit: baseline
-    conf: 0.95
-    for: [npm]
-    # A plain .tgz is also reported through the npm-compatible archive path.
-    # Require the package manifest before attributing the parser diagnostic to
-    # an NPM wrapper; otherwise every compressed tar fixture is mislabeled.
-    unless:
-      - type: value
-        path: package.json::name
-        exists: false
+  - id: archive-uncompressed-size-zero
+    desc: Archive expands to zero bytes
+    crit: component
+    if:
+      type: metrics
+      field: archive.uncompressed_size
+      max: 0
+
+  - id: archive-parser-errors-present
+    desc: Archive parser error count is nonzero
     if:
       type: metrics
       field: parse.error_count
       min: 1
 
-  - id: archive-parse-error
-    desc: Archive parser reported errors
-    crit: baseline
-    unless:
-      - type: basename
-        regex: '(?i)\.(tar\.(gz|bz2|xz|zst)|t(gz|bz2|xz|zst))$'
-      # Cargo packages are gzip-wrapped tar archives; the generic archive
-      # parser can report a recoverable wrapper diagnostic for them even when
-      # the Cargo members were extracted successfully.
-      - type: basename
-        regex: '(?i)\.crate$'
-      # Package wrappers are identified before the generic tar pass.  Their
-      # wrapper-level parse diagnostic is expected and is not corruption.
-      - type: value
-        path: archive.format.kind
-        exact: pkg
-      - id: metadata/build/archive::source-archive-member
-      # ZIP-local exclusions (inert on other formats): keep the finding quiet
-      # when the diagnostic is explained by traversal-path content.
-      - type: raw
-        substr: ".."
-      - type: hex
-        pattern: "50 4B 03 04 [26] (2F|5C)"
-      - type: hex
-        pattern: "50 4B 03 04 [26] ?? 3A (2F|5C)"
-    if:
-      type: metrics
-      field: parse.error_count
-      min: 1
+
 
   - id: high-entropy-archive
     desc: Archive has near-maximum entropy
@@ -243,7 +213,105 @@ traits:
       field: archive.uncompressed_size
       min: 1073741824
 
+  - id: archive-duplicate-member-names
+    platforms: [unix, windows, android]
+    desc: Archive contains duplicate member names
+    crit: notable
+    conf: 0.9
+    for: [zip, tar, jar]
+    if:
+      type: metrics
+      field: archive.duplicate_member_count
+      min: 1
+
+  # One archive-wide fact, read from the parsed member table.
+  #
+  # It used to exist twice, once as `zip::zip-encrypted-entry` and once as
+  # `7z::7z-encrypted-entry`, with identical matchers differing only in `for:`.
+  # `for:` does not gate a metrics trait to a container, so both fired on the
+  # same archive: one fact became two ML features, and a password-protected ZIP
+  # was reported as "7z archive contains encrypted content". Whether the members
+  # are worth hiding is for the composites that reference this to decide.
+  #
+  # Back on `archive.security.encrypted_count` after a spell reading
+  # `archive.members[*].encrypted`.
+  #
+  # The member flag was adopted because the metric used to be absent for 7z,
+  # which encrypts through the folder's coder chain rather than a per-entry
+  # header bit. filefacts now computes the count for 7z as well, and the member
+  # flag turned out to be the worse of the two: it matches under `test-rules`
+  # but is not among the member fields the scan path exposes as value facts, so
+  # a password-protected 7z produced nothing during an actual analysis and the
+  # thirteen rules referencing this trait stayed unreachable for exactly the
+  # format the switch was meant to fix. Verify this one with `analyze`, not
+  # `test-rules`.
+  # How much of the archive is encrypted, as opposed to whether any of it is.
+  # `for:` does not gate a metrics trait to a container, so the name is
+  # deliberately container-neutral: the APK- and ZIP-named versions this
+  # replaces announced "APK contains multiple encrypted archive members" over a
+  # password-protected 7z. The composites that want a container supply one as a
+  # separate leg. A `2..4` band used to sit beside this; it overlapped this one
+  # and reported "a few" and "several" of the same members in the same
+  # analysis, so the presence trait below covers the low end on its own.
+  - id: archive-encrypted-member-cluster
+    platforms: [unix, windows, android]
+    desc: Archive has several encrypted members
+    crit: notable
+    conf: 0.94
+    for: [zip, 7z, rar]
+    if:
+      type: metrics
+      field: archive.security.encrypted_count
+      min: 3
+  - id: archive-encrypted-member
+    platforms: [unix, windows, android]
+    desc: Archive contains an encrypted member
+    crit: notable
+    conf: 0.9
+    # zip, 7z, and RAR are the formats filefacts emits the count for. tar is
+    # dropped because tar has no encryption of any kind -- its extractor
+    # hardcodes the flag to false -- and an encrypted tarball is the whole
+    # stream through gpg or openssl, which leaves no member listing to read.
+    for: [zip, 7z, rar]
+    if:
+      type: metrics
+      field: archive.security.encrypted_count
+      min: 1
+
+  - id: petabyte-uncompressed-size
+    desc: Archive declares over one petabyte unpacked
+    crit: suspicious
+    conf: 0.99
+    for: [zip]
+    if:
+      type: metrics
+      field: archive.uncompressed_size
+      min: 1000000000000000
+
 composite_rules:
+  - id: npm-package-parse-error
+    desc: npm package archive reports parser errors
+    for:
+    - npm
+    conf: 0.95
+    unless:
+    - id: metadata/package/name/convention::npm-archive-name-missing
+    all:
+    - id: metadata/file/archive::archive-parser-errors-present
+  - id: archive-parse-error
+    desc: Archive errors outside recognized wrappers
+    unless:
+    - id: metadata/file/extension/package::compressed-tar-basename
+    - id: metadata/file/extension/package::rust-crate-basename
+    - id: metadata/file/format/structured::archive-format-pkg
+    - id: metadata/build/archive::source-archive-member
+    - id: metadata/package/files/archive-member::path-traversal-members
+    - id: metadata/package/files/archive-member::absolute-path-member
+    - id: metadata/package/files/archive-member::backslash-rooted-member
+    - id: metadata/package/files/archive-member::drive-rooted-member
+    all:
+    - id: metadata/file/archive::archive-parser-errors-present
+
   - id: recognized-package-executable-context
     desc: Recognized package executable layout
     crit: exception

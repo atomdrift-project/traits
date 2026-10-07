@@ -200,6 +200,43 @@ traits:
     if:
       type: text
       substr: SUGAR2A041
+  # Mirai-lineage bots XOR their telnet spray dictionary with a one-byte key
+  # (tadashi.mips: key 0x45, NUL terminators become the key byte), so every
+  # plaintext credential atom above stays dark. YARA's xor modifier tries all
+  # keys per string; key 0 is excluded so a plaintext table -- already covered
+  # above -- is not counted twice. Three distinct device-specific credentials
+  # under any key do not occur by accident in a binary.
+  - id: xor-encoded-iot-credential-table
+    desc: XOR-hidden IoT default credential table
+    crit: suspicious
+    conf: 0.93
+    attack: T1110.001,T1027
+    if:
+      type: yara
+      source: |
+        rule xor_encoded_iot_credential_table {
+          strings:
+            $c01 = "xc3511" xor(1-255)
+            $c02 = "vizxv" xor(1-255)
+            $c03 = "7ujMko0" xor(1-255)
+            $c04 = "juantech" xor(1-255)
+            $c05 = "jvbzd" xor(1-255)
+            $c06 = "smcadmin" xor(1-255)
+            $c07 = "oelinux123" xor(1-255)
+            $c08 = "hi3518" xor(1-255)
+            $c09 = "xmhdipc" xor(1-255)
+            $c10 = "Zte521" xor(1-255)
+            $c11 = "telecomadmin" xor(1-255)
+            $c12 = "t0talc0ntr0l4!" xor(1-255)
+            $c13 = "hunt5759" xor(1-255)
+            $c14 = "ipcam_rt5350" xor(1-255)
+            $c15 = "zlxx." xor(1-255)
+            $c16 = "klv1234" xor(1-255)
+            $c17 = "zsun1188" xor(1-255)
+            $c18 = "1001chin" xor(1-255)
+          condition:
+            3 of them
+        }
 composite_rules:
   # Keyed on distinct *device-specific* credentials. This was one alternation
   # regex over root|admin|default|password|12345 with `count_min: 4`, which
@@ -227,6 +264,21 @@ composite_rules:
       - id: camera-cred-xmhdipc
       - id: router-cred-zte
       - id: router-cred-huawei
+  # An obfuscated IoT spray dictionary inside a binary that dials out through
+  # raw socket/connect syscalls: the propagation half of a Mirai-lineage bot.
+  - id: xor-credential-table-direct-network-bot
+    desc: Hidden IoT credential table with raw-syscall dialer
+    crit: hostile
+    conf: 0.97
+    attack: T1110.001,T1027
+    mbc: E1017
+    all:
+      - id: xor-encoded-iot-credential-table
+    any:
+      - id: micro-behaviors/communications/socket/syscall::mips-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::arm-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::arm-oabi-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-network-syscalls
   - id: telnet-connect
     desc: Telnet connection string
     crit: suspicious
@@ -243,7 +295,7 @@ composite_rules:
     attack: T1110.001
     any:
       - id: micro-behaviors/communications/http/download/curl::wget
-      - id: micro-behaviors/communications/ftp/download/tftp::tftp
+      - id: micro-behaviors/communications/tftp/download::tftp
   - id: iot-credential-spray-command-injection-loader
     desc: IoT credential spray with command-injection payload loader
     crit: hostile
@@ -252,7 +304,7 @@ composite_rules:
     mbc: E1110
     all:
       - id: iot-default-credential-token-cluster
-      - id: objectives/command-and-control/dropper/delivery/execute-download::download-permission-execute-chain
+      - id: micro-behaviors/process/create/local-exec::embedded-download-chmod-execute-chain
       - id: objectives/lateral-movement/brute-force/iot::busybox-bot-name-invocation
     # The specific Mirai credential/stager detector describes the same
     # propagation routine with stronger evidence; avoid two hostile verdicts
@@ -306,14 +358,14 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/http/download/busybox::wget
       - id: micro-behaviors/communications/http/download/busybox::busybox-wget-http-reference
+      - id: micro-behaviors/communications/http/download/busybox::wget-http-url-reference
       - id: micro-behaviors/communications/ftp/download/busybox::ftpget
-      - id: micro-behaviors/communications/ftp/download/tftp::tftp
-      - id: objectives/lateral-movement/brute-force/iot::iot-credential-spray
-  - id: mirai-credential-covert-c2
-    desc: Mirai credential list with covert C2 protocol markers
-    crit: hostile
-    conf: 0.98
-    attack: T1110.001,T1071
+      - id: micro-behaviors/communications/tftp/download::tftp
+  - id: mirai-credential-static-endpoint
+    desc: Static uClibc binary combines Mirai credentials and remote endpoint
+    crit: suspicious
+    conf: 0.92
+    attack: T1110.001
     mbc: E1017
     all:
       - id: mirai-credential-access
@@ -322,7 +374,6 @@ composite_rules:
       - id: micro-behaviors/communications/ip/literal::external-ipv4-binary
       - id: micro-behaviors/communications/ip/literal::external-ipv4-host-literal-binary
       - id: micro-behaviors/communications/ip/literal::http-ip-url
-      - id: micro-behaviors/fs/proc/cmdline::process-pid-cmdline-format
   - id: mirai-telnet-credential-spray
     desc: Mirai credential spray with Telnet status and procfs scan
     crit: hostile
@@ -345,7 +396,7 @@ composite_rules:
     all:
       - id: mirai-credential-access
       - id: objectives/lateral-movement/brute-force/iot::shell-injection-pattern-1
-      - id: objectives/command-and-control/botnet/iot::telnet-target
+      - id: micro-behaviors/communications/socket/telnet::telnet-port-endpoint-reference
   - id: telnet-attack
     desc: IoT telnet attack patterns
     crit: suspicious

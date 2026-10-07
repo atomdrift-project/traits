@@ -4,13 +4,6 @@ defaults:
   attack: T1005
   mbc: B0030
 traits:
-- id: mastercard-brand
-  desc: Mastercard brand reference
-  crit: notable
-  conf: 0.4
-  if:
-    type: text
-    word: mastercard
 - id: cc-regex-16digit
   desc: 16-digit card regex near card field
   crit: notable
@@ -40,28 +33,33 @@ traits:
     # HTTP 4xx status checks (e.g. httpStatusCode.startsWith("4")) are not BINs.
     - type: text
       regex: '(?i)(statusCode|httpStatus)\w*\.startsWith\s*\(\s*["'']4["'']'
-- id: visa-bin--card-payment-marker
-  desc: Card-number/PAN field assignment
+- id: card-number-field-assignment
+  unless:
+    - id: metadata/package/testing/corpus::inert-security-input-module
+  desc: Card-number or PAN field assignment
   crit: notable
   conf: 0.75
   if:
     type: text
-    # Require card-number/PAN identity — bare "card"/"payment" match UI Card
-    # components and generic checkout copy.
-    #
-    # \b on both sides is load-bearing: without it the `pan` alternative is a
-    # substring match, so any identifier ENDING in "pan" followed by `=` or `:`
-    # scored as a PAN field. `const nameSpan = document.createElement('span')`
-    # in a tab-manager extension's popup.js matched on "…meSpan =", putting a
-    # credential-access/financial finding on code that has no card data at all.
-    #
-    # A leading `-`/`_` must also be excluded: `\b` treats a hyphen as a word
-    # boundary, so Tailwind's class metadata `"touch-pan":["x","left","right"]`
-    # in a Next.js bundle scored as a PAN field assignment.
-    regex: '(?i)(^|[^\w-])["'']?(cardNumber|card_number|credit_?card|pan)\b["'']?\s*[:=]'
+    # Require a number-bearing object key. A bare `creditcard` key also occurs
+    # in public-suffix tables for the .creditcard TLD. The value must be code,
+    # not a quoted string: Rich's emoji table maps "credit_card" to a quoted
+    # glyph. Quoted uppercase PAN remains supported; unquoted PAN collides with
+    # chart and networking APIs.
+    regex: '(?m)(^|[{,])\s*(["'']?(?i:card_?number)["'']?|["'']PAN["''])[:=]\s*[^"''\s]'
+- id: credit-card-number-field-assignment
+  desc: Credit-card number field assignment
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?i)\bcredit[ _-]?card[ _-]?number\s*[:=]\s*[^"''\s]'
   unless:
-  - id: metadata/package/documentation/page::static-documentation-html-page
-  - id: metadata/lang/generated::generated-apollo-icon-enum-source
+    - id: metadata/package/documentation/page::static-documentation-html-page
+    - id: metadata/lang/generated::generated-apollo-icon-enum-source
+    # Obfuscated bundles emit PAN-like identifier keys from the string table.
+    - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::plain-javascript-obfuscator-string-array-runtime
+    - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::javascript-obfuscator-string-array-runtime
 - id: mastercard-bin--rx-1
   desc: Regex component marker
   crit: component
@@ -91,7 +89,9 @@ composite_rules:
   conf: 0.7
   all:
   - id: visa-bin
-  - id: visa-bin--card-payment-marker
+  any:
+  - id: card-number-field-assignment
+  - id: credit-card-number-field-assignment
   near_lines: 100
 - id: mastercard-bin-prefix-check
   for: [javascript]

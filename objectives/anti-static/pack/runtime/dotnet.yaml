@@ -10,72 +10,15 @@ traits:
   # plain strings means a .NET payload/runtime is embedded for reflective
   # loading. Kept as separate substr atoms (a composite below requires several
   # distinct names so a stray mention does not fire).
-  - id: dotnet-corelib-string
-    desc: Embedded System.Private.CoreLib name
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      substr: "System.Private.CoreLib"
-    unless:
-      - id: metadata/binary/framework::dotnet-assembly
-  - id: dotnet-reflection-emit-string
-    desc: Embedded System.Reflection.Emit name
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      substr: "System.Reflection.Emit"
-    unless:
-      - id: metadata/binary/framework::dotnet-assembly
-  - id: dotnet-reflection-primitives-string
-    desc: Embedded System.Reflection.Primitives name
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      substr: "System.Reflection.Primitives"
-    unless:
-      - id: metadata/binary/framework::dotnet-assembly
-  - id: dotnet-interop-services-string
-    desc: Embedded System.Runtime.InteropServices name
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      substr: "System.Runtime.InteropServices"
-    unless:
-      - id: metadata/binary/framework::dotnet-assembly
-
 composite_rules:
   # >=3 distinct .NET runtime assembly names embedded as strings.
-  - id: embedded-dotnet-runtime-assembly-strings
-    desc: Embedded .NET runtime assembly-name strings
-    crit: notable
-    conf: 0.85
-    needs: 3
-    any:
-      - id: dotnet-corelib-string
-      - id: dotnet-reflection-emit-string
-      - id: dotnet-reflection-primitives-string
-      - id: dotnet-interop-services-string
-    # Default file scope can pool strings from decoded layers.  Suppress the
-    # inference for a real managed assembly even when a child layer supplied
-    # one of the string findings.
-    unless:
-      - id: metadata/binary/framework::dotnet-assembly
-  # A native PE (not itself a .NET assembly) that both embeds a .NET reflective
-  # payload AND conceals an encrypted stage in an oversized .reloc is a native
-  # loader for a managed second stage — the ACRStealer/Shelma host shape. The
-  # `unless` keeps real managed assemblies (which legitimately carry these
-  # names) from matching.
   - id: native-host-embedded-dotnet-payload
     desc: Native PE conceals embedded .NET payload
     crit: hostile
     conf: 0.95
     attack: "T1620"
     all:
-      - id: embedded-dotnet-runtime-assembly-strings
+      - id: metadata/lang/runtime::dotnet-runtime-name-cluster
       - id: metadata/binary/section/header::reloc-overhang-dominant
     unless:
       - id: metadata/binary/framework/
@@ -92,6 +35,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-reflective-loader-chain
     unless:
       - id: objectives/anti-static/obfuscation/obfuscator/managed/
+      - id: metadata/build/protector::dotnet-reactor-module-guid-type
       - id: well-known/dual-use/tunnel/connectify/
 
   - id: dotnet-sparse-import-encrypted-resource-stager
@@ -121,6 +65,7 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: objectives/anti-static/obfuscation/obfuscator/managed/
+      - id: metadata/build/protector::dotnet-reactor-module-guid-type
       - id: well-known/dual-use/remote-admin/meshcentral::meshcentral-agent-binary-context
       - id: well-known/lib/runtime/managed/dotnet-runtime::mono-mscorlib-runtime-context
 
@@ -155,25 +100,24 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: metadata/binary/code/entropy::pe-code-entropy-78
-      - id: micro-behaviors/data/compress/gzip::dotnet-gzip-compression
+      - id: metadata/binary/code/entropy::native-code-entropy-78
+      - id: "micro-behaviors/data/codec::dotnet-gzip-compression"
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
       - id: micro-behaviors/os/api-resolution/dynamic::assembly-load-type-method-marker-cluster
     unless:
       - id: metadata/signed/platform/
 
   - id: dotnet-packed-stub
-    desc: Packed .NET stub (high entropy, sparse imports)
+    desc: High-entropy .NET stub with packer-specific entry behavior
     crit: suspicious
     conf: 0.88
     all:
       - id: metadata/binary/framework::dotnet-assembly
-    needs: 2
-    any:
-      - id: objectives/command-and-control/dropper/execution/loader::dotnet-single-import
       - id: metadata/binary/code/entropy::high-code-entropy
+    any:
       - id: objectives/anti-static/pack/polymorphic::unusual-entry-point-section
       - id: objectives/anti-static/pack/detect::themida-section
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
     unless:
       # Black Lightning is a verified managed game client whose ordinary CLR
       # image has one native import and high-entropy UI resources. Those
@@ -185,6 +129,7 @@ composite_rules:
         - id: metadata/binary/debug::pdb-visual-studio
         - id: well-known/app/system/crayens/
         - id: objectives/anti-static/obfuscation/obfuscator/managed/
+        - id: metadata/build/protector::dotnet-reactor-module-guid-type
 
   - id: dotnet-dominant-resource-packed-stub
     desc: .NET packed stub with dominant resource payload
@@ -192,7 +137,7 @@ composite_rules:
     conf: 0.93
     all:
       - id: metadata/binary/framework::clr-runtime-header
-      - id: objectives/anti-static/obfuscation/payload/encrypted::dominant-high-entropy-resources
+      - id: metadata/binary/section/permission::dominant-high-entropy-resources
       - id: metadata/binary/section/prose::medium-pe-string-concealment-profile
     unless:
       - id: metadata/binary/installer/script/
@@ -223,7 +168,7 @@ composite_rules:
     conf: 0.95
     all:
       - id: metadata/binary/framework::clr-runtime-header
-      - id: objectives/anti-static/obfuscation/payload/encrypted::dominant-high-entropy-resources
+      - id: metadata/binary/section/permission::dominant-high-entropy-resources
     unless:
       - id: metadata/binary/framework::dotnet-metadata
       - id: metadata/signed/platform/
@@ -258,3 +203,28 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/reflection/runtime::methodbase-class
       - id: micro-behaviors/os/privilege/manifest::require-administrator
       - id: metadata/hardening/memory::wx-section
+
+  # CLR crypter stubs keep the COM descriptor but strip BSJB metadata; the
+  # encrypted overlay is read, decrypted, and handed to MethodBase.Invoke on the
+  # resolved entry point. Requiring dotnet-assembly misses this shape entirely.
+  - id: clr-crypter-overlay-entrypoint-loader
+    desc: CLR crypter stub decrypts overlay and invokes entry point
+    crit: hostile
+    conf: 0.98
+    attack: T1027.009,T1140,T1620
+    mbc: B0030,B0040
+    all:
+      - id: metadata/binary/framework::clr-runtime-header
+      - id: metadata/binary/section/header::pe-il-only-without-clr-metadata
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/binary/layout/overlay::overlay-dominates-80pct
+      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
+      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+      - id: micro-behaviors/crypto/library/stdlib::dotnet-cryptostream
+      - id: micro-behaviors/process/interpreter/reflection/runtime::get-entrypoint-token
+      - id: micro-behaviors/process/interpreter/reflection/runtime::methodbase-class
+      - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-token
+    unless:
+      - id: metadata/binary/framework::dotnet-metadata
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

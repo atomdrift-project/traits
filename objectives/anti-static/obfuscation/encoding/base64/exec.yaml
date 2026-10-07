@@ -6,28 +6,6 @@ defaults:
   platforms: [unix, android, ios]
   for: [shell]
 traits:
-  - id: base64-sh-pipeline
-    desc: base64 output pipes to sh
-    crit: notable
-    conf: 0.9
-    for: [shell, github-actions, makefile]
-    if:
-      type: text
-      regex: '\bbase64\b[^\n|]{0,160}\|\s*sh\b'
-    unless:
-      - id: metadata/file/naming::rust-source-file-context
-  - id: base64-d-pipe-bash
-    desc: base64 -d piped to bash
-    crit: suspicious
-    conf: 0.82
-    for: [shell, github-actions]
-    if:
-      type: text
-      regex: 'base64\s+-d\s*\|\s*bash\b'
-    unless:
-      - id: well-known/tool/detection/llm-scanner/
-      - id: well-known/tool/detection/defensive-scanner-context::linux-persistence-threat-scanner
-      - id: metadata/package/testing/presence/harness::test-directory-path
   - id: base64-d-pipe-shell
     desc: base64 -d piped to shell
     crit: suspicious
@@ -36,6 +14,8 @@ traits:
     if:
       type: text
       regex: 'base64\s+-d\s*\|\s*shell'
+    unless:
+    - id: metadata/package/testing/corpus/
   - id: base64-decode-pipe-sh
     desc: base64 --decode piped to sh
     crit: suspicious
@@ -45,6 +25,7 @@ traits:
       type: text
       regex: 'base64\s+--decode\s*\|\s*sh'
     unless:
+      - id: metadata/package/testing/corpus/
       - id: metadata/package/testing/presence/harness::test-directory-path
       - id: well-known/tool/detection/oracle-macaron/
   - id: base64-decode-pipe-bash
@@ -55,6 +36,10 @@ traits:
     if:
       type: text
       regex: 'base64\s+--decode\s*\|\s*bash\b'
+    unless:
+      - id: metadata/package/testing/corpus/
+      - id: metadata/package/testing/presence/harness/
+      - id: well-known/tool/detection/oracle-macaron/
     downgrade:
       any:
         - id: well-known/lib/ai/pyaigis
@@ -83,6 +68,21 @@ traits:
     if:
       type: text
       regex: 'base64\s+-D\s*\|\s*shell\b'
+  # macOS `base64 -D` and GNU `base64 -d`/`--decode`, piped at zsh rather than
+  # sh/bash. The optional `/bin/` or `/usr/bin/` prefix is how a JXA
+  # doShellScript carrier spells the interpreter (`base64 -D | /bin/zsh -s`).
+  - id: base64-decode-pipe-zsh
+    desc: base64 decode piped to zsh
+    crit: suspicious
+    conf: 0.84
+    for: [scripts]
+    if:
+      type: text
+      regex: 'base64\s+(-D|--decode|-d)\s*\|\s*(/(usr/)?bin/)?zsh(\s+-s)?\b'
+    unless:
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/defensive-scanner-context::linux-persistence-threat-scanner
   - id: ifs-spaced-base64-pipe-shell
     desc: IFS-expanded Base64 decode pipes into a shell
     crit: suspicious
@@ -92,6 +92,24 @@ traits:
       type: text
       regex: '\bbase64\$\{IFS\}-(d|D)\|(/bin/)?(ba)?sh\b'
 composite_rules:
+  - id: base64-d-pipe-bash
+    desc: base64 -d piped to bash
+    crit: suspicious
+    conf: 0.82
+    for: [shell, github-actions]
+    near_bytes: 256
+    all:
+      - id: micro-behaviors/data/decode/base64::base64-pipeline-input
+      - id: micro-behaviors/data/decode/base64::decode-pipe-bash
+    unless:
+      - id: metadata/package/testing/corpus/
+      - id: metadata/file/format/structured::serialized-news-article-catalog
+      - id: micro-behaviors/process/create/shell/guard::python-command-risk-classifier-context
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/defensive-scanner-context::linux-persistence-threat-scanner
+      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: micro-behaviors/process/create/shell/bridge::runtime-base64-shell-transport
+      - id: metadata/package/tooling::the-situation-provisioner
   - id: base64-d-pipe-sh
     desc: base64 -d followed by sh interpreter
     crit: suspicious
@@ -100,8 +118,11 @@ composite_rules:
     near_bytes: 64
     all:
       - id: micro-behaviors/data/decode/base64::base64-d-cmd
-      - id: base64-sh-pipeline
+      - id: micro-behaviors/process/create/shell/pipeline::base64-output-shell-stdin
     unless:
+      - id: runtime-base64-transport-context
+      - id: metadata/package/testing/corpus/
+      - id: well-known/tool/detection/pattern-catalog::js-threat-data-catalog
       - id: metadata/file/naming::rust-source-file-context
       - id: well-known/tool/detection/security-scanner/
       - id: well-known/tool/detection/security-scanner-identity::ks-aur-scanner-source-context
@@ -112,7 +133,7 @@ composite_rules:
       # it across a shell boundary without quoting problems. There is no static
       # encoded payload to hide in that round-trip; the shell-bridge trait still
       # reports the unusual decode-to-shell capability.
-      - id: micro-behaviors/process/create/shell/bridge::runtime-base64-shell-transport
+      # Printf-fed variant of the same round trip, built as a wider block.
 
   # The redirect sibling of the pipe forms above, and the one they all miss.
   # Piping keeps the payload off disk; redirecting stages it as a real script
@@ -157,8 +178,30 @@ composite_rules:
       - id: base64-decode-pipe-shell
       - id: base64-capital-d-pipe-sh
       - id: base64-capital-d-pipe-shell
+      - id: base64-decode-pipe-zsh
       - id: ifs-spaced-base64-pipe-shell
       - id: base64-decode-redirect-exec
     unless:
       - id: metadata/file/naming::rust-source-file-context
       - id: well-known/tool/detection/oracle-macaron/
+  # The JXA layer's only job is to unwrap an embedded blob into a shell that
+  # reads commands from stdin. doShellScript alone is a normal automation
+  # call; the base64-to-zsh pipe is what makes this a carrier.
+  - id: jxa-embedded-base64-zsh-stdin
+    desc: JXA doShellScript feeds base64 into zsh
+    crit: hostile
+    conf: 0.96
+    attack: T1059.002,T1059.004,T1027
+    for: [javascript]
+    near_bytes: 400
+    all:
+      - id: micro-behaviors/process/create/script/automation::do-shell-script
+      - id: base64-decode-pipe-zsh
+
+  - id: runtime-base64-transport-context
+    for: [javascript, typescript, shell, github-actions, makefile]
+    desc: Runtime Base64 shell transport forms
+    crit: exception
+    any:
+    - id: micro-behaviors/process/create/shell/bridge::runtime-base64-shell-transport
+    - id: micro-behaviors/process/create/shell/bridge::printf-fed-base64-shell-transport

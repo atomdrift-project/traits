@@ -4,13 +4,6 @@ defaults:
   attack: T1059.001
   mbc: E1027
 traits:
-  - id: executionpolicy-set-scope-process
-    desc: Set-ExecutionPolicy process-scope marker
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      regex: '(Set-ExecutionPolicy Bypass -Scope Process -Force)'
   - id: executionpolicy-dp0-file
     desc: Batch-local PowerShell file marker
     crit: notable
@@ -42,14 +35,6 @@ traits:
     if:
       type: text
       substr: rustup target add
-  - id: executionpolicy-sysadmin-template
-    desc: SysAdmin template execution-policy marker
-    crit: notable
-    conf: 0.82
-    for: [batch]
-    if:
-      type: text
-      substr: ':PSDownload <URL> <FileLocation>'
   - id: executionpolicy-hardware-tweak-marker
     desc: Hardware tweak execution-policy marker
     crit: notable
@@ -90,6 +75,27 @@ traits:
     if:
       type: text
       regex: '(?im)^[ \t]*(#|Write-Host\b|echo\b).{0,80}-ExecutionPolicy\s+Bypass'
+  - id: documented-executionpolicy-bypass-comment
+    desc: Documents ExecutionPolicy Bypass in comment
+    crit: notable
+    conf: 0.88
+    for: [powershell]
+    if:
+      type: text
+      # Comment-based help often runs past 500 chars (sap-dev's
+      # sap_compare_ddic.ps1 synopsis: ~600); 1000 is the perf ceiling.
+      regex: '(?is)-ExecutionPolicy\s+Bypass[^#]{0,1000}#>'
+  # Agent-plugin skills launch their own helpers through a root placeholder
+  # the host expands (<PLUGIN_DIR>, ${CLAUDE_PLUGIN_ROOT}); the script ships
+  # in the same package rather than arriving from a download or temp drop.
+  - id: executionpolicy-plugin-root-script
+    desc: Bypass runs a plugin-root script
+    crit: notable
+    conf: 0.86
+    for: [powershell, batch]
+    if:
+      type: text
+      regex: '(?i)-ExecutionPolicy\s+Bypass\s+-File\s+"?(<[A-Z_]+_DIR>|\$\{?CLAUDE_PLUGIN_ROOT)'
 composite_rules:
   - id: benign-executionpolicy-wrapper-context
     desc: Documented local script execution wrapper
@@ -99,9 +105,12 @@ composite_rules:
       - id: executionpolicy-rustup-wrapper
       - id: micro-behaviors/fs/path/construct::sibling-powershell-script-path
       - id: executionpolicy-local-script-wrapper
+      - id: executionpolicy-plugin-root-script
       - id: documented-executionpolicy-bypass-help
+      - id: documented-executionpolicy-bypass-comment
       - id: metadata/package/testing/harness/runtime::powershell-dogfood-harness
       - id: objectives/evasion/security-bypass/policy/execution::chocolatey-package-installer-marker
+      - id: metadata/build/ci/github-actions::workflow-definition-path
 
   - id: powershell-policy-bypass-script
     desc: PowerShell policy bypass launches a script file
@@ -135,6 +144,27 @@ composite_rules:
       - id: powershell-policy-bypass-script
       - id: objectives/evasion/masquerade/identity/name::microsoft-like-user-profile-script
 
+# A launcher that bypasses the execution policy, hides its window, and
+# evaluates a remotely fetched script in one command line is a concealed
+# fileless dropper. Documented local-script wrappers and the known
+# vendor Bootstrap installers that legitimately combine these flags are
+# excluded; an unknown remote payload is not one of them.
+  - id: hidden-policy-bypassed-remote-script-eval
+    desc: Hidden policy-bypassed launcher evaluates a remote script
+    crit: hostile
+    conf: 0.97
+    attack: T1059.001,T1105,T1562.001
+    for: [batch, powershell]
+    near_bytes: 512
+    all:
+      - id: micro-behaviors/process/create/flags::powershell-policy-bypass-text
+      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden
+      - id: objectives/command-and-control/dropper/script-eval/response-pipeline::ps-command-wrapper-network-eval
+    unless:
+      - id: benign-executionpolicy-wrapper-context
+      - id: well-known/tool/sysadmin/scoop::scoop-bootstrap-installer-context
+      - id: well-known/app/productivity/ferronote::ferronote-windows-installer-context
+
   - id: compressed-policy-bypass-stage
     for: [powershell]
     desc: Compressed PowerShell stage uses policy bypass
@@ -144,7 +174,7 @@ composite_rules:
     mbc: B0032,E1059
     all:
       - id: micro-behaviors/data/encode/payload::large-base64-string-literals
-      - id: micro-behaviors/data/decompress/gzip::gzip-decompress-to-text
+      - id: micro-behaviors/data/decompress/gzip::gzip-decompression-stream
       - id: micro-behaviors/fs/write/file/full::write-all-text
       - id: micro-behaviors/process/create/start-process::start-process-call
       - id: micro-behaviors/process/create/flags::powershell-policy-bypass-value
@@ -161,7 +191,7 @@ composite_rules:
     # assemblies commonly contain both features in unrelated methods.
     near_bytes: 1024
     all:
-      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+      - id: micro-behaviors/process/create/flags::execution-policy-bypass
     any:
       - id: micro-behaviors/process/create/hidden/
     unless:
@@ -178,7 +208,7 @@ composite_rules:
     for: [pe]
     all:
       - id: micro-behaviors/os/privilege/manifest::require-administrator
-      - id: objectives/evasion/hijack-execution-flow/dll-hijacking::runtime-dll-backup-name
+      - id: objectives/evasion/hijack-execution-flow/dll-hijacking/runtime::runtime-dll-backup-name
       - id: micro-behaviors/process/create/spawn::process-token-dotnet
     # `bypass-execution-policy` needs the interpreter name and its switches in
     # one contiguous run of text.  A managed launcher assigns
@@ -191,18 +221,18 @@ composite_rules:
     needs: 1
     any:
       - id: bypass-execution-policy
-      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass-flag
-      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass-concat
+      - id: micro-behaviors/process/create/flags::powershell-policy-bypass-text
+      - id: micro-behaviors/process/create/flags::execution-policy-bypass-concat
   - id: executionpolicy-known-installer-marker
     desc: Known installer execution-policy marker
     crit: notable
     conf: 0.85
     any:
-      - id: executionpolicy-set-scope-process
+      - id: micro-behaviors/process/create/flags::powershell-process-policy-bypass-command
       - id: executionpolicy-dp0-file
       - id: executionpolicy-jbang-wrapper
       - id: executionpolicy-build-wrapper
-      - id: executionpolicy-sysadmin-template
+      - id: micro-behaviors/communications/http/download/cli::psdownload-helper-label
       - id: executionpolicy-hardware-tweak-marker
       - id: executionpolicy-msys2-shell-wrapper
       - id: executionpolicy-gocross-wrapper

@@ -94,19 +94,6 @@ traits:
   if:
     type: text
     regex: SecurityProtocol\s*=\s*SecurityProtocolType\.Tls12
-- id: powershell-cert-validation-callback-accept-all
-  desc: PowerShell accepts every server certificate
-  crit: suspicious
-  conf: 0.97
-  for: [powershell]
-  if:
-    type: text
-    regex: '(?is)ServerCertificateValidationCallback\s*=\s*\{\s*\$?true\s*\}'
-  unless:
-    # Ansible's win_get_url/win_package modules gate this behind a documented
-    # `validate_certs: no` parameter the operator must opt into.
-    - id: well-known/app/infrastructure/ansible::ansible-module-source-context
-    - id: well-known/app/infrastructure/ansible::ansible-powershell-webrequest-context
 - id: python-self-signed-test-host
   desc: Python self-signed test host
   crit: notable
@@ -157,7 +144,7 @@ traits:
     substr: session.xenapi.event_from
 # A single requests call (or Session) with verify=False is a widespread,
 # benign-leaning weakness. The neutral mechanics live in
-# micro-behaviors/communications/http/ssl; this file only interprets them
+# micro-behaviors/communications/tls/verify/disable; this file only interprets them
 # when combined with stronger evasion evidence.
   # Always-true cert callback (Python ssl SNI/sni callback)
 - id: ssl-callback-always-true
@@ -256,7 +243,12 @@ composite_rules:
 
   # A custom X509TrustManager is neutral — pinning and private-CA managers use
   # the same interface. What marks a bypass is an implementation that names
-  # itself trust-all or insecure, which a validating manager never does.
+  # itself trust-all or insecure, which a validating manager never does -- or
+  # one that calls nothing at all: a validating manager must delegate to a
+  # default TrustManager, check a pin or validity date, or construct the
+  # CertificateException it throws, and every one of those is a method call.
+  # (2026-09 Luminex mod stealer: checkServerTrusted was junk arithmetic
+  # around a bare return, with no names to go on.)
   - id: java-trust-all-x509trustmanager
     desc: Java trust manager accepts every certificate
     crit: suspicious
@@ -268,15 +260,34 @@ composite_rules:
     any:
       - id: java-trust-all-type-name
       - id: java-inert-trustmanager-name
+      - id: metadata/file/function::jvm-class-calls-no-methods
     unless:
-      - id: well-known/lib/runtime/managed/netty::insecure-trust-manager-utility
-      - id: well-known/lib/runtime/managed/vertx/
+      # These are documented opt-in helpers in identified JVM runtime
+      # libraries; an application still reports its own trust-manager classes.
+      - id: well-known/lib/runtime/managed/
       - id: well-known/lib/testing/testcontainers::testcontainers-package-path
       - id: well-known/tool/development/vscode-extension/vscode-tlaplus::extension-archive-context
       - id: well-known/app/ai/tool-server/quarkus-agent-mcp::quarkus-agent-mcp-package
-      - id: well-known/lib/runtime/managed/quarkus-tls-registry::quarkus-tls-runtime-path
       - id: well-known/lib/ai/ray/
       - id: well-known/lib/data/cloud-jdbc::jdbc-sdk-bundle-context
+  # The C2 half of a JVM stager: a class that builds its own TLS socket and
+  # hands SSLContext.init a trust manager it defines itself, inline, that
+  # accepts every certificate. javac puts that manager in `Outer$X.class`,
+  # so `file` never sees both and `archive` would pool any JAR that merely
+  # contains both; `nest` joins exactly the class and its inner classes.
+  # (2026-09 Luminex implant: MLEEJeV6XOT + MLEEJeV6XOT$oww.)
+  - id: java-tls-client-own-trust-all-manager
+    desc: TLS client trusts every certificate via own inner class
+    crit: suspicious
+    conf: 0.95
+    attack: T1553,T1573
+    for: [jar, zip, class, java_class]
+    scope: nest
+    all:
+      - id: java-trust-all-x509trustmanager
+      - id: micro-behaviors/communications/socket/ssl::jvm-sslcontext-trustmanager-init-call
+      - id: micro-behaviors/communications/socket/ssl::jvm-sslsocket-handshake-call
+
   - id: java-token-loader-with-custom-trust-manager
     desc: Minecraft token loader combines remote staging with custom TLS trust
     # The archive-level correlation is strong but the custom manager is only a
@@ -349,7 +360,7 @@ composite_rules:
     attack: T1105,T1140,T1553,T1059.001
     for: [powershell]
     all:
-      - id: powershell-cert-validation-callback-accept-all
+      - id: micro-behaviors/communications/tls/verify/callback::powershell-callback-accepts-all-certificates
       - id: micro-behaviors/communications/http/client/managed::downloadstring
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
       - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
@@ -362,7 +373,7 @@ composite_rules:
     near_bytes: 240
     all:
       - id: micro-behaviors/communications/ip/literal::external-ipv4-url-script
-      - id: micro-behaviors/communications/http/ssl
+      - id: micro-behaviors/communications/tls/verify/disable
     unless:
       - id: metadata/package/testing/
   - id: java-tls-validation-bypass
@@ -399,11 +410,10 @@ composite_rules:
     # documented opt-in trust-all helper is implementing the option its
     # callers ask for, not disabling validation on its own account. OpenJDK's
     # source tree, Netty's InsecureTrustManagerFactory, Apache HttpClient's
-    # TrustAllStrategy and Quarkus' TLS registry are all that shape; the last
-    # had an identity that said exactly this but reached only the sibling rule
-    # `java-trust-all-x509trustmanager`. The directory's other members are
-    # narrow runtime-binary identities (libjvm.so, coreclr, mono exports), so
-    # the reference does not widen past libraries.
+    # TrustAllStrategy, Quarkus' TLS registry and Swagger Parser's opt-in
+    # RemoteUrl helper all fit that pattern. The directory's other members are
+    # narrow runtime-library or runtime-binary identities (libjvm.so, coreclr,
+    # mono exports), so the reference does not widen to applications.
     - id: well-known/lib/runtime/managed/
   # Ruby Net::HTTP with VERIFY_NONE, write fetched bytes, then Process.spawn —
   # catches SleeperGem-style and other TLS-blind remote loaders.
@@ -415,12 +425,22 @@ composite_rules:
     attack: T1105,T1553
     near_bytes: 4000
     all:
-      - id: micro-behaviors/communications/http/ssl::openssl-verify-none
+      - id: micro-behaviors/communications/tls/verify/disable::openssl-verify-none
       - id: micro-behaviors/communications/http/lib/netlib::net-http
       - id: micro-behaviors/process/create/direct::ruby-spawn
     any:
       - id: micro-behaviors/fs/write/file/full::ruby-file-write-content
       - id: micro-behaviors/fs/write/file/binary::ruby-file-binwrite-content
+  - id: java-fabric-mod-trust-all-c2-client
+    desc: Trojanized Fabric mod trust-all TLS client
+    crit: hostile
+    conf: 0.98
+    for: [jar, zip, json, class]
+    scope: archive
+    attack: T1195.002,T1573,T1102
+    all:
+      - id: objectives/supply-chain/trojanized/app/game-mod::fabric-manifest-net-fabric-main-entrypoint
+      - id: java-tls-client-own-trust-all-manager
   # PHP aggregator. Both the stream-context and the cURL option-array forms
   # of "trust any certificate" are verification-disabling by definition, so
   # the directory reference stays coherent (see the Python note above).
@@ -430,7 +450,7 @@ composite_rules:
     conf: 0.9
     for: [php]
     any:
-      - id: micro-behaviors/communications/http/ssl
+      - id: micro-behaviors/communications/tls/verify/disable
       - id: micro-behaviors/communications/http/curl::ssl-verify-disable
     unless:
       - id: metadata/package/testing/

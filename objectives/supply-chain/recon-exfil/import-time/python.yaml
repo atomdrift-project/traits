@@ -124,7 +124,12 @@ composite_rules:
     attack: "T1195.002,T1082,T1041"
     all:
       - id: micro-behaviors/communications/http/lib/requests::requests-post
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      # The name convicts timing, so the matcher must show it: a POST helper
+      # that only fires when explicitly called (a `send_info()` the importer
+      # never invokes) is an exfiltration capability, not an import-time
+      # beacon -- the sibling host-profile composites already state that.
+      - id: micro-behaviors/data/control-flow/module-exec::module-level-execution
     any:
       - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
       - id: micro-behaviors/os/sysinfo/hostname::python-os-uname-nodename
@@ -205,8 +210,8 @@ composite_rules:
       - id: metadata/file/size::init-py-file
       - id: micro-behaviors/communications/http/request/client::request-python
     any:
-      - id: objectives/exfiltration/oob/endpoint::canarytokens-com
-      - id: objectives/exfiltration/oob/endpoint::canarytokens-traffic-path
+      - id: micro-behaviors/communications/url/host::canarytokens-com
+      - id: micro-behaviors/communications/url/host::canarytokens-traffic-path
   - id: init-canarytokens-traffic-callback
     desc: Import-time CanaryTokens traffic callback
     crit: hostile
@@ -214,7 +219,7 @@ composite_rules:
     mbc: E1041
     all:
       - id: init-oob-callback
-      - id: objectives/exfiltration/oob/endpoint::canarytokens-traffic-path
+      - id: micro-behaviors/communications/url/host::canarytokens-traffic-path
   - id: init-oob-host-profile-callback
     desc: Import-time OOB host profile callback
     crit: suspicious
@@ -224,7 +229,7 @@ composite_rules:
       - id: metadata/file/size::init-py-file
       - id: micro-behaviors/data/serialize/schema-object::compact-host-profile-fields
       - id: micro-behaviors/communications/http/request/client::request-python
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
   - id: init-subprocess-oob-profile-exfil
     desc: Import-time command output OOB exfiltration
     crit: hostile
@@ -288,10 +293,17 @@ composite_rules:
       - id: micro-behaviors/communications/http/request/client::request-python
       - id: micro-behaviors/data/encode/base64::base64-encoding
     any:
-      - id: objectives/credential-access/cloud/devops-bundle::developer-credential-sweep
-      - id: objectives/credential-access/wallet/desktop::doteth-keystore
+      - id: micro-behaviors/fs/path/credential::developer-cloud-credential-path-cluster
+      - id: micro-behaviors/fs/path/wallet::doteth-keystore
       - id: micro-behaviors/fs/path/private-key::keys
       - id: micro-behaviors/fs/path/credential::container-credentials
+
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/lib/
+      - id: metadata/package/documentation/
+      - id: metadata/package/testing/
+      - id: metadata/package/config::sensitive-file-exclusion-list
 
   # Shared context: this code runs as a side effect of installing or importing
   # the package -- either the module the `import <pkg>` statement executes
@@ -366,11 +378,11 @@ composite_rules:
     attack: "T1195.002,T1041"
     all:
       - id: runs-at-import-or-install
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
     any:
-      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname
-      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
-      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname-ex
+      - id: micro-behaviors/communications/dns/resolver::gethostbyname
+      - id: micro-behaviors/communications/dns/resolver::getaddrinfo
+      - id: micro-behaviors/communications/dns/resolver::gethostbyname-ex
 
   - id: init-os-system-oob-curl
     desc: Import-time os.system curls an OOB host
@@ -381,7 +393,7 @@ composite_rules:
     all:
       - id: metadata/file/size::init-py-file
       - id: micro-behaviors/process/create/system::python-os-system
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
 
   - id: init-curl-command-subst-oob
     desc: Import curls command-substitution to OOB
@@ -391,7 +403,7 @@ composite_rules:
     attack: "T1195.002,T1041,T1059.006"
     all:
       - id: metadata/file/size::init-py-file
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
       - id: micro-behaviors/communications/http/curl::curl-data-command-subst
 
   # A requests.post call plus a hostname read proves neither import-time
@@ -413,7 +425,24 @@ composite_rules:
       - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
     any:
       - id: import-time-requests-post-data
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+
+  # urllib.request.Request(..., data=json.dumps({hostname,...})) then
+  # urlopen(req) — the POST body lives on the Request, not on urlopen()'s
+  # `data=` keyword, so the urlopen-data atom alone misses this spelling.
+  - id: import-time-urllib-json-host-profile-ip-beacon
+    desc: Import POSTs JSON host profile to external IP
+    crit: hostile
+    conf: 0.96
+    mbc: E1041
+    attack: "T1195.002,T1041,T1082"
+    all:
+      - id: runs-at-import-or-install
+      - id: micro-behaviors/communications/http/request/json::urllib-json-request-body
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-url-script
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
+      - id: micro-behaviors/data/serialize/schema-object::python-host-id-object-fields
 
   - id: init-curl-user-host-cwd-beacon
     desc: Import curls host user and cwd
@@ -445,8 +474,8 @@ composite_rules:
     attack: T1195.002,T1059
     near_lines: 16
     all:
-      - id: micro-behaviors/process/interpreter/python::exec-builtin
-      - id: micro-behaviors/process/interpreter/python::python-exec-docstring
+      - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
+      - id: micro-behaviors/process/interpreter/eval/direct::python-exec-docstring
       - id: micro-behaviors/process/interpreter/python::python-path-home-write-text
       - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
 
@@ -462,8 +491,8 @@ composite_rules:
     attack: "T1195.002,T1041"
     all:
       - id: metadata/file/size::init-py-file
-      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/dns/resolver::gethostbyname
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
 
   # DNS-only OOB at import, plus a host identity label in the queried name.
   # The resolve itself is the beacon; getpass/hostname make it a landing report
@@ -476,11 +505,11 @@ composite_rules:
     attack: "T1195.002,T1082,T1041"
     all:
       - id: runs-at-import-or-install
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
       - id: micro-behaviors/process/user/query::python-getpass-user
     any:
-      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname
-      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
+      - id: micro-behaviors/communications/dns/resolver::gethostbyname
+      - id: micro-behaviors/communications/dns/resolver::getaddrinfo
 
   - id: init-dns-oob-silent-beacon
     desc: Init file silently resolves an OOB host
@@ -491,11 +520,11 @@ composite_rules:
     all:
       - id: metadata/file/size::init-py-file
       - id: micro-behaviors/data/control-flow/module-exec::module-level-execution
-      - id: objectives/exfiltration/oob/endpoint::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host::oob-endpoint-any
       - id: micro-behaviors/data/control-flow/error-handling::silent-exception-pass
     any:
-      - id: micro-behaviors/communications/dns/lookup/resolver::gethostbyname
-      - id: micro-behaviors/communications/dns/lookup/resolver::getaddrinfo
+      - id: micro-behaviors/communications/dns/resolver::gethostbyname
+      - id: micro-behaviors/communications/dns/resolver::getaddrinfo
 
   - id: import-thread-chr-exec-loader
     desc: Thread execs decoded text at import
@@ -518,5 +547,5 @@ composite_rules:
     near_lines: 8
     all:
       - id: objectives/anti-static/obfuscation/control-flow/logic::join-chr-xor-transform
-      - id: micro-behaviors/process/interpreter/python::exec-builtin
+      - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
       - id: micro-behaviors/data/control-flow/error-handling::silent-exception-pass

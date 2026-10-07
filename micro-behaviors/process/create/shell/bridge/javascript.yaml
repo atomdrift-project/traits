@@ -13,6 +13,14 @@ traits:
     if:
       type: text
       regex: "(execSync|spawnSync)\\(\\s*[`\"']npm install[\\s\\S]{0,80}(-g|--global)"
+  - id: node-global-npm-install-remote-tgz
+    desc: Node global-installs remote npm tarball
+    crit: notable
+    conf: 0.94
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'npm install -g .{0,80}https?://.{0,120}\.tgz'
   - id: node-bash-lc-member-command
     desc: Runs object command through Bash
     crit: notable
@@ -79,19 +87,6 @@ traits:
       # `vscode.d.ts` declares `Terminal.sendText`; it does not call it.
       - id: metadata/lang/scripted::dts-declaration-file
 
-  - id: js-execsync
-    desc: Executes shell commands synchronously
-    crit: notable
-    conf: 1.0
-    unless:
-      - type: basename
-        exact: windowsPtyAgent.js
-      - type: basename
-        exact: publish.js
-      - id: metadata/package/testing/harness/runtime::node-common-require
-    if:
-      type: symbol
-      exact: execSync
   - id: js-execsync-backgrounds-variable-command
     desc: execSync backgrounds a variable command
     crit: notable
@@ -136,7 +131,11 @@ traits:
     for: [javascript, typescript]
     if:
       type: text
-      regex: 'process\.argv[\s\S]{0,60}\.join\s*\('
+      # Same line only: a wider window let `process.argv` flag checks bridge
+      # across newlines into an unrelated `path.join(` (an install script's
+      # `process.argv.includes('--dry-run')` two lines above
+      # `path.join(__dirname, ...)` read as argv joined into a command).
+      regex: 'process\.argv[^\n]{0,40}\.join\s*\('
   - id: js-compiled-execsync-cmd-arg
     desc: compiled JS execSync cmd arg
     crit: notable
@@ -144,44 +143,6 @@ traits:
     if:
       type: text
       substr: execSync)(cmd
-  - id: js-execfilesync
-    desc: Executes a file synchronously
-    crit: notable
-    conf: 0.9
-    for: [javascript, typescript]
-    if:
-      type: text
-      substr: execFileSync
-  # execFileSync given a *variable* program path rather than a command name:
-  # the executable is one the script resolved at run time (downloaded, unpacked
-  # or looked up), not a tool baked into the source. The argument list is a
-  # path the script built the same way. Legitimate wrappers do this around a
-  # vendored binary; interpreter droppers do it to run a co-shipped script with
-  # a runtime they just fetched.
-  - id: js-execfilesync-var-program-join-arg
-    desc: execFileSync runs variable path with path.join
-    crit: notable
-    conf: 0.85
-    for: [javascript, typescript]
-    if:
-      type: text
-      regex: 'execFileSync\s*\(\s*[\w.$]{1,40}\s*,\s*\[\s*path\.join\s*\('
-  - id: js-execfilesync-var-program-var-arg
-    desc: execFileSync runs variable path and arg
-    crit: notable
-    conf: 0.82
-    for: [javascript, typescript]
-    if:
-      type: text
-      regex: 'execFileSync\s*\(\s*[\w.$]{1,40}\s*,\s*\[\s*[\w.$]{1,40}\s*[,\]]'
-  - id: js-execfilesync-var-program-forwarded-argv
-    desc: execFileSync forwards argv to variable program
-    crit: notable
-    conf: 0.9
-    for: [javascript, typescript]
-    if:
-      type: text
-      regex: 'execFileSync\s*\(\s*[\w.$]{1,80}\s*,\s*process\.argv\.slice\(\s*2\s*\)'
   - id: js-execfile-bash
     desc: Node execFile launches bash process
     crit: notable
@@ -202,15 +163,6 @@ traits:
     if:
       type: text
       regex: "\\b[A-Za-z_$][\\w$]*\\s*\\(\\s*['\"`]bash['\"`]\\s*,"
-  - id: js-spawnsync
-    desc: Calls spawnSync() to run a child process
-    crit: notable
-    conf: 0.98
-    for: [javascript, typescript]
-    if:
-      type: symbol
-      kind: call
-      exact: spawnSync
   - id: js-spawnsync-posix-interpreter
     desc: Runs a POSIX interpreter via spawnSync
     crit: notable
@@ -274,14 +226,6 @@ traits:
     if:
       type: text
       regex: 'exec\s*\([^)]{0,80},\s*function\s*\([^)]{0,40}\).{0,400}\bexec\s*\('
-  - id: js-exec-call
-    desc: Calls a function named exec
-    crit: component
-    conf: 1.0
-    if:
-      type: symbol
-      kind: call
-      exact: exec
   - id: shelljs-exec
     desc: Executes a shell command through shelljs
     crit: notable
@@ -362,6 +306,53 @@ traits:
       type: text
       regex: '\$\{[A-Za-z_$][\w$]*\}\s*\|\s*base64\s+--?d\s*\|\s*(ba)?sh\b'
 
+  # Same transport shape, but the value is encoded inline instead of staged
+  # through a variable: `${Buffer.from(script).toString("base64")} | base64 -d
+  # | bash`. Remote-execution helpers (e.g. ts-cloud's SSH runner) build the
+  # whole round trip in one template literal so a generated script crosses
+  # the shell boundary without quoting problems. The encoder sits inside the
+  # pipeline literal itself, so nothing static was concealed. Keep the
+  # interpolation window tight so a distant encoder cannot launder an
+  # unrelated decode pipe.
+  - id: js-inline-base64-shell-interpolation
+    desc: Interpolates inline Base64 into shell pipeline
+    crit: notable
+    conf: 0.94
+    attack: T1059.007
+    if:
+      type: text
+      regex: '\$\{[^}]{0,40}\.toString\(["'']base64["'']\)\}\s*\|\s*base64\s+--?d\s*\|\s*(ba)?sh\b'
+
+  # Printf-fed variant of the transport shape: `printf %s ${b64} | base64 -d
+  # | sh -s ${b64} ${b64}`. Every word is an interpolation or a fixed token,
+  # so there is no static blob to conceal; exec layers that re-split quoting
+  # still deliver the program byte-for-byte. The decoder input must be an
+  # interpolation -- a static blob here is a concealed payload, not transport.
+  - id: js-printf-base64-shell-pipeline
+    desc: Printf-fed Base64 into shell pipeline
+    crit: notable
+    conf: 0.94
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'printf\s+%s\s+\$\{[^}]{0,80}\}\s*\|\s*base64\s+--?d(ecode)?\s*\|\s*(ba)?sh\b'
+
+  # Inline-encoded variant of the printf transport above: the Base64 encoder
+  # call sits INSIDE the interpolation (`${Buffer.from(x).toString("base64")}`),
+  # so one contiguous match proves the decoder input is a runtime value -- no
+  # proximity window is needed, and minified bundles that separate the helper
+  # from its use site still match. The encoder argument must not open with a
+  # quote or whitespace: `Buffer.from("<static>")` double-encodes a static
+  # blob, which is concealment, not transport.
+  - id: js-inline-encoded-printf-shell-pipeline
+    desc: Runtime-encoded printf pipeline transport
+    crit: notable
+    conf: 0.95
+    attack: T1059.007
+    if:
+      type: text
+      regex: 'from\([^''"`\s][^}]{0,30}\.toString\([''"]base64[''"]\)[^}]{0,6}\} \| base64 -d \| (ba)?sh'
+
   # A JavaScript string containing a decode-into-shell pipeline. The matcher
   # does not establish that child_process.exec is called, so execution-aware
   # objective composites add their own child-process leg.
@@ -371,10 +362,17 @@ traits:
     conf: 0.94
     attack: T1059.007,T1140
     unless:
+      - id: well-known/tool/detection/pattern-catalog::js-threat-data-catalog
       # A runtime value Base64-encoded only to cross a shell boundary without
       # quoting problems is transport, not a hidden static payload -- the
       # encode leg sits next to the pipeline, so nothing static was concealed.
       - id: micro-behaviors/process/create/shell/bridge::runtime-base64-shell-transport
+      # Printf-fed variant of the same round trip, built as a wider block.
+      - id: micro-behaviors/process/create/shell/bridge::printf-fed-base64-shell-transport
+      # Inline-encoded variant: the encoder sits inside the interpolation,
+      # so minified bundles still match without a proximity window. The
+      # single contiguous match proves a runtime value, no window needed.
+      - id: micro-behaviors/process/create/shell/bridge::js-inline-encoded-printf-shell-pipeline
       # agent-glovebox's deny-rules test suite quotes `base64 -d | sh` shapes
       # as deny-pattern rows for its defensive allow/deny engine -- quoted
       # policy text, not an executed pipeline.
@@ -384,6 +382,10 @@ traits:
       # rather than a command. `type: text` reads comments, and MiniMax Code's
       # @mavis/permission spells its encoding-bypass rule out in one.
       - id: well-known/tool/detection/pattern-catalog::js-command-deny-list-catalog
+      # Content blocker filter lists (e.g. uBlock Origin) contain regex rules
+      # matching shell pipelines to prevent clipboard-hijacking / clickfix attacks.
+      - id: metadata/file/format/markup::adblock-filter-list
+      - id: metadata/package/testing/
     if:
       # Just the decode-into-shell pipeline. The earlier form led with
       # `(exec|execSync)\s*\(` and scanned up to 400 characters to reach it,
@@ -401,8 +403,27 @@ composite_rules:
     for: [javascript, typescript]
     near_bytes: 256
     all:
-      - id: js-runtime-base64-shell-interpolation
       - id: micro-behaviors/data/encode/base64::tostring-base64
+    any:
+      - id: js-runtime-base64-shell-interpolation
+      - id: js-inline-base64-shell-interpolation
+      - id: js-printf-base64-shell-pipeline
+
+  # Printf-fed variant of the transport above. The pipeline template is built
+  # as a multi-line block with its encoder helper just above it, so the
+  # round-trip evidence spans hundreds of bytes; the shared 256-byte window
+  # cannot hold it. The decoder input is still an interpolation, never a
+  # static blob.
+  - id: printf-fed-base64-shell-transport
+    desc: Printf-fed Base64 value transported through shell
+    crit: exception
+    conf: 0.96
+    for: [javascript, typescript]
+    near_bytes: 1024
+    all:
+      - id: micro-behaviors/data/encode/base64::tostring-base64
+    any:
+      - id: js-printf-base64-shell-pipeline
 
   - id: js-exec
     desc: Executes a command through Node.js child_process exec
@@ -412,13 +433,13 @@ composite_rules:
     attack: T1059.007
     near_bytes: 16384
     all:
-      - id: js-exec-call
+      - id: metadata/lang/javascript-features::js-exec-call
     any:
       # Local helpers named `exec` that wrap spawnSync are not child_process.exec.
       - id: child-process-inline-exec-call
       - id: child-process-exec-alias-binding
       - id: js-computed-exec-destructure
-      - id: child-process-exec-destructure
+      - id: metadata/import/builtin::child-process-exec-destructure
       - id: child-process-exec-esm-import
 
   - id: js-spawnsync-interpreter
@@ -445,10 +466,10 @@ composite_rules:
     near_lines: 25
     all:
       - id: micro-behaviors/fs/write/file/full::js-file-write
-      - id: child-process-require
+      - id: micro-behaviors/os/module/require::child-process-require
     any:
       - id: js-exec
-      - id: js-execsync
+      - id: micro-behaviors/process/create/shell/bridge::execSync-call
     unless:
       - id: metadata/package/testing/harness/runtime::node-common-require
       - id: well-known/lib/web/nextjs::next-build-telemetry-writer
@@ -463,15 +484,6 @@ composite_rules:
     crit: notable
     conf: 0.9
     any:
-      - id: js-execfilesync
-      - id: js-spawnsync
-      - id: js-execsync
-  - id: js-execfilesync-resolved-program
-    desc: Executes a run-time-resolved program path
-    crit: notable
-    conf: 0.85
-    for: [javascript, typescript]
-    any:
-      - id: js-execfilesync-var-program-join-arg
-      - id: js-execfilesync-var-program-var-arg
-      - id: js-execfilesync-var-program-forwarded-argv
+      - id: micro-behaviors/process/create/system::js-execfilesync
+      - id: micro-behaviors/process/create/exec::node-spawnsync-call
+      - id: micro-behaviors/process/create/shell/bridge::execSync-call

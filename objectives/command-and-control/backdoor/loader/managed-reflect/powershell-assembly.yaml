@@ -73,6 +73,17 @@ traits:
       exact: invoke
       case_insensitive: true
 
+  - id: ps-thread-getdomain-load
+    desc: PowerShell Thread-domain assembly load
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      # Fileless PowerShell RunPE stubs load the decompressed bytes through
+      # the current thread's AppDomain (`[Thread]::GetDomain().Load($bytes)`)
+      # instead of the `Assembly::Load` spelling other loaders use.
+      substr: 'GetDomain().Load('
+
 composite_rules:
   - id: ps-appdomain-byte-load
     desc: PowerShell AppDomain byte assembly load
@@ -105,19 +116,6 @@ composite_rules:
     all:
       - id: ps-appdomain-byte-load
       - id: ps-split-reflection-method-dispatch
-
-  - id: reflective-dotnet-loader
-    desc: PowerShell reflective .NET loader
-    for: [powershell]
-    crit: hostile
-    conf: 0.95
-    all:
-      - id: micro-behaviors/process/interpreter/reflection/resolve::powershell-assembly-load
-      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-assembly-entrypoint-invoke
-      - id: metadata/lang/scripted::invoke-prefixed-cmdlet-name
-      - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-assembly-method-invoke
 
   - id: appdomain-reflective-dotnet-loader
     desc: PowerShell AppDomain reflective loader
@@ -154,7 +152,7 @@ composite_rules:
       - id: micro-behaviors/communications/http/lib/invoke-webrequest::download
     any:
       - id: micro-behaviors/communications/http/client/managed::downloaddata
-      - id: objectives/evasion/anti-av/platform/defender::amsi-memory-patch-bypass
+      - id: objectives/evasion/anti-av/amsi::amsi-memory-patch-bypass
 
   # DownloadData + typed LoadAssembly helper + reflected Invoke — covers
   # Add-Type stub loaders that never call Assembly::Load in plaintext.
@@ -186,6 +184,23 @@ composite_rules:
     any:
       - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-assembly-entrypoint-invoke
       - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-assembly-method-invoke
+
+  # Sibling of the gzip-base64 loader for stubs that carry the gzip payload
+  # as a numeric byte array (or URL-encoded blob) and load it through the
+  # thread's AppDomain instead of Assembly::Load: decompress, GetDomain.Load,
+  # then GetMethod.Invoke on the in-memory assembly. No file touches disk.
+  - id: ps-gzip-bytearray-reflective-loader
+    desc: PowerShell gzip byte payload reflectively loaded and invoked
+    for: [powershell]
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: "micro-behaviors/data/codec::powershell-gzipstream"
+      - id: ps-thread-getdomain-load
+      - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-assembly-method-invoke
+    any:
+      - id: objectives/anti-static/obfuscation/string/concat::ps-numeric-chararray
+      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
 
   - id: powershell-xor-reflected-assembly-loader
     desc: XOR-decrypts then reflectively loads assembly

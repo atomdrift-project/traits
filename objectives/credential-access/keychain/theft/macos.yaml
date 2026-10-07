@@ -5,6 +5,21 @@ defaults:
   attack: T1555.001
   for: [shell, applescript, macho, python]
 composite_rules:
+  # MacSync (and any stealer copying it) rewrites a keychain item's
+  # partition-list so apple/apple-tool/teamid-signed callers read the browser
+  # Safe Storage secret without a prompt. The command paired with a named
+  # browser Safe Storage service is the keychain-ACL bypass, not maintenance.
+  - id: keychain-partition-list-browser-secret-bypass
+    desc: Keychain ACL rewritten to expose browser Safe Storage secret
+    crit: hostile
+    conf: 0.95
+    attack: T1555.001,T1555.003
+    platforms: [macos]
+    for: [scripts, source, macho]
+    all:
+      - id: micro-behaviors/os/security/keychain::generic-password-partition-list-command
+      - id: micro-behaviors/os/security/keychain::partition-list-teamid-grant
+      - id: micro-behaviors/fs/path/password-store::chromium-safe-storage-service-name
   - id: source-browser-keychain-exfil
     desc: Source uploads browser keychain material
     crit: hostile
@@ -36,10 +51,10 @@ composite_rules:
     conf: 0.95
     all:
       - id: micro-behaviors/fs/path/password-store::macos-login-keychain-db
-      - id: objectives/credential-access/validation/check::dscl-authonly-comp
+      - id: micro-behaviors/os/security/auth/verify::dscl-password-verification
     any:
-      - id: objectives/credential-access/phishing/lure::hidden-answer
-      - id: objectives/credential-access/phishing/lure::password-prompt-pattern
+      - id: micro-behaviors/ui/dialog/apple::hidden-answer
+      - id: micro-behaviors/ui/dialog/prompt::password-prompt-pattern
   # Login keychain DB exfiltrated together with a phished+validated password.
   # The login.keychain-db holds every saved credential/cert; on its own it is a
   # sensitive path, but combined with a `dscl . authonly`-validated password
@@ -55,8 +70,8 @@ composite_rules:
     all:
       - id: login-keychain-phish-signal
     any:
-      - id: objectives/collection/stealer/staging::applescript-staging-layout
-      - id: objectives/collection/stealer/staging::applescript-buildid-databinary-exfil
+      - id: objectives/collection/archive/stage::applescript-staging-layout
+      - id: objectives/exfiltration/http/upload::applescript-buildid-databinary-exfil
 
   # Password laundering: phish the login password behind a native-looking
   # prompt, confirm it really authenticates against the local directory
@@ -79,12 +94,12 @@ composite_rules:
     for: [scripts, source, macho]
     platforms: [macos]
     all:
-      - id: objectives/credential-access/validation/check::dscl-authonly-comp
-      - id: objectives/credential-access/phishing/lure::password-prompt-pattern
+      - id: micro-behaviors/os/security/auth/verify::dscl-password-verification
+      - id: micro-behaviors/ui/dialog/prompt::password-prompt-pattern
     any:
       - id: micro-behaviors/os/security/keychain::macos-keychain-unlock-command
       - id: micro-behaviors/process/create/sudo::sudo-password-on-stdin
-      - id: objectives/collection/stealer/staging::sudo-pipe-launchdaemon
+      - id: objectives/persistence/system/launchd/submit::sudo-pipe-launchdaemon
     # Prefer the more specific login-keychain theft verdict when it is present.
     unless:
       - id: login-keychain-phish-signal

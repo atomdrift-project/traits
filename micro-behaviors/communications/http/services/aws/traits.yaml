@@ -24,7 +24,7 @@ traits:
   - id: ec2-imds-iam-credentials-endpoint
     desc: EC2 instance-metadata IAM credentials endpoint
     conf: 0.9
-    for: [scripts, binaries, source, data, text]
+    for: [scripts, binaries, source, data, text, json]
     if:
       type: text
       substr: '169.254.169.254/latest/meta-data/iam/security-credentials'
@@ -73,6 +73,14 @@ traits:
       type: text
       regex: 'boto3\.client\s*\([\s\S]{0,500}aws_access_key_id\s*='
 
+  - id: boto3-session-supplied-credentials
+    desc: boto3 session receives AWS credential pair
+    conf: 0.94
+    for: [python]
+    if:
+      type: text
+      regex: 'boto3\.Session\s*\([^)]{0,500}aws_access_key_id\s*=[^)]{0,300}aws_secret_access_key\s*='
+
   # AWS SDK v3 accepts an explicit credential-provider object on each client.
   # This is ordinary SDK behavior on its own; credential-validation objectives
   # add identity checks and harvested-inventory context.
@@ -113,6 +121,19 @@ traits:
       type: text
       regex: 'new\s+(STS|Bedrock|BedrockRuntime)Client\s*\(\s*\{[^}]{0,200}\bcredentials\s*[,}]'
 
+  # AWS IAM Identity Center OIDC token endpoint. Tooling that refreshes a
+  # local SSO credential POSTs its refresh_token grant here -- the token's
+  # first-party issuer -- which is authentication, not credential transfer
+  # to an unrelated service. The region is usually interpolated, so match
+  # the host shape rather than one concrete region.
+  - id: oidc-regional-token-endpoint
+    desc: AWS OIDC regional token endpoint
+    conf: 0.99
+    for: [scripts, source]
+    if:
+      type: text
+      regex: "oidc\\.[A-Za-z0-9_${}.:-]{1,50}\\.amazonaws\\.com/token"
+
   - id: javascript-sqs-send-message
     desc: JavaScript sends an AWS SQS message
     conf: 0.92
@@ -144,6 +165,18 @@ traits:
   # Constructing the AWS SDK's client session (boto3, and its async wrapper
   # aioboto3). The neutral "this code opens AWS SDK sessions" fact; which
   # service it talks to is decided by the client calls downstream.
+  # Relocated from objectives/credential-access/cloud/token-context
+  # (boto3-profile-credential-chain-marker). The matcher sees boto3 client,
+  # resource or named-profile session construction -- every boto3 program --
+  # not a credential-chain walk.
+  - id: python-boto3-client-construction
+    for: [python]
+    desc: Creates a boto3 client, resource or session
+    conf: 0.9
+    if:
+      type: text
+      regex: 'boto3\.session\.Session\(profile_name=|boto3\.(client|resource)\('
+
   - id: python-aws-sdk-client-session
     for: [python]
     desc: Constructs an AWS SDK client session
@@ -180,6 +213,7 @@ composite_rules:
     for: [python, javascript, typescript]
     any:
       - id: boto3-client-supplied-credentials
+      - id: boto3-session-supplied-credentials
       - id: javascript-client-supplied-credentials
       - id: python-client-supplied-credential-map
       - id: javascript-client-supplied-credential-map

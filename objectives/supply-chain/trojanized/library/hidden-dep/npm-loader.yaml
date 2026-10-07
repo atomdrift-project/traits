@@ -246,6 +246,19 @@ traits:
     kind: call
     exact: animatecssPostcssPlugin
 
+# A library that finishes building its export table, then requires a sibling
+# module before assigning `module.exports`, runs that sibling at every import
+# whether or not the consumer calls the public API. Trojanized dotenv clones
+# use this to hide spyware beside a copied implementation.
+- id: cjs-pre-export-local-sidecar-require
+  desc: CommonJS entry loads local module before exports
+  crit: suspicious
+  conf: 0.96
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: '}\s*\r?\n\s*require\s*\(\s*[''"]\./[^''"]{1,80}[''"]\s*\)\s*\r?\n\s*module\.exports'
+
 composite_rules:
 # Dotenv's public configuration routine should begin by resolving its own .env
 # path. A clone that instead enters a separately published scoped config module
@@ -332,7 +345,7 @@ composite_rules:
   - id: micro-behaviors/os/module/require::cjs-require-in-try
   - id: micro-behaviors/process/create/shell/bridge::execsync-in-catch-handler
   - id: micro-behaviors/os/module/require::cjs-require-in-catch-fallback
-  - id: objectives/supply-chain/install-hook/scripts/dynamic-install::runtime-npm-install-comp
+  - id: micro-behaviors/os/package-manager/runtime-install::runtime-npm-install-comp
   unless:
   - id: metadata/package/testing/
 
@@ -570,3 +583,66 @@ composite_rules:
   - id: animatecss-postcss-affected-dependency
   - id: require-animatecss-postcss-plugin
   - id: call-animatecss-postcss-plugin
+
+# npm packages that ship compiled dist output and fetch remote JavaScript into a
+# CommonJS Function constructor at module load — the animatecss-postcss and
+# vite-plugin-crypto supply-chain shape without pinning a package name.
+- id: npm-dist-remote-commonjs-eval-loader
+  desc: npm dist module fetches and executes remote CommonJS code
+  crit: hostile
+  conf: 0.99
+  for: [npm, javascript, typescript]
+  scope: archive
+  attack: T1195.002,T1059.007,T1105
+  mbc: B0009.016
+  near_bytes: 512
+  all:
+  - id: micro-behaviors/communications/http/request/client::js-fetch-buffer-from-decoded-url
+  - id: micro-behaviors/communications/http/response::fetch-text-commonjs-function-constructor
+  - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor-commonjs-wrapper
+  - id: metadata/package/entrypoint::npm-archive-member-dist-runtime-path
+
+# Manifest lists dozens of unrelated packages pinned to the `latest` dist-tag;
+# the entry module only requires them so npm install pulls every payload.
+- id: npm-mass-latest-runtime-dependency-loader
+  desc: npm entry only requires many latest-tagged deps
+  crit: hostile
+  conf: 0.97
+  for: [npm, package.json, javascript, typescript]
+  scope: archive
+  all:
+  - id: metadata/package/dependencies/manifest/count::many-runtime-deps
+  - id: metadata/package/dependencies/manifest/range::npm-many-latest-tag-dependencies
+  - id: metadata/lang/javascript-features::cjs-top-level-require-only
+  unless:
+  - id: metadata/package/testing/
+
+# A renamed clone that keeps another project's repository URL, ships a vendored
+# node_modules tree its manifest never references, and loads a local sidecar
+# before exporting the copied library API.
+- id: npm-clone-vendored-tree-import-sidecar
+  desc: Renamed npm clone bundles deps and import sidecar
+  crit: hostile
+  conf: 0.99
+  for: [npm, tar, tgz, package.json, javascript, typescript]
+  scope: archive
+  attack: "T1195.002,T1036,T1059.007"
+  mbc: B0024
+  all:
+  - id: metadata/package/files/included::npm-publish-root-manifest
+  - id: metadata/package/repository::npm-name-repo-mismatch
+  - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
+  - id: metadata/package/files/included::npm-vendored-node-modules-runtime-member
+  - id: cjs-pre-export-local-sidecar-require
+
+- id: npm-clone-bundled-desktop-control-rat
+  desc: Cloned npm package ships bundled desktop control RAT
+  crit: hostile
+  conf: 0.995
+  for: [npm, tar, tgz, javascript, typescript]
+  scope: archive
+  attack: "T1195.002,T1219,T1113,T1036"
+  mbc: B0030
+  all:
+  - id: npm-clone-vendored-tree-import-sidecar
+  - id: objectives/command-and-control/backdoor/control/desktop::node-screen-control-rat

@@ -4,16 +4,6 @@ defaults:
   for: [scripts, binaries]
   attack: T1547
 traits:
-- id: lsa-auth-package-registry
-  desc: LSA authentication package registry
-  crit: suspicious
-  conf: 0.9
-  for: [scripts, binaries, csharp, powershell, c, cpp, batch, vbs]
-  attack: T1547.002
-  if:
-    type: text
-    regex: '(?i)\\Control\\Lsa\\(Authentication Packages|Security Packages|Notification Packages)\b'
-
 - id: lsa-notification-package-source
   desc: LSA Notification Packages near control path
   crit: suspicious
@@ -24,22 +14,6 @@ traits:
     type: text
     regex: '(?is)\\Control\\Lsa[\s\S]{0,180}Notification Packages\b'
 
-- id: lsa-control-path
-  desc: LSA registry control path
-  crit: component
-  conf: 0.84
-  if:
-    type: text
-    regex: '(?i)\\Control\\Lsa\\'
-
-- id: lsa-package-value-name
-  desc: LSA package value name
-  crit: notable
-  conf: 0.84
-  if:
-    type: text
-    regex: '(?i)\b(Authentication Packages|Security Packages|Notification Packages)\b'
-
 - id: print-monitor-registry
   desc: Print monitor registry persistence
   crit: suspicious
@@ -49,8 +23,11 @@ traits:
   - id: micro-behaviors/os/service/print::print-monitor-initialize-export
   - type: text
     substr: Disable Printer bloat
+  - type: text
+    substr: Standard TCP/IP Port\Ports
   - id: well-known/lib/platform/wine/
   - id: well-known/app/system/reactos::system-component
+  - id: well-known/app/infrastructure/chef::chef-source-context
   if:
     type: text
     regex: '(?i)\\Control\\Print\\Monitors\\|\\Print\\Monitors\\[^\\\n]{1,80}\\Driver\b'
@@ -65,14 +42,6 @@ traits:
   if:
     type: text
     regex: '(?i)\\Control\\Print\\Environments\\[^\\\n]{1,160}\\Print Processors\\'
-
-- id: time-provider-registry
-  desc: Windows Time Provider persistence
-  crit: notable
-  conf: 0.88
-  if:
-    type: text
-    regex: '(?i)\\Services\\W32Time\\TimeProviders\\|\\TimeProviders\\[^\\\n]{1,80}\\DllName\b'
 
 - id: netsh-helper-registry
   desc: Netsh helper DLL persistence
@@ -119,15 +88,6 @@ traits:
     word: PROVIDERORDER
     case_insensitive: true
 
-- id: network-provider-dll-value
-  desc: NetworkProvider DLL path value
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    word: ProviderPath
-    case_insensitive: true
-
 - id: silentprocessexit-registry--rx-9
   desc: SilentProcessExit registry path reference
   crit: notable
@@ -163,12 +123,11 @@ composite_rules:
   - id: micro-behaviors/os/registry/manipulate::winreg-setvalue
 
 - id: network-provider-registry
-  desc: NetworkProvider DLL registry persistence
-  crit: suspicious
+  desc: NetworkProvider registry path and value references
+  crit: notable
   conf: 0.9
-  attack: T1556
   all:
-  - id: network-provider-dll-value
+  - id: micro-behaviors/os/registry/keys::providerpath-value-name
   unless:
   - id: well-known/lib/platform/wine/
   - id: well-known/tool/sysadmin/sysinternals/
@@ -185,13 +144,12 @@ composite_rules:
     - id: well-known/tool/offensive/psbits::source-tree-member
 
 - id: npp-order-dll-persistence
-  desc: Network provider order points at a DLL
-  crit: hostile
-  conf: 0.96
-  attack: T1556.008
+  desc: Network provider order and ProviderPath references
+  crit: notable
+  conf: 0.9
   all:
   - id: network-provider-order-path
-  - id: network-provider-dll-value
+  - id: micro-behaviors/os/registry/keys::providerpath-value-name
   unless:
   - id: well-known/lib/platform/wine/
   - id: well-known/tool/sysadmin/sysinternals/
@@ -202,13 +160,12 @@ composite_rules:
   - id: well-known/tool/offensive/psbits::source-tree-member
 
 - id: npp-service-dll-persistence
-  desc: Network provider service points at a DLL
-  crit: hostile
-  conf: 0.96
-  attack: T1556.008
+  desc: Network provider service and ProviderPath references
+  crit: notable
+  conf: 0.9
   all:
   - id: network-provider-service-path
-  - id: network-provider-dll-value
+  - id: micro-behaviors/os/registry/keys::providerpath-value-name
   unless:
   - id: well-known/lib/platform/wine/
   - id: well-known/tool/sysadmin/sysinternals/
@@ -219,10 +176,9 @@ composite_rules:
   - id: well-known/tool/offensive/psbits::source-tree-member
 
 - id: npp-order-value-service
-  desc: PROVIDERORDER written with a provider service
-  crit: hostile
-  conf: 0.95
-  attack: T1556.008
+  desc: PROVIDERORDER and NetworkProvider service references
+  crit: notable
+  conf: 0.9
   all:
   - id: network-provider-order-value
   - id: network-provider-service-path
@@ -234,6 +190,7 @@ composite_rules:
   - id: well-known/lib/crypto/mit-krb5::source-tree-context
   - id: well-known/app/enterprise/citrix-receiver::citrix-receiver-context
   - id: well-known/tool/offensive/psbits::source-tree-member
+  - id: metadata/package/tooling::dependencies-clrph-library
 
 - id: registry-write-to-windows-system-persistence
   for: [pe]
@@ -243,10 +200,11 @@ composite_rules:
   all:
   - id: micro-behaviors/os/registry/access::registry-write-api-chain
   unless:
+  - id: native-system-registry-product-context
+  # Infection containers carry registry strings from displaced benign hosts.
+  - id: objectives/impact/infect/binary/carrier::facehacker-delimited-host-carrier
   - id: well-known/app/utility/
   - id: well-known/lib/platform/wine/
-  - id: well-known/app/system/reactos::system-component
-  - id: well-known/tool/sysadmin/gflags::gflags-tool-identity
   - id: well-known/tool/sysadmin/sysinternals/
   # DesktopMania manages the user's ScreenSaveActive setting as part of its
   # wallpaper/screensaver feature; that is product configuration, not covert
@@ -254,11 +212,11 @@ composite_rules:
   - id: well-known/unwanted/desktopmania::autonavigator-desktopmania-registry-key
   any:
   - id: micro-behaviors/os/registry/keys::appinit-registry-values
-  - id: lsa-auth-package-registry
-  - id: lsa-package-value
+  - id: micro-behaviors/os/registry/keys::lsa-package-registry-path
+  - id: micro-behaviors/os/registry/keys::lsa-package-list-value-name
   - id: print-monitor-registry
   - id: print-processor-registry
-  - id: time-provider-registry
+  - id: micro-behaviors/os/registry/keys::time-provider-registry
   - id: netsh-helper-registry
   - id: winsock-provider-catalog
   - id: micro-behaviors/os/registry/keys::screensaver-registry-values
@@ -276,24 +234,12 @@ composite_rules:
   - id: micro-behaviors/os/registry/keys::appinit-dlls-value-name
   - id: micro-behaviors/os/registry/keys::loadappinit-policy-value
   - id: micro-behaviors/os/registry/keys::appcert-dlls-registry-path
-  - id: lsa-auth-package-registry
+  - id: micro-behaviors/os/registry/keys::lsa-package-registry-path
   - id: print-monitor-registry
   - id: print-processor-registry
-  - id: time-provider-registry
+  - id: micro-behaviors/os/registry/keys::time-provider-registry
   - id: netsh-helper-registry
   - id: winsock-provider-catalog
-- id: lsa-package-value
-  desc: LSA package value name
-  crit: suspicious
-  conf: 0.84
-  attack: T1547.002
-  all:
-  - id: lsa-control-path
-  - id: lsa-package-value-name
-  near_bytes: 128
-  unless:
-  - id: well-known/tool/sysadmin/sysinternals/
-  - id: well-known/lib/runtime/scripted/electron/
 - id: silentprocessexit-registry
   desc: SilentProcessExit monitor registry surface
   crit: notable
@@ -319,3 +265,12 @@ composite_rules:
   all:
   - id: objectives/evasion/masquerade/version-resource/service-host::unsigned-service-host-version-resource
   - id: registry-write-to-windows-system-persistence
+
+- id: native-system-registry-product-context
+  desc: Known system and diagnostic registry implementations
+  crit: exception
+  conf: 0.99
+  any:
+  - id: well-known/tool/reverse-engineering/dynamorio::balloon-memory-test-utility
+  - id: well-known/app/system/reactos::system-component
+  - id: well-known/tool/sysadmin/gflags::gflags-tool-identity

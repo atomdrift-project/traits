@@ -19,6 +19,7 @@ traits:
       type: text
       regex: (/bin/)?(ba)?sh\s+-i\b.{0,40}/dev/tcp/
     unless:
+      - id: metadata/package/testing/corpus/
       - id: metadata/file/policy/identity::agent-action-security-policy-context
       - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
       - id: well-known/tool/offensive/
@@ -35,6 +36,15 @@ traits:
       # host or a shell variable ($h / ${h}), which this does not exclude.
       - type: text
         regex: '/dev/tcp/\{'
+      # A placeholder host slot names no dialable host either. Methodology
+      # docs and scanner guidance write the slot as an all-caps token
+      # (`/dev/tcp/ATTACKER_IP/4444`) or in angle brackets
+      # (`/dev/tcp/<target>/4444`); underscores are illegal in DNS hostnames
+      # and brackets never survive exec, so neither form can be dialed.
+      # Live one-liners carry a literal host or a shell variable ($h /
+      # ${h}), which this does not exclude.
+      - type: text
+        regex: '/dev/tcp/([A-Za-z0-9.~-]*_[A-Za-z0-9_.~-]*|<[^>\n]*>)/'
   - id: reverse-shell-shell
     platforms: [unix, windows]
     desc: Bash reverse shell via /dev/tcp
@@ -48,31 +58,22 @@ traits:
       type: text
       regex: (/bin/)?(ba)?sh\s+-i\b.{0,80}/dev/tcp/
     unless:
+      - id: metadata/package/testing/corpus/
       - id: metadata/file/policy/identity::agent-action-security-policy-context
       - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
       - id: well-known/tool/offensive/
       - id: well-known/tool/detection/security-scanner
       - id: metadata/package/testing/presence/harness::test-directory
-  - id: dev-tcp-http-get
-    platforms: [unix, windows]
-    desc: HTTP GET via /dev/tcp socket
-    crit: suspicious
-    conf: 0.95
-    for:
-      - shell
-    if:
-      type: string_literal
-      regex: /dev/tcp/.{0,64}GET\s+/
-  - id: dev-tcp-http-host
-    platforms: [unix, windows]
-    desc: HTTP Host header via /dev/tcp
-    crit: suspicious
-    conf: 0.9
-    for:
-      - shell
-    if:
-      type: string_literal
-      regex: '/dev/tcp/.{0,50}Host:'
+      # Same payload-template carve-out as reverse-shell-shell-complete
+      # above: a brace, angle-bracket, or underscore placeholder host slot
+      # (`/dev/tcp/{ip}/`, `/dev/tcp/<target>/`, `/dev/tcp/ATTACKER_IP/`)
+      # names no dialable host, so the one-liner is documentation, not a
+      # payload. Live one-liners carry a literal host or a shell variable
+      # ($h / ${h}), which this does not exclude.
+      - type: text
+        regex: '/dev/tcp/\{'
+      - type: text
+        regex: '/dev/tcp/([A-Za-z0-9.~-]*_[A-Za-z0-9_.~-]*|<[^>\n]*>)/'
   - id: python-fstring-dev-tcp-template
     platforms: [unix, windows]
     desc: F-string builds a bash TCP shell
@@ -84,12 +85,13 @@ traits:
       substr: 'bash -i >& /dev/tcp/{'
 composite_rules:
   - id: dev-tcp-revshell
-    for: [scripts, source, package.json]
+    for: [scripts, source, package.json, npm, whl, python_sdist, zip, tar]
     platforms: [linux, macos]
     mbc: B0030
     desc: bash /dev/tcp reverse shell redirect
     crit: hostile
     conf: 0.99
+    # Container types listed so the pooled scope has a node to run on (cleave archive for: gate, 2026-09).
     scope: outer
     all:
       - id: objectives/command-and-control/reverse-shell/dev-tcp::reverse-shell-shell-complete
@@ -97,6 +99,7 @@ composite_rules:
       - id: micro-behaviors/communications/socket/tcp::dev-tcp-path
       - id: micro-behaviors/communications/socket/tcp::dev-tcp-external-ip
     unless:
+      - id: metadata/package/testing/corpus/
       - id: metadata/file/policy/identity::agent-action-security-policy-context
       - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
       - id: well-known/tool/detection/security-scanner/
@@ -105,16 +108,18 @@ composite_rules:
       - id: metadata/package/testing/presence/harness::test-directory
       - id: metadata/package/testing/harness/unit::rust-test
   - id: dev-tcp-bash-interactive-shell
-    for: [scripts, source, package.json]
+    for: [scripts, source, package.json, npm, whl, python_sdist, zip, tar]
     platforms: [linux, macos]
     mbc: B0030
     desc: bash -i redirected onto /dev/tcp socket (full one-liner skeleton)
     crit: suspicious
     conf: 0.98
+    # Container types listed so the pooled scope has a node to run on (cleave archive for: gate, 2026-09).
     scope: outer
     all:
       - id: objectives/command-and-control/reverse-shell/dev-tcp::reverse-shell-shell-complete
     unless:
+      - id: metadata/package/testing/corpus/
       - id: metadata/file/policy/identity::agent-action-security-policy-context
       - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
       - id: well-known/tool/detection/security-scanner/
@@ -123,17 +128,19 @@ composite_rules:
       - id: metadata/package/testing/presence/harness::test-directory
       - id: metadata/package/testing/harness/unit::rust-test
   - id: dev-tcp-bash-stdin-redirect
-    for: [scripts, source, package.json]
+    for: [scripts, source, package.json, npm, whl, python_sdist, zip, tar]
     platforms: [linux, macos]
     mbc: B0030
     desc: Bash interactive reverse shell with stdin redirection
     crit: hostile
     conf: 0.99
+    # Container types listed so the pooled scope has a node to run on (cleave archive for: gate, 2026-09).
     scope: outer
     all:
       - id: objectives/command-and-control/reverse-shell/dev-tcp::reverse-shell-shell-complete
       - id: objectives/command-and-control/backdoor/shell/reverse::stdin-redirect-dup
     unless:
+      - id: metadata/package/testing/corpus/
       - id: metadata/file/policy/identity::agent-action-security-policy-context
       - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
       - id: well-known/tool/detection/security-scanner/
@@ -171,18 +178,6 @@ composite_rules:
       - id: micro-behaviors/communications/socket/tcp::dev-tcp-external-ip
       - id: micro-behaviors/process/create/shell/interactive::sh-interactive
       - id: objectives/command-and-control/backdoor/shell/reverse::stdin-redirect-dup
-  - id: shell-dev-tcp-http
-    platforms: [unix, windows]
-    desc: Bash /dev/tcp HTTP client
-    crit: hostile
-    conf: 0.95
-    for:
-      - shell
-    all:
-      - id: micro-behaviors/communications/socket/tcp::dev-tcp-fd-redirect
-    any:
-      - id: dev-tcp-http-get
-      - id: dev-tcp-http-host
   - id: python-executes-dev-tcp-template
     platforms: [unix, windows]
     desc: Python runs a built reverse shell

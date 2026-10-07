@@ -10,13 +10,6 @@ traits:
     if:
       type: string_literal
       regex: '(?i)(DOCKER_HOST|DOCKER_CONTAINER)'
-  - id: docker-api-privileged-field
-    desc: Docker privileged API field
-    crit: notable
-    conf: 0.88
-    if:
-      type: text
-      regex: '"Privileged"\s*:\s*(true|True)'
   - id: docker-cli-run-create
     desc: Docker CLI run or create command
     crit: notable
@@ -25,14 +18,8 @@ traits:
       type: text
       regex: '\bdocker\s+(run|create)\b'
     unless:
+      - id: metadata/file/format/structured::serialized-news-article-catalog
       - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
-  - id: docker-privileged-flag
-    desc: Docker privileged CLI flag
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      word: --privileged
   - id: dockerenv
     desc: Docker marker file reference
     crit: notable
@@ -48,22 +35,6 @@ traits:
     if:
       type: string_literal
       exact: "{{json .Config.Env}}"
-  - id: docker-sock
-    desc: Docker socket path
-    crit: notable
-    conf: 0.7
-    if:
-      type: string_literal
-      substr: /run/docker.sock
-  - id: docker-var-run-sock
-    desc: Docker socket path
-    crit: notable
-    conf: 0.75
-    if:
-      type: text
-      substr: /var/run/docker.sock
-    unless:
-      - id: well-known/app/utility/cmdchamp::cli-trainer-source-context
   - id: docker-api-container-create-path
     desc: Docker Engine container-create API path
     crit: notable
@@ -85,6 +56,13 @@ traits:
     if:
       type: text
       regex: '/containers/[^/\s]{1,160}/exec\b'
+  - id: docker-api-exec-start-path
+    desc: Docker Engine exec-start API path
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '/exec/[^/\s"'']{1,160}/start\b'
   - id: docker-api-container-list-path
     desc: Docker Engine container-list API path
     crit: notable
@@ -107,33 +85,12 @@ traits:
     # response in its docstring. Either direction is worth surfacing: a
     # container sharing the host PID namespace is a container-escape primitive.
     desc: Docker HostConfig PidMode set to host
-    crit: suspicious
+    crit: notable
     conf: 0.9
     attack: T1611
     if:
       type: text
       regex: '"PidMode"\s*:\s*"host"'
-  - id: docker-api-port-2375
-    desc: Docker unauthenticated API port
-    crit: notable
-    conf: 0.78
-    if:
-      type: text
-      regex: ':2375\b|\b2375/tcp\b'
-  - id: docker-api-port-2376
-    desc: Docker TLS API port
-    crit: notable
-    conf: 0.72
-    if:
-      type: text
-      regex: ':2376\b|\b2376/tcp\b'
-  - id: docker-api-port-reference
-    desc: Docker API port reference
-    crit: notable
-    conf: 0.82
-    if:
-      type: text
-      regex: '2375.{0,32}docker|docker.{0,32}2375'
   - id: docker-root-bind-host
     desc: Docker root filesystem bind mount
     crit: suspicious
@@ -147,6 +104,8 @@ traits:
         dirname: true
         regex: '(^|[\\/])integration-cli([\\/]|$)'
       - id: metadata/build/ci/github-actions::workflow-definition-path
+      - id: metadata/package/testing/
+      - id: well-known/tool/sysadmin/rancher::rancher-agent-cleanup-context
     if:
       type: text
       # Require a shell command boundary and Docker run/create context; a
@@ -166,8 +125,8 @@ traits:
   # rejected. The destination is intentionally variable because host-escape
   # payloads use /host, /mnt/host, /rootfs, and arbitrary renamed mountpoints.
   - id: docker-api-root-bind-host
-    desc: Docker API binds host root into container
-    crit: suspicious
+    desc: Docker bind spec exposes host root filesystem
+    crit: notable
     conf: 0.9
     unless:
       - id: well-known/tool/offensive/pentestkit/
@@ -235,14 +194,6 @@ traits:
     if:
       type: text
       regex: 'python_on_whales|docker\.from_env\('
-  - id: docker-sdk-privileged
-    desc: Docker SDK privileged container kwarg
-    crit: notable
-    conf: 0.8
-    for: [python]
-    if:
-      type: text
-      regex: 'privileged\s*=\s*True'
   - id: node-docker-cli-invocation
     desc: Node.js invokes the Docker CLI
     crit: notable
@@ -273,13 +224,15 @@ traits:
   # a decoded suffix, so keep that incomplete evidence separate from the
   # structured direct-call atom below.
   - id: node-docker-list-containers-fragment
-    desc: Obfuscated listContainers method prefix
+    desc: Split listContainers method-name literal
     crit: notable
     conf: 0.86
     for: [javascript, typescript]
     if:
+      # Anchored: the split piece is the whole literal. A substring also hit
+      # React's `"listContainerRef"` ref name in ordinary UI bundles.
       type: string_literal
-      substr: listContai
+      regex: '^listContai(ners?)?$'
 
 composite_rules:
   - id: docker-container-state-watcher
@@ -299,7 +252,7 @@ composite_rules:
     crit: notable
     conf: 0.92
     all:
-      - id: docker-var-run-sock
+      - id: micro-behaviors/fs/path/socket::docker-var-run-sock
       - id: micro-behaviors/communications/http/download/curl::curl-easy-init
       - id: micro-behaviors/communications/http/download/curl::curl-easy-perform
 
@@ -309,18 +262,10 @@ composite_rules:
     conf: 0.88
     near_bytes: 160
     all:
-      - id: docker-privileged-flag
+      - id: micro-behaviors/os/container/runtime::privileged-option-text
     any:
       - id: docker-cli-run-create
       - id: docker-argv-run-create
-  - id: docker-remote-api-ports
-    desc: Docker remote API ports
-    crit: notable
-    conf: 0.82
-    any:
-      - id: docker-api-port-2375
-      - id: docker-api-port-2376
-    needs: 2
   - id: docker-api-container-lifecycle
     desc: Docker API container lifecycle routes
     crit: notable
@@ -335,6 +280,7 @@ composite_rules:
     conf: 0.94
     unless:
       - id: well-known/tool/development/luma::archive-member
+      - id: well-known/tool/sysadmin/rancher::rancher-agent-cleanup-context
     all:
       - id: docker-privileged-spec
     # Either spelling of the host-root bind satisfies this leg; the argv form
@@ -345,13 +291,13 @@ composite_rules:
       - id: docker-api-root-bind-host
   - id: docker-privileged-spec
     desc: Docker privileged container spec
-    crit: suspicious
+    crit: notable
     conf: 0.86
     unless:
       - id: metadata/package/testing/presence/harness::test-directory-path
       - id: well-known/tool/development/luma::archive-member
     any:
-      - id: docker-api-privileged-field
+      - id: docker-hostconfig-privileged-field
       - id: docker-privileged-cli-run-create
     downgrade:
       any:

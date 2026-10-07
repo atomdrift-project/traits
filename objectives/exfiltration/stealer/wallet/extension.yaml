@@ -1,0 +1,112 @@
+defaults:
+  crit: hostile
+  platforms: [unix, windows]
+  for: [javascript, xpi, crx]
+  attack: T1041
+  mbc: B0028
+
+composite_rules:
+  # This detects stealers reading the installed wallet stores, rather than a
+  # malicious browser extension. Stable extension IDs identify the targeted
+  # products; the profile path, archive creation, and upload establish theft.
+  - id: wallet-extension-archive-http-exfiltration
+    desc: Archives multiple browser wallet extension stores and uploads them
+    conf: 0.99
+    attack: "T1555.003,T1560.001,T1041"
+    for: [scripts, binaries]
+    scope: file
+    near_lines: 160
+    all:
+      - id: well-known/app/browser-extension/wallets::wallet-extension-id-cluster
+      - id: micro-behaviors/fs/path/app-data::chromium-local-extension-settings-path
+      - id: micro-behaviors/data/archive/create/
+      - id: micro-behaviors/communications/http/upload/
+
+  # Wallet input in an extension claiming another purpose, with an input
+  # handler and outbound requests. Archive scope connects the HTML form,
+  # its handler, and the HTTP callback implementation. Require the explicit
+  # no-data-collection claim to distinguish a deceptive extension from a
+  # wallet with an innocuous short manifest name and ordinary RPC traffic.
+  - id: wallet-input-telemetry-http-exfiltration
+    desc: Disguised extension sends entered wallet secrets
+    conf: 0.99
+    attack: T1056.002,T1041,T1036
+    # html/svg included: the secret-entry page normally lives in an HTML member
+    # while the form handler and sink live in JS members; without them the
+    # origin filter drops the html-sourced entry-page leg at archive scope.
+    for: [xpi, crx, zip, javascript, chrome-manifest, html, svg]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::manifest-literal-name-omits-wallet
+      - id: micro-behaviors/ui/controls/credential::credential-input-surface
+      - id: micro-behaviors/ui/window/form-input::listener-reads-field-value
+      - id: micro-behaviors/communications/http/request/client::browser-outbound-request
+      - id: metadata/permission/telemetry::gecko-required-none-sentinel
+    unless:
+      - id: metadata/permission/manifest::manifest-description-declares-wallet
+
+  - id: wallet-secret-callback-http-exfiltration
+    desc: Extension sends wallet input through callback JSON POST
+    conf: 0.99
+    scope: archive
+    all:
+      - id: metadata/file/format/browser-extension::xpi-member-path
+      - id: micro-behaviors/ui/controls/credential::credential-entry-label
+      - id: micro-behaviors/data/property/access::js-value-property-read
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/verb::post-method-text
+      - id: micro-behaviors/communications/http/header/content-type::json-header
+    any:
+      - id: micro-behaviors/data/source/syntax/credential::secret-data-property
+      - id: objectives/exfiltration/sensitive-data/source::js-input-value-data-field
+
+  - id: wallet-seed-phrase-http-exfiltration
+    desc: Browser extension sends wallet seed phrase over HTTP
+    conf: 0.99
+    scope: archive
+    all:
+      - id: metadata/file/format/browser-extension::xpi-member-path
+      - id: objectives/exfiltration/sensitive-data/source::js-seed-phrase-request-field
+      - id: micro-behaviors/communications/ipc/message::chrome-runtime-on-message
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/url/query::js-urlsearchparams-construction
+
+  - id: wallet-seed-phrase-xhr-fallback-exfiltration
+    desc: Browser extension sends wallet seed through XHR fallback
+    conf: 0.98
+    scope: archive
+    all:
+      - id: metadata/file/format/browser-extension::xpi-member-path
+      - id: objectives/exfiltration/sensitive-data/source::js-seed-phrase-request-field
+      - id: micro-behaviors/communications/ipc/message::chrome-runtime-on-message
+      - id: micro-behaviors/communications/http/request/client::xmlhttprequest-new
+      - id: micro-behaviors/communications/http/url/query::js-urlsearchparams-construction
+
+  # The captured-secret half is now required, not optional. As written this was
+  # `fetch()` + the text "POST" + a JSON content-type header — which every
+  # wallet extension satisfies by existing — plus an `any:` that accepted a
+  # *wallet identity marker* (`wallet-id-rabby`, tronlink, trust) as if being a
+  # given wallet were evidence of stealing from it. The only thing standing
+  # between the genuine article and a hostile verdict was a one-vendor
+  # allowlist for MetaMask, so every other real wallet — Rabby, Trust,
+  # TronLink, Coinbase — was convicted. A repackaged Rabby build scored hostile
+  # here on nothing but its own runtime.
+  #
+  # Now the secret field or seed-word field must be present (it moved from
+  # `any:` into `all:` as its own `any:` group of two), and `near_bytes` keeps
+  # the POST and the secret in one routine rather than one archive. The wallet
+  # identity markers are gone: they said what the extension *is*, never what it
+  # does with the key material. Detecting a *repackaged* wallet is the job of
+  # the impersonation rules, not of an exfiltration composite.
+  - id: wallet-captured-secret-http-exfiltration
+    desc: Wallet extension sends captured secret in JSON POST
+    conf: 0.99
+    scope: archive
+    near_bytes: 2048
+    all:
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
+      - id: micro-behaviors/communications/http/request/verb::post-method-text
+      - id: micro-behaviors/communications/http/header/content-type::json-header
+    any:
+      - id: micro-behaviors/data/source/syntax/credential::secret-data-property
+      - id: micro-behaviors/ui/controls/wallet::wallet-seed-word-field-code

@@ -10,7 +10,15 @@ traits:
   desc: Shell command blocklist
   if:
     type: text
-    substr: BLOCKED_PATTERNS
+    regex: '(?i)\b(TERMINAL_)?BLOCKED_(PATTERNS|TOKENS|COMMANDS)\b'
+
+- id: powershell-inline-flag-token-set
+  desc: PowerShell inline flag token allowlist Set
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)POWERSHELL_INLINE_COMMAND_FLAGS|new Set\(\[[\s\S]{0,600}-encodedcommand'
 
 - id: command-filter-verdicts
   crit: notable
@@ -40,6 +48,14 @@ traits:
   if:
     type: text
     substr: COMMAND_BLOCKED
+
+- id: js-shell-threat-guard
+  desc: JavaScript defensive shell threat check function
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: '(?i)(function\s+checkShellThreats\b|PIPE_TO_SHELL\b[\s\S]{0,120}REVERSE_SHELL\b)'
 
 - id: ai-cli-bash-tool-root-rm-pattern
   crit: notable
@@ -76,34 +92,72 @@ traits:
     type: raw
     regex: '(?i)[A-Za-z][A-Za-z0-9]*\(\*\)[^()\n]{0,40}Bash\s*\(\s*rm\s+-(rf|fr)\s+/'
 
-- id: destructive-action-prohibition-phrase
-  desc: Destructive action prohibition phrase
-  crit: notable
-  conf: 0.88
-  for: [scripts]
-  if:
-    type: text
-    regex: '(?i)\b(no|never)\s+(destruction|destructive)\b'
-
 # Agent guardrails quote the command they refuse to run. Two orders, because
 # the verdict word can lead ("NEVER run `rm -rf`") or follow ("`rm -rf /` is
 # still DENIED by the catastrophic-standalone rule") -- MiniMax Code's prompt
 # builder and its permission registry are one of each.
-- id: destructive-command-prohibited-prose
+- id: destructive-command-forbid-phrase
   desc: Prose forbids a destructive rm command
   crit: notable
   conf: 0.9
+  for: [pe, elf, macho, scripts, source]
   if:
     type: text
     regex: '(?i)(never|do not|don.t|refuse|forbidden)[^\n]{0,60}rm\s+-rf'
+
+- id: destructive-command-ban-list
+  desc: Destructive command listed as banned
+  crit: notable
+  conf: 0.9
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)(banned commands|dangerous command blocking|defaultBannedCommands)'
+
+- id: agent-guard-action-blocked
+  desc: AI agent blocked action guardrail
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)(guard blocked refinement|blocked by guardrail|action must be blocked)'
+
+- id: agent-guard-llm-verdict-prompt
+  desc: AI agent LLM security verdict prompt
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)shouldBlock["'':\s]+(true|false)'
 
 - id: destructive-command-denied-prose
   desc: Prose marks a destructive rm as denied
   crit: notable
   conf: 0.9
+  for: [pe, elf, macho, scripts, source]
   if:
     type: text
     regex: '(?i)rm\s+-rf[^\n]{0,60}(denied|blocked|not allowed|rejected)'
+
+- id: command-security-test-fixture
+  desc: Defensive command security test fixture
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)(fail_mode:\s*hard_fail|expected:\s*BLOCK)'
+
+- id: agent-tool-permission-rules
+  desc: Agent permission rules guard tool execution
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)denied by permission rules'
 
 - id: execute-command-tool-name
   crit: notable
@@ -123,9 +177,12 @@ traits:
 
 - id: sudo-exec
   desc: sudo command execution
-    # Component-only: `exec.{0,20}sudo` trivially matches in Go binaries whose
-    # string tables juxtapose `os/exec` with `sudo` help text / package paths.
-    # Only meaningful paired with an escalation library (see `privilege-escalation`).
+    # Word boundaries on both ends of `sudo`: Go's runtime juxtaposes
+    # `os/exec` with its internal `sudog` scheduler struct (`execRschedsudog`),
+    # which the unbounded alternation matched as a sudo invocation. A genuine
+    # reference names the `sudo` command as its own token; `sudog`/`sudoers`
+    # adjacency is not an invocation. Still only meaningful paired with an
+    # escalation library (see `privilege-escalation`), hence the Go downgrade.
   crit: baseline
   conf: 0.75
   for:
@@ -137,7 +194,10 @@ traits:
   - macos
   if:
     type: text
-    regex: exec.{0,20}sudo|sudo.{0,20}exec
+    regex: '\bexec.{0,20}\bsudo\b|\bsudo\b.{0,20}\bexec'
+  downgrade:
+    any:
+      - id: metadata/lang/compiler/systems::go-binary
 
 - id: python-command-safety-blocklists--blocked-patterns
   desc: Python command safety (blocked_patterns)
@@ -195,7 +255,47 @@ traits:
   if:
     type: text
     regex: '(?s)def\s+_check_allowed\s*\([^)]{0,80}\).{0,900}self\._blocked.{0,350}self\._whitelist'
+
+- id: shell-blocklist-assignment
+  desc: Shell blocklist or denylist assignment
+  crit: notable
+  conf: 0.93
+  ref: sha256:96cc34228b8dd9817c978852f6a9a3972e62720c7b915d8584b83f19e019dbe5
+  for: [scripts, source]
+  if:
+    # A named denylist collection being assigned (`SHELL_BLOCKLIST = [`).
+    # Case-sensitive BLOCKLIST/DENYLIST keeps Smithy codegen `BlockList`
+    # schema arrays out (they are not shell guard lists).
+    type: text
+    regex: '\b([A-Z0-9_]+_)?(BLOCKLIST|DENYLIST)\b\s*[:=]\s*\['
+
+- id: literal-secret-exec-gate
+  desc: Literal secret gates Node exec call
+  crit: notable
+  conf: 0.93
+  if:
+    type: text
+    # A hardcoded comparison literal near an exec() call: the knee of a
+    # shared-secret remote-command gate (`k !== 'secret'` ... `exec(cmd)`).
+    # Generalized beyond one spelling — `==`/`===` allowlist checks gate the
+    # same way, and the sunk call need not wrap its argument in String().
+    regex: '[!]==?\s*[''"][A-Za-z0-9_\-]{4,32}[''"][\s\S]{0,240}?\bexec\s*\('
+  not:
+    # `typeof it != 'function'` (the core-js aFunction guard, bundled into
+    # thousands of dist files) is a type check: typeof yields a fixed type
+    # keyword, never a shared secret.
+    - regex: '==?\s*[''"](function|object|string|number|boolean|undefined|symbol|bigint)[''"]'
+
 composite_rules:
+- id: destructive-command-prohibited-prose
+  desc: Prose forbids a destructive rm command
+  crit: notable
+  conf: 0.9
+  any:
+  - id: destructive-command-forbid-phrase
+  - id: destructive-command-ban-list
+  - id: agent-guard-action-blocked
+  - id: agent-guard-llm-verdict-prompt
 - id: ai-cli-destructive-command-deny-rules
   desc: AI CLI blocks destructive root rm commands
   crit: notable

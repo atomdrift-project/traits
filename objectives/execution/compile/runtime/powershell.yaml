@@ -4,33 +4,6 @@ defaults:
   attack: T1027
 
 traits:
-  - id: ps-codedom-compile-source
-    desc: PowerShell compiles C# source at runtime
-    crit: suspicious
-    conf: 0.94
-    if:
-      type: text
-      substr: "CompileAssemblyFromSource"
-    unless:
-      # Ansible's Add-CSharpType module util (ansible.module_utils.powershell.
-      # Ansible.ModuleUtils.AddType) legitimately compiles+loads C# module code
-      # in-memory and is vendored verbatim into module_utils and integration
-      # test fixtures across hundreds of collections. The Ansible.ModuleUtils
-      # substr was meant to catch it but that string is only in the FILENAME,
-      # not the body; the function definition is the reliable anchor.
-      - type: text
-        substr: Ansible.ModuleUtils
-      - type: text
-        regex: 'Function\s+Add-CSharpType\b'
-      - type: text
-        substr: required extended attribute for the source to be trusted
-    downgrade:
-      any:
-        # Runtime C# compilation is expected in Rapid7's shellcode-generator
-        # template; retain it as behavior context without calling the gem
-        # suspicious software.
-        - id: well-known/tool/offensive/metasploit::rex-gem-context
-
   - id: ps-roslyn-compile-source
     desc: PowerShell Roslyn compile source
     crit: suspicious
@@ -45,10 +18,7 @@ traits:
       # test fixtures across hundreds of collections. The Ansible.ModuleUtils
       # substr was meant to catch it but that string is only in the FILENAME,
       # not the body; the function definition is the reliable anchor.
-      - type: text
-        substr: Ansible.ModuleUtils
-      - type: text
-        regex: 'Function\s+Add-CSharpType\b'
+      - id: well-known/app/infrastructure/ansible::ansible-powershell-provenance
       - type: text
         substr: required extended attribute for the source to be trusted
 
@@ -66,14 +36,35 @@ traits:
       # test fixtures across hundreds of collections. The Ansible.ModuleUtils
       # substr was meant to catch it but that string is only in the FILENAME,
       # not the body; the function definition is the reliable anchor.
-      - type: text
-        substr: Ansible.ModuleUtils
-      - type: text
-        regex: 'Function\s+Add-CSharpType\b'
+      - id: well-known/app/infrastructure/ansible::ansible-powershell-provenance
       - type: text
         substr: required extended attribute for the source to be trusted
+      # Same cert-shim compile the hostile exempts: the load is part of
+      # that benign act, not a separate staging signal.
+      - id: ps-cert-ignore-shim-compile
+  - id: ps-cert-policy-shim-source
+    desc: PowerShell compiles a certificate-policy shim
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      # The canonical Ignore-SSLCertificates snippet (TechNet gallery
+      # origin) compiles Local.ToolkitExtensions.Net.CertificatePolicy:
+      # BMC/admin tooling talking to self-signed iDRAC/ILO/ESXi endpoints.
+      substr: 'Local.ToolkitExtensions.Net.CertificatePolicy'
 
 composite_rules:
+  # A trust-all certificate shim compiled in-memory is the standard way
+  # admin modules reach self-signed BMCs -- not a staged payload. The shim
+  # namespace is fixed gallery boilerplate, not attacker-chosen text.
+  - id: ps-cert-ignore-shim-compile
+    desc: In-memory compile of a certificate-ignore shim
+    crit: exception
+    conf: 0.97
+    scope: file
+    all:
+      - id: ps-cert-policy-shim-source
+      - id: micro-behaviors/process/create/compile::compile-assembly-from-source-ref
   - id: ps-compile-load-assembly
     desc: PowerShell compile-load assembly
     crit: hostile
@@ -81,8 +72,11 @@ composite_rules:
     all:
       - id: ps-inmemory-assembly-load
     any:
-      - id: ps-codedom-compile-source
+      - id: micro-behaviors/process/create/compile::compile-assembly-from-source-ref
       - id: ps-roslyn-compile-source
     unless:
       - id: well-known/tool/sysadmin/alpine-packages/package::alpine-ansible-core-package
       - id: well-known/tool/sysadmin/container/
+      # Cert-ignore shim compilation for self-signed endpoints is admin
+      # tooling, not payload staging; the load capability stays suspicious.
+      - id: ps-cert-ignore-shim-compile

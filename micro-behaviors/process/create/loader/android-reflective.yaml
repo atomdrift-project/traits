@@ -41,6 +41,28 @@ traits:
       type: text
       substr: "pathList"
 
+  # DexPathList's private element factories. Calling one reflectively builds
+  # classloader elements for DEX files the platform never registered -- the
+  # step that splices a decrypted stage into the running app's classloader.
+  - id: dex-path-list-element-factory
+    desc: Names DexPathList element factory method
+    conf: 0.93
+    for: [dex]
+    if:
+      type: text
+      regex: '^make(Dex|Path|InMemoryDex)Elements$'
+
+  # ActivityThread.mInitialApplication holds the process's Application
+  # object. Only code that replaces the running Application (a packer's stub
+  # handing over to the decrypted real one, or a hot-patch framework) names it.
+  - id: activitythread-initial-application-field
+    desc: Names ActivityThread initial Application field
+    conf: 0.94
+    for: [dex]
+    if:
+      type: text
+      exact: "mInitialApplication"
+
   # The early-Context hook these loaders install from lives in
   # micro-behaviors/process/lifecycle/runtime-init::attach-base-context --
   # overriding attachBaseContext is ordinary app bootstrap, so the neutral
@@ -112,6 +134,38 @@ traits:
       type: text
       substr: "Ljava/util/zip/InflaterInputStream;"
 
+  # Some Android APK droppers implement their Base64 decoder directly, XOR
+  # the output, then feed it to java.util.zip.Inflater instead of using
+  # InflaterInputStream. Keep these as separate DEX API facts so downstream
+  # rules can recognize the same staged-payload flow without requiring the
+  # Android Base64 helper or a ClassLoader.
+  - id: dalvik-inflater-class
+    desc: Dalvik Inflater class reference
+    crit: notable
+    conf: 0.9
+    for: [dex]
+    if:
+      type: text
+      substr: "Ljava/util/zip/Inflater;"
+
+  - id: dalvik-inflater-set-input
+    desc: Dalvik Inflater receives compressed input
+    crit: notable
+    conf: 0.9
+    for: [dex]
+    if:
+      type: text
+      word: "setInput"
+
+  - id: dalvik-inflater-inflate
+    desc: Dalvik Inflater decompresses data
+    crit: notable
+    conf: 0.9
+    for: [dex]
+    if:
+      type: text
+      word: "inflate"
+
   - id: dalvik-get-files-dir-call
     desc: Dalvik getFilesDir API call
     crit: notable
@@ -121,14 +175,25 @@ traits:
       type: text
       word: "getFilesDir"
 
+  # The descriptor for any ClassLoader parameter or field, present in nearly
+  # every app; the loader composites add the dex-specific loader names.
   - id: dalvik-classloader-descriptor
     desc: Dalvik ClassLoader descriptor
-    crit: notable
+    crit: component
     conf: 0.86
     for: [dex]
     if:
       type: text
       substr: "Ljava/lang/ClassLoader;"
+
+  - id: dalvik-runtime-classloader-descriptor
+    desc: Dalvik runtime ClassLoader descriptor
+    crit: notable
+    conf: 0.9
+    for: [class, dex]
+    if:
+      type: text
+      regex: 'Ldalvik/system/(BaseDexClassLoader|DexClassLoader|PathClassLoader);'
 
   - id: dalvik-in-memory-dex-classloader
     desc: Dalvik in-memory DEX class loader reference
@@ -138,6 +203,69 @@ traits:
     if:
       type: text
       substr: "Ldalvik/system/InMemoryDexClassLoader;"
+
+  - id: dalvik-app-component-factory-descriptor
+    desc: Dalvik AppComponentFactory descriptor
+    crit: notable
+    conf: 0.94
+    for: [dex]
+    if:
+      type: text
+      substr: "Landroid/app/AppComponentFactory;"
+
+  - id: dalvik-androidx-core-component-factory-descriptor
+    desc: Dalvik AndroidX CoreComponentFactory descriptor
+    crit: notable
+    conf: 0.94
+    for: [dex]
+    if:
+      type: text
+      substr: "Landroidx/core/app/CoreComponentFactory;"
+
+  - id: dalvik-instantiate-application-hook
+    desc: Dalvik instantiateApplication hook name
+    crit: notable
+    conf: 0.95
+    for: [dex]
+    if:
+      type: text
+      word: instantiateApplication
+
+  - id: dalvik-instantiate-activity-hook
+    desc: Dalvik instantiateActivity hook name
+    crit: notable
+    conf: 0.94
+    for: [dex]
+    if:
+      type: text
+      word: instantiateActivity
+
+  - id: dalvik-instantiate-provider-hook
+    desc: Dalvik instantiateProvider hook name
+    crit: notable
+    conf: 0.93
+    for: [dex]
+    if:
+      type: text
+      word: instantiateProvider
+
+  - id: dalvik-instantiate-receiver-hook
+    desc: Dalvik instantiateReceiver hook name
+    crit: notable
+    conf: 0.93
+    for: [dex]
+    if:
+      type: text
+      word: instantiateReceiver
+
+  - id: dalvik-instantiate-service-hook
+    desc: Dalvik instantiateService hook name
+    crit: notable
+    conf: 0.93
+    for: [dex]
+    if:
+      type: text
+      word: instantiateService
 
   - id: dalvik-gzip-inputstream-class
     desc: Dalvik GZIP input stream reference
@@ -411,10 +539,28 @@ composite_rules:
       - id: dalvik-get-assets-call
       - id: micro-behaviors/process/lifecycle/runtime-init::attach-base-context
 
+  - id: android-app-component-factory-instantiate-surface
+    desc: Custom AppComponentFactory component instantiation hooks
+    crit: suspicious
+    conf: 0.97
+    for: [dex]
+    unless:
+      - id: dalvik-androidx-core-component-factory-descriptor
+    all:
+      - id: dalvik-app-component-factory-descriptor
+      - id: dalvik-instantiate-application-hook
+    any:
+      - id: dalvik-instantiate-activity-hook
+      - id: dalvik-instantiate-provider-hook
+      - id: dalvik-instantiate-receiver-hook
+      - id: dalvik-instantiate-service-hook
+
   - id: android-application-classloader-hijack
     desc: Android application classloader hijack through ActivityThread internals
     crit: suspicious
     conf: 0.995
+    unless:
+      - id: well-known/app/communication/sms-forwarder::smsforwarder-dex-communication-features
     all:
       - id: android-activitythread-reflection
       - id: android-activitythread-current-method
@@ -448,6 +594,7 @@ composite_rules:
 
   - id: reflective-dex-loader-member
     desc: Reflective DexFile classloader patching chain
+    for: [android_apk, zip, dex, class]
     crit: suspicious
     conf: 0.98
     all:

@@ -42,24 +42,6 @@ traits:
     if:
       type: string_literal
       word: exec
-  - id: import-dunder
-    desc: __import__ function
-    crit: notable
-    if:
-      type: string_literal
-      substr: __import__
-  - id: unhexlify-word
-    desc: unhexlify function
-    crit: notable
-    if:
-      type: string_literal
-      substr: unhexlify
-  - id: open-file-ref
-    desc: open(__file__ call
-    crit: notable
-    if:
-      type: text
-      substr: open(__file__
   - id: open-file-sp-ref
     desc: open( __file__ call (with space)
     crit: notable
@@ -73,21 +55,19 @@ traits:
       type: text
       substr: open(os.path.abspath(__file__)
   - id: marshal-word
-    desc: marshal module
+    desc: marshal serialization named in a string literal
     crit: notable
     if:
       type: string_literal
-      word: marshal
+      # Only the serialization-module shapes: the API call spelled out in a
+      # packed/obfuscated literal, or the module name quoted for __import__.
+      # The bare word also matched English "to marshal" in RPC docstrings
+      # (pypsexec's PDU marshaling helpers) — not bytecode staging.
+      regex: '(?i)\bmarshal\s*\.\s*(loads?|dumps?)\b|["'']marshal["'']'
     unless:
     # The symbol records the API being used; this also sees the name sitting in
     # data. Standing down there keeps one use from counting twice.
     - id: micro-behaviors/data/serialize/unsafe::import-marshal
-  - id: setuptools-word
-    desc: setuptools package
-    crit: notable
-    if:
-      type: string_literal
-      substr: setuptools
   - id: pyobfuscate-pyc-marker
     desc: PyObfuscate payload with embedded 'pyc' string
     crit: notable
@@ -105,7 +85,6 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/obfuscator/signature::pyobfuscate-signature
 
   - id: bytecode-disguised-as-source
-    for: [python]
     desc: Python bytecode disguised as source
     crit: suspicious
     conf: 0.97
@@ -127,6 +106,15 @@ composite_rules:
     any:
       - id: pyc-extreme-line-length
       - id: objectives/anti-static/obfuscation/encoding/custom::slash-delimited-utf8-hex
+
+  - id: disguised-bytecode-packed-payload
+    for: [pyc]
+    desc: Disguised pyc carries packed payload
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: bytecode-disguised-as-source
+      - id: objectives/anti-static/obfuscation/pack::packed-python-module
   # Source and bytecode express the same technique with different facts:
   # exec-builtin/eval-builtin are symbol/AST facts that only exist for parsed
   # Python source, while eval-word/exec-word are string_literal facts read
@@ -140,10 +128,10 @@ composite_rules:
     attack: T1059
     for: [python]
     all:
-      - id: micro-behaviors/process/interpreter/python::exec-builtin
-      - id: micro-behaviors/process/interpreter/python::eval-builtin
-      - id: import-dunder
-      - id: unhexlify-word
+      - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
+      - id: micro-behaviors/process/interpreter/eval/direct::eval-builtin
+      - id: micro-behaviors/process/interpreter/python::dunder-import-string
+      - id: micro-behaviors/data/decode/hex::unhexlify-name-string
   - id: bytecode-exec-eval-import-bytecode
     desc: Bytecode with exec eval and __import__ (bytecode)
     crit: suspicious
@@ -154,8 +142,8 @@ composite_rules:
     all:
       - id: exec-word
       - id: eval-word
-      - id: import-dunder
-      - id: unhexlify-word
+      - id: micro-behaviors/process/interpreter/python::dunder-import-string
+      - id: micro-behaviors/data/decode/hex::unhexlify-name-string
   - id: bytecode-exec-eval-import
     desc: Bytecode with exec eval and __import__
     crit: suspicious
@@ -169,25 +157,25 @@ composite_rules:
     desc: Opens own file reference
     crit: component
     any:
-      - id: open-file-ref
+      - id: micro-behaviors/fs/read/self::python-open-own-file
       - id: open-file-sp-ref
       - id: open-abspath-ref
   - id: exec-functions
     desc: Code execution functions
     crit: component
     any:
-      - id: micro-behaviors/process/interpreter/python::exec-builtin
+      - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
       - id: eval-word
-      - id: micro-behaviors/process/interpreter/python::compile-builtin
+      - id: micro-behaviors/process/interpreter/eval/compile::compile-builtin
   - id: decode-functions
     desc: Decoding/deserialization functions
     crit: component
     any:
       - id: marshal-word
-      - id: micro-behaviors/data/compress/zlib::zlib-signature
+      - id: micro-behaviors/data/codec::zlib-codec-name-reference
       - id: micro-behaviors/data/decode/base64::b64decode-string
-      - id: unhexlify-word
-      - id: import-dunder
+      - id: micro-behaviors/data/decode/hex::unhexlify-name-string
+      - id: micro-behaviors/process/interpreter/python::dunder-import-string
   - id: bytecode-self-reader
     for: [python]
     desc: Bytecode reads own file for payload
@@ -201,7 +189,7 @@ composite_rules:
       - id: exec-functions
       - id: decode-functions
     unless:
-      - id: setuptools-word
+      - id: metadata/build/pip::setuptools-name-literal
       - id: metadata/package/testing/presence/harness::test-directory
       - id: well-known/lib/runtime/scripted/clr-loader::clr-loader-pythonnet-runtime
   - id: bytecode-payload-execution
@@ -215,6 +203,6 @@ composite_rules:
       - id: bytecode-exec-eval-import
       - id: bytecode-self-reader
     any:
-      - id: unhexlify-word
+      - id: micro-behaviors/data/decode/hex::unhexlify-name-string
       - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
       - id: objectives/anti-static/obfuscation/obfuscator/signature::known-obfuscator-detected

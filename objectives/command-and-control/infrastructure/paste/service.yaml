@@ -17,16 +17,6 @@ traits:
   # matched evidence string, so with a bare `pastebin\.com` match it would have
   # nothing to test. The comment leader must be followed by whitespace, which is
   # what keeps the `//` of `https://` from suppressing every real match.
-  - id: pastebin
-    desc: Pastebin.com reference
-    if:
-      type: text
-      regex: '.{0,60}pastebin\.com'
-    not:
-      - regex: '(//|/\*|#)\s[^\n]{0,60}pastebin\.com'
-    unless:
-      - id: objectives/credential-access/cloud/token/oauth::sharex-uploaderslib-assembly
-      - id: well-known/app/browser-extension/content-blocker::adblock-filter-resource
   - id: hastebin
     desc: Hastebin reference
     if:
@@ -66,6 +56,8 @@ traits:
     if:
       type: text
       regex: rentry\.(co|org)
+    unless:
+      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   - id: ctrlv
     desc: CtrlV.it reference
     if:
@@ -104,6 +96,15 @@ traits:
       type: literal
       kind: string
       regex: '^aHR0cHM6Ly93d3cuanNvbmtlZXBlci5jb20[A-Za-z0-9_-]{4,80}={0,2}$'
+  - id: jsonkeeper-hex-endpoint
+    desc: Hex-encoded JSONKeeper endpoint
+    crit: suspicious
+    conf: 0.98
+    for: [javascript, typescript, python]
+    if:
+      type: encoded
+      encoding: hex
+      regex: https://(www\.)?jsonkeeper\.com/b/[A-Za-z0-9_-]{4,24}
   - id: jsonbin
     desc: JSONBin.io reference
     if:
@@ -155,6 +156,17 @@ traits:
       type: text
       regex: '(^|[^A-Za-z0-9.-])(https?://)?temp\.sh\b'
 
+  # shz.al: a public pastebin (Cloudflare Workers "pb") whose named pastes
+  # can be re-written with a password, so a program can keep a fixed URL
+  # pointing at whatever it last posted.
+  - id: shz-al
+    desc: shz.al pastebin reference
+    # An exact URL match, not a bare word; more certain than the file default.
+    conf: 0.9
+    if:
+      type: text
+      regex: 'https?://shz\.al/'
+
 composite_rules:
   - id: jsonkeeper-bearrtoken-client
     desc: JSONKeeper client uses a misspelled token header
@@ -173,7 +185,7 @@ composite_rules:
     attack: T1102.001,T1059.007
     all:
       - id: jsonkeeper-bearrtoken-client
-      - id: objectives/command-and-control/dropper/delivery/fetch-eval::request-json-field-eval-loader
+      - id: objectives/command-and-control/dropper/script-eval/remote-code::request-json-field-eval-loader
 
   - id: jsonkeeper-development-secret-config
     desc: Encoded JSONKeeper endpoint with secret config
@@ -183,6 +195,38 @@ composite_rules:
     all:
       - id: jsonkeeper-b64-endpoint
       - id: micro-behaviors/data/config/schema::javascript-development-secret-config
+  - id: jsonkeeper-eval-loader
+    desc: Evaluates decoded JSONKeeper remote payload
+    crit: hostile
+    conf: 0.99
+    attack: T1102.001,T1059.007
+    all:
+      - id: jsonkeeper-b64-endpoint
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
+      - id: micro-behaviors/data/decode/base64::base64-decode-call-text
+    unless:
+      - id: metadata/package/testing/
+  - id: jsonkeeper-endpoint
+    desc: JSONKeeper remote endpoint reference
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript, python]
+    any:
+      - id: jsonkeeper
+      - id: jsonkeeper-b64-endpoint
+      - id: jsonkeeper-b64-endpoint-literal
+      - id: jsonkeeper-hex-endpoint
+  - id: jsonkeeper-hex-eval-loader
+    desc: Evaluates hex-encoded JSONKeeper payload
+    crit: hostile
+    conf: 0.99
+    attack: T1102.001,T1059.007
+    for: [javascript, typescript]
+    all:
+      - id: jsonkeeper-hex-endpoint
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
+    unless:
+      - id: metadata/package/testing/
   - id: jsonbin-v3-bins-endpoint
     desc: JSONBin.io v3 bins API endpoint
     crit: notable
@@ -216,3 +260,26 @@ composite_rules:
     any:
       - id: objectives/credential-access/wallet/key-format::eth-hex64-private-key-regex
       - id: objectives/credential-access/wallet/key-format::base58-44to88-key-regex
+
+  # A program that opens a tunnel and posts to a paste service publishes its
+  # own reachable address where a controller can look it up: a rendezvous
+  # that needs no fixed C2 server and survives the tunnel's hostname changing.
+  - id: tunnel-address-paste-rendezvous
+    desc: Posts its tunnel address to a paste site
+    crit: suspicious
+    conf: 0.88
+    for: [scripts, source]
+    attack: T1102.001,T1572
+    all:
+      - id: objectives/command-and-control/infrastructure/domain/tunnel/
+    any:
+      - id: shz-al
+      - id: micro-behaviors/communications/http/services/file-hosting::pastebin
+      - id: hastebin
+      - id: dpaste
+      - id: rentry
+      - id: termbin
+      - id: paste-ee
+      - id: privatebin
+    unless:
+      - id: well-known/tool/detection/cordon-scanner::cordon-defensive-scanner-context

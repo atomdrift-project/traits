@@ -9,25 +9,42 @@ defaults:
   mbc: "B0022"
 
 composite_rules:
+  # The bind shell's own two literals -- the socket it listens on and the
+  # shell it hands the connection to -- belong to one function, so they sit
+  # together in .rodata (16 bytes apart in a gcc -O2 build). In a large
+  # program the same strings are unrelated vocabulary megabytes apart:
+  # Windsurf's Go language_server carries /run/haproxy/admin.sock as config
+  # knowledge 1.1MB from its /bin/sh. The path leg also ignores stock daemon
+  # defaults and RFC 2606 example names; those are config templates, not the
+  # listener.
+  - id: unix-socket-path-beside-shell
+    desc: Unix socket path stored beside a shell path
+    crit: component
+    conf: 0.9
+    for: [elf, macho]
+    near_bytes: 1024
+    all:
+      - id: micro-behaviors/fs/path/socket::non-stock-unix-socket-path
+    any:
+      - id: micro-behaviors/process/create/shell/native::bash-binary-name
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
   # Compiled local bind shells do not retain AF_UNIX as a string or type name.
-  # A concrete local endpoint path plus the complete accepting-server surface,
-  # socket-to-stdio redirection, byte-token comparison, and shell execution is
-  # the stable cross-compiler shape. The source variant below remains separate
-  # because source facts expose call syntax while binaries expose imports.
+  # The endpoint/shell literal pair plus the complete accepting-server surface
+  # and socket-to-stdio redirection is the stable cross-compiler shape. No
+  # memcmp leg: -O2 inlines a short password compare (no import), many bind
+  # shells have no password, and every large binary imports memcmp. The
+  # source variant below remains separate because source facts expose call
+  # syntax while binaries expose imports.
   - id: unix-socket-stdio-shell-binary
     desc: Unix-domain socket listener redirects stdio to a shell
     crit: hostile
     conf: 0.98
     for: [elf, macho]
     all:
-      - id: micro-behaviors/communications/ipc/unix-socket::native-binary-unix-socket-path
+      - id: unix-socket-path-beside-shell
       - id: micro-behaviors/communications/socket/listen::accepting-server-api-surface
       - id: micro-behaviors/process/fd/dup::dup2
       - id: micro-behaviors/process/create/direct::execve-import
-      - id: micro-behaviors/mem/c-runtime/functions::memcmp
-    any:
-      - id: micro-behaviors/process/create/shell/native::bash-binary-name
-      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
     unless:
       # Pinokio's local daemon uses a Unix socket to broker automation
       # subprocesses; the packaged binary is not a bind-shell payload.
@@ -39,6 +56,10 @@ composite_rules:
       # Chromium/Electron runtime binaries use Unix domain sockets for browser-renderer
       # IPC and manage child processes (zygote, renderer, GPU); they are not bind shells.
       - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
+      # A Node.js/V8 runtime statically links libuv (socket, accept, dup2)
+      # and child_process (execve, /bin/sh): a renamed Node binary such as
+      # the signed postman-cli satisfies every leg without being a shell.
+      - id: well-known/lib/runtime/scripted/node-runtime::embedded-js-runtime-safe-context
 
   - id: posix-bind-shell-source
     desc: C source bind shell (bind+dup2+shell)
@@ -65,10 +86,57 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/shell/spawn::system-fn
       - id: micro-behaviors/process/interpreter/shell::bin-sh
-      - id: objectives/command-and-control/reverse-shell/socket-exec::c-source-shell-path
+      - id: micro-behaviors/process/interpreter/shell::unix-shell-executable-path
     unless:
       # Socket test helpers deliberately exercise bind/listen/dup2 patterns:
       # checkpointctl's test/piggie/piggie.c binds 127.0.0.1:5000 and dup2s
       # log-file fds for namespace tests, with system() only running a fixed
       # `ip link` setup command -- no shell ever touches the socket.
       - id: metadata/package/testing/
+  # TCP sibling of the Unix-socket rules above for LD_PRELOAD exploit
+  # payloads (Metasploit's CVE-2017-17562 GoAhead bind .so family): the
+  # template binds every interface with no address literal at all, so the
+  # Unix-socket-path legs cannot apply. LD_PRELOAD plus a complete
+  # accept/dup2/shell-exec chain is the discriminator; legitimate preload
+  # shims never accept sockets and exec shells together.
+  - id: ld-preload-tcp-bind-shell
+    desc: LD_PRELOAD TCP bind shell with shell exec
+    conf: 0.96
+    for: [elf]
+    all:
+      - id: micro-behaviors/os/linker/env::ld-preload
+      - id: micro-behaviors/communications/socket/listen::accepting-server-api-surface
+      - id: micro-behaviors/process/fd/dup::dup2
+      - id: micro-behaviors/process/create/execv::c-exec-variants
+    any:
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+      - id: micro-behaviors/process/create/shell/native::bash-binary-name
+    needs: 1
+    unless:
+      # Preload exploit payloads are shared objects (.so); standalone executables have PT_INTERP.
+      - id: metadata/binary/linking/runtime::interpreter
+      - id: well-known/app/ai/coding-agent/
+
+  # Detached preload shell; socket and stdio evidence are required.
+
+  - id: ld-preload-forking-shell-loader
+    desc: LD_PRELOAD object forks and execs a shell
+    crit: hostile
+    platforms: [linux]
+    for: [elf]
+    conf: 0.96
+    all:
+      - id: micro-behaviors/os/linker/env::ld-preload
+      - id: micro-behaviors/communications/socket/create::posix-socket-import
+      - id: micro-behaviors/process/fd/dup::dup2
+      - id: micro-behaviors/process/fork/clone::fork
+      - id: micro-behaviors/process/create/execv::c-exec-variants
+    any:
+      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+      - id: micro-behaviors/process/create/shell/native::bash-binary-name
+    needs: 1
+    unless:
+      # Preload exploit payloads are shared objects (.so); standalone executables have PT_INTERP.
+      - id: metadata/binary/linking/runtime::interpreter
+      - id: well-known/app/ai/coding-agent/
+

@@ -38,41 +38,21 @@ traits:
   if:
     type: text
     regex: "spawn\\(['\"]osascript['\"]"
-- id: node-install-sh-url-path
-  desc: Remote install.sh URL path construction
-  crit: notable
-  conf: 0.86
-  for: [javascript, typescript]
-  if:
-    type: text
-    substr: /install.sh
-- id: node-install-sh-chmod-executable
-  desc: Downloaded install.sh made executable
-  crit: notable
-  conf: 0.9
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: "install\\.sh[\\s\\S]{0,900}chmodSync\\([^)]{0,120},\\s*(493|0o?755)\\)"
 composite_rules:
-- id: vscode-activated-curl-shell
-  desc: Activated extension pipes curl into a shell
+- id: vscode-obfuscated-curl-shell-exec
+  desc: Obfuscated extension executes curl into shell
   crit: hostile
   conf: 0.99
-  attack: T1059.004,T1105,T1195.002
-  for: [vsix, javascript]
-  # Archive scope is correct here -- in a real VSIX the activate() and the
-  # `curl | sh` are different members, and the corpus samples rely on it.
-  # The breadth was in `for:`: `archives` let this run on any archive, so
-  # the Rust crate agentdiff-0.1.26 matched with a VS Code shape in
-  # tests/test_extension.js and a `curl ... | sh` install line in README.md.
-  # A VS Code extension ships as a .vsix.
-  scope: archive
+  attack: T1027,T1059.004,T1105
+  for: [javascript]
+  scope: file
+  # An installer suggestion in an error dialog is not an execution site.
+  # Require a call carrying the pipeline and actual code concealment.
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: well-known/lib/development/vscode::activate-export
-  - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
-  - id: micro-behaviors/communications/http/curl::curl-command-remote-url
+  - id: micro-behaviors/communications/http/download/curl::curl-pipe-shell-in-js-exec
+  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::strong-js-obfuscation
 
 - id: vscode-encoded-powershell-sidecar
   desc: Extension hides an encoded PowerShell sidecar
@@ -130,35 +110,37 @@ composite_rules:
   - id: micro-behaviors/fs/path/config/app::vscode-launch-json-filename
   - id: micro-behaviors/process/create/shell/terminal::vscode-hidden-debug-fetch-runtime
 
-- id: vscode-dns-bitmask-collection
-  desc: Extension encodes collected data into DNS queries
+- id: vscode-bundled-dns-code-execution
+  desc: Extension bundles DNS TXT code execution
   crit: hostile
   conf: 0.98
-  attack: T1048.003,T1195.002
-  for: [source, scripts, '!jcl', class, package.json, vsix]
+  attack: T1071.004,T1059.007,T1195.002
+  for: [javascript, typescript, package.json, vsix]
   scope: archive
+  # DNS imports, low-bit masks, and hex conversion can belong to unrelated
+  # proxy, PDF, and stream-test dependencies. Require the existing file-local
+  # TXT callback/code-execution profile before correlating extension context.
+  # This describes bundled code; it does not assert an activation-to-sidecar
+  # call edge or that the email-grabbing UI supplies the transmitted data.
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
-  - id: metadata/permission/activation::on-startup-finished
-  - id: micro-behaviors/communications/dns/lookup/resolver::require-dns
-  - id: micro-behaviors/data/source/arithmetic::lsb-bit-mask-source
-  - id: micro-behaviors/data/encode/hex::js-to-string-hex
-  unless:
-  - id: well-known/app/ai/coding-agent/qwen-code::qwen-code-benign-bundle-context
+  - id: objectives/command-and-control/dns/tunneling::node-dns-txt-callback-code-exec
 
 - id: vscode-eval-network-typosquat
   desc: Extension evaluates code fetched from a network
   crit: hostile
   conf: 0.98
   attack: T1059,T1105,T1195.002
-  for: [vsix, javascript]
-  scope: archive
+  for: [javascript, typescript]
+  near_bytes: 4096
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: well-known/lib/development/vscode::activate-export
   - id: micro-behaviors/process/interpreter/vm::vm-runInNewContext-call
   - id: micro-behaviors/communications/http/request/get::node-http-client-get
   - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+  unless:
+  - id: metadata/package/testing/
 
 - id: vscode-ssh-mode-sidecar
   desc: Extension stages a hidden SSH sidecar
@@ -185,8 +167,28 @@ composite_rules:
   all:
   - id: metadata/package/runtime::vscode-language-purpose-claim
   - id: metadata/package/runtime::vscode-localizations-absent
+  - id: metadata/package/runtime::vscode-languages-contribution-absent
   - id: metadata/permission/activation::on-startup-finished
   - id: metadata/permission/activation::main-extension-js
+- id: vscode-obfuscated-startup-batch-dropper
+  desc: Startup VS Code extension downloads and executes a remote batch file
+  crit: hostile
+  conf: 0.995
+  attack: T1027,T1059.007,T1105,T1195.002,T1553.004
+  mbc: B0024,E1105
+  for: [vsix, javascript, package.json]
+  scope: archive
+  # The extension stores the curl command with JavaScript hex escapes, runs it
+  # through a hidden child_process.exec wrapper, and launches automatically
+  # after VS Code starts. Correlate the decoded transport with the batch-stage
+  # path and extension activation across the VSIX members.
+  all:
+  - id: well-known/lib/development/vscode::vscode-extension-marker
+  - id: metadata/permission/activation::on-startup-finished
+  - id: micro-behaviors/communications/http/download/encoded::encoded-fetch-insecure-tls
+  - id: micro-behaviors/fs/path/temp::temporary-batch-path-reference
+  - id: micro-behaviors/fs/write/content::batch-command-extension-literal
+  - id: micro-behaviors/process/create/shell/bridge::js-exec-wrapper-with-hidden-options
 - id: vscode-insecure-downloader
   desc: VS Code extension launches insecure download
   crit: hostile
@@ -263,8 +265,8 @@ composite_rules:
   - id: micro-behaviors/fs/read/stream::create-read-stream
   any:
   - id: vscode-request-post-call
-  - id: micro-behaviors/communications/http/upload::form-data-append
-  - id: micro-behaviors/communications/http/url/api-path::fetch-http-scheme-url
+  - id: micro-behaviors/communications/http/form::form-data-append
+  - id: micro-behaviors/communications/http/request/client::fetch-http-scheme-url
   needs: 2
   scope: file
   near_bytes: 4096
@@ -303,7 +305,7 @@ composite_rules:
   near_bytes: 4096
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
-  - id: objectives/command-and-control/dropper/delivery/fetch-eval::response-end-then-eval
+  - id: objectives/command-and-control/dropper/script-eval/response-eval::response-end-then-eval
   any:
   - id: micro-behaviors/communications/http/request/client::http-get-dup
   - id: metadata/import/builtin::require-http
@@ -317,8 +319,8 @@ composite_rules:
   scope: archive
   all:
   - id: metadata/package/runtime::vscode-extension
-  - id: node-install-sh-url-path
-  - id: node-install-sh-chmod-executable
+  - id: micro-behaviors/communications/http/url/path::remote-install-sh-url-reference
+  - id: micro-behaviors/fs/chmod/modify::node-install-sh-chmod-executable
   - id: micro-behaviors/process/create/system::js-execfile-call
   any:
   - id: micro-behaviors/process/create/shell/bridge::js-execfile-bash
@@ -333,7 +335,7 @@ composite_rules:
   all:
   - id: metadata/package/runtime::vscode-extension
   - id: metadata/permission/activation::on-startup-finished
-  - id: objectives/command-and-control/dropper/delivery/execute-download::obfuscated-node-curl-exe-download-exec
+  - id: objectives/command-and-control/dropper/file-exec/spawn::obfuscated-node-curl-exe-download-exec
 - id: vscode-obfuscated-filewatch-terminal-command-dispatch
   desc: Obfuscated file watcher dispatches terminal commands
   crit: suspicious
@@ -348,7 +350,7 @@ composite_rules:
   scope: file
   all:
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::strong-js-obfuscation
-  - id: micro-behaviors/fs/watch/monitor::vscode-filesystem-watcher
+  - id: micro-behaviors/fs/watch::vscode-filesystem-watcher
   - id: micro-behaviors/process/create/shell/bridge::vscode-terminal-command-dispatch
 - id: vscode-startup-obfuscated-sidecar
   desc: VS Code extension starts obfuscated sidecar at launch
@@ -394,10 +396,10 @@ composite_rules:
   - javascript
   - typescript
   all:
-  - id: metadata/permission/uri::oauth-code-capture
+  - id: micro-behaviors/communications/url/parse::oauth-code-capture
   - id: micro-behaviors/communications/http/request/client::https-request
-  - id: micro-behaviors/communications/http/request/client::post-method-text
-  - id: objectives/exfiltration/oob/endpoint::webhook-site
+  - id: micro-behaviors/communications/http/request/verb::post-method-text
+  - id: micro-behaviors/communications/url/host::webhook-site
 - id: post-install-exec
   desc: Post-install script execution (dropper pattern)
   crit: suspicious
@@ -411,7 +413,7 @@ composite_rules:
   - id: metadata/permission/activation::activate-comp
   - id: postInstall-word
   any:
-  - id: micro-behaviors/process/create/shell/bridge::js-execsync
+  - id: micro-behaviors/process/create/shell/bridge::execSync-call
   - id: micro-behaviors/process/create/shell/bridge::js-execasync-call
 - id: auto-activated-reverse-shell
   desc: Auto-activated VSCode reverse shell
@@ -425,7 +427,7 @@ composite_rules:
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: metadata/permission/activation::activate-comp
-  - id: objectives/command-and-control/reverse-shell/socket-exec::cmd-shell-rfc1918-bridge
+  - id: objectives/command-and-control/reverse-shell/stream-bridge::cmd-shell-rfc1918-bridge
 - id: vscode-auto-activated-native-installer
   desc: VS Code extension auto-runs a platform native installer
   crit: hostile
@@ -485,7 +487,7 @@ composite_rules:
   - id: micro-behaviors/fs/write/file/full::js-file-write
   any:
   - id: micro-behaviors/fs/path/autostart::windows-startup-directory
-  - id: objectives/persistence/login/startup/registry::software-run-key
+  - id: micro-behaviors/os/registry/keys::software-run-key-reference
   - id: micro-behaviors/os/autorun/keyword::launchd-keyword
   - id: micro-behaviors/os/autorun/cron::crontab-keyword
   - id: micro-behaviors/os/service/config::systemd-keyword
@@ -526,7 +528,7 @@ composite_rules:
   - typescript
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
-  - id: micro-behaviors/crypto/symmetric/aes/runtime-library::createDecipheriv
+  - id: micro-behaviors/crypto/symmetric/decrypt::createDecipheriv
   - id: micro-behaviors/crypto/symmetric/aes/runtime-library::aes-256-cbc
 - id: vscode-dual-platform-payload-exec
   desc: Extension executes Windows and macOS payloads

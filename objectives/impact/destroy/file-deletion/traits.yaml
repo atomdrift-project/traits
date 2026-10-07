@@ -42,6 +42,8 @@ traits:
     regex: '\bdelete\b[^\r\n]{0,40}\s(all|your)\s[^\r\n]{0,20}\b(files?|documents?)\b'
     case_insensitive: true
   not:
+  # "Delete all temporary files" is cleanup, not a destruction warning.
+  - regex: '(?i)\b(temp|temporary|tmp|intermediate|cache|cached|staging)\s+files?\b'
   # A ransom or wiper warning quantifies over the victim ("all your files").
   # Operational text quantifies over a named file class -- "delete all
   # aria_log.######## files" (MariaDB aria_chk recovery advice), "delete all
@@ -71,6 +73,15 @@ traits:
   # JSZip's file-entry helper documents removing one zip member, not wiping
   # a disk: "Delete a file, or a directory and all sub-files, from the zip".
   - substr: directory and all sub-files
+  # Retention housekeeping deletes the tool's own raw exports by format --
+  # "Delete all raw JSONL files" -- not the victim's documents.
+  - regex: (?i)\bdelete\s+all\s+raw\s+\w+\s+files\b
+  # Scope note, not a deletion warning: React Native's CocoaPods helper
+  # ("Delete all directories - not files, since we want to keep the
+  # React-VFS.yaml file") removes stale prebuilt directories while keeping
+  # files. The "all" quantifies directories, so this is directory
+  # maintenance, not a file-destruction warning.
+  - regex: '(?i)\bdelete\s+all\s+directories\s*-\s*not\s+files\b'
   - regex: (?i)\bdelete\s+all\s+sidecar\s+files\b
   - regex: (?i)\bdelete(d)?\s+all\s+old\s+files\b
   - regex: (?i)\bdelete\s+all\s+mature\s+data\b
@@ -132,6 +143,10 @@ traits:
   - regex: (?i)\b(secret-?keys?|keyring|private key)s?\b
   - regex: (?i)THIS MAY DESTROY
   - regex: (?i)MAY DESTROY \(PARTS OF\)
+  - regex: '(?i)\bAI\s+wants\s+to\b'
+  - regex: '(?i)\bdestroy\b.{0,30}\b(tenant|organization|workspace|account|project|cluster|resource)\b'
+  - regex: '(?i)\bloses?\s+(all\s+)?data\b'
+  - regex: '(?i)\ball\s+its\s+(data|files|documents)\b'
   unless:
   - type: text
     regex: (?i)\bto install \w+.{0,120}\brepartitioned\b.{0,120}\bdestroy all data on the disk\b
@@ -145,6 +160,7 @@ traits:
     regex: '\b(files|data|documents)\b.{0,24}\b(will be|are)\b.{0,20}\bdestroyed\b'
     case_insensitive: true
   not:
+  - regex: '(?i)\b(never|not)\b.{0,20}\bdestroyed\b'
   - regex: (?i)\bdata on the (usb|removable|target|selected) disk will be destroyed\b
   - regex: (?i)\ball data on the (usb|removable|target|selected) disk will be destroyed\b
   - regex: (?i)deleting a team project is an irrecoverable operation
@@ -159,7 +175,9 @@ traits:
   for: [elf, macho, pe, vbs, javascript, powershell, batch]
   if:
     type: text
-    regex: \bwipe[a-z]{0,3}\b.{0,80}\b(your|all)\b.{0,20}\b(files|data|documents)\b
+    # The object is the victim's data as a whole ('all your files'); 'all
+    # preexisting data in the specified table' is a GDAL driver option.
+    regex: \bwipe[a-z]{0,3}\b.{0,80}\b(your|all)(\s+(your|the|of))?\s+(files|data|documents)\b
     case_insensitive: true
   unless:
   - id: well-known/app/finance/go-ethereum::go-ethereum-tool
@@ -210,14 +228,6 @@ traits:
     type: text
     regex: \byou deserve\b.{0,20}(format|wipe)
     case_insensitive: true
-- id: shell-folders-personal-targeting
-  desc: References Windows Shell Folders path
-  crit: notable
-  conf: 0.7
-  for: [pe]
-  if:
-    type: text
-    substr: "Shell Folders"
 - id: overwrite-with-question-mark
   desc: 'overwrite with question mark'
   crit: suspicious
@@ -271,8 +281,9 @@ traits:
   if:
     type: text
     # `/(\*|\s|$)` also catches the `rm -rf /*` glob form, not just bare `/`.
-    regex: '(?i)\brm\s+-rf\s+/(\*|\s|$)'
+    regex: '(?i)\brm\s+-rf\s+/(\*(\s|$|[;&|)"''])|\s|$)'
   unless:
+  - id: well-known/tool/detection/watchmen::watchmen-cli-context
   - id: micro-behaviors/process/create/shell/guard::ai-cli-destructive-command-deny-rules
 
 - id: unix-root-rm-glob
@@ -292,11 +303,13 @@ traits:
     # and comments in bundled source are not treated as executable commands.
     # `Bash(rm -rf /*)` is a Claude Code permission pattern, not a wipe.
     # Subshell/command-substitution forms still match via `^\(` / `\s\(` / `$(`.
-    regex: '(?i)(^|[\n;&|)]|^\(|\s\(|\$\()\s*(sudo\s+)?rm\s+-[a-z]*(rf|fr)[a-z]*\s+/\*'
+    regex: '(?i)(^|[\n;&|)]|(^|\s)\(|\$\()\s*(sudo\s+)?rm\s+-[a-z]*(rf|fr)[a-z]*\s+/\*(\s|$|[;&|)"''])'
   unless:
     - id: well-known/lib/native/uclibc::static-uclibc-string-tables
     - id: metadata/package/testing/harness/unit::rust-test
     - id: metadata/package/testing/presence/harness::test-directory-path
+    - id: micro-behaviors/process/create/shell/guard/
+    - id: metadata/file/policy/identity::agent-tool-permission-ruleset
 
 - id: encoded-rm-binary-path
   desc: Obfuscated /bin/rm delete path
@@ -322,6 +335,9 @@ traits:
   # preserve ordinary build/cleanup source containing /bin/rm. The map is
   # debug metadata, not a runtime decoder hiding the executable path.
   - id: metadata/file/format/structured::sourcemap-inline-base64
+  # The same file already names /bin/rm in cleartext, so the path is not hidden.
+  - type: text
+    substr: '/bin/rm'
 
 - id: shell-variable-recursive-home-delete
   desc: Variable-selected recursive home delete
@@ -364,7 +380,29 @@ traits:
     type: text
     regex: '(?i)\.exe\b[^b\n]{0,128}\.gho\b[^b\n]{0,128}\.bak\b'
 
+- id: wsh-copyfile-txt-suffix
+  desc: CopyFile destination ends in txt
+  crit: suspicious
+  conf: 0.9
+  platforms: [windows]
+  for: [vbs, javascript, text, static-lib]
+  if:
+    type: text
+    regex: '(?i)\.CopyFile\b[^\r\n]{0,80}\.txt'
+  not:
+    # camelCase copyFile member (Deno/Node/browser), not WSH CopyFile.
+    - regex: '\.copyFile\b'
+
 composite_rules:
+- id: wsh-copy-then-delete-as-txt
+  desc: Copies a file to txt then deletes it
+  crit: hostile
+  conf: 0.94
+  platforms: [windows]
+  for: [vbs, javascript, text, static-lib]
+  all:
+  - id: wsh-copyfile-txt-suffix
+  - id: micro-behaviors/fs/delete/file/library::wsh-deletefile-call
 - id: unix-root-rm-no-preserve-command
   desc: Unix root rm no-preserve command
   crit: notable
@@ -399,7 +437,7 @@ composite_rules:
   # a shell-command boundary the way unix-root-rm-glob does, because a binary's
   # string table has no separators, so suppress on the ruleset context instead.
   - id: metadata/file/policy/identity::agent-tool-permission-ruleset
-  - id: micro-behaviors/process/create/shell/guard::ai-cli-destructive-command-deny-rules
+  - id: micro-behaviors/process/create/shell/guard/
 - id: obfuscated-home-directory-wiper
   desc: Obfuscated command recursively wipes a user home directory
   crit: hostile
@@ -458,6 +496,9 @@ composite_rules:
   # fs.unlinkSync next to an explicit "this will delete" warning. The leaf
   # signer is the organisation on the Authenticode cert, not a version string.
   - id: metadata/signed/leaf::mullvad-vpn-ab
+  - id: metadata/file/policy/identity::agent-tool-permission-ruleset
+  - id: micro-behaviors/process/create/shell/guard/
+  - id: well-known/tool/detection/ai-guardrail/
 - id: pe-destructive-file-wiper
   desc: Destructive file wiper trojan
   crit: hostile
@@ -468,10 +509,30 @@ composite_rules:
   - id: micro-behaviors/fs/delete/file/library::deletefile-a
   - id: punishment-threat-any
   any:
-  - id: objectives/persistence/login/startup/registry::software-run-key
+  - id: micro-behaviors/os/registry/keys::software-run-key-reference
   - id: micro-behaviors/fs/file/copy::copyfile-a
   - id: micro-behaviors/os/sysinfo/directories::get-system-directory
-  - id: shell-folders-personal-targeting
+  - id: micro-behaviors/os/registry/keys::explorer-shell-folders-regpath
+- id: delphi-padding-file-deleter
+  desc: Delphi trojan with padding obfuscation and file deletion
+  crit: hostile
+  conf: 0.94
+  attack: T1485,T1027
+  for: [pe]
+  platforms: [windows]
+  size_min: 8192
+  size_max: 131072
+  all:
+  - id: metadata/lang/compiler/managed::borland-rtl-regkey
+  - id: micro-behaviors/fs/delete/file/library::deletefile-a
+  - id: metadata/file/padding::paddingxxpadding-filler
+  any:
+  - id: micro-behaviors/process/create/spawn::create-process-a
+  - id: micro-behaviors/fs/path/application/executable::cmd-exe-image-name
+  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
 - id: drive-wide-nonallowed-list-file-deleter
   desc: Deletes non-allowed listed files across drives
   crit: hostile
@@ -484,7 +545,6 @@ composite_rules:
   - id: objectives/impact/infect/binary/rewrite::skip-windows-install-dir
   - id: exe-gho-bak-allowed-list
   any:
-  - id: micro-behaviors/process/create/exec::comspec-reference
   - id: micro-behaviors/dylib/library/legacy::mfc42-ref
   - id: objectives/impact/infect/binary/rewrite::ghost-image-filter
 

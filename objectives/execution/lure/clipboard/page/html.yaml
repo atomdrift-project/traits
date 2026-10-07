@@ -26,22 +26,6 @@ traits:
   if:
     type: text
     regex: '(?i)command\s*=\s*data\.command'
-- id: command-copy-operation
-  desc: Browser copies text to the clipboard
-  crit: notable
-  conf: 0.98
-  for: [html, powershell]
-  if:
-    type: text
-    regex: '(?i)execCommand\s*\(\s*["'']copy["'']\s*\)'
-- id: command-clipboarddata-write
-  desc: Browser writes command text to clipboard data
-  crit: notable
-  conf: 0.98
-  for: [html, powershell]
-  if:
-    type: text
-    regex: '(?i)clipboardData\.setData\s*\('
 - id: remote-human-check-page
   desc: Page presents a human-verification lure
   crit: suspicious
@@ -114,14 +98,16 @@ traits:
   if:
     type: text
     regex: '(?i)\b(required|ready|available|install)\b'
+# "Press Return" in a paste-into-Terminal lure; a bare word would match
+# every "Return to …" link and button.
 - id: macos-terminal-return-word
-  desc: Return instruction marker
+  desc: Tells the reader to press Return
   crit: notable
   conf: 0.86
   platforms: [macos]
   if:
     type: text
-    word: Return
+    regex: '(?i)\b(press|hit|tap|then)\b[^\n.]{0,40}\bReturn\b'
 composite_rules:
 - id: decoded-browser-command-copy
   desc: Browser copies Base64-decoded content to the clipboard
@@ -132,6 +118,8 @@ composite_rules:
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
   - id: micro-behaviors/data/decode/base64::base64-decode-call-text
   near_bytes: 768
+  unless:
+  - id: metadata/package/documentation/
 - id: fake-captcha-decoded-command-clipboard
   desc: Fake CAPTCHA copies a decoded Windows command for Win+R execution
   crit: hostile
@@ -165,8 +153,8 @@ composite_rules:
   all:
   - id: command-response-assignment
   any:
-  - id: command-copy-operation
-  - id: command-clipboarddata-write
+  - id: micro-behaviors/os/clipboard/write::browser-execcommand-copy
+  - id: micro-behaviors/os/clipboard/write::browser-clipboarddata-setdata
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
 - id: fake-captcha-remote-command-clipboard
   desc: Fake CAPTCHA stages a remote command for clipboard execution
@@ -328,6 +316,27 @@ composite_rules:
   any:
   - id: micro-behaviors/communications/http/download/curl::source-curl-output-option
   - id: objectives/anti-static/obfuscation/string/delimiter::cmd-delayed-curl-fragment-pair
+# The Windows Installer variant of the ClickFix clipboard command. Instead of a
+# powershell/cmd one-liner the lure copies `msiexec /i <remote .msi> /qn`, run
+# straight from the Run dialog to silently install a remote MSI (T1218.007) —
+# the shape the Psychedelic-stealer campaign used from hacked Ukrainian sites.
+# The generic clickfix composites above never matched it because msiexec is not
+# a windows-command-shell invocation, and the hostile msiexec composites only
+# convict raw-IPv4 URLs; this catches the domain-hosted lure too. Intent is the
+# clipboard write plus a Run-dialog instruction next to a remote-MSI install.
+- id: clickfix-msiexec-clipboard-install
+  desc: Run shortcut near clipboard MSI command
+  crit: hostile
+  conf: 0.98
+  attack: T1204.001,T1218.007,T1105
+  for: [html, javascript]
+  scope: leaf
+  near_bytes: 1600
+  all:
+  - id: objectives/execution/lure/clipboard/instruction::html-winr-shortcut-instruction
+  - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
+  - id: micro-behaviors/process/create/installer::msiexec-package-verb
+  - id: micro-behaviors/communications/http/url/endpoint::remote-msi-package-url
 - id: fake-software-update-clipboard-execution
   desc: Fake software update copies shell command for execution
   crit: hostile
@@ -376,7 +385,7 @@ composite_rules:
   all:
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
   - id: micro-behaviors/ui/window/click::browser-click-listener
-  - id: objectives/command-and-control/dropper/execution/browser::clickfix-base64-terminal-exec
+  - id: objectives/command-and-control/dropper/delivery/clickfix/clipboard::clickfix-base64-terminal-exec
 - id: clickfix-clipboard-mshta-run
   desc: OS-gated page copies a remote MSHTA command for Win+R execution
   crit: hostile
@@ -390,7 +399,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/user-agent::navigator-useragent-regex-test-branch
   - id: objectives/execution/lure/clipboard/instruction::html-winr-shortcut-instruction
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
-  - id: objectives/command-and-control/dropper/execution/script::mshta-remote-url
+  - id: objectives/execution/interpreter/script/mshta::mshta-remote-url
 - id: platform-switched-clipboard-loader
   desc: Platform-gated clipboard stages Unix shell and Windows MSHTA routes
   crit: hostile
@@ -403,4 +412,4 @@ composite_rules:
   - id: micro-behaviors/communications/http/user-agent::navigator-useragent-regex-test-branch
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
   - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
-  - id: objectives/command-and-control/dropper/execution/script::mshta-remote-url
+  - id: objectives/execution/interpreter/script/mshta::mshta-remote-url

@@ -45,15 +45,24 @@ traits:
     desc: Java defineClass call in source
     crit: notable
     conf: 0.9
-    for: [java, kotlin, groovy, scala, html]
+    for: [jsp, java, kotlin, groovy, scala, html]
     if:
       type: text
       regex: '\.defineClass\s*\('
 
+  - id: java-reflective-defineclass-source
+    desc: Reflectively resolves ClassLoader.defineClass
+    crit: notable
+    conf: 0.92
+    for: [java]
+    if:
+      type: text
+      regex: 'getDeclaredMethod\s*\(\s*"defineClass"'
+
   - id: java-class-forname
     desc: Java Class.forName reference
     crit: notable
-    for: [java, class, java_class]
+    for: [jsp, java, class, java_class, html]
     if:
       type: text
       substr: Class.forName
@@ -69,7 +78,7 @@ traits:
   - id: java-classloader
     desc: Java source ClassLoader reference
     crit: notable
-    for: [java]
+    for: [jsp, java]
     if:
       type: text
       substr: ClassLoader
@@ -97,6 +106,19 @@ traits:
       exact: setAccessible
     unless:
       - id: well-known/lib/runtime/managed/openjdk::jdk-distribution-artifact
+  # Constant-pool form of the call above: some class files reference
+  # setAccessible only in the constant pool without an emitted call record.
+  - id: java-set-accessible-string
+    desc: Java reflection accessibility override string
+    crit: notable
+    conf: 0.84
+    for: [class, java_class]
+    if:
+      type: value
+      path: class.strings[*]
+      substr: setAccessible
+    unless:
+      - id: well-known/lib/runtime/managed/openjdk::jdk-distribution-artifact
   # A bare `.invoke()` call is not enough to identify Java reflection: Clojure
   # IFn, callbacks, and ordinary application interfaces use the same method
   # name. Keep the source-side evidence tied to a declared java.lang.reflect
@@ -105,7 +127,7 @@ traits:
     desc: Java reflection Method variable invoke call
     crit: notable
     conf: 0.92
-    for: [java]
+    for: [jsp, java, html]
     if:
       type: text
       regex: '(?s)\bMethod\s+\w+\s*(=|;)[\s\S]{0,300}\.\s*invoke\s*\('
@@ -122,7 +144,7 @@ traits:
   - id: java-newinstance
     desc: Java newInstance reference
     crit: notable
-    for: [java, class, java_class]
+    for: [jsp, java, html]
     if:
       type: text
       substr: newInstance
@@ -198,7 +220,93 @@ traits:
       type: import
       exact: java/lang/Class.getConstructor
 
+  # Relocated from objectives/anti-static/obfuscation/reflection/class (dalvik-*).
+  - id: jvm-reflect-method-descriptor
+    desc: JVM reflect.Method type descriptor
+    crit: notable
+    for: [class]
+    if:
+      type: text
+      substr: "Ljava/lang/reflect/Method;"
+    unless:
+      - id: well-known/tool/development/build/gradle-wrapper::gradle-wrapper-package-class
+
+  - id: jvm-reflect-field-descriptor
+    desc: JVM reflect.Field type descriptor
+    crit: notable
+    for: [class]
+    if:
+      type: text
+      substr: "Ljava/lang/reflect/Field;"
+
+  - id: jvm-reflect-constructor-descriptor
+    desc: JVM reflect.Constructor type descriptor
+    crit: notable
+    for: [class]
+    if:
+      type: text
+      substr: "Ljava/lang/reflect/Constructor;"
+
+  - id: jvm-get-declared-method
+    desc: JVM getDeclaredMethod reflection
+    crit: notable
+    for: [class]
+    if:
+      type: text
+      word: "getDeclaredMethod"
+
+  - id: jvm-get-declared-field
+    desc: JVM getDeclaredField reflection
+    crit: notable
+    for: [class]
+    if:
+      type: text
+      word: "getDeclaredField"
+  # A class that defines its own invokedynamic bootstrap taking one extra
+  # String: `(Lookup, String, MethodType, String) -> CallSite`. javac never
+  # emits this shape (string concat carries `[Object`, lambdas carry
+  # MethodType/MethodHandle), so it is either a language runtime linking its
+  # own call sites (JRuby has three) or a string-concealment obfuscator that
+  # resolves every literal through `invokedynamic ()String` with the encrypted
+  # text as the static argument -- every obfuscated class of a JNA HVNC jar
+  # (2026-09) did the latter.
+  - id: jvm-custom-string-indy-bootstrap
+    desc: Class defines a string-argument indy bootstrap
+    crit: notable
+    conf: 0.85
+    for: [class, java_class]
+    if:
+      type: text
+      exact: '(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;)Ljava/lang/invoke/CallSite;'
+  - id: java-get-declared-field-call
+    desc: Java getDeclaredField reflection call
+    for: [java]
+    crit: notable
+    conf: 0.9
+    mbc: "F0006"
+    if:
+      type: symbol
+      kind: call
+      exact: getDeclaredField
+    unless:
+      - id: well-known/lib/runtime/managed/openjdk::jdk-distribution-artifact
 composite_rules:
+  # URLClassLoader plus reflective invocation is a dynamic-loading capability.
+  # Source and bytecode facts are mutually exclusive on a file node, so a
+  # two-of-four requirement pairs the corresponding forms without a mixed hit.
+  # The combination alone does not identify a dropper.
+  - id: java-urlclassloader-reflective-invoke
+    desc: Java URLClassLoader invokes reflectively
+    crit: notable
+    conf: 0.92
+    for: [java, class, java_class]
+    needs: 2
+    any:
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-urlclassloader-api
+      - id: java-urlclassloader-bytecode
+      - id: java-method-invoke
+      - id: java-method-invoke-bytecode
+
   - id: context-classloader-handoff
     desc: Thread context classloader activation
     crit: notable
@@ -296,16 +404,18 @@ composite_rules:
     desc: Java source or bytecode defineClass load
     crit: notable
     conf: 0.9
+    for: [jsp, java, class, java_class]
     any:
       - id: java-defineclass
       - id: java-defineclass-source
+      - id: java-reflective-defineclass-source
       - id: micro-behaviors/data/embedded/classfile::runtime-define-class
 
   - id: java-reflection
     desc: Java dynamically loads classes
     crit: notable
     conf: 0.85
-    for: [java, class, java_class]
+    for: [jsp, java, class, java_class]
     needs: 2
     any:
       - id: java-class-forname

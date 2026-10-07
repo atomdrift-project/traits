@@ -3,7 +3,58 @@ defaults:
   for: [javascript, typescript, package.json, npm]
   attack: "T1195.002,T1105,T1222.002"
 
+traits:
+  - id: node-cli-publish-login-registry-flag-injection
+    desc: CLI injects --registry for publish/login
+    crit: suspicious
+    conf: 0.97
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(publish|login)[\s\S]{0,500}push\(\s*[''"]--registry'
+
+  - id: node-http-response-pipeline-write-file
+    desc: Node pipelines HTTP to write stream
+    crit: notable
+    conf: 0.92
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'pipeline\([\s\S]{0,400}createWriteStream'
+
 composite_rules:
+  - id: verified-versioned-release-binary-installer
+    desc: Verified versioned release installer context
+    crit: exception
+    conf: 0.95
+    scope: leaf
+    for: [javascript, typescript]
+    near_bytes: 8192
+    all:
+      - id: micro-behaviors/crypto/hash/digest::node-createhash-sha256-call
+      - id: micro-behaviors/communications/http/download/release::forge-release-version-download-url
+      - id: micro-behaviors/communications/http/download/handler::node-http-response-to-file
+      - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-exec-mode-755
+      - id: micro-behaviors/process/create/variable-spawn::spawn-variable-program
+      - id: micro-behaviors/crypto/hash/digest::hash-verification-diagnostic
+
+  # The Unix native-binary bootstrap rules below key on chmod 755 and tar
+  # extraction, so a Windows dropper that fetches a bare .exe from a code
+  # forge and runs it with execFile — no permission bit, no archive — slips
+  # through at notable. That is the Kothamine npm vector (dotnet-runtime-base
+  # pulling npm-sc-legit.exe from a GitHub repo during install). Correlate the
+  # lifecycle hook, an executable download URL, and a child-process launch
+  # across the package archive.
+  - id: npm-lifecycle-install-hook
+    desc: npm lifecycle install hook declared
+    crit: notable
+    conf: 0.9
+    scope: archive
+    any:
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
+      - id: metadata/package/scripts/lifecycle::filtered-raw-preinstall-hook
+
   - id: npm-postinstall-system-dependency-provisioning
     desc: npm hook provisions system dependency
     crit: notable
@@ -11,7 +62,7 @@ composite_rules:
     scope: archive
     attack: "T1195.002,T1059.007,T1548.003"
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: micro-behaviors/os/package-manager/reference-install::system-package-install-command-text
       - id: micro-behaviors/os/privilege/elevation::sudo-command-string
 
@@ -26,7 +77,7 @@ composite_rules:
     scope: archive
     attack: "T1195.002,T1105,T1222.002,T1059.007"
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: micro-behaviors/communications/http/url/cloud::cloud-download-url
       - id: micro-behaviors/fs/write/file/executable::node-write-file-executable-mode
       - id: micro-behaviors/crypto/hash/digest::node-createhash-sha256-call
@@ -64,12 +115,13 @@ composite_rules:
     scope: leaf
     near_bytes: 8192
     all:
-      - id: objectives/command-and-control/dropper/execution/dropper-script::github-release-version-url
+      - id: micro-behaviors/communications/http/download/release::forge-release-version-download-url
       - id: micro-behaviors/communications/http/download/handler::node-http-response-to-file
       - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-exec-mode-755
       - id: micro-behaviors/process/create/variable-spawn::spawn-variable-program
     unless:
-      - id: micro-behaviors/crypto/hash/file::hash-pinned-download-context
+      - id: well-known/app/ai/gateway/inboost-ai-proxy::archive-context
+      - id: objectives/supply-chain/install-hook/remote-binary::verified-versioned-release-binary-installer
 
   - id: node-unverified-native-bootstrap-inherits-environment
     desc: Unverified native binary inherits full environment
@@ -81,6 +133,8 @@ composite_rules:
     all:
       - id: node-versioned-release-native-binary-bootstrap
       - id: micro-behaviors/os/env/read::node-process-env-object-field
+    unless:
+      - id: objectives/supply-chain/install-hook/remote-binary::verified-versioned-release-binary-installer
 
   # Correlate the file-local bootstrap with the lifecycle declaration rather
   # than pooling unrelated downloader and process APIs across a large package.
@@ -92,7 +146,7 @@ composite_rules:
     for: [npm, tar, package.json, javascript]
     attack: "T1195.002,T1105,T1222.002,T1059.007"
     all:
-      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
       - id: node-latest-release-native-binary-bootstrap
 
   # Keep the staging operations file-local before correlating them with a
@@ -123,12 +177,12 @@ composite_rules:
     conf: 0.99
     scope: archive
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: micro-behaviors/communications/http/request/get::node-http-client-get
       - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
       - id: micro-behaviors/data/decompress/gzip::node-gunzip-function
-      - id: micro-behaviors/process/create/shell/bridge::js-execfilesync
-      - id: objectives/supply-chain/install-hook/scripts/dynamic-install::exec-npm-install-array
+      - id: micro-behaviors/process/create/system::js-execfilesync
+      - id: micro-behaviors/os/package-manager/runtime-install::exec-npm-install-array
 
   # An install hook that fetches an archive, extracts it with a host command,
   # and explicitly enables the resulting file changes the trusted package
@@ -140,7 +194,7 @@ composite_rules:
     conf: 0.98
     scope: archive
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: remote-native-archive-stage
     unless:
       - id: micro-behaviors/os/package-manager/publish::npm-native-binary-wrapper-postinstall
@@ -157,12 +211,12 @@ composite_rules:
     scope: archive
     attack: "T1195.002,T1105,T1059.007,T1573"
     all:
-      - id: objectives/supply-chain/install-hook/scripts/declaration::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: micro-behaviors/communications/http/request/client::https-get
       - id: micro-behaviors/fs/write/file/stream::create-write-stream
       - id: micro-behaviors/data/archive/extract/tar::js-tar-gzip-extract-command
       - id: micro-behaviors/process/create/shell/bridge::execSync-call
-      - id: objectives/command-and-control/dropper/delivery/fetch-eval::remote-https-get-tls-bypass
+      - id: objectives/command-and-control/dropper/script-eval/remote-code::remote-https-get-tls-bypass
 
   # Executing a mutable raw-forge shell script from an npm lifecycle hook is
   # an install-time remote-code chain.  The lifecycle declaration and the
@@ -176,7 +230,7 @@ composite_rules:
     for: [source, binaries, '!dex', scripts, '!jcl', npm, package.json, tar]
     attack: "T1195.002,T1105,T1059.004"
     all:
-      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
       - id: objectives/command-and-control/dropper/delivery/pipe::curl-pipe-sh
       - id: micro-behaviors/communications/http/url/github::raw-githubusercontent-script-file
     # curl-pipe-sh is a text observation, so a package that merely *prints* its
@@ -208,3 +262,40 @@ composite_rules:
     # same FP being patched one project at a time.
     unless:
       - id: micro-behaviors/communications/url/external/github::github-release-download
+
+  - id: remote-brotli-binary-stage
+    desc: One script streams, brotli-decompresses, hashes, and enables a native binary
+    crit: notable
+    conf: 0.98
+    for: [javascript, typescript]
+    scope: leaf
+    all:
+      - id: micro-behaviors/crypto/hash/digest::node-createhash-sha256-call
+      - id: micro-behaviors/data/decompress/brotli::js-create-brotli-decompress
+      - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-make-executable
+      - id: node-http-response-pipeline-write-file
+
+  - id: npm-postinstall-sha256-brotli-native-bootstrap
+    desc: npm postinstall verifies brotli native download
+    crit: hostile
+    conf: 0.99
+    scope: archive
+    attack: "T1195.002,T1105"
+    all:
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+      - id: remote-brotli-binary-stage
+    unless:
+      - id: verified-versioned-release-binary-installer
+      - id: micro-behaviors/os/package-manager/publish::npm-native-binary-wrapper-postinstall
+
+  - id: npm-shim-publish-registry-hijack
+    desc: npm-compatible shim hijacks publish registry
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    attack: "T1195.002,T1557"
+    all:
+      - id: node-cli-publish-login-registry-flag-injection
+      - id: metadata/package/entrypoint::bin-field-declared
+    unless:
+      - id: verified-versioned-release-binary-installer

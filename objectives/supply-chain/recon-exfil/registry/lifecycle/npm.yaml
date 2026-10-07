@@ -31,20 +31,9 @@ traits:
     type: text
     regex: "\"test\"\\s*:\\s*\"curl\\s"
 
-- id: meta-preinstall-curl
-  desc: Preinstall hook invokes curl remotely
-  crit: suspicious
-  conf: 0.9
-  attack: T1041
-  for: [manifests]
-  if:
-    type: text
-    regex: "\"preinstall\"\\s*:\\s*\"curl\\s"
-
-  # Removed duplicate wget traits and composites to avoid overlap with npm-registry-snapshot.yaml
 - id: meta-preinstall-wget
   desc: Preinstall hook invokes wget remotely
-  crit: suspicious
+  crit: notable
   conf: 0.9
   attack: T1041
   for: [manifests]
@@ -64,8 +53,8 @@ traits:
     substr: "wget --quiet"
 
 - id: meta-preupdate-wget
-  desc: Preupdate hook runs wget for exfil
-  crit: suspicious
+  desc: Preupdate hook invokes wget
+  crit: notable
   conf: 0.92
   attack: T1041
   for: [manifests]
@@ -118,6 +107,9 @@ traits:
   unless:
   - id: metadata/package/testing/presence/fixture::vulnerable-config-fixture-path
   - id: well-known/tool/detection/agent-audit-kit::scanner-context
+  # RFC 2606 documentation domains are non-routable: curl toward one reaches
+  # no attacker, so the remote-exfil shape does not hold.
+  - id: micro-behaviors/communications/url/host::reserved-docs-domain-npm-script
 
 - id: meta-postinstall-bash-curl-ip
   desc: Postinstall bash curl IP fallback
@@ -131,35 +123,18 @@ traits:
     is: external_ip
 
   # === Shell Command Substitution in Hooks ===
-- id: meta-hook-whoami-sub
-  desc: Hook uses $(whoami) for identity exfil
-  crit: suspicious
-  conf: 0.93
-  attack: T1082
-  for: [manifests]
-  if:
-    type: text
-    regex: "\"(preinstall|postinstall|preupdate|test)\"[^\"]{0,20}\"[^\"]{0,220}\\$\\(whoami\\)"
 
 - id: meta-hook-hostname-sub
   desc: Hook uses $(hostname) for host exfil
   crit: suspicious
   conf: 0.93
   attack: T1082
-  for: [manifests]
+  for: [package.json, pkginfo]
+  unless:
+    - id: metadata/package/scripts/lifecycle::preinstall-echo-script
   if:
     type: text
-    regex: "\"(preinstall|postinstall|preupdate|test)\"[^\"]{0,20}\"[^\"]{0,220}\\$\\(hostname\\)"
-
-- id: meta-hook-pwd-sub
-  desc: Hook uses $(pwd) for path exfil
-  crit: suspicious
-  conf: 0.88
-  attack: T1083
-  for: [manifests]
-  if:
-    type: text
-    regex: "\"(preinstall|postinstall|preupdate|test)\"[^\"]{0,20}\"[^\"]{0,220}\\$\\(pwd\\)"
+    substr: $(hostname)
 
   # === Install hook curl (non-pre/post) ===
 - id: meta-install-curl
@@ -178,10 +153,10 @@ traits:
   crit: suspicious
   conf: 0.93
   attack: T1033
-  for: [manifests]
+  for: [package.json, pkginfo]
   if:
     type: text
-    regex: "\"(preinstall|install|postinstall)\"[^\"]{0,20}\"[^\"]{0,220}\\$\\(id\\)"
+    substr: $(id)
 
 - id: meta-hook-ls-data-logs-sub
   desc: Hook exfils /data/logs listing
@@ -259,9 +234,9 @@ traits:
   - id: metadata/package/scripts/lifecycle::preinstall-runtime-guard-help
 
 - id: meta-dual-node-sidecar-true-kv
-  desc: Versioned hooks repeat Node sidecar fallback
-  crit: suspicious
-  conf: 0.96
+  desc: Node script runs with || true fallback
+  crit: notable
+  conf: 0.85
   for: [manifests]
   if:
     type: text
@@ -318,8 +293,8 @@ composite_rules:
   mbc: E1041
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
-  - id: meta-preinstall-curl
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-hook-hostname-sub
   - id: meta-hook-pipedream
@@ -334,7 +309,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-preinstall-wget
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-hook-hostname-sub
   - id: meta-hook-pipedream
@@ -348,7 +323,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-preupdate-curl
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
 
   # === Preupdate Wget Sysinfo Exfil ===
 - id: meta-preupdate-wget-sysinfo-exfil
@@ -360,7 +335,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-preupdate-wget
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
 
   # === Multi-hook Redundant Exfil (curl) ===
 - id: meta-multi-hook-redundant-exfil
@@ -370,9 +345,9 @@ composite_rules:
   mbc: E1041
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
-  - id: meta-preinstall-curl
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
   - id: objectives/supply-chain/impersonation/registry/snapshot::versioned-preupdate-hook
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-test-hook-curl
   - id: meta-hook-pipedream
@@ -389,7 +364,7 @@ composite_rules:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-preinstall-wget
   - id: objectives/supply-chain/impersonation/registry/snapshot::versioned-preupdate-hook
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-test-hook-wget
   - id: meta-hook-pipedream
@@ -404,10 +379,10 @@ composite_rules:
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-postinstall-curl
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-hook-hostname-sub
-  - id: meta-hook-pwd-sub
+  - id: micro-behaviors/fs/directory/cwd::package-script-pwd-substitution
 
 - id: meta-postinstall-node-curl-fallback-beacon
   desc: Postinstall Node sidecar falls back to curl beacon
@@ -431,7 +406,7 @@ composite_rules:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-hook-user-path-host-exfil
   any:
-  - id: meta-preinstall-curl
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
   - id: meta-preupdate-curl
   - id: meta-preinstall-wget
   - id: meta-preupdate-wget
@@ -450,7 +425,7 @@ composite_rules:
   - id: objectives/supply-chain/recon-exfil/oast/secret::oastify-url
   any:
   - id: meta-postinstall-curl
-  - id: meta-preinstall-curl
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
   - id: meta-install-curl
   - id: meta-test-hook-curl
 
@@ -480,7 +455,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-internal-app-desc
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-preupdate-curl
   - id: objectives/supply-chain/impersonation/registry/snapshot::versioned-readme-error
@@ -498,7 +473,7 @@ composite_rules:
   all:
   - id: objectives/supply-chain/impersonation/registry/snapshot::registry-metadata-json
   - id: meta-test-hook-curl
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-hook-hostname-sub
   - id: meta-hook-pipedream
@@ -511,9 +486,9 @@ composite_rules:
   attack: T1041
   mbc: E1041
   all:
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
-  - id: meta-preinstall-curl
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
   - id: meta-postinstall-curl
   - id: meta-install-curl
   - id: meta-hook-hostname-sub
@@ -529,10 +504,10 @@ composite_rules:
   attack: T1041
   mbc: E1041
   all:
-  - id: meta-preinstall-curl
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
   - id: meta-postinstall-curl
   any:
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   - id: meta-hook-hostname-sub
   - id: meta-hook-id-sub
 
@@ -545,7 +520,8 @@ composite_rules:
   mbc: E1041
   for: [package.json]
   all:
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/communications/url/host::webhook-site
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   any:
   - id: meta-preinstall-wget
   - id: meta-preupdate-wget
@@ -554,6 +530,24 @@ composite_rules:
   - id: meta-hook-pipedream
   - id: meta-hook-user-path-host-exfil
   needs: 2
+
+  # === Triple host-param wget exfil (package.json) ===
+- id: meta-package-hook-triple-exfil
+  desc: Hook exfils user/path/hostname via URL params
+  crit: hostile
+  conf: 0.999
+  attack: T1041
+  mbc: E1041
+  for: [package.json]
+  all:
+  - id: meta-hook-user-path-host-exfil
+  any:
+  - id: meta-preinstall-wget
+  - id: meta-preupdate-wget
+  - id: meta-test-hook-wget
+  - id: micro-behaviors/communications/http/curl::npm-preinstall-curl
+  - id: meta-postinstall-curl
+  - id: meta-test-hook-curl
 
   # === Multi-hook wget sysinfo exfil (package.json) ===
 - id: meta-multi-hook-wget-exfil
@@ -568,7 +562,7 @@ composite_rules:
   - id: meta-preupdate-wget
   any:
   - id: meta-test-hook-wget
-  - id: meta-hook-whoami-sub
+  - id: micro-behaviors/process/user/query::whoami-command-substitution
   - id: meta-hook-hostname-sub
   - id: meta-hook-pipedream
 
@@ -579,7 +573,24 @@ composite_rules:
   mbc: E1041
   all:
   - id: meta-preinstall-node-sidecar-kv
-  - id: objectives/supply-chain/install-hook/package/manifest::postinstall-runs-node-script
+  - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
   - id: meta-dual-node-sidecar-true-kv
   any:
   - id: objectives/supply-chain/impersonation/registry/snapshot::versioned-readme-error
+
+- id: meta-postinstall-curl-path-exfil
+  desc: Postinstall hook exfiltrates working directory or host info via curl
+  crit: hostile
+  conf: 0.98
+  attack: T1041,T1195.002
+  mbc: E1041
+  for: [manifests]
+  all:
+  - id: meta-postinstall-curl
+  any:
+  - id: micro-behaviors/fs/directory/cwd::package-script-pwd-substitution
+  - id: meta-hook-hostname-sub
+  unless:
+  # RFC 2606 documentation domains are non-routable: a hook posting to one
+  # reaches no attacker, so the exfiltration claim does not hold.
+  - id: micro-behaviors/communications/url/host::reserved-docs-domain-npm-script

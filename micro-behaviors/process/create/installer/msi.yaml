@@ -4,11 +4,29 @@ defaults:
   attack: T1105,T1218.007
 
 traits:
+  - id: msiexec-programdata-msi
+    desc: msiexec targets an MSI in ProgramData
+    crit: suspicious
+    conf: 0.95
+    attack: T1218.007
+    for: [powershell, batch, pe]
+    if:
+      type: text
+      regex: (?i)msiexec(\.exe)?.{0,80}(C:\\ProgramData|%ProgramData%).{0,80}\.msi
+  - id: msiexec-norestart-switch
+    desc: msiexec uses the no-restart switch
+    crit: notable
+    conf: 0.9
+    attack: T1218.007
+    for: [powershell, batch, pe]
+    if:
+      type: text
+      word: /norestart
   - id: msiexec-package-verb
-    desc: msiexec package install verb
+    desc: Windows Installer package operation
     crit: notable
     conf: 0.92
-    for: [batch, powershell, vbs, javascript, python, scripts]
+    for: [batch, powershell, vbs, javascript, python, scripts, html]
     if:
       type: text
       regex: '(?i)\bmsiexec(\.exe)?\b[^\r\n]{0,64}[-/](i|a|x|package)\b'
@@ -23,13 +41,6 @@ traits:
       type: tree-sitter
       kind: call
       regex: '(?is)\b(subprocess\.\w+|os\.system)\s*\([^)]{0,240}\bmsiexec\b'
-  - id: remote-msi-package-url
-    desc: Remote Windows Installer package URL
-    crit: notable
-    conf: 0.96
-    if:
-      type: text
-      regex: '(?i)https?://[^\s"<>]{1,120}\.(msi|msix)(["''<>\s?#]|$)'
   - id: lnk-remote-msiexec-url
     desc: LNK passes remote MSI URL to msiexec
     crit: suspicious
@@ -69,6 +80,28 @@ traits:
     if:
       type: text
       regex: '\.m["'']\s*\+\s*["'']si'
+  # Same split-literal evasion for HTA-embedded script, where the executable
+  # is assembled as "msiexec" + ".exe" so no single line names msiexec.exe.
+  - id: html-split-msiexec-literal
+    desc: HTML splits msiexec executable name
+    crit: notable
+    conf: 0.95
+    for: [html]
+    if:
+      type: text
+      regex: '(?i)msiexec[''"]\s*\+\s*[''"]\.exe'
+  # The argument half of a silent install: /package with a quiet switch on
+  # one command line. Droppers split the executable name across literals but
+  # usually leave the argument string intact; the msiexec half is supplied by
+  # the companion atoms and the consuming composite.
+  - id: quiet-package-install-args
+    desc: Quiet package install arguments
+    crit: notable
+    conf: 0.93
+    for: [html, javascript, vbs, batch, powershell]
+    if:
+      type: text
+      regex: '(?i)/package\b[^\r\n]{0,160}/(quiet|qn?)\b'
 composite_rules:
   - id: remote-msi-download-install
     desc: Downloads then invokes Windows Installer package
@@ -77,7 +110,7 @@ composite_rules:
     for: [batch, powershell, vbs, javascript, lnk]
     near_lines: 4
     all:
-      - id: remote-msi-package-url
+      - id: micro-behaviors/communications/http/url/endpoint::remote-msi-package-url
     any:
       - id: msiexec-package-verb
       - id: lnk-remote-msiexec-url
@@ -89,7 +122,7 @@ composite_rules:
     for: [python]
     near_bytes: 1024
     all:
-      - id: remote-msi-package-url
+      - id: micro-behaviors/communications/http/url/endpoint::remote-msi-package-url
       - id: python-msiexec-process-call
       - id: msiexec-package-verb
 
@@ -102,3 +135,15 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/start-process::start-process-msiexec
       - id: micro-behaviors/process/argument/option::variable-msi-quiet-install-args
+
+  - id: quiet-msi-process-start
+    desc: Quiet MSI process-start evidence
+    crit: notable
+    conf: 0.94
+    near_lines: 4
+    all:
+      - id: micro-behaviors/process/create/start-process::start-process-call
+      - id: micro-behaviors/process/argument/option::variable-msi-quiet-install-args
+    any:
+      - id: micro-behaviors/process/create/start-process::start-process-msiexec
+      - id: micro-behaviors/fs/path/application/executable::msiexec-system-path-reference

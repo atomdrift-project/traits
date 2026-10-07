@@ -1,0 +1,202 @@
+# Node install hooks that collect local state and send it over HTTP.
+# The hook requirement keeps ordinary telemetry in runtime libraries out of
+# this objective; the combined collection and transport pattern is the signal.
+defaults:
+  platforms: [windows, linux]
+  for: [javascript, typescript, tar, zip]
+  attack: T1195.002,T1041,T1082,T1552.005
+  mbc: E1041
+
+composite_rules:
+  # The seven collection/transport legs describe ONE script: it shells out,
+  # reads the environment, and writes a JSON body to an HTTP request. Kept at
+  # package scope they were satisfiable by seven unrelated files, so any large
+  # JS monorepo that also happens to declare a preinstall hook read as a
+  # profiling installer -- openclaw (8550 files, an AI gateway whose preinstall
+  # only prints a "use pnpm" warning) matched all seven from seven different
+  # files. Co-locating them in one leaf file is what the description claims.
+  - id: node-host-profile-http-post-file
+    desc: Script shells out, reads env, and posts a JSON body
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    scope: file
+    all:
+      - id: metadata/import/builtin::require-child-process
+      - id: micro-behaviors/process/create/shell/bridge::execSync-call
+      - id: micro-behaviors/os/env/read::node-process-env-object-field
+      - id: micro-behaviors/communications/http/request/client::http-request
+      - id: micro-behaviors/communications/http/request/body::request-write-call
+      - id: micro-behaviors/communications/http/request/body::request-end-call
+      - id: micro-behaviors/data/serialize/json::json-stringify-call
+  - id: npm-preinstall-profile-http-post
+    desc: npm preinstall profiles host and posts data
+    crit: hostile
+    conf: 0.99
+    for: [npm, tar, zip, pe, deb, asar, javascript, csharp, manifests]
+    # The claim is about one package's install hook, so it must be evaluated
+    # per package root. Under `scope: archive` a source tree that vendors many
+    # independent npm fixtures -- Deno ships ~1000 under tests/registry/npm --
+    # satisfies the legs from unrelated files and reads as a single profiling
+    # installer.
+    scope: package
+    all:
+      - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
+      - id: node-host-profile-http-post-file
+    unless:
+      - id: well-known/tool/development/toolchain/deno::source-archive-context
+      - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
+      - id: well-known/tool/development/game-engine/unity-hub::official-package-context
+  - id: node-install-path-context-field
+    desc: Script reads install path or working directory
+    crit: notable
+    conf: 0.88
+    for: [javascript, typescript]
+    scope: file
+    any:
+      - id: micro-behaviors/fs/path/self::cwd-reference
+      - id: micro-behaviors/fs/path/self::script-dirname-ref
+  - id: node-hostname-read
+    desc: Script queries the machine hostname
+    crit: notable
+    conf: 0.88
+    for: [javascript, typescript]
+    scope: file
+    any:
+      - id: micro-behaviors/os/sysinfo/hostname::node-inline-os-hostname-call
+      - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+  # Install-recon beacons often POST JSON (hostname, cwd, install path) to a
+  # literal IP via Node's http/https client rather than http.get to the same URL.
+  - id: node-json-install-context-ip-http-post-file
+    desc: Script POSTs JSON install context to IP URL
+    crit: hostile
+    conf: 0.96
+    attack: T1195.002,T1041,T1082
+    for: [javascript, typescript]
+    scope: file
+    all:
+      - id: micro-behaviors/communications/ip/literal::http-ip-url
+      - id: micro-behaviors/communications/http/request/verb::post-method-text
+      - id: micro-behaviors/communications/http/request/body::request-write-call
+      - id: micro-behaviors/communications/http/request/body::request-end-call
+      - id: micro-behaviors/data/serialize/json::json-stringify-call
+      - id: node-hostname-read
+      - id: node-install-path-context-field
+    unless:
+      - id: objectives/supply-chain/recon-exfil/install-hook/recon::npm-postinstall-ip-beacon
+  - id: npm-postinstall-ip-beacon
+    desc: npm postinstall sends an HTTP callback to a public IP
+    crit: hostile
+    conf: 0.99
+    attack: "T1195.002,T1041"
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    all:
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+    any:
+      - id: objectives/supply-chain/install-hook/scripts/local-script::postinstall-hook-script-http-ip-callback-file
+      - id: node-json-install-context-ip-http-post-file
+    unless:
+      - id: well-known/app/ai/knowledge/lean-ctx::source-tree-path
+      - id: objectives/supply-chain/recon-exfil/callback::npm-disclosed-depconf-postinstall-beacon
+  - id: npm-postinstall-http-post-ip-beacon
+    desc: npm postinstall POSTs install metadata to public IP
+    crit: hostile
+    conf: 0.99
+    attack: "T1195.002,T1041,T1082"
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    all:
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+      - id: micro-behaviors/communications/ip/literal::http-ip-url
+      - id: micro-behaviors/communications/http/request/verb::post-method-text
+      - id: micro-behaviors/data/serialize/json::json-stringify-call
+      - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
+      - id: micro-behaviors/os/sysinfo/hostname::node-inline-os-hostname-call
+    any:
+      - id: micro-behaviors/os/sysinfo/platform/runtime::process-cwd-call
+      - id: micro-behaviors/fs/path/self::script-dirname-ref
+    unless:
+      - id: well-known/app/ai/knowledge/lean-ctx::source-tree-path
+      - id: objectives/supply-chain/recon-exfil/install-hook/recon::npm-postinstall-ip-beacon
+  - id: npm-preinstall-local-script-profile-get-beacon
+    desc: npm preinstall sidecar GET beacons host profile
+    crit: hostile
+    conf: 0.99
+    attack: "T1195.002,T1041,T1082"
+    for: [npm, tar, zip, javascript, package.json]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
+      - id: objectives/discovery/system/fingerprint/user::small-node-host-user-query
+      - id: micro-behaviors/communications/http/request/dynamic::node-scheme-selected-http-get
+    any:
+      - id: micro-behaviors/data/control-flow/error-handling::silent-error-handler
+      - id: micro-behaviors/communications/ip/literal::http-ip-url
+  - id: postinstall-script-credential-exfil
+    desc: Postinstall script harvests credentials and posts over HTTP
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1552,T1041"
+    for: [javascript, typescript]
+    scope: file
+    all:
+      - id: metadata/package/files/lifecycle::install-js-basename
+      - id: node-host-profile-http-post-file
+    any:
+      - id: objectives/credential-access/theft/multi-store::multi-store-credential-targeting
+      - id: micro-behaviors/fs/read/file/full::node-npmrc-read-reference
+      - id: micro-behaviors/fs/path/credential::ssh-key-or-host-store-reference
+      - id: objectives/credential-access/theft/multi-store::browser-store-target
+  - id: npm-preinstall-shell-curl-backtick-exfil
+    desc: npm preinstall shell posts command output via curl
+    crit: hostile
+    conf: 0.99
+    attack: "T1195.002,T1041,T1059.004"
+    for: [npm, tar, zip, package.json, shell]
+    scope: archive
+    all:
+      - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-shell-local-script
+    any:
+      - id: micro-behaviors/communications/http/curl::shell-curl-data-backtick-substitution
+      - id: micro-behaviors/communications/http/curl::shell-interleaved-var-curl-data-post
+  - id: npm-preinstall-contradicts-no-hook-claim
+    desc: npm preinstall despite no-scripts description
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    for: [npm, tar, zip, package.json]
+    scope: archive
+    all:
+      - id: metadata/package/description/disclosure::description-denies-install-scripts
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+      - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-shell-local-script
+
+  # Same binding rule as its exfiltration-leaf sibling: the collection and
+  # transport legs must land in the one script the hook runs. Flat archive
+  # pooling let OpenClaw's gateway satisfy hostname from one file, userInfo
+  # from another, and https.request plus encodeURIComponent from a vendored
+  # chrome-devtools-mcp bundle — a six-file "beacon" with no beacon script.
+  - id: node-https-userinfo-host-profile-script
+    desc: Script reports hostname, user, and interfaces over encoded HTTPS
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    scope: file
+    all:
+      - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+      - id: micro-behaviors/process/user/query::node-os-alias-userinfo-call
+      - id: micro-behaviors/network/interface::node-network-interfaces-call
+      - id: micro-behaviors/communications/http/request/client::https-request
+      - id: micro-behaviors/data/encode/url::encode-uri-component-call
+  - id: npm-postinstall-https-request-host-profile-beacon
+    desc: npm postinstall HTTPS GET beacons host profile
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1041,T1082
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    all:
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+      - id: objectives/supply-chain/recon-exfil/install-hook/recon::node-https-userinfo-host-profile-script

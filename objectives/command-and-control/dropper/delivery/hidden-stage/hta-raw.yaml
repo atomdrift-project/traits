@@ -36,9 +36,12 @@ traits:
     type: raw
     regex: '(?is)applicationname.{0,800}[^\x00-\x7f]{8,64}'
 
-- id: hta-raw-split-join-cleanup
-  desc: Raw HTA strips marker via split-join
-  crit: suspicious
+# Split-join stripping alone is an ordinary string-replace idiom, not an HTA
+# marker cleanup. Suspicion needs a WSH staging marker in the same file
+# (see hta-raw-split-join-cleanup below); this stays notable as evidence.
+- id: hta-raw-split-join-strip
+  desc: Raw split-literal-join-empty strip
+  crit: notable
   conf: 0.95
   attack: T1027.002
   if:
@@ -66,6 +69,23 @@ composite_rules:
   - id: metadata/file/format/markup::hta-application-element
   - id: hta-raw-nonascii-run
 
+# Junk-padded HTA that hides its window and resolves its automation objects
+# at runtime (computed ProgIDs): the padding defeats string inspection while
+# the hidden window defeats casual observation. No legitimate HTA combines
+# non-ASCII padding with a hidden window and computed ActiveX.
+- id: hta-padded-hidden-computed-activex-stage
+  desc: Junk-padded hidden HTA resolves ActiveX objects at runtime
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1218.005,T1564.003
+  for: [html]
+  all:
+  # hta-raw-nonascii-padding already requires the <hta:application> element,
+  # so it is not listed again here.
+  - id: hta-raw-nonascii-padding
+  - id: objectives/evasion/process/hidden/execution::hidden-hta-window
+  - id: micro-behaviors/os/com/automation::script-computed-activex-object
+
 # Hidden WMI stage plus an encoded https carrier (UTF-16LE Base64 prefix or
 # decoded URL). Catches the next customs-doc HTA that stages a remote PS
 # download without hardcoding hostnames.
@@ -90,6 +110,22 @@ composite_rules:
   - id: micro-behaviors/os/com/automation::wscript-shell-activex-constructor
   - id: hta-raw-user-environment
 
+# Split-join stripping is an ordinary string-replace idiom on its own
+# (vendored doc UIs normalize URL $refs this way). It reads as HTA marker
+# cleanup only beside a WSH staging marker in the same file — hidden WMI
+# process, user-environment access, or an environment Item() write.
+- id: hta-raw-split-join-cleanup
+  desc: Raw HTA strips marker via split-join
+  crit: suspicious
+  conf: 0.95
+  attack: T1027.002
+  all:
+  - id: hta-raw-split-join-strip
+  any:
+  - id: hta-raw-hidden-wmi-process-stage
+  - id: hta-raw-user-environment
+  - id: hta-raw-environment-item-write
+
 # Off-screen window + env Item + split-join cleanup around hidden WMI —
 # durable shape for pad-junked HTA→PS stagers; kept suspicious so it does
 # not stack with the existing for:* unicode-padded hostile on data/text.
@@ -101,8 +137,24 @@ composite_rules:
   all:
   - id: micro-behaviors/os/com/automation::wscript-shell-activex-constructor
   - id: hta-raw-hidden-wmi-process-stage
-  - id: objectives/evasion/process/hidden/execution::raw-window-offscreen-resize
+  - id: micro-behaviors/ui/window/control::script-window-zero-negative-coordinates
   - id: hta-raw-user-environment
   - id: hta-raw-split-join-cleanup
   any:
   - id: hta-raw-environment-item-write
+
+# HTA stager pairing split-join marker cleanup with hidden-WMI staging and an
+# environment Item() write. The full chain strips junk padding, stages the
+# launcher name into the user environment, and executes a hidden WMI process.
+- id: hta-raw-split-join-hidden-wmi-stager
+  desc: HTA deobfuscates and launches hidden WMI stager
+  crit: hostile
+  conf: 0.98
+  attack: T1027.002,T1047,T1059.001,T1564.003
+  all:
+  - id: hta-raw-split-join-strip
+  - id: hta-raw-hidden-wmi-process-stage
+  any:
+  - id: hta-raw-environment-item-write
+  - id: hta-raw-wsh-user-environment
+

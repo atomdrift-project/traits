@@ -1,0 +1,68 @@
+# Suppressing macOS Background Task Management notifications. When a LaunchAgent
+# or Login Item is installed, macOS 13+ posts a "Background items added" alert
+# via BTMNotificationAgent / BackgroundTaskManagementAgent. MacSync's .repair-run
+# kills those agents so the freshly registered persistence raises no user-facing
+# notification. Killing those specific daemons has no legitimate use; pairing it
+# with a LaunchAgent install is the persistence-hiding technique.
+defaults:
+  platforms: [macos]
+  for: [shell, applescript, macho]
+  attack: T1562.001
+  mbc: F0004
+
+traits:
+  - id: kill-btm-notification-agent
+    desc: Kills macOS background-item notification agent
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)(killall|pkill)[^\n]{0,60}(BTMNotificationAgent|BackgroundTaskManagementAgent)'
+  # `pgrep <agent> | xargs kill -SIGSTOP` puts the signal after the name.
+  - id: sigstop-btm-agent-after-name
+    desc: Signal follows a BTM notification agent
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)(BTMNotificationAgent|BackgroundTaskManagementAgent)[^\n]{0,80}SIG(STOP|KILL)'
+  # `kill -SIGSTOP BTMNotificationAgent` puts the signal first.
+  - id: sigstop-btm-agent-before-name
+    desc: Signal precedes a BTM notification agent
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)SIG(STOP|KILL)[^\n]{0,40}(BTMNotificationAgent|BackgroundTaskManagementAgent)'
+  - id: sigstop-notification-center
+    desc: SIGSTOP or SIGKILL targets NotificationCenter
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)(killall|pkill|kill)[^\n]{0,20}SIG(STOP|KILL)[^\n]{0,20}NotificationCenter'
+
+composite_rules:
+  - id: login-item-notifier-stopped
+    desc: Stops macOS login-item notification process
+    crit: suspicious
+    conf: 0.96
+    any:
+      - id: kill-btm-notification-agent
+      - id: sigstop-btm-agent-after-name
+      - id: sigstop-btm-agent-before-name
+      - id: sigstop-notification-center
+  # Registering a LaunchAgent while stopping the notification processes that
+  # would announce it: persistence installed under a suppressed notification.
+  - id: notification-suppressed-launchagent
+    desc: LaunchAgent install suppresses BTM notification
+    crit: hostile
+    conf: 0.97
+    attack: T1562.001,T1543.004
+    scope: file
+    any:
+      - id: micro-behaviors/os/service/start::launchctl-bootstrap-command
+      - id: objectives/evasion/masquerade/binary/cache::launchagents-fake-apple
+      - id: micro-behaviors/os/service/start::launchctl-load-command
+    all:
+      - id: login-item-notifier-stopped

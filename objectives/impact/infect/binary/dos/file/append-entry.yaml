@@ -1,0 +1,50 @@
+# INT 21h seek-to-end returns the host length in AX. Save it across the
+# append, seek back to offset zero, and subtract the three-byte JMP length
+# to construct E9 + displacement before writing three bytes at the entry.
+# Addresses and append length vary; the infection data flow is the evidence.
+defaults:
+  for: [dos_com]
+  platforms: [windows, linux, macos]
+  size_max: 65536
+
+traits:
+  # BP-relative header buffers: save the original three entry bytes with
+  # MOVSW/MOVSB, replace the entry opcode with E9, subtract the jump length
+  # from the host size, store its displacement, and select a three-byte write.
+  # Buffer addresses vary with relocation; no family marker is required.
+  - id: com-buffer-entry-jump-patch
+    desc: Saves COM entry, builds host-length jump
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: hex
+      pattern: "8D BE ?? ?? 8D B6 ?? ?? A5 A4 3E C6 86 ?? ?? E9 3E 8B 86 ?? ?? 2D 03 00 3E 89 86 ?? ?? B9 03 00"
+      offset_range: [0, 4096]
+
+  - id: objectives/impact/infect/binary/dos/file::com-append-and-entry-jump
+    desc: Appends code and redirects COM entry
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: hex
+      pattern: "B8 02 42 CD 21 50 B9 ?? ?? [0-8] BA ?? ?? [0-4] B4 40 CD 21 (33|31) C9 (33|31) D2 B0 00 B4 42 CD 21 58 2D 03 00 C6 86 ?? ?? E9 89 86 ?? ?? [0-2] BA ?? ?? [0-4] B9 03 00 B4 40 CD 21"
+      offset_range: [0, 4096]
+
+composite_rules:
+  - id: dos-com-buffer-entry-infector
+    desc: Searches files and writes entry-redirecting COM headers
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: com-buffer-entry-jump-patch
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
+      - id: micro-behaviors/fs/write/file/handle::dos-int21-write-call
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-find-next
+
+  - id: dos-com-append-entry-infector
+    desc: Searches hosts and appends entry-redirecting code
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/impact/infect/binary/dos/file::com-append-and-entry-jump
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call

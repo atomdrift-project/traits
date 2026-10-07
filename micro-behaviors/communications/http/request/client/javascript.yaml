@@ -15,15 +15,6 @@ traits:
       kind: call
       exact: invokeEndpoint
 
-  - id: image-src-network-request
-    desc: Assigns a URL to Image element src
-    crit: notable
-    conf: 0.9
-    for: [javascript, typescript, html, text]
-    if:
-      type: text
-      regex: '(\(new\s+Image\)\.src\s*=|new\s+Image\s*\(\s*\)[\s\S]{0,120}\.src\s*=)'
-
   - id: axios-request-call
     desc: Calls axios.request() to send an HTTP request
     crit: notable
@@ -110,6 +101,14 @@ traits:
     if:
       type: symbol
       exact: h.request
+  - id: lib-request-call
+    desc: HTTP request via lib module alias
+    crit: notable
+    conf: 0.82
+    if:
+      type: symbol
+      kind: call
+      exact: lib.request
   - id: node-http-get-dynamic
     desc: Node.js http.get dynamic call
     crit: notable
@@ -128,14 +127,14 @@ traits:
       kind: call
       # A leading parenthesis covers computed URL builders such as
       # `fetch((makeBase()) + path)` while still requiring a parsed fetch call.
-      regex: '^fetch\s*\(\s*(["''`]|\(|[A-Za-z_$][\w$]*(?i:url|uri|endpoint)\b)'
+      # Buffer.from(..., "base64") URL builders are a common npm-loader shape.
+      regex: '^fetch\s*\(\s*(["''`]|\(|[A-Za-z_$][\w$]*(\s*\+|url|uri|endpoint)|Buffer)'
     unless:
       - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: metadata/file/string/corpus::hashed-text-record
       # Scanner regression tests embed fetch syntax in strings passed to the
       # scanner; this is not a live network call in the test harness.
       - id: well-known/tool/detection/skill-scanner::typescript-test-context
@@ -170,6 +169,24 @@ traits:
       type: symbol
       kind: call
       regex: '^(\$|jQuery)\.ajax$'
+  - id: fetch-literal-https-url
+    desc: fetch() called with literal HTTPS URL
+    crit: notable
+    conf: 0.88
+    for: [html, javascript, typescript]
+    if:
+      type: text
+      regex: '\bfetch\s*\(\s*["'']https://'
+
+  - id: js-fetch-buffer-from-decoded-url
+    desc: fetch() called with Buffer.from decoded URL
+    crit: notable
+    conf: 0.94
+    attack: T1105
+    if:
+      type: text
+      regex: 'fetch\s*\(\s*Buffer\.from\([^)]{1,120}["'']base64["'']\)'
+
   - id: stringified-fetch-call
     desc: String literal begins with fetch(
     crit: notable
@@ -195,18 +212,6 @@ traits:
     unless:
       - id: metadata/package/testing/presence/harness/
       - id: metadata/package/testing/presence/fixture/
-  - id: fetch-json-body
-    desc: fetch() sends JSON body
-    crit: notable
-    conf: 0.82
-    count_min: 2
-    if:
-      type: text
-      regex: "fetch\\(.{0,220}'body':JSON\\["
-    unless:
-      - id: metadata/package/testing/harness/runtime/
-      - id: metadata/package/testing/presence/manifest::test-fixtures
-      - id: metadata/package/testing/presence/fixture::test-filename-pattern
   - id: xmlhttprequest-new
     desc: Invokes the XMLHttpRequest constructor
     crit: notable
@@ -270,22 +275,6 @@ traits:
       regex: 'axios\.(get|post)\s*\([^)]{0,160}/api/(sms|otp)'
       case_insensitive: true
 
-  - id: post-method-text
-    desc: Configures an HTTP POST request
-    crit: notable
-    conf: 0.94
-    if:
-      type: tree-sitter
-      query: |
-        ((pair
-          key: (property_identifier) @key
-          value: (string) @value)
-         (#eq? @key "method")
-         (#match? @value "^['\"]POST['\"]$"))
-    unless:
-      - id: metadata/file/format/structured::sourcemap-sources-content
-      - id: metadata/lang/scripted::dts-declaration-file
-      - id: metadata/package/testing/harness/runtime/
   - id: node-http-client-scheme-selection
     desc: Selects an HTTP client by URL scheme
     crit: notable
@@ -293,15 +282,49 @@ traits:
     if:
       type: text
       regex: '\b[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.startsWith\(\s*["'']https'
+  - id: node-url-protocol-https-ternary-selection
+    desc: Picks HTTP client from URL.protocol
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '\.protocol\s*===\s*[''"]https:[''"]\s*\?'
+
+  - id: fetch-http-scheme-url
+    desc: Fetches an HTTP(S)-scheme URL
+    crit: notable
+    conf: 0.82
+    if:
+      type: symbol
+      kind: call
+      exact: fetch
+      arg:
+        kind: string
+        regex: '^https?://'
+    unless:
+      - id: well-known/tool/detection/skill-scanner::typescript-test-context
 
 composite_rules:
+  # Creating an Image and assigning `.src` also decodes data: and object URLs.
+  # Only report an HTTP request when the assigned source is explicitly remote
+  # or contains a query expression, the common browser-beacon form.
+  - id: image-src-network-request
+    desc: Creates a network-backed Image request
+    crit: notable
+    conf: 0.92
+    for: [javascript, typescript, html, text]
+    all:
+      - id: micro-behaviors/ui/graphics/image::js-image-src-assignment
+    any:
+      - id: micro-behaviors/communications/http/client/resource::js-remote-src-assignment
+      - id: micro-behaviors/communications/http/client/resource::element-src-query-parameter
   - id: fetch-post-pattern
     desc: JavaScript file uses fetch and configures an HTTP POST
     crit: notable
     conf: 0.9
     all:
       - id: js-fetch-call
-      - id: post-method-text
+      - id: micro-behaviors/communications/http/request/verb::post-method-text
   - id: node-https-request-h-alias
     desc: Node.js https.request via alias
     crit: notable
@@ -309,57 +332,6 @@ composite_rules:
     all:
       - id: h-require-https
       - id: h-request-call
-  - id: node-http-request-stream-body
-    desc: Node HTTP request writes body
-    crit: notable
-    conf: 0.84
-    all:
-      - id: node-http
-      - id: micro-behaviors/communications/http/request/body::request-write-call
-      - id: micro-behaviors/communications/http/request/body::request-end-call
-  - id: node-http-post-json-body
-    desc: Node HTTP request posts a JSON body
-    crit: notable
-    conf: 0.9
-    all:
-      - id: node-http-request-stream-body
-      - id: http-post-json
-  - id: js-http-post-body
-    desc: JavaScript sends an HTTP POST body
-    crit: notable
-    conf: 0.9
-    any:
-      - id: node-http-post-json-body
-      - id: micro-behaviors/communications/http/body::js-fetch-post-body-variable
-  - id: node-http-request-end-body
-    desc: Node HTTP request sends a body with end()
-    crit: notable
-    conf: 0.84
-    all:
-      - id: node-http
-      - id: micro-behaviors/communications/http/request/body::request-end-body-call
-  # Neutral request-body groupings used by credential-exfiltration composites.
-  # JSON.stringify() alone is not a request-body operation: many modules
-  # serialize return values, cache records, or generated source.
-  - id: node-request-payload-serialization
-    desc: Node serializes or prepares an HTTP request body
-    crit: notable
-    conf: 0.86
-    any:
-      - id: fetch-json-body
-      - id: micro-behaviors/communications/http/post::axios-with-data
-      - id: micro-behaviors/communications/http/body::request-write-payload-variable
-
-  - id: node-http-request-body
-    desc: Node sends an HTTP request body
-    crit: notable
-    conf: 0.86
-    any:
-      - id: node-http-request-end-body
-      - id: node-http-request-stream-body
-      - id: fetch-json-body
-      - id: micro-behaviors/communications/http/post::axios-with-data
-      - id: micro-behaviors/communications/http/body::request-write-payload-variable
   - id: script-http-client
     desc: Uses a script HTTP client
     crit: notable
@@ -380,6 +352,8 @@ composite_rules:
       - id: node-http-get-dynamic
       - id: node-https-get-dynamic
       - id: node-https-request-h-alias
+      - id: lib-request-call
+      - id: node-scheme-selected-http-client
   - id: http-client-usage
     desc: Uses HTTP client APIs
     crit: notable
@@ -395,13 +369,6 @@ composite_rules:
       - id: needle-import
       - id: request-import
       - id: node-https-request-h-alias
-  - id: http-post-json
-    desc: HTTP POST request with JSON content
-    crit: notable
-    conf: 0.75
-    all:
-      - id: post-method-text
-      - id: micro-behaviors/communications/http/header/content-type::application-json
   - id: http-method-calls
     desc: Calls an HTTP request method
     crit: notable
@@ -415,14 +382,6 @@ composite_rules:
       - id: micro-behaviors/communications/http/post::axios-with-data
       - id: fetch-post-pattern
       - id: micro-behaviors/communications/http/request/params::get-with-params
-  - id: bearer-header-from-storage
-    desc: Bearer header from storage
-    crit: notable
-    conf: 0.93
-    all:
-      - id: micro-behaviors/data/db/web-storage::dom-storage-getitem
-      - id: micro-behaviors/communications/http/authorization-header::auth-header-dup
-      - id: micro-behaviors/communications/http/authorization-header::bearer-authorization-prefix
   - id: node-scheme-selected-http-client
     desc: Node HTTP client selected by URL scheme
     crit: notable
@@ -432,6 +391,7 @@ composite_rules:
       - id: metadata/import/builtin::require-https
     any:
       - id: node-http-client-scheme-selection
+      - id: node-url-protocol-https-ternary-selection
       - id: micro-behaviors/communications/http/request/dynamic::node-http-client-charat-scheme-selection
 
   - id: js-http-get-or-fetch
@@ -439,6 +399,7 @@ composite_rules:
     crit: notable
     conf: 0.9
     any:
+      - id: http-get-dup
       - id: https-get
       - id: js-fetch-call
 
