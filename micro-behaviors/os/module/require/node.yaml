@@ -173,12 +173,18 @@ traits:
     crit: notable
     conf: 0.75
     if:
-      type: text
-      regex: '^\s*require\s*\(\s*["''](\./|\.\./|/)[^"''\n]{1,80}["'']\s*\)\s*;?\s*$'
+      type: tree-sitter
+      query: |
+        (expression_statement
+          (call_expression
+            function: (identifier) @require
+            arguments: (arguments (string (string_fragment) @path))) @call
+          (#eq? @require "require")
+          (#match? @path "^(\\.\\.?/|/)"))
     unless:
       - type: text
         regex: '^#!/usr/bin/env\s+node\b'
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
   - id: cjs-side-effect-package-require
     desc: CommonJS side-effect-only package require
     crit: notable
@@ -260,12 +266,14 @@ traits:
       query: |
         (
           (_
-            (call_expression
+            (_
+              (call_expression
               function: (import)
-          arguments: (arguments (string) @module)) @call) @parent
+          arguments: (arguments (string) @module)) @call) @parent) @context
           (#not-match? @module "^[\"']?@(components|pages|utils|hooks)/")
           (#not-match? @module "^[\"']?@(constants|apis|styles|types)/")
           (#not-match? @parent "\\)\\s*\\.")
+          (#not-match? @context "<\\s*typeof\\s+import\\s*\\(")
         )
     unless:
       - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
@@ -286,14 +294,16 @@ traits:
       query: |
         (
           (_
-            (call_expression
+            (_
+              (call_expression
               function: (import)
-          arguments: (arguments (string) @module)) @call) @parent
+          arguments: (arguments (string) @module)) @call) @parent) @context
           (#not-match? @module "^[\"']?\\.")
           (#not-match? @module "^[\"']?/")
           (#not-match? @module "^[\"']?@(components|pages|utils|hooks)/")
           (#not-match? @module "^[\"']?@(constants|apis|styles|types)/")
           (#not-match? @parent "\\)\\s*\\.")
+          (#not-match? @context "<\\s*typeof\\s+import\\s*\\(")
         )
     unless:
       # Type-only declaration imports are erased and never load at runtime.
@@ -327,20 +337,6 @@ traits:
   # which is an ordinary API method on a user object, not a module load.
   # `import` is a legal method name, and in minified class bodies a shorthand
   # method reads exactly like a call: `}import(t){return this.emit(...)}` in
-  # @adobe/css-tools is the CSS @import at-rule printer, not a module load.
-  # A definition is followed by its body, so require one of the continuations
-  # a real dynamic import actually takes after the parameter list: `.then`,
-  # `;`, `)`, `,`, `]`, or the `}` that closes a minified arrow body. Any
-  # other trailing character means this is prose, not code -- `the \`path\`
-  # import (path$8) and` in a bundle's header comment read as a dynamic
-  # import under the old `[^{\s]` tail.
-  - id: dynamic-import-expression
-    desc: Dynamically imports a computed module reference
-    crit: notable
-    conf: 0.88
-    if:
-      type: text
-      regex: '[^.\w$]import\s*\(\s*[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)?\s*\)\s*[.;,)\]}]'
   - id: dynamic-import-call-expression
     desc: Dynamically imports a computed call result
     crit: notable
@@ -379,43 +375,82 @@ traits:
       arg:
         kind: string
         exact: child_process
-  # `await import("node:child_process")` inside a function body, rather than a
-  # top-level `import`/`require`. The capability never appears in the module's
-  # static import list, so a manifest-level dependency review, a bundler's
-  # module graph and every "what does this package require" scanner all miss
-  # it. Neutral on its own — ESM libraries genuinely defer Node-only builtins so
+  # Runtime dynamic imports, excluding comments, quoted examples and erased
+  # TypeScript import types. The call may occur at any nesting depth. Neutral on its own — ESM libraries genuinely defer Node-only builtins so
   # the same file can load in a browser — so the concealment reading comes from
   # the composites that pair these with what the loaded builtin is used for.
   # Split by capability family so a composite can ask for *which* capabilities
   # were deferred rather than for how many import calls it counted.
   - id: node-lazy-exec-builtin-import
-    desc: Defers loading a Node execution builtin
+    desc: Dynamically imports a Node execution builtin
     crit: notable
     conf: 0.9
-    attack: T1027
     if:
-      type: text
-      regex: 'import\(\s*["'']node:(child_process|vm|worker_threads)["'']\s*\)'
+      type: tree-sitter
+      query: |
+        (
+          (_ (call_expression
+            function: (import)
+            arguments: (arguments (string) @module)) @call) @parent
+          (#not-match? @parent "\\)\\s*\\.")
+          (#match? @module "^[\"']node:(child_process|vm|worker_threads)[\"']$")
+        )
+        (
+          (call_expression
+            function: (member_expression
+              object: (call_expression
+                function: (import)
+                arguments: (arguments (string) @module))))
+          (#match? @module "^[\"']node:(child_process|vm|worker_threads)[\"']$")
+        )
     unless:
       - id: metadata/lang/scripted::dts-declaration-file
   - id: node-lazy-fs-builtin-import
-    desc: Defers loading a Node filesystem builtin
+    desc: Dynamically imports a Node filesystem builtin
     crit: notable
     conf: 0.9
-    attack: T1027
     if:
-      type: text
-      regex: 'import\(\s*["'']node:fs(/promises)?["'']\s*\)'
+      type: tree-sitter
+      query: |
+        (
+          (_ (call_expression
+            function: (import)
+            arguments: (arguments (string) @module)) @call) @parent
+          (#not-match? @parent "\\)\\s*\\.")
+          (#match? @module "^[\"']node:fs(/promises)?[\"']$")
+        )
+        (
+          (call_expression
+            function: (member_expression
+              object: (call_expression
+                function: (import)
+                arguments: (arguments (string) @module))))
+          (#match? @module "^[\"']node:fs(/promises)?[\"']$")
+        )
     unless:
       - id: metadata/lang/scripted::dts-declaration-file
   - id: node-lazy-net-builtin-import
-    desc: Defers loading a Node network builtin
+    desc: Dynamically imports a Node network builtin
     crit: notable
     conf: 0.9
-    attack: T1027
     if:
-      type: text
-      regex: 'import\(\s*["'']node:(net|tls|https?|dgram|dns)["'']\s*\)'
+      type: tree-sitter
+      query: |
+        (
+          (_ (call_expression
+            function: (import)
+            arguments: (arguments (string) @module)) @call) @parent
+          (#not-match? @parent "\\)\\s*\\.")
+          (#match? @module "^[\"']node:(net|tls|https?|dgram|dns)[\"']$")
+        )
+        (
+          (call_expression
+            function: (member_expression
+              object: (call_expression
+                function: (import)
+                arguments: (arguments (string) @module))))
+          (#match? @module "^[\"']node:(net|tls|https?|dgram|dns)[\"']$")
+        )
     unless:
       - id: metadata/lang/scripted::dts-declaration-file
   - id: node-dynamic-import-file-url
@@ -454,7 +489,7 @@ composite_rules:
       - id: scoped-config-package-import
       - id: micro-behaviors/data/config/load::load-config-helper-call
   - id: node-lazy-builtin-capability-import
-    desc: Defers loading a Node capability builtin
+    desc: Dynamically imports a Node capability builtin
     crit: notable
     conf: 0.9
     any:

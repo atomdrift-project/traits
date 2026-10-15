@@ -3,7 +3,7 @@ defaults:
     - windows
     - macos
     - linux
-  for: [javascript, typescript, python, pe, elf, macho]
+  for: [javascript, typescript, python, pe, elf, macho, batch]
   attack: T1555.003
 traits:
   - id: token-log-directory-marker
@@ -65,24 +65,6 @@ traits:
     if:
       type: text
       regex: '(?i)\bDiscord token\b.{0,100}\b(account|server|guild)\b'
-  - id: discord-channel-state-marker
-    desc: Discord channel monitoring marker
-    crit: notable
-    conf: 0.92
-    if:
-      type: text
-      # `/messages/` alone is any app's message route: it convicted Next.js's
-      # own error-documentation URLs (https://nextjs.org/docs/messages/...)
-      # inside an ordinary dashboard bundle.  Anchor it to the Discord channel
-      # API shape instead.
-      regex: '(?i)last_message_id|users/@me/guilds|channels/\d+/messages'
-  - id: regex-standard
-    desc: Discord token-shaped string
-    crit: notable
-    conf: 0.75
-    if:
-      type: text
-      regex: (^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}([^A-Za-z0-9_-]|$)
   - id: regex-mfa
     desc: Discord MFA token regex pattern
     crit: suspicious
@@ -104,6 +86,14 @@ traits:
     if:
       type: text
       substr: 'mfa\\.[\\w-]{84}'
+  - id: batch-findstr-discord-token
+    desc: Batch findstr pattern for Discord tokens
+    crit: suspicious
+    conf: 0.95
+    for: [batch]
+    if:
+      type: text
+      regex: '(?i)findstr[^\r\n]{0,80}(/C:"mfa\."|\[A-Za-z0-9_\]\\\{24)'
   - id: literal-pattern
     desc: Discord token in code
     crit: suspicious
@@ -169,13 +159,6 @@ traits:
     if:
       type: text
       word: discord_tool
-  - id: discord-path
-    desc: Discord application path reference
-    crit: suspicious
-    conf: 0.7
-    if:
-      type: text
-      regex: (?i)[/\\]discord(canary|ptb)?[/\\]Local Storage
   - id: ldb-extension
     desc: LevelDB file extension
     crit: component
@@ -189,7 +172,7 @@ traits:
     conf: 0.6
     if:
       type: text
-      regex: (?i)AppData[/\\](Roaming|Local)[/\\]discord(canary|ptb)?
+      regex: (?i)(AppData[/\\](Roaming|Local)|%APPDATA%)[/\\]discord(canary|ptb)?
   - id: go-discord-token-stealer-function
     desc: Go Discord token stealer function
     crit: suspicious
@@ -214,7 +197,7 @@ traits:
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   # get-tokens-fn relocated to
-  # micro-behaviors/data/parse/vocabulary::token-getter-call — `getTokens(`
+  # micro-behaviors/data/property/access::token-getter-call — `getTokens(`
   # is a generic function name, not Discord-specific. The composites below
   # reference it cross-tier alongside Discord/storage context.
   - id: clerk-token-bridge
@@ -234,14 +217,14 @@ traits:
     if:
       type: text
       substr: "dQw4w9WgXcQ:"
-  - id: js-discord-tokens-method
-    desc: Method named for saving Discord tokens
+  - id: js-steal-discord-tokens-function
+    desc: Function named for stealing Discord tokens
     crit: suspicious
     conf: 0.94
     for: [javascript, typescript]
     if:
-      type: text
-      substr: DiscordTokens
+      type: function
+      regex: '(?i)^steal[A-Za-z0-9_]{0,24}Discord[A-Za-z0-9_]{0,24}Tokens?$'
   - id: embed-template-token-field
     desc: Discord credential embed resource
     crit: suspicious
@@ -355,15 +338,6 @@ traits:
     if:
       type: text
       regex: '\b(discord|disnake)\.Client\.(run|login)\s*='
-  - id: python-disnake-library-reference
-    desc: Python Disnake library import
-    crit: notable
-    conf: 0.85
-    for: [python]
-    if:
-      type: symbol
-      kind: import
-      regex: '^disnake(\.|$)'
   - id: python-discord-token-socket-send
     desc: Python sends Discord token over socket
     crit: suspicious
@@ -401,7 +375,7 @@ composite_rules:
     attack: T1528,T1041
     for: [python]
     all:
-      - id: discord-channel-state-marker
+      - id: micro-behaviors/communications/http/services/discord::discord-channel-state-reference
       - id: micro-behaviors/communications/http/authorization-header::authorization-header-map-entry
       - id: micro-behaviors/communications/http/webhook::python-discord-webhook-api-path
     any:
@@ -414,18 +388,10 @@ composite_rules:
     for: [python]
     near_bytes: 800
     all:
-      - id: python-discord-library-token-reference
+      - id: metadata/import/package::python-discord-client-library
     any:
       - id: micro-behaviors/data/source/syntax/keyword::token-parameter-declaration
       - id: micro-behaviors/data/source/syntax/keyword::token-tuple-argument
-  - id: python-discord-library-token-reference
-    desc: Python Discord library token reference
-    crit: component
-    conf: 0.85
-    for: [python]
-    any:
-      - id: well-known/lib/network/discord-py::import
-      - id: python-disnake-library-reference
   - id: token-regex-source
     desc: Source includes Discord token regex
     crit: suspicious
@@ -433,15 +399,16 @@ composite_rules:
     any:
       - id: source-pattern-standard
       - id: source-pattern-mfa
+      - id: batch-findstr-discord-token
   - id: stealer-detected
     desc: Discord token stealer detected
     crit: suspicious
     conf: 0.98
     mbc: B0030
     all:
-      - id: discord-path
+      - id: localstorage-path
     any:
-      - id: regex-standard
+      - id: micro-behaviors/data/format/credentials::discord-token-shaped-text
       - id: token-regex-source
   - id: discord-token-getter
     desc: Discord token getter context
@@ -453,9 +420,9 @@ composite_rules:
       - python
     near_bytes: 1200
     all:
-      - id: micro-behaviors/data/parse/vocabulary::token-getter-call
+      - id: micro-behaviors/data/property/access::token-getter-call
     any:
-      - id: discord-path
+      - id: localstorage-path
       - id: micro-behaviors/communications/http/oauth::discord-api-users-me-url
       - id: micro-behaviors/communications/http/oauth::discord-users-me-path
       - id: well-known/app/communication/discord::webpack-runtime-global
@@ -470,8 +437,8 @@ composite_rules:
     # theft/keywords::token is not typed for elf, macho, or pe.
     for: [javascript, typescript, python]
     all:
-      - id: discord-path
-      - id: objectives/credential-access/theft/keywords::token
+      - id: localstorage-path
+      - id: micro-behaviors/data/parse/vocabulary::token-extraction-wording
   - id: leveldb-harvester
     desc: LevelDB credential harvester
     crit: hostile
@@ -495,14 +462,54 @@ composite_rules:
       - id: micro-behaviors/data/db/leveldb::leveldb-ref
       - id: micro-behaviors/fs/path/app-data::local-storage-ref
     any:
-      - id: discord-path
+      - id: localstorage-path
       - id: appdata-ref
+      - id: well-known/app/communication/discord::discord-canary-reference
       - id: micro-behaviors/fs/path/application/browser::brave-path
       - id: micro-behaviors/fs/path/application/browser::opera-path
       - id: micro-behaviors/fs/path/application/browser::yandex-path
       - id: metadata/file/string/application-name::chrome-browser-name-literal
     unless:
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+  - id: batch-discord-leveldb-token-harvester
+    desc: Batch Discord token harvester targets LevelDB
+    crit: hostile
+    conf: 0.97
+    mbc: B0030
+    for: [batch]
+    all:
+      - id: batch-findstr-discord-token
+      - id: micro-behaviors/data/db/leveldb::leveldb-ref
+      - id: micro-behaviors/fs/path/app-data::local-storage-ref
+    any:
+      - id: localstorage-path
+      - id: appdata-ref
+      - id: well-known/app/communication/discord::discord-canary-reference
+    unless:
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+  - id: obfuscated-discord-leveldb-harvester
+    desc: Obfuscated Discord token harvester targets LevelDB
+    crit: hostile
+    conf: 0.97
+    mbc: B0030
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: discord-token-dqw-separator
+      - id: micro-behaviors/data/db/leveldb::leveldb-ref
+    any:
+      - id: localstorage-path
+      - id: appdata-ref
+      - id: micro-behaviors/fs/path/app-data::local-storage-ref
+      - id: micro-behaviors/fs/path/app-data::javascript-appdata-directory-reference
+      - id: micro-behaviors/os/application/target::service-name-discord
+      - id: metadata/file/string/application-name::chrome-browser-name-literal
+    unless:
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
   - id: discord-token-exfiltration-chain
     desc: Discord token theft with webhook exfil
     crit: hostile
@@ -532,11 +539,11 @@ composite_rules:
       - javascript
       - typescript
     all:
-      - id: objectives/credential-access/browser/firefox::local-storage-access
+      - id: micro-behaviors/fs/path/application/browser::firefox-storage-database-reference
       - id: micro-behaviors/fs/path/app-data::javascript-appdata-directory-reference
       - id: micro-behaviors/process/user/query::os-homedir-call
     any:
-      - id: micro-behaviors/data/parse/vocabulary::token-getter-call
+      - id: micro-behaviors/data/property/access::token-getter-call
       - id: micro-behaviors/communications/http/services/discord::domain-regex
   - id: discord-token-dpapi-decrypt
     desc: Discord token DPAPI+AES-GCM decryption (Chromium format)
@@ -607,11 +614,11 @@ composite_rules:
     all:
       - id: java-discord-clients-loot-table
       - id: micro-behaviors/communications/http/lib/httpclient::java-httpclient-api
-      - id: micro-behaviors/crypto/library/provider::secretkeyspec
+      - id: micro-behaviors/crypto/key/representation::secretkeyspec
     any:
       - id: micro-behaviors/fs/write/file/handle::jvm-fileoutputstream-bytecode
-      - id: micro-behaviors/process/create/spawn::java-processbuilder-bytecode
-      - id: micro-behaviors/process/create/spawn::java-processbuilder-start-bytecode-symbol
+      - id: micro-behaviors/process/create/subprocess::java-processbuilder-bytecode
+      - id: micro-behaviors/process/create/subprocess::java-processbuilder-start-bytecode-reference
     needs: 1
   - id: discord-users-me-api
     desc: Discord users/@me endpoint
@@ -632,7 +639,7 @@ composite_rules:
       - id: discord-users-me-api
     any:
       - id: token-regex-source
-      - id: regex-standard
+      - id: micro-behaviors/data/format/credentials::discord-token-shaped-text
       - id: regex-mfa
       - id: literal-pattern
       - id: localstorage-path
@@ -742,7 +749,7 @@ composite_rules:
       - id: discord-token-dqw-separator
       - id: micro-behaviors/fs/path/app-data::chromium-leveldb-local-storage
       - id: micro-behaviors/fs/path/app-data::local-storage-ref
-      - id: micro-behaviors/crypto/symmetric/aes/cng::bcrypt-aes-gcm-decrypt
+      - id: micro-behaviors/crypto/library/cryptoapi::bcrypt-gcm-decrypt-api-set
     any:
       - id: well-known/app/communication/discord::discord-canary-reference
       - id: well-known/app/communication/discord::discord-ptb-reference
@@ -764,7 +771,7 @@ composite_rules:
     needs: 1
   - id: discord-extension-live-token-extraction
     desc: Browser extension extracts a live Discord session token
-    crit: hostile
+    crit: suspicious
     conf: 0.99
     mbc: B0030
     attack: T1539,T1528
@@ -814,7 +821,7 @@ composite_rules:
       - id: discord-token-dqw-separator
     any:
       - id: objectives/collection/messaging/app::discord-token-regex-source
-      - id: js-discord-tokens-method
+      - id: js-steal-discord-tokens-function
     needs: 1
     unless:
       - id: well-known/tool/detection/
@@ -832,3 +839,16 @@ composite_rules:
       - id: micro-behaviors/communications/http/url/path::remote-transfer-url-path
     unless:
       - id: well-known/tool/detection/
+  - id: discord-token-storage-harvest-validate
+    desc: Harvests Discord token from Web Storage and validates via API
+    crit: hostile
+    conf: 0.98
+    mbc: B0030
+    attack: T1539,T1528
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/data/db/web-storage::browser-storage-token-key-read
+      - id: discord-users-me-auth-get
+    unless:
+      - id: well-known/tool/detection/
+

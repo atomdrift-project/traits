@@ -10,20 +10,6 @@ defaults:
   for: [python, shell, javascript, typescript]
 traits:
   # === Dotenv File Access ===
-- id: dotenv-api-key-value
-  desc: Dotenv API key value
-  crit: notable
-  conf: 0.88
-  for: [data, text]
-  if:
-    type: text
-    regex: '(?m)^[A-Z0-9_]{0,64}API_?KEY[A-Z0-9_]*=[A-Za-z0-9._/-]{32,128}$'
-  not:
-  - regex: '(?i)generate'
-  - regex: '(?i)your-'
-  - regex: '(?i)example'
-  - regex: '(?i)placeholder'
-  - regex: '(?i)changeme'
 - id: dotenv-secret-key-value
   desc: Dotenv secret key value
   crit: notable
@@ -113,20 +99,6 @@ traits:
     type: text
     regex: "[\"'`/\\\\]\\.env($|[^A-Za-z0-9_]).{0,50}read\\(\\)|\\bdotenv\\b.{0,50}read\\(\\)"
   # === Environment Variable Theft ===
-  # === Powershell Enumeration ===
-- id: powershell-drive-enum
-  desc: Powershell drive enumeration
-  crit: suspicious
-  conf: 0.85
-  unless:
-  - id: metadata/package/testing/
-  - id: well-known/app/ai/browser-agent/agent-browser::agent-browser-benchmark
-  if:
-    type: text
-    regex: 'Get-ChildItem.{0,40}-Path\s+["'']?[A-Z]:\\\\["'']?.{0,40}(-Recurse|-Force)'
-  downgrade:
-    any:
-    - {id: 'metadata/package/testing/harness/runtime/'}
 - id: js-dotenv-parse-file
   desc: Node parses dotenv file after reading it
   # Parsing an application's own .env configuration is a normal build/runtime
@@ -146,6 +118,7 @@ traits:
   # it is not a search for user or application credentials.
   - type: text
     substr: .env.sentry-build-plugin
+  - id: "metadata/file/naming::test-directory-component"
 - id: shell-cat-dotenv
   desc: Shell cat of .env file
   # Reading .env is a sensitive-file access signal (notable), not inherently
@@ -215,14 +188,15 @@ composite_rules:
   for: [data, text]
   needs: 2
   unless:
+  - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
   - id: well-known/tool/detection/agent-audit-kit::scanner-context
   - id: well-known/tool/detection/agent-audit-kit::tree-path
-  - id: metadata/package/testing/presence/fixture::vulnerable-config-fixture-path
   # `.env.example` / `.env.sample` files document variables with preset or
   # dummy values by filename convention; loot does not ship that way.
   - id: metadata/file/extension/identity::dotenv-example-filename
   any:
-  - id: dotenv-api-key-value
+  - id: micro-behaviors/data/format/credentials::dotenv-api-key-assignment
   - id: dotenv-secret-key-value
   - id: dotenv-db-password-value
   - id: dotenv-password-value
@@ -269,6 +243,7 @@ composite_rules:
   - id: well-known/app/ai/gateway/opencode-router
   - id: well-known/app/ai/assistant/nitin-ai
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
   any:
   - id: js-dotenv-parse-file
   - id: micro-behaviors/fs/path/secret-config::hidden-app-dotenv
@@ -303,6 +278,7 @@ composite_rules:
 # package.json's postinstall declaration to the JS member that does the
 # exfil; `for:` has to name both member types plus the container, the same
 # shape as prepare-decoded-command-loader/has-prepare.
+  - id: "metadata/file/naming::test-directory-component"
 - id: npm-postinstall-dotenv-http-exfil
   desc: npm postinstall exfils dotenv file
   crit: hostile
@@ -313,3 +289,18 @@ composite_rules:
   all:
   - id: js-dotenv-json-post
   - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+- id: python-dotenv-discovered-env-session-cookie-get
+  desc: Loads discovered dotenv and replays session cookie over HTTP GET
+  crit: hostile
+  conf: 0.95
+  attack: T1552.001,T1539
+  for: [python]
+  near_bytes: 1200
+  all:
+  - id: micro-behaviors/os/env/config::python-dotenv-load
+  - id: micro-behaviors/os/env/read::python-os-getenv-call
+  - id: micro-behaviors/communications/http/cookies::cookie-header-construction
+  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  any:
+  - id: micro-behaviors/fs/directory/traverse::python-dotenv-filename-in-walk
+  - id: micro-behaviors/fs/file/open::dotenv-path

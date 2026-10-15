@@ -4,15 +4,6 @@ defaults:
   attack: "T1195.002,T1059,T1222.002"
 
 traits:
-  - id: opencode-plugin-discovery-path
-    desc: OpenCode plugin auto-discovery directory path
-    crit: notable
-    conf: 0.94
-    for: [javascript, typescript]
-    if:
-      type: text
-      regex: 'join\([^)]{0,120}["'']plugins["'']'
-
 composite_rules:
   # Copying the worker, marking it executable, pointing it at a home dotdir and
   # launching the agent unrestricted is ONE installer script's behaviour. Held
@@ -29,7 +20,7 @@ composite_rules:
     scope: file
     for: [javascript]
     all:
-      - id: micro-behaviors/fs/file/copy::fs-copyfileSync
+      - id: micro-behaviors/fs/file/copy::js-copyfile-sync-call
       - id: micro-behaviors/fs/chmod/executable/mode::node-chmod-exec-mode-755
       - id: micro-behaviors/process/create/agent::claude-dangerous-agent-session
       - id: micro-behaviors/fs/path/location::node-homedir-hidden-entry
@@ -71,7 +62,7 @@ composite_rules:
     near_bytes: 4096
     all:
       - id: metadata/package/files/lifecycle::postinstall-js-file
-      - id: opencode-plugin-discovery-path
+      - id: micro-behaviors/fs/path/construct::node-join-plugins-directory
       - id: micro-behaviors/fs/write/file/full::node-write-file-promise-destructured
   - id: npm-postinstall-opencode-agent-hijack
     desc: npm postinstall hijacks OpenCode agent control plane
@@ -85,3 +76,39 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
       - id: postinstall-writes-opencode-agent-config
       - id: postinstall-seeds-opencode-plugin-discovery
+  # Install-time mutation of the user's GLOBAL agent settings (outside the
+  # project being installed into) persists beyond the install and affects
+  # future agent sessions. Agent toolkits do this legitimately when
+  # explicitly invoked, so it stays suspicious; the bundled telemetry
+  # endpoint, hardcoded credential and content-logging flags elsewhere
+  # decide whether it escalates.
+  - id: npm-postinstall-writes-claude-global-settings
+    desc: npm postinstall hook writes global Claude settings
+    crit: suspicious
+    conf: 0.97
+    for: [npm, package.json, javascript]
+    scope: archive
+    all:
+      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
+      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+      - id: micro-behaviors/fs/path/agent-config/file::claude-global-settings-path-js-two-step
+      - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
+  # The escalation the rule above defers to: a postinstall hook that writes
+  # the user's GLOBAL agent settings is still just toolkit behavior on its
+  # own, but when the same install also configures full-conversation content
+  # logging (prompts, responses, tool details) to a hardcoded-credential
+  # collector endpoint, the conjunction has no legitimate use. Silent
+  # postinstall auto-run is not consent for machine-wide prompt collection;
+  # metrics-only telemetry, project-local writes and explicitly invoked
+  # setup cannot satisfy the content-logging legs, so they stay below this.
+  - id: npm-postinstall-plants-global-prompt-telemetry
+    desc: Postinstall plants global prompt-logging telemetry export
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    all:
+      - id: npm-postinstall-writes-claude-global-settings
+      - id: micro-behaviors/os/telemetry/logging/llm::full-conversation-telemetry-export
+      - id: micro-behaviors/communications/http/telemetry::otel-exporter-hardcoded-bearer-header

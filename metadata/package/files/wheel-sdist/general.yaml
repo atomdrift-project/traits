@@ -61,6 +61,15 @@ traits:
       type: value
       path: "archive.members[*].path"
       regex: '(^|/)\.payload$'
+  - id: wheel-package-config-member
+    desc: Wheel ships a package-local .config member
+    crit: notable
+    conf: 0.93
+    for: [whl]
+    if:
+      type: value
+      path: "archive.members[*].path"
+      regex: '(^|/)[^/]+/[^/]+\.config$'
   - id: wheel-dist-info-member
     desc: Wheel contains a distribution-metadata member
     crit: baseline
@@ -70,6 +79,24 @@ traits:
       type: value
       path: "archive.members[*].path"
       regex: '(^|/)[^/]+\.dist-info/[^/]+$'
+  # PEP 427 requires a .dist-info directory in every wheel; without one the
+  # archive cannot be installed and declares no name, author or dependencies
+  # for a reviewer to read. The absence is decided here, live against the
+  # member list: a composite `unless:` that references the baseline presence
+  # trait above cannot see it, because unreferenced low-tier findings are
+  # stripped before composite suppressors resolve.
+  - id: wheel-missing-dist-info
+    desc: Wheel lacks distribution metadata member
+    crit: notable
+    conf: 0.92
+    for: [whl]
+    if:
+      type: value
+      path: whl.filename.version
+    unless:
+      - type: value
+        path: "archive.members[*].path"
+        regex: '(^|/)[^/]+\.dist-info/'
   - id: wheel-python-code-member
     desc: Wheel contains a Python-code member
     crit: baseline
@@ -88,6 +115,23 @@ traits:
       type: value
       path: "archive.members[*].path"
       regex: '.*\.(so|pyd|dll|dylib)$'
+  # Every importable member is compiled: the wheel ships native extension
+  # modules and not a single .py/.pyi file, so nothing the package runs can be
+  # read without disassembly. Decided live against the member list for the
+  # same reason as wheel-missing-dist-info above.
+  - id: wheel-native-only-code
+    desc: Wheel has native code, no Python source
+    crit: notable
+    conf: 0.9
+    for: [whl]
+    if:
+      type: value
+      path: "archive.members[*].path"
+      regex: '\.(so|pyd)$'
+    unless:
+      - type: value
+        path: "archive.members[*].path"
+        regex: '\.pyi?$'
   - id: wheel-any-platform-tag
     desc: Wheel uses platform-independent tag
     crit: baseline
@@ -97,14 +141,6 @@ traits:
       type: value
       path: whl.filename.platform_tag
       exact: any
-  - id: empty-description
-    desc: Package has empty description field
-    crit: notable
-    conf: 0.8
-    if:
-      type: value
-      path: description
-      exact: ""
   - id: suspicious-single-dependency
     desc: "Package w/ suspicious single dependency"
     crit: suspicious
@@ -161,6 +197,42 @@ traits:
       type: value
       path: "archive.members[*].path"
       regex: '(^|/)scr/[^/]+\.egg-info/top_level\.txt$'
+  - id: wheel-distribution-name-pillow
+    desc: Wheel distribution name is Pillow
+    crit: baseline
+    conf: 0.99
+    for: [whl]
+    if:
+      type: value
+      path: whl.filename.name_prefix
+      regex: '(?i)^pillow$'
+  - id: wheel-top-level-pil-module
+    desc: Wheel exposes PIL top_level module
+    crit: notable
+    conf: 0.94
+    for: [whl]
+    if:
+      type: value
+      path: whl.top_level_packages[*]
+      exact: PIL
+  - id: wheel-top-level-litellm-module
+    desc: Wheel exposes litellm top_level module
+    crit: notable
+    conf: 0.95
+    for: [whl]
+    if:
+      type: value
+      path: whl.top_level_packages[*]
+      exact: litellm
+  - id: wheel-pil-data-demo-bmp-member
+    desc: Wheel bundles PIL _data demo bitmap
+    crit: notable
+    conf: 0.93
+    for: [whl]
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: '(?i)^PIL/_data/demo\.bmp$'
 composite_rules:
   # Baseline: 6% of installed benign distributions (48/799 sampled) declare
   # none, so on its own it says nothing; it is a leg for the composites below.
@@ -208,7 +280,7 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     all:
-      - id: empty-description
+      - id: metadata/package/description/presence::pkginfo-no-description-body
       - id: pkginfo-no-classifiers
   - id: python-314-classifier-conflicts-docs
     desc: Python 3.14 classifier conflicts with docs

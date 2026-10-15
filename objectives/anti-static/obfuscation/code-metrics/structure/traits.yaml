@@ -19,6 +19,7 @@ traits:
       - id: metadata/package/testing/harness/runtime/
       - id: metadata/file/invisible-unicode/
       - id: well-known/app/ai/browser-agent/open-webui-computer/
+      - id: well-known/app/ai/eve::eve-compiled-vendor-bundle-path
       - id: metadata/lang/generated::codegen-source-path
       - id: metadata/file/catalog/identity/
   - id: buildkit-dockerfile-v0
@@ -40,21 +41,27 @@ traits:
       regex: \.pyz$
   - id: source-map-inline
     desc: Inline source map data URL
-    crit: notable
+    # Bundlers routinely embed maps as data URLs; keep this as a composite
+    # leg for steganography, not a standalone notable obfuscation signal.
+    crit: component
     if:
       type: text
       substr: '//# sourceMappingURL=data:application/json'
     unless:
       - id: metadata/build/recognized-contexts::benign-build-tooling-context
+      - id: metadata/file/format/source-map::sourcemap-inline-base64
       - id: well-known/lib/vendor-sdk/tscircuit-eval/
   - id: test-basename-path
     desc: Test file path or basename
-    crit: notable
+    crit: component
     for: [javascript, typescript, python]
     unless:
       - id: metadata/lang/scripted::dts-declaration-file
       - id: metadata/package/testing/harness/runtime::test-basename-suffix
       - id: metadata/package/testing/harness/runtime::test-basename-spec
+      - id: metadata/file/naming::test-directory-component
+      - id: metadata/file/naming::jest-tests-directory-component
+      - id: well-known/lib/web/caporal::caporal-package-identity
     if:
       type: path
       dirname: true
@@ -81,7 +88,7 @@ composite_rules:
       - id: wordpress-rest-response-fixture
       - id: metadata/file/format/markup::source-svg-path-data-marker
       - id: metadata/build/bundler/asset::js-any-bundle-output
-      - id: metadata/file/format/structured::sourcemap-sources-content
+      - id: metadata/file/format/source-map::sourcemap-sources-content
       - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
       - id: well-known/lib/web/ecmascript::next-edge-runtime-bundle
       - id: well-known/lib/data/influxdb3-js
@@ -101,13 +108,13 @@ composite_rules:
       - id: metadata/file/function::high-function-density
       - id: objectives/anti-static/obfuscation/code-metrics/functions::many-one-liner-functions
       - id: metadata/file/comment::no-comments-code
-      - id: metadata/file/naming::sequential-identifiers
+      - id: "metadata/file/profile/identifier-population::sequential-identifiers"
       - id: objectives/anti-static/obfuscation/code-metrics/identifiers::py-sequential-identifiers
     unless:
       - id: metadata/build/
       - id: metadata/file/extension/identity::html-basename
       - id: metadata/file/extension/identity::ico-basename
-      - id: metadata/lang/source/
+      - id: metadata/file/profile/source-indications/
       - id: well-known/lib/web/
       - id: objectives/anti-static/obfuscation/code-metrics/functions/
   - id: appended-long-line
@@ -146,14 +153,9 @@ composite_rules:
     for: [scripts, source]
 
     any:
-      - id: metadata/file/invisible-unicode::invisible-unicode-17-to-64
-      - id: micro-behaviors/data/decode/base64/
-      - id: metadata/file/encoded::large-base64-like-string
-      - id: micro-behaviors/data/decode/hex/
-      - id: micro-behaviors/data/encode/payload::hex-byte-format
-      - id: micro-behaviors/data/encode/xor::js-chunked-xor-loop
-      - id: micro-behaviors/data/encode/xor::js-xor-decoder-loop
-      - id: micro-behaviors/data/encode/xor::js-xor-decoder-ast
+      - id: metadata/lang/source/syntax::encoding-or-invisible-unicode-indicators
+      - id: metadata/file/encoding::php-base64-file-put-contents-literal
+      - id: micro-behaviors/metaprogramming/reflection::dotnet-frombase64-getmethods-like
     unless:
       - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
   - id: has-dynamic-exec
@@ -164,7 +166,7 @@ composite_rules:
     any:
       - id: micro-behaviors/process/interpreter/eval/
       - id: micro-behaviors/process/interpreter/vm::vm-runInContext-call
-      - id: micro-behaviors/process/interpreter/python::dunder-import-call
+      - id: micro-behaviors/os/module/load::dunder-import-call
       - id: micro-behaviors/process/interpreter/python::dunder-import-string-call
       - id: micro-behaviors/process/interpreter/python::runpy-run-module
       - id: micro-behaviors/process/interpreter/python::runpy-run-path
@@ -195,68 +197,6 @@ composite_rules:
     unless:
       - id: metadata/build/
       - id: metadata/package/files/dependency::vsix-bundled-output-path
-  - id: one-line-obfuscated-dropper
-    desc: One-line script that decodes and executes or writes a payload (hostile)
-    crit: hostile
-    conf: 0.95
-    for: [scripts, '!jcl']
-    # A genuine one-line dropper payload is compact. Multi-MB "one-liners" are
-    # multi-line minified bundles whose text.lines is mis-computed as 1
-    # for archive members (engine metric bug); guard against that hostile FP.
-    size_max: 1048576
-    # Everything a compact one-line dropper does happens on that one line, so
-    # all of the evidence has to sit inside a few kilobytes of each other. For
-    # a large archive member the one-liner metrics are computed per text
-    # segment rather than per file, so a 960KB minified bundle (puppeteer-core's
-    # es5-iife build) could present one segment as a "one-liner" while its
-    # encoding and exec evidence sat 300KB away. Proximity settles it from the
-    # evidence positions instead of the file-level metrics.
-    near_bytes: 4096
-    all:
-      - id: metadata/file/line::file-one-liner
-      - id: metadata/file/line::single-long-line
-      - id: has-encoding
-    # A bare file write is not a payload write: minified config vaults, cache
-    # writers, and log helpers all decode something and write a file. Only
-    # writes that stage an executable artifact count here (see
-    # staged-payload-write below); the execution half stays covered by
-    # has-dynamic-exec above.
-    any:
-      - id: has-dynamic-exec
-      - id: micro-behaviors/fs/write/content::multiple-file-write-observations
-    unless:
-      - id: metadata/file/line::enormous-single-line
-      - id: metadata/file/line::file-has-30-plus-lines
-      - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
-      - id: metadata/build/bundler/vscode::javascript-source-map-file
-      - id: metadata/package/testing/presence/harness::go-test-file
-      - id: one-line-dropper-benign-context
-      - id: well-known/tool/development/vcs/github-web::js-parse-end-mark
-      - id: well-known/tool/development/vcs/github-web::catalog-service-meta
-
-  - id: one-line-dropper-benign-context
-    desc: Recognized benign contexts for one-line script metrics
-    crit: exception
-    conf: 0.99
-    any:
-      # A .pth path configuration file is line-oriented Python configuration,
-      # not a standalone executable dropper script.
-      - id: micro-behaviors/process/interpreter/python::pth-path-config-file
-      - id: micro-behaviors/process/interpreter/eval/direct::eval-parenthesized-expression
-      - id: metadata/package/testing/harness/unit::rust-test
-      - id: well-known/tool/development/vcs/github-web::js-parse-end-mark
-      - id: well-known/tool/development/vcs/github-web::githubassets-fetched-artifact-path
-
-  - id: obfuscated-dropper-in-asar-unpacked
-    desc: Obfuscated dropper in unpacked asar
-    crit: hostile
-    conf: 0.95
-    scope: outer
-    for: [7z, zip, javascript]
-    all:
-      - id: metadata/file/naming::archive-asar-unpacked-member
-      - id: one-line-obfuscated-dropper
-
   - id: appended-encoded-exec
     desc: Encoded payload executed from appended line
     crit: suspicious

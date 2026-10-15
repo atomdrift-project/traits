@@ -12,10 +12,16 @@ traits:
     if:
       type: text
       # Raw text is not syntax-aware, so require the following argument to
-      # look like an encoded payload. This excludes regexes, documentation,
-      # and classifier descriptions that merely mention the command shape.
-      regex: '\bpowershell(\.exe)?\b[^\r\n]{0,180}\s-(EncodedCommand|enc)\b\s+["'']?[A-Za-z0-9+/]{16,}'
+      # look like an encoded payload, and carry the bounded same-line prefix
+      # in the match so `not:` can drop documented console-prompt examples
+      # ("PS C:\> powershell.exe -enc ..."), which are documentation rather
+      # than an invocation this file performs.
+      regex: '(?m)^.{0,64}\bpowershell\b[^\n]{0,180}\s-(EncodedCommand|enc)\b\s+["'']?[A-Za-z0-9+/]{16,}'
       case_insensitive: true
+    not:
+      # Comment-based help and README examples quote the interpreter behind a
+      # console prompt ("PS C:\>", "C:\PS>"); live invocations do not.
+      - regex: '(?i)PS\s+[A-Za-z]:\\>'
     unless:
       - id: ansible-encoded-command-context
       - id: metadata/package/testing/corpus/
@@ -165,6 +171,15 @@ traits:
       type: text
       regex: 'buildPowerShellEncodedArgs[\s\S]{0,500}-EncodedCommand'
 
+  - id: openclaw-windows-powershell-spawn-encoded-argv
+    desc: OpenClaw buildEncodedPowerShellArgs argv builder
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'buildEncodedPowerShellArgs[\s\S]{0,500}-EncodedCommand'
+
   # Local helper queries Windows default browser ProgId via PowerShell.
   - id: windows-browser-query-encoded-helper
     desc: PowerShell default browser query helper
@@ -185,6 +200,17 @@ traits:
     if:
       type: text
       regex: 'window-control\.ps1[\s\S]{0,1000}-EncodedCommand'
+  # Shortcut caretaker: the helper probes whether an existing .lnk carries
+  # its ownership marker (Arguments -like) before touching it. Payload
+  # placement overwrites; installer hygiene checks first.
+  - id: windows-shortcut-ownership-encoded-helper
+    desc: PowerShell shortcut ownership-probe helper
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)CreateShortcut\([^\r\n]{0,160}\)[\s\S]{0,200}Arguments\s+-like'
   # A command guard defines a detector for the encoded-flag spellings (e.g.
   # /^-e(?:c|nc\w*)?$/) and verdicts matches instead of launching anything.
   # Malware names the flag to use it; only a guard names its spellings to
@@ -223,6 +249,33 @@ traits:
       type: text
       regex: '(?i)powershell.{0,560}-W\s+Hidden.{0,320}-Exec\s+Bypass.{0,320}-Enc\b'
 
+  - id: powershell-utils-library
+    desc: powershell-utils helper library
+    crit: notable
+    conf: 0.98
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: executePowerShell.encodeCommand
+
+  - id: windows-directory-acl-encoded-helper
+    desc: Windows directory ACL Set-Acl helper
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)Set-Acl\s+-LiteralPath\s+\$path\s+-AclObject\s+\$acl'
+
+  - id: windows-openssh-authorized-keys-helper
+    desc: Windows OpenSSH authorized keys audit helper
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)administrators_authorized_keys[\s\S]{0,400}authorizedkeysfile'
+
   - id: windows-keep-awake-powershell-helper
     desc: Windows SetThreadExecutionState keep-awake
     crit: notable
@@ -231,8 +284,32 @@ traits:
     if:
       type: text
       regex: '(?i)SetThreadExecutionState[\s\S]{0,200}Wait-Process'
+  - id: encodedcommand-toast-helper-comment
+    desc: Comment cites EncodedCommand toast helper
+    crit: component
+    conf: 0.92
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: for -EncodedCommand (avoids
+  - id: toast-notification-manager-api
+    desc: Windows toast notification API reference
+    crit: component
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: ToastNotificationManager
 
 composite_rules:
+  - id: claude-hook-toast-encoded-helper
+    desc: Claude hook toast cites EncodedCommand
+    crit: notable
+    conf: 0.92
+    for: [javascript, typescript]
+    all:
+      - id: encodedcommand-toast-helper-comment
+      - id: toast-notification-manager-api
   - id: encodedcommand-invocation-source
     desc: PowerShell child process uses EncodedCommand
     crit: suspicious
@@ -242,27 +319,6 @@ composite_rules:
       - id: micro-behaviors/process/create/shell/interpreter::powershell-process-call
       - id: micro-behaviors/process/interpreter/powershell/command::encodedcommand-flag-native
     near_lines: 1
-  # Union of the `any:` legs' own for: -- the composite otherwise inherited
-  # just [powershell] from the file default, even though encodedcommand-
-  # invocation-raw already covers batch/data/oledoc and encodedcommand-flag-js
-  # covers javascript/typescript.
-  - id: encodedcommand-invocation
-    desc: PowerShell EncodedCommand invocation
-    crit: suspicious
-    conf: 0.92
-    attack: T1059.001
-    for: [powershell, data, batch, oledoc, javascript, typescript]
-    any:
-      - id: encodedcommand-invocation-raw
-      - id: encodedcommand-invocation-source
-      - id: micro-behaviors/process/interpreter/powershell/command::encodedcommand-flag-js
-      - id: encodedcommand-exec-js
-    unless:
-      - id: metadata/package/testing/corpus/
-      # Markdown code examples can be content-sniffed as JavaScript, which
-      # indexes fenced commands as string literals. They are not invocations.
-      - id: metadata/file/extension/identity::markdown-file-basename
-      - id: encodedcommand-known-benign-context
   # JavaScript tooling that builds an EncodedCommand for a fixed, recognizable
   # helper script, or that names the flag only to classify or block it.
   - id: encodedcommand-known-benign-context
@@ -274,17 +330,21 @@ composite_rules:
       - id: well-known/tool/development/agent/anthropic-claude-agent::claude-agent-sdk-package
       - id: command-classifier-encodedcommand-doc
       - id: powershell-flags-disallowed-doc
-      - id: micro-behaviors/process/create/shell/guard::command-filter-blocklist
+      - id: metadata/lang/source/naming::blocked-or-destructive-list-identifier
       - id: windows-dpapi-unprotect-helper
       - id: libreoffice-owner-encoded-helper
       - id: windows-credential-manager-encoded-helper
       - id: windows-resource-query-encoded-helper
       - id: windows-browser-query-encoded-helper
       - id: windows-window-control-encoded-helper
+      - id: windows-shortcut-ownership-encoded-helper
+      - id: claude-hook-toast-encoded-helper
       - id: electron-builder-cmd-shim-encoded-argv
+      - id: openclaw-windows-powershell-spawn-encoded-argv
       - id: well-known/lib/runtime/scripted/powershell-utils::powershell-utils-encoded-command-launcher
       - id: well-known/app/ai/coding-agent/vivus-agent::vivus-agent-package
       - id: well-known/app/ai/coding-agent/symbiot::symbiot-package
+      - id: well-known/app/ai/coding-agent/moflo::moflo-package-context
       - id: well-known/app/ai/coding-agent/workflow-ai::workflow-ai-package-context
       # LobeChat's local-file-shell builds the flag for the user's own local
       # pwsh calls (utf16le-base64 script passing, per Ansible/VS Code
@@ -302,15 +362,24 @@ composite_rules:
       - id: well-known/tool/development/cli/volter-supercode::supercode-terminal-import
       - id: well-known/tool/development/cli/volter-supercode::teams-package-reference
       - id: well-known/app/ai/coding-agent/ezcoder::ezcoder-package-context
+      - id: well-known/app/ai/coding-agent/smartstack::smartstack-package-context
       - id: windows-keep-awake-powershell-helper
+      - id: powershell-utils-library
+      - id: windows-directory-acl-encoded-helper
+      - id: windows-openssh-authorized-keys-helper
+      - id: well-known/app/ai/coding-agent/haystack::haystack-cli-context
+      - id: well-known/tool/development/agent/ai-cli/phnx-agents-cli/
   - id: encodedcommand-bypass
     desc: PowerShell encoded command with bypass
     crit: suspicious
     conf: 0.94
     attack: T1059.001
     all:
-      - id: encodedcommand-invocation
       - id: micro-behaviors/process/create/flags::powershell-policy-bypass-flag
+    any:
+      - id: encodedcommand-invocation-raw
+      - id: encodedcommand-invocation-source
+      - id: micro-behaviors/process/interpreter/powershell/command::encodedcommand-process-launch
     unless:
       - id: well-known/app/infrastructure/ansible::ansible-python-package-path
       - id: well-known/app/infrastructure/ansible::ansible-powershell-context

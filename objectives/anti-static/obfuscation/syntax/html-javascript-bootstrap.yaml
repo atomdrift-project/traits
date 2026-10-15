@@ -23,33 +23,22 @@ traits:
       # prefix, so it sits just above the 1024 run floor).
       regex: 'var\s+_0x[a-f0-9]{4,}\s*=\s*[''"][A-Za-z0-9+/=]*[A-Z][A-Za-z0-9+/=]*'
       length_min: 1040
-  - id: html-charcode-decode
-    desc: HTML charCode decode helper
-    crit: notable
-    conf: 0.78
-    if:
-      type: text
-      substr: charCodeAt(
-  - id: html-fromcharcode-decode
-    desc: HTML fromCharCode decode helper
-    crit: notable
-    conf: 0.78
-    # oledoc: Outlook .msg / legacy Office bodies carry embedded HTML whose
-    # script cleave reads as the container's own text runs. The atom stays
-    # notable; the sealed-container hostile composite that consumes it
-    # (objectives/anti-static/obfuscation/payload/container::noncode-container-selfdecoding-script)
-    # supplies the "no reason for script to be here" context.
-    for: [html, scala, elixir, oledoc]
-    if:
-      type: text
-      substr: fromCharCode
   - id: html-eval-unescape-decoder
-    desc: HTML evals percent-unescaped decoder code
+    desc: Eval input hides percent-escaped JavaScript
     crit: suspicious
-    conf: 0.9
+    conf: 0.96
+    for: [html, javascript, makefile, text]
     if:
       type: text
-      regex: 'eval\s*\(\s*unescape\s*\('
+      regex: "eval\\s*\\(\\s*unescape\\s*\\(\\s*['\"]function%20"
+  - id: eval-unescape-percent-payload
+    desc: eval of a percent-encoded unescape payload
+    crit: suspicious
+    conf: 0.96
+    for: [html, javascript, makefile]
+    if:
+      type: text
+      regex: 'eval\s*\(\s*unescape\s*\(\s*["''](%[0-9A-Fa-f]{2}){6,}'
   - id: percent-encoded-vbscript-language
     desc: Percent-encoded VBScript language attribute
     crit: suspicious
@@ -71,13 +60,6 @@ traits:
     if:
       type: text
       regex: '(?i)(Chr%28|Num2Str%20)'
-  - id: html-charcode-minus-one-decode
-    desc: Subtracts one from each character code
-    crit: notable
-    conf: 0.86
-    if:
-      type: text
-      regex: 'fromCharCode\s*\(\s*[A-Za-z_$][\w$]*\s*-\s*1'
   - id: html-encoded-alphabet-indexof-lookup
     desc: Percent-encoded custom-alphabet character lookup
     crit: suspicious
@@ -85,99 +67,38 @@ traits:
     if:
       type: text
       regex: 'indexOf%28[A-Za-z_$][\w$]{0,40}\.charAt%28'
-  # js-new-function-constructor is a tree-sitter JavaScript-grammar query --
-  # it never runs against an .html-typed file. Pair it with a text-based
-  # equivalent so the composite below can still fire on an HTML document
-  # whose inline <script> block is only ever scanned as raw text.
-  - id: html-new-function-constructor-text
-    desc: Script calls new Function constructor
-    crit: notable
-    conf: 0.7
-    if:
-      type: text
-      regex: 'new\s+Function\s*\('
-  - id: jscript-encode-language-attr
-    desc: Script tagged as JScript.Encode
-    crit: suspicious
-    conf: 0.94
-    for: [html, javascript, objectivec, scala, vbs, static-lib]
-    if:
-      type: text
-      regex: '(?i)(\b|%[0-9a-f]{2})JScript\.Encode\b'
-    unless:
-      # CyberChef's operation documents an encoded sample while implementing
-      # a decoder. That example is decoded, never executed.
-      - type: text
-        substr: 'this.name = "Microsoft Script Decoder"'
-  - id: jscript-encode-inline-magic
-    desc: Inline JScript.Encode start marker
-    crit: notable
-    conf: 0.9
-    for: [html, javascript, objectivec, scala, static-lib, vbs]
-    if:
-      type: text
-      regex: '#@~\^|%23(@|%40)%7[eE]%5[eE]'
-  - id: vbscript-encode-language-attr
-    desc: Script tagged as VBScript.Encode
-    crit: suspicious
-    conf: 0.94
-    for: [html, javascript, vbs, static-lib]
-    if:
-      type: text
-      regex: '(?i)(\b|%[0-9a-f]{2})VBScript\.Encode\b'
-  - id: jscript-encode-magic-hex
-    desc: Encoded script marker in bytes
-    crit: notable
-    conf: 0.9
-    for: [static-lib, html, data]
-    if:
-      type: hex
-      pattern: "23 40 7E 5E"
 
-  - id: vbscript-encode-name-hex
-    desc: VBScript.Encode name in bytes
+  - id: shifted-hidden-external-iframe
+    desc: Shifted hidden iframe with external URL
     crit: suspicious
-    conf: 0.94
-    for: [static-lib, html, data]
+    conf: 0.98
+    for: [html, javascript]
     if:
-      type: hex
-      pattern: "56 42 53 63 72 69 70 74 2E 45 6E 63 6F 64 65"
+      type: text
+      regex: '=jgsbnf!tsd>#iuuq[s]?;00[^"\r\n]{1,180}ejtqmbz;opof'
 
 composite_rules:
-  - id: html-vbscript-encode-payload-hex
-    desc: Encoded VBScript body in bytes
-    crit: hostile
-    conf: 0.95
-    for: [static-lib, html, data]
-    all:
-      - id: vbscript-encode-name-hex
-      - id: jscript-encode-magic-hex
-
-  - id: html-jscript-encode-payload
-    desc: HTML runs an encoded JScript body
-    crit: hostile
-    conf: 0.95
-    for: [html, javascript, vbs, static-lib]
-    all:
-      - id: jscript-encode-language-attr
-      - id: jscript-encode-inline-magic
+  # The declaration in either corpus: source-typed files carry it as text,
+  # opaque data containers only as raw bytes (their '#@~^'-carrying runs are
+  # replaced by the decoded layer before text matching).
+  - id: vbscript-encode-runtime-declared
+    desc: Declares the VBScript.Encode scripting runtime
+    crit: notable
+    conf: 0.94
+    for: [html, javascript, vbs, asp, static-lib, data, makefile]
+    platforms: [windows]
+    any:
+      - id: metadata/lang/runtime::vbscript-encode-runtime-declaration
+      - id: metadata/lang/runtime::vbscript-encode-runtime-declaration-bytes
 
   - id: html-vbscript-encode-payload
     desc: HTML runs an encoded VBScript body
-    crit: hostile
+    crit: suspicious
     conf: 0.95
-    for: [html, javascript, vbs, static-lib]
+    for: [html, javascript, vbs, static-lib, data]
     all:
-      - id: vbscript-encode-language-attr
-      - id: jscript-encode-inline-magic
-  - id: new-function-constructor-call
-    desc: Calls JavaScript's new Function constructor
-    crit: notable
-    conf: 0.7
-    for: [html, javascript]
-    any:
-      - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
-      - id: html-new-function-constructor-text
+      - id: vbscript-encode-runtime-declared
+      - id: metadata/file/encoding::microsoft-script-encoder-start-marker
   - id: html-xor-self-decoding-loader
     for: [html, javascript]
     desc: Self-decoding HTML loader with Base64 blob, XOR routine, and dynamic execution
@@ -186,7 +107,7 @@ composite_rules:
     all:
       - id: html-large-inline-base64-blob
       # The Base64 decode call is carried by the TextDecoder leg below.
-      - id: micro-behaviors/data/encode/xor::js-charcode-xor-operation
+      - id: micro-behaviors/data/arithmetic::js-charcode-xor-operation
       # The former `html-textdecoder-utf8` wrapper lived here and called the
       # decode stage `suspicious` on its own -- but `atob()` -> `Uint8Array`
       # via `charCodeAt` -> `new TextDecoder('utf-8').decode()` is the standard
@@ -195,7 +116,7 @@ composite_rules:
       # `notable` micro-behavior; the obfuscation evidence here comes from the
       # blob, XOR and `new Function` legs, and this leg only marks the stage.
       - id: micro-behaviors/data/decode/utf8::textdecoder-utf8-after-byte-decode
-      - id: new-function-constructor-call
+      - id: micro-behaviors/process/interpreter/eval/compile::new-function-constructor-call
   - id: browser-base64-xor-document-rewrite-loader
     desc: Base64 XOR document rewrite loader
     crit: hostile
@@ -203,18 +124,19 @@ composite_rules:
     ref: sha256:2e95c6a1842b99a4045e973126f1b16261cb8f0b89ee9e7c618a6e4d0746d7fd
     for: [javascript]
     all:
-      - id: micro-behaviors/data/encode/base64::large-string-assignment
+      - id: metadata/file/encoding::large-base64-compatible-string-assignment
       - id: micro-behaviors/data/decode/xor::js-repeating-key-charcode-xor-decoder
       - id: micro-behaviors/ui/window/insert-html::browser-aliased-document-rewrite-call
   - id: html-eval-encoded-decoder-document-writer
-    desc: HTML evals an encoded custom decoder and writes its output into the document
+    desc: Encoded decoder eval then document write
     crit: hostile
+    for: [html]
     conf: 0.98
     all:
       - id: html-eval-unescape-decoder
       - id: html-encoded-alphabet-indexof-lookup
       - id: micro-behaviors/ui/window/insert-html::browser-document-write
-      - id: html-fromcharcode-decode
+      - id: micro-behaviors/data/string/conversion::fromcharcode-text-reference
   - id: html-unescape-vbs-polyglot-writer
     desc: Unescape writer rebuilds embedded VBScript
     crit: hostile
@@ -233,36 +155,28 @@ composite_rules:
       - id: micro-behaviors/ui/window/insert-html::browser-document-write-unescape
       - id: percent-encoded-chr-call
       - id: percent-encoded-execute-call
-  - id: html-rot-minus-one-document-writer
-    desc: Rot-minus-one decoder writes HTML into the page
-    crit: hostile
-    conf: 0.96
-    attack: T1027,T1059.007
-    all:
-      - id: html-charcode-minus-one-decode
-      - id: html-fromcharcode-decode
-      - id: micro-behaviors/ui/window/insert-html::browser-document-write
   - id: html-rot-minus-one-tiny-iframe
     desc: Rot-minus-one decoder writes a tiny iframe
     crit: hostile
     conf: 0.96
     attack: T1027,T1189
     all:
-      - id: html-charcode-minus-one-decode
+      - id: micro-behaviors/data/decode/custom::js-charcode-minus-one
       - id: micro-behaviors/ui/window/visibility::tiny-iframe
       - id: micro-behaviors/communications/http/client/resource::external-iframe-element-load
-  - id: hta-jscript-encode-loader
-    desc: HTA page holds an encoded JScript block
-    crit: hostile
+  - id: hta-markup-with-jscript-encode
+    desc: HTA markup accompanies encoded JScript
+    crit: suspicious
     conf: 0.96
     for: [html, javascript, objectivec]
     all:
       - id: metadata/file/format/markup::hta-application-element
-      - id: jscript-encode-language-attr
-      - id: jscript-encode-inline-magic
+      - id: metadata/lang/runtime::jscript-encode-runtime-declaration
+      - id: metadata/file/encoding::microsoft-script-encoder-start-marker
   - id: html-eval-unescape-percent-loader
     desc: Eval rebuilds a page from percent-encoded bytes
     crit: hostile
+    for: [html]
     conf: 0.96
     all:
       - id: html-eval-unescape-decoder
@@ -274,10 +188,56 @@ composite_rules:
     attack: T1027,T1059.007
     for: [html]
     all:
-      - id: objectives/execution/interpreter/vbscript/loader::eval-variable
-      - id: html-fromcharcode-decode
-      - id: html-charcode-decode
+      - id: micro-behaviors/process/interpreter/eval/direct::eval-identifier-call-text
+      - id: micro-behaviors/data/string/conversion::fromcharcode-text-reference
+      - id: micro-behaviors/data/string/conversion::charcodeat-text-expression
       - id: micro-behaviors/data/decode/hex::js-parseint-radix-16
+    near_bytes: 2048
     unless:
       - id: metadata/package/testing/
       - id: well-known/lib/web/jquery/
+      - id: "metadata/file/naming::test-directory-component"
+  - id: percent-wrapped-script-encoder-writer
+    desc: Percent decoder writes a Script Encoder stage
+    crit: suspicious
+    conf: 0.97
+    for: [html, javascript]
+    all:
+      - id: metadata/file/encoding::percent-script-encoder-header
+      - id: micro-behaviors/data/decode/url::js-unescape-call-text
+      - id: micro-behaviors/ui/window/insert-html::browser-document-write
+  - id: nested-percent-script-encoder-writer
+    desc: Nested percent decoders write an encoded script payload
+    crit: hostile
+    conf: 0.99
+    attack: T1027,T1059.007
+    for: [html, javascript]
+    all:
+      - id: micro-behaviors/ui/window/insert-html::nested-document-write-unescape
+      - id: percent-wrapped-script-encoder-writer
+  - id: shifted-hidden-iframe-injection
+    desc: Decodes and inserts a concealed external iframe
+    crit: hostile
+    conf: 0.99
+    for: [html, javascript]
+    all:
+      - id: shifted-hidden-external-iframe
+      - id: micro-behaviors/data/decode/custom::js-charcode-minus-one
+      - id: micro-behaviors/ui/window/insert-html::browser-document-write
+  # The atob twin of html-hex-decode-eval-stager above: a 400+ character
+  # Base64 literal decoded by atob() and executed through a bare-variable
+  # eval. The blob scale rules out data-URI thumbnails and the identifier
+  # sink rules out direct eval(unescape(...)) one-liners; together in one
+  # page they stage a concealed payload (further atob/subtraction/XOR
+  # layers stay hidden even from decoded-string matching). Scope stays file
+  # because the blob itself separates the decode call from the sink.
+  - id: html-atob-eval-identifier-stager
+    desc: Large atob blob executed through variable eval
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1059.007
+    for: [html]
+    all:
+      - id: micro-behaviors/data/decode/base64::large-base64-atob-decode
+      - id: micro-behaviors/data/decode/base64::base64-decode-call-text
+      - id: micro-behaviors/process/interpreter/eval/direct::eval-identifier-call-text

@@ -24,7 +24,7 @@ composite_rules:
   - id: micro-behaviors/data/decode/base64::atob-decode
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-call-expression-arg
   - id: metadata/import/builtin::child-process-api-destructure
-  - id: micro-behaviors/process/create/spawn::stdio-ignore
+  - id: micro-behaviors/process/fd/stdio::child-stdio-ignore-option
   - id: micro-behaviors/process/create/spawn::windowshide-option
 - id: wsh-rat-http-stream-stage
   desc: WSH downloads binary stream and executes it
@@ -36,7 +36,7 @@ composite_rules:
   - id: micro-behaviors/fs/write/stream::adodb-save-to-file
   - id: micro-behaviors/fs/write/stream::adodb-type-binary-assignment
   - id: micro-behaviors/fs/write/stream::stream-write-response-body
-  - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run
+  - id: micro-behaviors/process/create/exec::wsh-progid-near-run
 - id: packed-table-decoder-indirect-eval-stage
   desc: Table decoder and indirect eval sink share one stage
   crit: suspicious
@@ -81,6 +81,7 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/eval/indirect::js-indirect-eval-variable
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: encoded-url-eval-process-loader
   desc: Obfuscated URL payload evaluated and executed
   crit: hostile
@@ -139,12 +140,17 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/eval/indirect::js-eval-alias-assignment
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: custom-decoder-function-constructor-dropper
   desc: Large JavaScript decoder feeds Function constructor
   crit: hostile
   conf: 0.99
   attack: T1027,T1140,T1059.007
   mbc: B0032
+  scope: file
+  # Without proximity, a decoder loop, unicode set iteration, and a Function
+  # constructor across distant bundled libraries (e.g. in Bokeh compiler) compose.
+  near_bytes: 2048
   all:
   - id: metadata/file/data-blob::js-many-very-long-strings
   - id: micro-behaviors/data/decode/custom::js-indexof-charat-lookup
@@ -170,22 +176,44 @@ composite_rules:
   unless:
   - id: well-known/lib/web/mermaid::mermaid-bundle-marker
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: activex-xmlhttp-remote-eval
   desc: ActiveX XMLHTTP remote response eval
   crit: hostile
   conf: 0.98
+  near_bytes: 2048
   unless:
+  - id: well-known/lib/web/browser-libraries::dojo-toolkit-library
   - id: well-known/lib/web/syntaxhighlighter::shjs-syntax-highlighter
   - id: well-known/lib/format/ejs::ejs-legacy-browser-loader
+  - id: well-known/app/publishing/tribalfusion::tribalfusion-ad-tag-script
+  # A fetch from an RFC 2606 reserved TLD cannot resolve, so responseText is
+  # always empty and the eval can never receive a payload; the shape is a
+  # documentation or fixture example, not an operational dropper.
+  - id: micro-behaviors/communications/http/url/tld::reserved-documentation-tld-url
   all:
-  - id: micro-behaviors/process/interpreter/jscript::activex-object
-  - id: micro-behaviors/communications/http/client/xmlhttp::msxml-xmlhttp-progid-text
-  - id: micro-behaviors/communications/http/client/response-body::response-text
-  - id: objectives/execution/interpreter/eval/remote::js-eval-response-text
+  - id: micro-behaviors/os/com/automation::activex-constructor-call
+  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-response-text
   any:
+  - id: micro-behaviors/communications/http/client/xmlhttp::msxml-xmlhttp-progid-text
+  - id: micro-behaviors/communications/http/client/xmlhttp::http-client-msxml-serverxmlhttp-progid
   - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-open
   - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-open-obfuscated-method
   - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-send
+  needs: 1
+- id: activex-serverxmlhttp-sync-eval-dropper
+  desc: ActiveX ServerXMLHTTP synchronous fetch and eval dropper
+  crit: hostile
+  conf: 0.99
+  attack: T1105,T1059.007
+  # Same reserved-TLD inertness as activex-xmlhttp-remote-eval above.
+  unless:
+  - id: micro-behaviors/communications/http/url/tld::reserved-documentation-tld-url
+  all:
+  - id: micro-behaviors/os/com/automation::activex-constructor-call
+  - id: micro-behaviors/communications/http/client/xmlhttp::http-client-msxml-serverxmlhttp-progid
+  - id: micro-behaviors/communications/http/client/xmlhttp::xhr-sync-get
+  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-response-text
 - id: activex-xmlhttp-marker-remote-eval
   desc: ActiveX XMLHTTP marker-rewritten remote eval
   crit: hostile
@@ -198,13 +226,15 @@ composite_rules:
   desc: WScript XMLHTTP download and eval execution
   crit: hostile
   conf: 0.95
+  unless:
+  - id: well-known/lib/web/jquery::license-url
+  # Reserved-TLD fetches cannot resolve, so the eval has no payload to run.
+  - id: micro-behaviors/communications/http/url/tld::reserved-documentation-tld-url
   all:
   - id: objectives/execution/interpreter/script/wsh::wscript-createobject
   - id: micro-behaviors/communications/http/client/response-body::response-text
   any:
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
-  unless:
-  - id: well-known/lib/web/jquery::license-url
 - id: html-title-dead-drop-eval
   desc: Page title points at an eval payload
   crit: hostile
@@ -214,6 +244,111 @@ composite_rules:
   all:
   - id: html-data-title-next-url
   - id: objectives/supply-chain/hidden-payload/encoding::eval-atob
+  # Staging claim for the XOR-encrypted inline stage: the page carries its
+  # own key (Base64) and ciphertext and evaluates the rebuild. The
+  # concealment half convicts in encoding/xor::atob-keyed-xor-eval-loader;
+  # this names the embedded-stage execution.
+- id: xor-keyed-stage-eval-dropper
+  desc: Base64-keyed XOR stage evaluated in page
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1059.007
+  for: [html, javascript]
+  platforms: [windows, unix]
+  near_lines: 40
+  all:
+  - id: micro-behaviors/data/decode/base64::atob-embedded-base64-literal
+  - id: micro-behaviors/data/string/conversion::js-fromcharcode-xor-result
+  - id: micro-behaviors/process/interpreter/eval/direct::eval-call-text
+  # Staging claim for the token-table stage: the page carries a machine
+  # concealment table and evaluates its concatenation. The concealment half
+  # convicts in concat::token-table-eval-loader; this names the embedded
+  # stage execution, required adjacent because the eval consumes the table.
+- id: token-table-stage-eval-dropper
+  desc: Token-table stage concatenated and evaluated in page
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1059.007
+  for: [html, javascript]
+  platforms: [windows, unix]
+  near_lines: 20
+  all:
+  - id: micro-behaviors/data/string/concat::js-indexed-token-table
+  - id: micro-behaviors/process/interpreter/eval/direct::eval-call-text
+  # A rotating server-side gate (bare random-token PHP script source) on a
+  # page that also injects third-party scripts at runtime: the gate hides
+  # the staged payload while the injector pulls the live one. Either half
+  # alone is weaker; together they name the staged drop.
+- id: random-php-gate-runtime-inject-dropper
+  desc: Random PHP gate with runtime script injection
+  crit: hostile
+  conf: 0.94
+  attack: T1105,T1059.007
+  for: [html, javascript]
+  platforms: [windows, unix]
+  all:
+  - id: micro-behaviors/communications/http/client/resource::random-php-script-src
+  - id: micro-behaviors/process/deploy::dynamic-script-element-load
+# Hacked-page script injection that hides the payload element by reversing it:
+# `document.write('>tpircs/<>...'.split("").reverse().join(""))` rebuilds
+# `<script src="https://...">` at runtime. Reversal plus a script write is
+# never page construction; the reversed tag proves the concealed element.
+- id: reversed-document-write-script-injector
+  desc: Reversed string feeds document.write script injection
+  crit: hostile
+  conf: 0.97
+  attack: T1189,T1105,T1027
+  for: [html]
+  platforms: [windows, unix]
+  all:
+  - id: micro-behaviors/ui/window/insert-html::browser-document-write
+  - id: micro-behaviors/data/string/reverse::html-split-reverse-join-string
+  - id: micro-behaviors/data/string/reverse::reversed-script-tag-text
+# Execution twin of the obfuscator loader above: the decoder derives the
+# Function constructor's head letter ("f" from the false-string) beside a
+# substitution alphabet under massed coercion. Alphabet plus constructor
+# head plus coercion mass name the constructed-code stager from its
+# execution shape rather than its concealment.
+- id: substitution-table-staged-code-execution
+  desc: Substitution alphabet feeds constructor-head staging
+  crit: hostile
+  conf: 0.96
+  attack: T1059.007,T1027
+  for: [html]
+  platforms: [windows, unix]
+  all:
+  - id: micro-behaviors/data/decode/charset::charcode-substitution-alphabet
+  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::false-zero-index-head
+  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::jsfuck-pattern
+# Stored-injection execution twin: the attribute-smuggled script tag points
+# at a bare directory URL, so the server chooses per visitor what code the
+# directory returns. Smuggled tag plus endpoint-style src name the injected
+# remote execution without depending on the payload host.
+- id: attribute-smuggled-directory-script-execution
+  desc: Smuggled script tag executes from a directory endpoint
+  crit: hostile
+  conf: 0.96
+  attack: T1189,T1105
+  for: [html]
+  platforms: [windows, unix]
+  all:
+  - id: micro-behaviors/communications/http/client/resource::attribute-value-script-tag
+  - id: micro-behaviors/communications/http/client/resource::directory-endpoint-script-src
+# Hex-table concealed iframe: a hex-escaped string array holds iframe
+# markup, a computed document member (`document[name](...)`) performs the
+# write without naming it, and the element renders at most one pixel.
+# Table plus computed write plus tiny frame name the concealed load.
+- id: hex-table-computed-write-tiny-iframe
+  desc: Hex table feeds computed write of a tiny iframe
+  crit: hostile
+  conf: 0.96
+  attack: T1189,T1027
+  for: [html]
+  platforms: [windows, unix]
+  all:
+  - id: metadata/lang/encoding::javascript-hex-escape-string-table
+  - id: micro-behaviors/data/control-flow/dispatch::js-computed-document-call
+  - id: micro-behaviors/ui/window/visibility::tiny-iframe-at-most-one
 traits:
 - id: html-data-title-next-url
   desc: Fetched page title is the next URL

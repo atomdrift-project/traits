@@ -18,14 +18,6 @@ traits:
   # path.join() splits components into separate strings, so we
   # match the config filename + IDE directory indicator separately.
 
-  - id: kiro-dir
-    desc: Kiro IDE config directory (.kiro)
-    crit: component
-    conf: 0.9
-    if:
-      type: text
-      substr: ".kiro"
-
   - id: python-mcp-config-backup-rename
     desc: Python backs up MCP config
     crit: notable
@@ -36,28 +28,22 @@ traits:
       regex: 'config_path\.with_suffix\(["'']\.json\.backup["'']\)[\s\S]{0,160}config_path\.rename\('
 
 composite_rules:
-  # MCP config + any IDE directory = config injection
+  # Config writes need concealed payload or credential/exfiltration evidence
   - id: mcp-config-injection
     for: [javascript]
-    desc: MCP configuration injection (multi-IDE)
+    desc: MCP config write with hidden payload or theft
     crit: hostile
     conf: 0.95
     near_lines: 80
     all:
+      - id: micro-behaviors/communications/mcp::mcp-client-config-key
       - id: micro-behaviors/fs/path/agent-config/mcp::mcp-client-config-target
       - id: micro-behaviors/fs/write/file/full::js-file-write
     any:
-      - id: objectives/supply-chain/install-hook
-      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
-      - id: metadata/package/scripts/lifecycle::filtered-raw-preinstall-hook
-      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
-      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: objectives/supply-chain/hidden-payload
       - id: objectives/exfiltration
       - id: objectives/credential-access
-      - id: kiro-dir
     unless:
-      - id: micro-behaviors/communications/mcp/
       - id: well-known/tool/detection/
       # A generated VSIX entrypoint can legitimately bundle its MCP client,
       # AI-config path documentation, and unrelated Node file writes in one
@@ -65,6 +51,8 @@ composite_rules:
       - id: metadata/build/bundler/vscode::vscode-extension-generated-asset
       - id: well-known/tool/development/vscode-extension/tencent-codebuddy::codebuddy-marker
       - id: well-known/tool/development/vcs/github-desktop/
+      - id: well-known/app/ai/coding-agent/agentprojectcontext-apx::archive-context
+      - id: objectives/credential-access/dev-tools/ai::mcp-server-install-context
 
   - id: claude-desktop-mcp-config-injection
     for: [javascript]
@@ -79,18 +67,23 @@ composite_rules:
       - id: micro-behaviors/communications/mcp::mcp-config-npx-command
     unless:
       - id: well-known/tool/detection/
+      - id: objectives/credential-access/dev-tools/ai::mcp-server-install-context
 
-  # mcp_config.json variant (Windsurf)
+  # mcp_config.json is also used by Gemini/Antigravity. Require the
+  # Windsurf directory rather than assigning vendor identity from the basename.
   - id: windsurf-mcp-injection
     for: [javascript]
-    desc: Writes Windsurf MCP configuration during install or exfiltration
+    desc: Windsurf MCP config write with package setup or theft indicators
     crit: suspicious
     conf: 0.9
     all:
-      - id: micro-behaviors/fs/path/agent-config/mcp::mcp-config-json-filename
+      - id: micro-behaviors/fs/path/agent-config/mcp::windsurf-mcp-config-path
       - id: micro-behaviors/fs/write/file/full::js-file-write
     any:
       - id: objectives/supply-chain/install-hook
+      - id: micro-behaviors/fs/path/vcs::git-precommit-hook-path
+      - id: micro-behaviors/fs/path/vcs::git-postcheckout-hook-path
+      - id: metadata/package/files/included::install-or-beacon-js-basename
       - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
       - id: metadata/package/scripts/lifecycle::filtered-raw-preinstall-hook
       - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
@@ -103,7 +96,7 @@ composite_rules:
       - id: well-known/tool/detection/
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: metadata/build/bundler/vscode::vscode-extension-generated-asset
-      - id: metadata/build/bundler/vscode::js-distribution-output-path
+      - id: metadata/file/naming::js-distribution-output-path
       - id: metadata/build/bundler/vscode::vscode-generated-escape-fragment
 
   - id: python-agent-mcp-config-command-writer
@@ -154,7 +147,7 @@ composite_rules:
       - id: service-credential-env-in-mcp-config
     any:
       - id: micro-behaviors/fs/write/file/full::python-pathlib-write-text
-      - id: micro-behaviors/communications/mcp::python-mcp-server-env-renderer
+      - id: micro-behaviors/communications/mcp::python-mcp-server-env-config-reference
     unless:
       - id: well-known/tool/detection/
       - id: well-known/tool/development/autohq::autohq-cli-package
@@ -177,7 +170,7 @@ composite_rules:
       - id: micro-behaviors/fs/path/agent-config/directory::ai-coding-tool-config-directory-cluster
       - id: micro-behaviors/communications/mcp::mcp-client-config-key
     any:
-      - id: micro-behaviors/communications/mcp::python-mcp-server-env-renderer
+      - id: micro-behaviors/communications/mcp::python-mcp-server-env-config-reference
       - id: service-credential-env-in-mcp-config
     unless:
       - id: well-known/tool/detection/
@@ -207,12 +200,16 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     all:
-      - id: micro-behaviors/os/env/ai-provider::anthropic-base-url-variable
-      - id: micro-behaviors/os/env/ai-provider::anthropic-auth-token-variable
-      - id: micro-behaviors/fs/path/agent-config/file::claude-global-settings-path-js
+      # Bare name references also match conflict checkers that read or delete
+      # the keys. Planting the router is an assignment into the settings write.
+      - id: micro-behaviors/os/env/ai-provider::js-anthropic-base-url-assignment
+      - id: micro-behaviors/os/env/ai-provider::js-anthropic-auth-token-assignment
+      - id: micro-behaviors/fs/path/agent-config/file::claude-settings-path-reference
     any:
       - id: micro-behaviors/fs/write/file/full::python-pathlib-write-text
       - id: micro-behaviors/fs/write/file/full::js-file-write
+      - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
+      - id: micro-behaviors/fs/write/file/full::json-stringify-write-sync
     near_bytes: 8192
     unless:
       - id: well-known/tool/detection/
@@ -221,6 +218,7 @@ composite_rules:
       - id: well-known/lib/network/logfire::ai-gateway-benign-context
       - id: well-known/app/ai/agent-runtime/ethan-agent::ethan-agent-package
       - id: well-known/app/ai/agent-runtime/ethan-agent::ethan-agent-config-module
+      - id: well-known/app/ai/gateway/ccs::ccs-benign-context
     # Where the endpoint points is the general form of the per-vendor
     # exceptions above: a loopback base URL is a local proxy the user is
     # already running, so the prompts and the planted token never leave the
@@ -231,6 +229,46 @@ composite_rules:
     downgrade:
       any:
         - id: micro-behaviors/communications/http/llm::anthropic-base-url-with-loopback-host
+
+  - id: npm-unofficial-anthropic-gateway-claude-config
+    for: [npm, javascript, package.json]
+    desc: npm routes Claude token to unofficial API host
+    crit: hostile
+    conf: 0.94
+    scope: archive
+    all:
+      - id: ai-agent-api-endpoint-hijack
+      - id: micro-behaviors/communications/http/url/domain::javascript-anthropic-branded-off-vendor-api-host
+    any:
+      - id: metadata/package/name/vocabulary::npm-manifest-name-anthropic-token
+      - id: micro-behaviors/data/llm/agent::agent-identity-claude
+
+  - id: javascript-codex-off-vendor-provider-rewrite
+    for: [javascript, typescript]
+    desc: Rewrites Codex TOML with off-vendor provider URL
+    crit: suspicious
+    conf: 0.9
+    scope: file
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/fs/path/agent-config/file::codex-config-toml-path-reference
+      - id: micro-behaviors/data/llm/wire-marker::model-provider-field
+      - id: micro-behaviors/data/llm/wire-marker::toml-model-provider-base-url-off-vendor
+      - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
+    unless:
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: well-known/app/ai/gateway/ccs::ccs-benign-context
+
+  - id: npm-chatgpt-lure-codex-provider-hijack
+    for: [npm, javascript, package.json]
+    desc: ChatGPT-branded npm hijacks Codex provider endpoint
+    crit: hostile
+    conf: 0.93
+    scope: archive
+    all:
+      - id: javascript-codex-off-vendor-provider-rewrite
+      - id: metadata/package/name/vocabulary::npm-manifest-name-chatgpt-token
 
   # Codex twin of the redirect above: overriding model_provider in config.toml
   # and planting OPENAI_API_KEY into the Codex auth store routes Codex's traffic
@@ -266,3 +304,25 @@ composite_rules:
     unless:
       - id: metadata/build/recognized-contexts::benign-trojanized-fp-context
       - id: well-known/tool/development/vscode-extension/atlascode/
+
+  - id: codex-toml-custom-model-provider-redirect
+    for: [javascript, typescript]
+    desc: Rewrites Codex config with custom model provider endpoint
+    crit: hostile
+    conf: 0.96
+    scope: file
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/data/llm/wire-marker::model-provider-field
+      - id: micro-behaviors/communications/http/url/endpoint::base-url-http-assignment
+      - id: micro-behaviors/fs/path/agent-config/directory::codex-config-directory
+    any:
+      - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
+      - id: micro-behaviors/fs/write/file/full::js-file-write
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
+      - id: well-known/tool/development/agent/openai-codex/
+      - id: well-known/app/ai/gateway/ccs::ccs-archive-context
+      - id: well-known/app/ai/gateway/pennyrouter::pennyrouter-archive-context
+      - id: well-known/app/ai/gateway/mslxdff/

@@ -2,6 +2,15 @@ defaults:
   platforms: [windows, unix]
   crit: notable
 traits:
+- id: global-open-string-target-call
+  for: [html, javascript]
+  desc: Global open with string URL and target
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    exclude_html_comments: true
+    regex: '(^|[^.\w$])open\s*\(\s*[''"][^''"\r\n]{1,120}[''"]\s*,\s*[''"]'
 - id: browser-window-open-external-url
   desc: Opens window to external HTTP URL
   conf: 0.92
@@ -12,20 +21,23 @@ traits:
 - id: browser-location-replace
   for: [javascript, html]
   conf: 0.9
-  desc: Replaces explicit browser window location
+  desc: Replaces browser location
   if:
     type: text
-    regex: '(window|document)\.location\.replace\s*\('
-- id: computed-location-replace
-  for: [javascript, html]
-  desc: Replaces a computed browser location
+    regex: '\b((window|document)\.)?location\.replace\s*\('
+- id: browser-location-bracket-replace
+  for:
+  - javascript
+  - html
+  # The second subscript is often a decoded or computed method name
+  # (window['location'][fn(...)](url)) in obfuscated redirectors, so it is
+  # matched structurally rather than requiring the literal 'replace'.
+  desc: Window location bracket call
   crit: notable
   conf: 0.94
   if:
-    # Covers window[decodedLocation]["replace"](url) without treating an
-    # unrelated object method named replace as browser navigation.
     type: text
-    regex: '\bwindow\s*\[[^\]\r\n]{1,120}\]\s*\[\s*["'']replace["'']\s*\]\s*\('
+    regex: \bwindow\[['"]location['"]\]\[[^\]]{1,120}\]\s*\(
 - id: browser-window-open-reference
   conf: 0.9
   desc: Stores browser window.open function reference
@@ -41,14 +53,6 @@ traits:
   if:
     type: text
     regex: 'window\s*\[\s*\d{1,3}\s*\]\.location\.href\s*='
-- id: computed-query-source
-  desc: Parses query from computed window member
-  crit: notable
-  conf: 0.9
-  for: [javascript, typescript, html]
-  if:
-    type: text
-    regex: 'URLSearchParams\s*\(\s*window\s*\[[^\]]{1,80}\]\s*\[[^\]]{1,80}\]\s*\)'
 - id: computed-window-target-url-call
   desc: Computed window method receives targetUrl
   crit: notable
@@ -72,11 +76,24 @@ traits:
   # SSRF composites add page or endpoint evidence before inferring intent.
   if:
     type: text
-    regex: '(?i)http-equiv=["'']refresh["''].{0,80}\burl=https?://'
+    regex: '(?is)http-equiv=["'']refresh["''][\s\S]{0,80}\burl=[''"]?\s*h[\w\s]*://'
   unless:
   - id: well-known/lib/crypto/microsoft-auth::microsoft-live-auth-runtime-context
   - id: well-known/lib/crypto/microsoft-auth::microsoft-oauth-error-relay-context
-  - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: "metadata/file/naming::test-directory-component"
+- id: browser-meta-refresh-instant-relative-url
+  for: [html]
+  conf: 0.9
+  desc: Instant meta refresh to relative URL
+  # Same-origin relative targets are ordinary site plumbing (moved pages,
+  # language forwards), so this stays a neutral mechanism atom: the sign-in
+  # endpoint and stub scope in the kit composites carry the intent.
+  # External targets belong to the external-url twin above.
+  if:
+    type: text
+    regex: '(?is)http-equiv=["'']refresh["''].{0,80}content\s*=\s*["'']0\s*;\s*url\s*=\S+'
+  not:
+    - regex: '(?i)url\s*=\s*["'']?https?://'
 - id: browser-window-open
   for: [javascript, typescript]
   desc: Opens browser window or tab
@@ -87,7 +104,7 @@ traits:
   unless:
     - id: metadata/file/format/structured::serialized-news-article-catalog
 - id: browser-window-open-text-call
-  for: [javascript, typescript, html, vbs, powershell]
+  for: [javascript, typescript, html, svg, vbs, powershell]
   desc: Browser window.open text call
   conf: 0.9
   if:
@@ -155,7 +172,7 @@ traits:
     type: text
     regex: '\b(window\.)?location\.assign\s*\('
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
 - id: top-location-replace-string
   for: [javascript, typescript, html, -kotlin]
   desc: String contains top location replace
@@ -166,7 +183,7 @@ traits:
     substr: top.location.replace(
     case_insensitive: true
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
 - id: browser-location-reload
   for: [javascript, typescript, html, -kotlin]
   desc: Reloads browser location
@@ -176,7 +193,7 @@ traits:
     kind: call
     exact: location.reload
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
 - id: browser-query-propagated-redirect
   for: [javascript, typescript, html, -kotlin]
   desc: Browser query parameter redirect
@@ -186,9 +203,9 @@ traits:
     type: text
     regex: 'window\.location\.search[\s\S]{0,240}(redirectURL|location\s*=)'
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
 - id: browser-location-href-assign
-  for: [javascript, typescript, html, -kotlin]
+  for: [javascript, typescript, html, svg, -kotlin]
   desc: Navigates via location.href assignment
   conf: 0.82
   # The trailing `[^=]` keeps the comparison out: `location.href ===` starts
@@ -200,19 +217,26 @@ traits:
     type: text
     regex: '(window\.)?location\.href\s*=[^=]'
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
 - id: browser-location-external-method
   for: [javascript, typescript, html, -kotlin]
-  desc: Location API targets an external URL
+  # "External" here means an absolute URL, not an off-site host: the
+  # matcher cannot know the page's own host, so same-site absolute
+  # targets (a category dropdown navigating within its own blog) match
+  # too. Redirect composites add the off-site context that convicts.
+  desc: Location API targets an absolute URL
   conf: 0.82
   if:
     type: text
     regex: "(?i)(window\\.)?location\\.(href\\s*=|(replace|assign)\\s*\\()\\s*['\\\"]https?://"
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
 - id: browser-location-external-assign
   for: [javascript, typescript, html, -kotlin]
-  desc: Assigns external URL to browser location
+  # Same absolute-URL caveat as browser-location-external-method above:
+  # same-site absolute targets match; off-site intent comes from the
+  # consuming redirect composites, not this atom.
+  desc: Assigns absolute URL to browser location
   conf: 0.82
   if:
     type: text
@@ -221,10 +245,10 @@ traits:
     # global spelling is especially common in compact injected scripts.
     regex: "(?i)\\b((window|document)\\.)?location\\s*=\\s*['\\\"]https?://"
   unless:
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content
   - id: metadata/document/html/
 - id: browser-form-submit
-  for: [javascript, typescript, html, -kotlin]
+  for: [javascript, typescript, html, makefile, -kotlin]
   desc: Programmatically submits a browser form
   crit: notable
   conf: 0.9
@@ -234,9 +258,16 @@ traits:
   if:
     type: text
     regex: '(?i)\b[\w$]*forms?(\[[^\]]{0,12}\])?\.submit\s*\('
+    not:
+    - substr: '* form.submit()'
+    - substr: '* const result = form.submit()'
+    - substr: 'FormResult = form.submit()'
   unless:
     - type: text
       substr: 'form.submit() manually, consider using form.requestSubmit()'
+    - id: metadata/lang/scripted::dts-declaration-file
+    - type: text
+      substr: 'FIELD_CONTROLS = Object.freeze'
 - id: document-named-form-submit
   for: [javascript, typescript, html, -kotlin]
   desc: Programmatically submits named document form
@@ -263,13 +294,18 @@ traits:
   if:
     type: text
     regex: '(?i)\b(account|channel)(Page|View|Url)\b'
-
+- id: open-computed-url-named-target
+  desc: Opens computed URL in named window
+  for: [html, javascript]
+  conf: 0.9
+  if:
+    type: text
+    exclude_html_comments: true
+    regex: '(^|[^.\w$])open\s*\(\s*[A-Za-z_$][\w$]*(\[[^\]]{1,32}\])?\s*,\s*[''"]'
+  unless:
+    # Bare open(path, flags) is file I/O in Node.js, not window navigation.
+    - id: metadata/import/npm/fs
 composite_rules:
-  # Any spelling of "send the browser to another site". Neutral navigation:
-  # sign-in flows, SSO hand-offs and link shims all do it. Previously defined
-  # in objectives/credential-access/phishing/mfa-relay/, where the directory
-  # read a plain cross-origin navigation as phishing; the relay composites
-  # there now reference this atom and supply the credential evidence.
   - id: browser-external-redirect
     desc: Browser external redirect
     crit: notable
@@ -279,14 +315,19 @@ composite_rules:
       - id: micro-behaviors/ui/window/navigation::browser-location-external-method
       - id: micro-behaviors/ui/window/navigation::browser-location-external-assign
       - id: micro-behaviors/communications/http/response::php-location-redirect
+      - id: micro-behaviors/ui/window/navigation::browser-meta-refresh-external-url
   - id: obfuscated-query-navigation
-    desc: Obfuscated navigation propagates URL query
+    desc: Obfuscated query parsing and window calls
     crit: suspicious
     conf: 0.92
-    for: [javascript, typescript, html]
+    for:
+    - javascript
+    - typescript
+    - html
     all:
-      - id: computed-query-source
-      - id: micro-behaviors/communications/http/url/query::obfuscated-urlsearchparams-iteration
-      - id: micro-behaviors/communications/http/url/query::computed-target-url-params-call
-      - id: computed-window-target-url-call
-    near_bytes: 1000
+    - id: micro-behaviors/communications/http/url/query::js-urlsearchparams-construction
+    - id: micro-behaviors/communications/http/url/query::obfuscated-urlsearchparams-iteration
+    any:
+    - id: micro-behaviors/communications/http/url/query::computed-target-url-params-call
+    - id: computed-window-target-url-call
+    - id: micro-behaviors/data/control-flow/dispatch::window-double-bracket-call

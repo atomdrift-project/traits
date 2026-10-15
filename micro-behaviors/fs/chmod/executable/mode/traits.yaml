@@ -27,7 +27,7 @@ traits:
     # comment. Plain text regex, so it needs no shell AST for any of those.
     crit: notable
     conf: 0.85
-    for: [source, manifests, dockerfile, elf, macho, lua, -pyproject.toml, -composer.json]
+    for: [source, manifests, dockerfile, elf, macho, lua, applescript, -pyproject.toml, -composer.json]
     if:
       type: text
       regex: '\bchmod\s+(\+x|0?7[57][57])(\s|$)'
@@ -35,23 +35,17 @@ traits:
       - id: well-known/tool/detection/security-remediation::compiled-remediation-catalog
       - type: basename
         regex: '(?i)^(METADATA|PKG-INFO|README(?:\.[^/\\!]*)?)$'
-  - id: pyproject-chmod-make-executable
-    desc: PyProject command marks file executable
-    crit: notable
-    conf: 0.85
-    for: [pyproject.toml]
-    if:
-      type: value
-      path: tool.setuptools.cmdclass.build_py
-      regex: '\bchmod\s+(\+x|0?7[57][57])\s'
   - id: composer-chmod-make-executable
-    desc: Composer hook marks file executable
+    desc: Composer script marks file executable
     crit: notable
     conf: 0.85
     for: [composer.json]
     if:
       type: value
-      path: scripts.post-install-cmd[*]
+      # Composer script handlers may be scalar commands or arrays, across
+      # install/update events and custom commands. The consuming objective
+      # separately requires a lifecycle chain with the same path throughout.
+      path: scripts.*
       regex: '\bchmod\s+(\+x|0?7[57][57])\s'
   - id: chmod-exec-var-target
     desc: chmod marks a variable path executable
@@ -106,7 +100,7 @@ traits:
     # Python, JavaScript or Ruby dropper, and gating on `shell` made every one
     # of those invisible. The sibling chmod-hidden-tmp-executable below already
     # uses the wider list.
-    for: [scripts, source, manifests]
+    for: [scripts, source, manifests, -pyproject.toml]
     if:
       type: text
       regex: '\bchmod\s+(\+x|0?7[57][57])\s+["'']?/[A-Za-z0-9._/-]+'
@@ -128,6 +122,7 @@ traits:
       regex: '\bchmod\s+(\+x|0?7[57][57])\s+/(opt|usr/(src|lib/node_modules)|app/data)/\S{2,50}'
     not:
       - regex: '/opt/[^/\s]+(\s|$)'
+      - regex: '/opt/(local/)?bin/|/opt/cache/bin/|/opt/(azure|aws|cni)/'
     unless:
       - id: well-known/tool/detection/security-remediation::compiled-remediation-catalog
   - id: chmod-hidden-tmp-executable
@@ -136,7 +131,7 @@ traits:
     # promote it when it is paired with staging or process execution.
     crit: notable
     conf: 0.94
-    for: [scripts, source, manifests]
+    for: [scripts, source, manifests, -pyproject.toml]
     if:
       type: text
       regex: '\bchmod\s+(\+x|0?7[57][57])\s+["'']?/(var/)?tmp/\.'
@@ -231,12 +226,22 @@ traits:
       type: text
       substr: '*.AppImage'
   - id: chmod-no-space
-    desc: Typo in chmod command without space
+    desc: chmod +x glued to target, no space
     crit: suspicious
     conf: 0.85
+    # Real glued targets are filenames (`chmod +xcli`), so the continuation
+    # must be a 3+ char lowercase/digit name token. Case matters for a reason:
+    # text conditions scan binaries as printable runs, and the 8-char literal
+    # "chmod +x" inside an x86 movabs immediate is routinely followed by a
+    # printable opcode byte (REX 0x48 'H', push/pop 0x50-0x5F) from the next
+    # instruction -- uppercase single-byte junk that fabricated glued targets
+    # no source ever wrote. Lowercase opcode bytes are rare, and 3 chars rules
+    # out the remaining one/two-byte coincidences. Embedded legit `chmod +x `
+    # text in binaries is covered by chmod-make-executable's space boundary.
+    for: [scripts]
     if:
       type: text
-      regex: chmod\s+\+x[a-zA-Z0-9_]{1,64}
+      regex: chmod\s+\+x[a-z0-9_-]{3,64}
     unless:
       - id: well-known/tool/detection/cleave::cleave-static-analysis-context
       - id: well-known/tool/detection/ascan::ascan-defensive-scanner-context
@@ -295,20 +300,6 @@ traits:
     if:
       type: text
       regex: chmod\(.{0,220}0[ox]?7[0-7][0-7]\)
-  - id: shell-7xx
-    desc: Shell chmod with numeric permission mode
-    conf: 0.7
-    for: [shell]
-    if:
-      type: text
-      regex: '\bchmod\s+[0-7]{3,4}\s+'
-    unless:
-      - id: well-known/tool/detection/security-remediation::authenticated-encryption-recommendation
-      - id: metadata/package/testing/harness/runtime/
-      - id: metadata/file/extension/identity::markdown-file-basename
-      # chmod 700 on .ssh directories is credential-store hardening, not payload executability.
-      - type: text
-        regex: 'chmod\s+[\-\w]*\s*0?7[0-7][0-7]\s+[^\n]*\.ssh(\b|/)'
   - id: chmod-system-path-executable
     desc: Shell marks a system-path file executable
     crit: notable
@@ -440,3 +431,11 @@ traits:
     if:
       type: text
       substr: "chmod 0755"
+
+  - id: shell-owner-executable-numeric-mode
+    desc: Shell chmod sets owner-executable numeric mode
+    conf: 0.9
+    for: [shell]
+    if:
+      type: text
+      regex: '(?m)(^|[;&|]\s*)[ \t]*chmod\s+[0-7]?[1357][0-7]{2}\s+'

@@ -1,13 +1,13 @@
 defaults:
   for: [javascript, typescript]
   attack: T1027
+  mbc: B0032
   platforms: [windows, unix]
 traits:
   - id: dense-fromcharcode
     desc: Dense fromCharCode calls (string obfuscation)
     crit: suspicious
     conf: 0.9
-    mbc: B0032
     count_min: 5
     per_kb_min: 1.0
     if:
@@ -16,22 +16,7 @@ traits:
     unless:
       - id: well-known/app/communication/thunderbird::firefox-source-tree-path
       - id: metadata/package/testing/
-  - id: fromcodepoint-with-base-decode
-    desc: 'fromcodepoint with base decode'
-    crit: notable
-    conf: 0.9
-    mbc: B0032
-    if:
-      type: text
-      regex: from(CodePoint|CharCode).{0,40}(atob|Buffer\.from)
-    unless:
-      - id: metadata/package/testing/harness/runtime/
-      - id: well-known/lib/format/pdfjs::pdfjs-bundle
-      - id: well-known/lib/format/pdfjs::pdfjs-pdfworker-class
-      - id: well-known/app/browser-extension/content-blocker::adblock-filter-resource
-      - id: micro-behaviors/data/encode/base64::js-base64url-alphabet-restore
-      - type: text
-        substr: fromCharCode(parseInt
+      - id: "metadata/file/naming::test-directory-component"
 composite_rules:
   # The scheme is rebuilt from character codes and the host never appears as a
   # string at all -- it is either a second code array or a table of constants
@@ -48,29 +33,47 @@ composite_rules:
     desc: HTTP endpoint assembled from numeric arrays
     crit: suspicious
     conf: 0.93
-    mbc: B0032
     scope: leaf
     near_bytes: 900
     all:
       - id: micro-behaviors/communications/url/encoded::javascript-charcode-http-scheme
+      - id: micro-behaviors/data/decode/charset::fromcharcode-call
     any:
-      - id: micro-behaviors/data/encode/arithmetic::seed-offset-integer-array
-      - id: micro-behaviors/data/collection/array::object-property-integer-arrays
+      - id: micro-behaviors/communications/ip/construct::computed-octet-dot-separator
+      - id: objectives/anti-static/obfuscation/encoding/ip-notation::ipv4-charcode-array
 
-  - id: js-charcode-url-host-rewrite
-    desc: Rewrites URL with fromCharCode strings
+  # Require the handler input to enter the serialized POST body; an unrelated
+  # numeric builder beside a state-only POST is insufficient.
+  - id: js-numeric-endpoint-json-post
+    desc: Numeric endpoint with input-object JSON POST
     crit: suspicious
-    conf: 0.96
-    scope: leaf
-    near_bytes: 4096
+    conf: 0.97
+    for: [javascript]
+    scope: file
+    near_bytes: 2048
     all:
-      - id: micro-behaviors/data/decode/charset::multiple-fromcharcode-calls
-      - id: micro-behaviors/data/string/replace::js-url-variable-self-replace
+      - id: js-runtime-assembled-http-endpoint
+      - id: micro-behaviors/communications/http/url/build::fetch-local-charcode-url-builder
+      - id: micro-behaviors/communications/http/request/payload::function-input-spread-json-post
+
+  # Rotation of the above: the host is a literal domain and only the scheme
+  # separators arrive as character codes, so the octet builder never fires.
+  # The concealment intent is the same -- a fetch callee whose URL helper
+  # decodes its punctuation at runtime -- and the caller input still lands
+  # in the serialized POST body, so require the same input-to-body binding.
+  - id: js-veiled-domain-endpoint-json-post
+    desc: Veiled-domain endpoint with input-object JSON POST
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    scope: file
+    near_bytes: 2048
+    all:
+      - id: micro-behaviors/communications/http/url/build::fetch-local-charcode-url-builder
+      - id: micro-behaviors/communications/http/request/payload::function-input-spread-json-post
+      - id: micro-behaviors/data/decode/charset::fromcharcode-call
     unless:
-      - id: well-known/dual-use/packaging/javascript-obfuscator::official-archive-context
-      - id: well-known/dual-use/packaging/javascript-obfuscator::implementation-context
-      - id: well-known/tool/development/lint/prettier/
-      - id: metadata/package/testing/presence/harness::test-directory-path
-      - id: metadata/package/testing/presence/fixture::snapshot-file
-      - id: well-known/lib/ui/vite::vite-source-path
-      - id: well-known/lib/ui/mermaid::mermaid-node-modules-path
+      # The numeric-octet shape satisfies the same three legs; without this
+      # the veiled finding also lands on numeric-endpoint builders, where
+      # its description is wrong. A file carrying both shapes reads numeric.
+      - id: objectives/anti-static/obfuscation/string/charcode-url::js-numeric-endpoint-json-post

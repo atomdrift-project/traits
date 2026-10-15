@@ -60,31 +60,6 @@ traits:
   # [24,16,8,0])`. Those are shift widths, not hidden octets.
   not:
     - regex: '\[\s*(24,\s*16,\s*8,\s*0|0,\s*8,\s*16,\s*24)\s*\]'
-- id: int-octet-list-js
-  desc: Integer array followed by dot-join
-  crit: notable
-  conf: 0.88
-  if:
-    type: text
-    regex: '\[\d{1,3}(,\s*\d{1,3}){3}\][^\n]{0,40}\.join\(["'']\.["'']\)'
-  # Same shift-ladder exclusion as `int-octet-list` above, which this atom was
-  # missing: the id says `-js` but nothing restricts the file type, so it is
-  # the leg that fires on every other language. The Ruby gem
-  # `philiprehberger-ip_addr` scored suspicious on
-  # `[24, 16, 8, 0].map { |shift| (int >> shift) & 0xFF }.join('.')` -- the
-  # textbook int-to-dotted-quad formatter, with the ladder read as octets.
-  not:
-    - regex: '\[\s*(24,\s*16,\s*8,\s*0|0,\s*8,\s*16,\s*24)\s*\]'
-    # A shift applied between the array and the join means the literals are
-    # operands, not the address: the octets are computed from a variable.
-    - regex: '\[\d{1,3}(,\s*\d{1,3}){3}\][^\n]{0,40}>>[^\n]{0,40}\.join\(["'']\.["'']\)'
-# First element is a decimal octet; remaining slots are identifiers or
-# arithmetic (`[77, seed, seed+9, seed+84]`). Bare `[r,g,b,a]` stays out
-# because it does not start with a 1–3 digit literal.
-# `i ? '.' : ''` (or equivalent) used to glue parts into a dotted string.
-# The address's own characters as char codes: `[49,57,51,46,...]` is
-# "193." -- digits (48-57) in 1-3 digit groups split by exactly three dots
-# (46). String.fromCharCode / chr() then yields a dotted quad no grep sees.
 - id: ipv4-charcode-array
   desc: IPv4 address spelled as character codes
   crit: suspicious
@@ -116,15 +91,6 @@ traits:
   # netmask helpers) writes, so drop matches whose shifted operand is a name.
   not:
     - regex: '\{\(?[A-Za-z_][A-Za-z_0-9.\[\]]*\s*>>\s*24'
-- id: ipv4-struct-pack
-  desc: struct.pack with hex IP constant
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    # The packed value must be a bare 32-bit hex literal in a one-integer
-    # format; `struct.pack("<L", self.pos & 0xffffFFFF)` (tarfile) is a mask.
-    regex: 'struct\.pack\s*\(\s*[''"][!<>=@]?[IL][''"]\s*,\s*0x[0-9a-fA-F]{8}\s*\)'
 - id: ipv4-bytes-call
   desc: Four-octet bytes array constructor
   crit: notable
@@ -157,7 +123,7 @@ traits:
   - id: metadata/package/testing/
   # SSRF/egress deny-list docs: hex loopback cited as a blocked check vector
   - type: text
-    regex: 'https?://0x[0-9a-fA-F]{6,8}/["'']\)?\s*#\s*(raises|hex|loopback)'
+    regex: 'https?://0x[0-9a-fA-F]{6,8}/?["'']\)?,?\s*#.*(raises|hex|loopback)'
   - type: text
     regex: '(?i)#\s*raises\s*\(\s*hex\b'
   # The hex-IP appears inside a comment/docstring line explaining an SSRF
@@ -167,8 +133,12 @@ traits:
     regex: '(?m)^\s*(#|//|\*)\s*.{0,120}https?://0x[0-9a-fA-F]{6,8}'
   - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
   - id: well-known/tool/offensive/
+  - id: "metadata/file/naming::test-directory-component"
+  - id: well-known/tool/development/testing/load-density::official-package
+  # Match runtime literals, not comments or Python documentation examples.
   if:
-    type: text
+    type: literal
+    exclude_docstrings: true
     regex: 'https?://0x[0-9a-fA-F]{6,8}([:/]|$)'
 - id: url-with-octal-ip
   desc: URL with octal-encoded IPv4 octet
@@ -183,8 +153,11 @@ traits:
   - id: well-known/tool/offensive/bingo/
   - id: well-known/tool/offensive/mcpsec/
   - id: metadata/package/documentation/agent-safety::scoped-security-test-documentation
+  - id: "metadata/file/naming::test-directory-component"
+  # Docstrings describing rejected SSRF inputs are not hidden destinations.
   if:
-    type: string_literal
+    type: literal
+    exclude_docstrings: true
     regex: https?://0[0-7]{0,2}[1-7][0-7]*\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}
 - id: url-with-dword-ip
   desc: URL with single-DWORD IPv4 (no dots)
@@ -221,7 +194,7 @@ composite_rules:
   - id: join-call
   any:
   - id: int-octet-list
-  - id: int-octet-list-js
+  - id: micro-behaviors/communications/ip/construct::integer-array-dot-join
   near_lines: 2
   unless:
   - id: well-known/lib/format/json-ts/
@@ -247,6 +220,7 @@ composite_rules:
   - id: well-known/lib/data/faker::faker-library-context
   - id: metadata/build/
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: ipv4-construction-aggregator
   desc: IPv4 address built or referenced via obfuscated form
   crit: suspicious
@@ -262,6 +236,7 @@ composite_rules:
   - id: url-with-octal-ip
   - id: url-with-dword-ip
   - id: ruby-percent-w-octet-join
+  - id: word-table-octet-join
   unless:
   # A dedicated IP-address library (ipaddr.js) constructs addresses from octets
   # as its core function, not to obfuscate a C2 endpoint.
@@ -274,9 +249,40 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/ip/parse::python-inet-ntoa-call
   any:
-  - id: ipv4-struct-pack
+  - id: micro-behaviors/data/serialize/binary::python-pack-hex-u32
   - id: ipv4-bytes-call
   - id: ipv4-struct-pack-dec
   unless:
   - id: well-known/tool/offensive/pentestkit/
   - id: well-known/lib/stdlib/python-stdlib
+# Word-substitution variant of the octet list: each octet hides behind an
+# English word key in an embedded table ("maple" => 192), the words are
+# collected from anchor-delimited text, and the looked-up values are
+# dot-joined into the dotted address. The words exist to keep the endpoint out
+# of plain text — neither the code nor the fetched document shows an address —
+# which is the same no-legitimate-use hide as the literal-octet forms above.
+- id: word-table-octet-join
+  desc: Dotted address built from word-to-number lookup table
+  crit: suspicious
+  conf: 0.9
+  near_lines: 30
+  unless:
+  - id: objectives/command-and-control/reverse-shell/fd-redirect::placeholder-documentation-address
+  - id: micro-behaviors/communications/http/url/github::placeholder-repository-url
+  - id: micro-behaviors/data/collection/map::documentation-octet-table
+  all:
+  - id: micro-behaviors/data/collection/map::four-word-numeric-table
+  - id: micro-behaviors/data/decode/custom::dictionary-dot-join
+# When the reconstructed address is immediately dialed, the hidden value is a
+# used network endpoint, not a formatting curiosity: concealment of the
+# rendezvous destination plus its use. Remote-fetch context is covered by the
+# dead-drop resolver composite; this one also catches locally embedded
+# word-table addresses.
+- id: word-table-octet-join-dialed
+  desc: Socket dialed to an address hidden behind word-number table
+  crit: hostile
+  conf: 0.92
+  near_lines: 40
+  all:
+  - id: word-table-octet-join
+  - id: micro-behaviors/communications/socket/connect::outbound-connect-call

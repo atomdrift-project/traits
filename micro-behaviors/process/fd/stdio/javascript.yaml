@@ -19,6 +19,14 @@ traits:
       type: text
       substr: 'readline.createInterface('
 
+  - id: node-readline-anthropic-key-activation-prompt
+    desc: Readline asks for sk-ant activation key
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)question\(.{0,180}(activation|license).{0,80}sk-ant'
+
   - id: js-readline-line-event
     desc: Handles readline input line by line
     crit: baseline
@@ -60,6 +68,17 @@ traits:
     if:
       type: text
       substr: stdin.write
+
+  # Structured worker IPC: the child receives serialized data, not code.
+  # A loader feeds its interpreter decodable or fetched bytes; JSON
+  # serialization marks the data side of that boundary.
+  - id: node-stdin-json-serialized-write
+    desc: Writes JSON-serialized data to Node stdin
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'stdin\.write\s*\(\s*JSON\.stringify\s*\('
 
   - id: js-stdin-end
     desc: Node stdin end call
@@ -120,15 +139,6 @@ traits:
       kind: call
       regex: '(^|\.)std(in|out|err)\.pipe$'
 
-  - id: node-socket-pipe
-    desc: Pipes a Node socket stream
-    crit: notable
-    conf: 0.8
-    unless:
-      - id: metadata/lang/scripted::dts-declaration-file
-    if:
-      type: text
-      regex: '\b(socket|sock|client)\.pipe\s*\('
   # Reads whether stdio is attached to an interactive terminal. Prompts and
   # colorizers check this routinely; the anti-analysis use pairs it with an
   # early exit so non-interactive harnesses never reach the payload.
@@ -140,38 +150,24 @@ traits:
       type: text
       regex: 'process\.(stdin|stdout)\.isTTY'
 
-  - id: node-stream-to-stdin-pipe
-    desc: Pipes a Node stream into child stdin
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      regex: '\b[A-Za-z_$][\w$]*\.pipe\s*\(\s*[A-Za-z_$][\w$]*\.stdin\s*\)'
-
-  - id: node-child-output-to-stream-pipe
-    desc: Pipes child output to a stream
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      regex: '\b[A-Za-z_$][\w$]*\.(stdout|stderr)\.pipe\s*\(\s*[A-Za-z_$][\w$]*\s*\)'
-
-  - id: node-socket-data-to-stdin-write
-    desc: Socket data event writes to child stdin
+  - id: node-data-handler-stdin-write
+    desc: Data event callback writes child stdin
     crit: notable
     conf: 0.94
     if:
-      type: text
-      regex: '\.on\(\s*["'']data["'']\s*,[\s\S]{0,600}\.stdin\.write\s*\('
+      type: tree-sitter
+      query: |
+        (call_expression
+          function: (member_expression
+            property: (property_identifier) @event
+            (#eq? @event "on"))
+          arguments: (arguments
+            (string) @name
+            (#match? @name "^['\"]data['\"]$")
+            [(arrow_function) (function_expression)] @handler
+            (#match? @handler "\\.stdin\\.write\\s*\\(")))
 
 composite_rules:
-  - id: node-stream-pipe
-    desc: Pipes a Node stream
-    crit: notable
-    conf: 0.8
-    any:
-      - id: node-stdio-pipe
-      - id: node-socket-pipe
   - id: node-child-output-discarded
     desc: Discards both child process output streams
     crit: notable

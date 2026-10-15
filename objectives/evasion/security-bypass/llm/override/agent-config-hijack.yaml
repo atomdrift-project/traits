@@ -31,7 +31,7 @@ composite_rules:
     scope: file
     for: [javascript, typescript, python, shell]
     all:
-      - id: micro-behaviors/fs/write/file/target::agent-config-file-mutation
+      - id: micro-behaviors/fs/write/file/target::agent-config-path-near-write
     # Require a permission-table rewrite, not merely documenting another
     # harness's bypass flag beside a headless `-p` adapter (agent relay CLIs).
     any:
@@ -43,6 +43,11 @@ composite_rules:
       - id: micro-behaviors/process/create/permission-agent::vendor-agent-approval-mode-disabled
     unless:
       - id: micro-behaviors/process/create/permission-agent::isolated-worktree-sandbox-config
+      # A headless job runner starts the harness itself, against an isolated
+      # throwaway session config it passes on the spawned command line. The
+      # bypass flags belong to that one child process; nothing is left behind
+      # for the victim's next session, which is the hijack claim.
+      - id: headless-agent-runner-isolated-session
       # An agent launcher writes the config of the agent it is about to start,
       # and does it because the user asked: the file declares `--yolo` /
       # `--dangerously-skip-permissions` as its own CLI option and routes it to
@@ -51,12 +56,48 @@ composite_rules:
       - id: micro-behaviors/process/create/permission-agent::agent-bypass-cli-handling-context
       - id: metadata/package/testing/harness/runtime/
       - id: metadata/package/testing/presence/manifest::test-fixtures
-      - id: well-known/tool/detection/repo-trust-scan::repo-trust-scan-context
+      - id: well-known/tool/detection/
       # The harness's own source writes the config it owns, including a local
       # development profile. That is the product scaffolding a project the user
       # asked to initialize, not a rewrite of somebody else's approval gate.
       # Same source set already used by agent-approval-gate-disabled.
       - id: micro-behaviors/process/create/permission-agent::coding-agent-harness-source
+
+  # A scheduled-job or relay runner: it spawns the harness now, against an
+  # isolated session config passed on the child's command line, so the
+  # approval flags never reach a persistent config file. The bypass-mode leg
+  # ties the context to the actual gate decision being made for that child.
+  - id: headless-agent-runner-isolated-session
+    desc: Headless runner starts an isolated agent session
+    crit: exception
+    conf: 0.93
+    for: [javascript, typescript, python, shell]
+    all:
+      - id: micro-behaviors/process/create/permission-agent::agent-isolated-session-launch
+      - id: micro-behaviors/process/create/agent::ai-agent-bypass-permissions-mode
+
+  # A package that pre-approves the consent prompts themselves — folder-trust
+  # and external-CLAUDE.md-include acceptance in the victim's global agent
+  # state — so the next session never asks. Unlike the approval-gate rewrite
+  # above this leaves tool permissions alone, so it is a consent bypass
+  # (suspicious) rather than a full gate disarm; the harness sets these flags
+  # itself only after the user answers.
+  - id: claude-trust-consent-prompts-preapproved
+    desc: Pre-approves Claude trust consent prompts
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/fs/path/agent-config/directory::claude-config-directory
+      - id: micro-behaviors/fs/write/file/full::js-file-write
+    any:
+      - id: micro-behaviors/data/config/write::claude-trust-dialog-accepted-assignment
+      - id: micro-behaviors/data/config/write::claude-md-includes-approved-assignment
+    needs: 1
+    near_bytes: 4000
+    unless:
+      - id: micro-behaviors/process/create/permission-agent::coding-agent-harness-source
+      - id: well-known/tool/detection/
 
   # The same rewrite, reached automatically: npm runs the hook on `npm install`,
   # so the victim never chooses to run the patcher. Archive scope because the
@@ -92,3 +133,4 @@ composite_rules:
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: metadata/package/testing/presence/manifest::test-fixtures
+      - id: micro-behaviors/process/create/permission-agent::coding-agent-harness-source

@@ -68,34 +68,6 @@ traits:
       - id: metadata/package/documentation/source::defensive-dangerous-command-doc
       - id: metadata/package/testing/presence/path::xml-testdata-directory-path
       - id: well-known/dual-use/tunnel/tailscale::tailscale-source-token
-  - id: root-wipe
-    for: [scripts, -python, binaries]
-    desc: Root filesystem wipe attempt
-    crit: suspicious
-    conf: 0.95
-    attack: T1561
-    if:
-      type: text
-      # A following prose word (for example, "rm -rf / which translates...")
-      # describes the command rather than terminating one. Python rmtree calls
-      # are covered by the dedicated structured trait below.
-      regex: 'rm\s+-rf\s+/(\*(\s|$|[;&|)"''])|\s+--no-preserve-root|\s*[;&|]|\s*$)'
-    unless:
-      # Code that quotes `rm -rf` in order to forbid it -- an agent's system
-      # prompt or its permission registry -- is the guard, not the wipe.
-      - id: micro-behaviors/process/create/shell/guard/
-      - id: metadata/file/policy/identity::agent-tool-permission-ruleset
-      - id: well-known/tool/development/vscode-extension/tencent-codebuddy::codebuddy-marker
-      # Scanner and guard unit tests assert the wipe is detected or blocked
-      # (inline #[cfg(test)] corpora as well as tests/ fixtures).
-      - id: metadata/package/testing/
-      - id: metadata/package/documentation/source::defensive-dangerous-command-doc
-      - id: well-known/tool/detection/
-      - id: objectives/supply-chain/trojanized/app/debug-probe/
-      - id: well-known/app/ai/coding-agent/
-      - type: path
-        regex: '(?i)(^|[\\/])tests?[\\/]'
-  # Python comments and deny-pattern literals are not executed commands.
   - id: python-root-wipe-command
     desc: Python launches a root deletion command
     crit: suspicious
@@ -111,6 +83,7 @@ traits:
         regex: 'rm\s+-rf\s+/(\*(\s|$|[;&|)"''])|\s+--no-preserve-root|\s*[;&|]|\s*$)'
     unless:
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
   - id: shell-rm-rf-macos-system-path
     desc: rm targets the macOS system root path
     crit: component
@@ -146,67 +119,6 @@ traits:
     unless:
       - type: basename
         regex: '^(common_ship|ship)\.py$'
-  - id: windows-system32-delete-cmd-first
-    desc: Deletes System32, command before path
-    crit: suspicious
-    platforms:
-      - windows
-    if:
-      type: text
-      # The rmdir/rd/remove branch captures the rest of the path so the
-      # nested-file exclusion below can see it.
-      regex: \b(rmdir|rd|remove)\b.{0,40}[Ss]ystem32\S{0,40}|\bdel\b.{0,40}[Ss]ystem32\\[^\n"]{0,24}
-      not:
-        - regex: '@%systemroot%\\system32\\[^",<]+,-[0-9]+'
-        - substr: .lnk
-        # A named file two or more folders below System32 (an mIRC bot
-        # removing its own staged `Setup\drona\mirc.reg`) is one file in a
-        # private staging folder, not System32 deletion. Wildcards, System32
-        # itself, `drivers\x.sys` and `drivers\etc\hosts` still match.
-        - regex: '(?i)system32\\[^\\\s*]+\\[^\\\s*]+\\[^\\\s*]+\.[a-z0-9]{1,4}'
-    unless:
-      - id: well-known/app/ai/agent-runtime/aui-agent-builder/
-      - id: well-known/lib/native/pywin32::pywin32-binding-module
-      # Windows image servicing deletes named files out of an offline mount
-      # (`del /f /q "%_mount%\Windows\System32\downlevel\wdscore.dll"`), not
-      # out of the running system.
-      - id: well-known/tool/development/cli/batch-scripts::uup-converter-wimlib-batch
-  - id: windows-system32-delete-path-first
-    desc: Deletes System32, path before command
-    crit: suspicious
-    if:
-      type: text
-      regex: (?i)System32(\\\\\*|["' ]).{0,40}\b(del|rd|rmdir)\b
-      platforms:
-        - windows
-    unless:
-      - id: well-known/lib/ai/unsloth::unsloth-package-context
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      # Agent safety scanners quote destructive commands (mklink + del) as
-      # detection corpus; CodeBuddy's headless CLI carries those guards.
-      - id: well-known/app/ai/coding-agent/codebuddy::codebuddy-headless-context
-      - id: well-known/app/ai/agent-runtime/aui-agent-builder/
-      - id: well-known/lib/native/pywin32::pywin32-binding-module
-  - id: windows-recursive-delete-target-windir
-    desc: Windows recursive deletion target WINDIR
-    crit: notable
-    if:
-      type: text
-      regex: '(?i)\b(del|erase|rd|rmdir)\b[^\r\n]{0,160}%WINDIR%'
-      platforms:
-        - windows
-    unless:
-      - id: metadata/file/string/application-name::microsoft-activation-script-benign-context
-  - id: windows-recursive-delete-target-systemroot
-    desc: Windows recursive deletion target SYSTEMROOT
-    crit: notable
-    if:
-      type: text
-      regex: '(?i)\b(del|erase|rd|rmdir)\b[^\r\n]{0,160}%SYSTEMROOT%'
-      platforms:
-        - windows
-    unless:
-      - id: metadata/file/string/application-name::microsoft-activation-script-benign-context
   - id: windows-shutdown-reboot-now
     desc: Immediate Windows reboot command
     crit: notable
@@ -215,6 +127,55 @@ traits:
     if:
       type: text
       regex: 'shutdown\s+-r\s+-t\s+0+'
+  - id: windows-systemroot-recursive-delete-command
+    desc: Recursively removes the Windows root directory
+    crit: suspicious
+    conf: 0.98
+    platforms: [windows]
+    for: [batch, text]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*@?(rd|rmdir)\s+(/q\s+)?/s(\s+/q)?\s+"?%(WINDIR|SYSTEMROOT)%"?\s*$'
+  - id: del-system32-hal-dll
+    desc: Deletes the Windows HAL library
+    crit: notable
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*del\s[^\r\n]{0,40}system32\\{1,2}hal\.dll'
+  - id: del-system32-kdcom-dll
+    desc: Deletes the Windows kernel debugger transport
+    crit: notable
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*del\s[^\r\n]{0,40}system32\\{1,2}kdcom\.dll'
+  - id: del-system32-bootvid-dll
+    desc: Deletes the Windows boot video driver
+    crit: notable
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*del\s[^\r\n]{0,40}system32\\{1,2}bootvid\.dll'
+  - id: del-system32-ntoskrnl-exe
+    desc: Deletes the Windows NT kernel
+    crit: notable
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*del\s[^\r\n]{0,40}system32\\{1,2}ntoskrnl\.exe'
+  - id: del-system32-atapi-sys
+    desc: Deletes the Windows ATAPI disk driver
+    crit: notable
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: text
+      regex: '(?im)^[ \t]*del\s[^\r\n]{0,40}system32\\{1,2}drivers\\{1,2}atapi\.sys'
   - id: batch-cd-system32
     desc: Changes into the System32 directory
     crit: notable
@@ -223,14 +184,6 @@ traits:
     if:
       type: text
       regex: '(?i)\bcd\s+[^\r\n]{0,60}system32\b'
-  - id: batch-del-wildcard-exe
-    desc: Deletes every executable in the directory
-    crit: notable
-    conf: 0.88
-    for: [batch, static-lib, text]
-    if:
-      type: text
-      regex: '(?i)\bdel\s+\*\.exe\b'
   - id: deltree-drive-wildcard
     desc: Deltree targets a whole drive
     crit: notable
@@ -263,9 +216,13 @@ traits:
       - windows
     if:
       type: text
-      regex: '(?i)\b(deltree|rd|rmdir)\b.{0,30}([a-z]:\\(windows|winnt)|%WINDIR%|%SYSTEMROOT%)\b'
+      regex: '(?im)^[ \t]*(deltree|rd|rmdir)\b.{0,30}([a-z]:\\win(dows|nt)|%(WINDIR|SYSTEMROOT)%)(\s|$)'
     unless:
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/file/policy/identity::enforced-dangerous-action-approval
+      - id: well-known/tool/detection/ai-guardrail/
+      - id: well-known/app/ai/coding-agent/
 composite_rules:
   - id: ruby-vmware-drive-wipe
     desc: Wipes a drive when VMware is present
@@ -276,22 +233,6 @@ composite_rules:
     all:
       - id: ruby-vmware-predicate
       - id: ruby-delete-drive-root
-  - id: root-wipe-safety-context
-    desc: Script guards or blocks its own root-wipe command
-    crit: exception
-    conf: 0.9
-    any:
-      - id: micro-behaviors/process/create/shell/guard::command-blocked-marker
-      - id: destructive-action-prohibition-text
-  - id: destructive-action-prohibition-text
-    desc: Destructive action prohibition text
-    crit: notable
-    conf: 0.88
-    for: [scripts, -shell, -jcl]
-    all:
-      - id: metadata/file/line::destructive-action-prohibition-phrase
-      - id: micro-behaviors/fs/delete/directory::rm-rf
-    near_lines: 2
   - id: systemroot-delete-then-reboot
     desc: Deletes system files then reboots
     crit: hostile
@@ -299,7 +240,28 @@ composite_rules:
     for: [shell, batch, scripts]
     near_lines: 40
     all:
-      - id: windows-recursive-delete-target-systemroot
+      - id: windows-systemroot-recursive-delete-command
+      - id: windows-shutdown-reboot-now
+  - id: boot-critical-file-deletion
+    desc: Deletes multiple boot-critical Windows files
+    crit: suspicious
+    conf: 0.97
+    for: [shell, batch]
+    needs: 3
+    any:
+      - id: del-system32-hal-dll
+      - id: del-system32-kdcom-dll
+      - id: del-system32-bootvid-dll
+      - id: del-system32-ntoskrnl-exe
+      - id: del-system32-atapi-sys
+  - id: boot-critical-delete-then-reboot
+    desc: Deletes boot-critical system files then reboots
+    crit: hostile
+    conf: 0.98
+    for: [shell, batch]
+    near_lines: 40
+    all:
+      - id: boot-critical-file-deletion
       - id: windows-shutdown-reboot-now
   - id: system32-wildcard-exe-wipe
     desc: Deletes every executable in System32
@@ -309,7 +271,7 @@ composite_rules:
     near_lines: 8
     all:
       - id: batch-cd-system32
-      - id: batch-del-wildcard-exe
+      - id: micro-behaviors/fs/delete/file/command::del-exe-wildcard-command-text
   - id: deltree-drive-wipe
     desc: Deltree wipes files on a drive
     crit: hostile
@@ -343,15 +305,6 @@ composite_rules:
     any:
       - id: shell-rm-rf-macos-system-path
       - id: python-rmtree-macos-system-path
-  - id: windows-system32-delete
-    desc: Windows System32 directory deletion
-    crit: suspicious
-    conf: 0.95
-    platforms:
-      - windows
-    any:
-      - id: windows-system32-delete-cmd-first
-      - id: windows-system32-delete-path-first
   - id: windows-recursive-delete
     desc: Windows system directory recursive deletion
     crit: notable
@@ -369,7 +322,7 @@ composite_rules:
       - windows
     all:
       - id: micro-behaviors/fs/delete/directory::windows-rd-recursive
-      - id: windows-recursive-delete-target
+      - id: windows-systemroot-recursive-delete-command
   - id: windows-recursive-delete-del-path
     desc: Windows recursive delete via del with target
     crit: notable
@@ -378,28 +331,37 @@ composite_rules:
       - windows
     all:
       - id: micro-behaviors/fs/delete/file/command::cmd-del-force-quiet
-      - id: windows-recursive-delete-target
-  - id: windows-recursive-delete-target
-    desc: Windows recursive deletion target directories
-    crit: notable
+      - id: windows-systemroot-recursive-delete-command
+  - id: root-command-defensive-context
+    desc: Guardrail policy or destructive-command guidance
+    crit: exception
+    conf: 0.98
     any:
-      - id: windows-recursive-delete-target-windir
-      - id: windows-recursive-delete-target-systemroot
-  - id: system-dir-reference
-    desc: Reference to critical system directories
-    crit: component
-    conf: 0.4
-    any:
-      - id: micro-behaviors/fs/path/system/
-  - id: mass-deletion
-    for: [python, javascript]
-    desc: Mass system file deletion
-    crit: notable
+      - id: metadata/file/policy/identity::agent-tool-permission-ruleset
+      - id: metadata/package/documentation/source::defensive-dangerous-command-doc
+      - id: micro-behaviors/process/create/agent::ai-agent-shell-command-allowlist
+
+  - id: root-wipe
+    desc: Root deletion bypasses filesystem protection
+    crit: suspicious
     conf: 0.95
-    near_bytes: 1024
+    attack: T1561
+    for: [scripts, -python, binaries]
     all:
-      - id: micro-behaviors/fs/delete/directory::recursive-delete
-      - id: micro-behaviors/data/control-flow/analysis::iteration-loop-pattern
-      - id: system-dir-reference
+      - id: micro-behaviors/fs/delete/directory::root-deletion-command-reference
+      - id: micro-behaviors/fs/delete/directory::root-deletion-unsafe-target
     unless:
-      - id: root-wipe-safety-context
+      - id: root-command-defensive-context
+      - id: well-known/app/ai/coding-agent/
+      - id: micro-behaviors/process/create/shell/guard/
+      - id: well-known/tool/detection/
+      - id: metadata/file/profile/test-indications/
+
+  - id: dos-system-directory-file-wipe
+    desc: DOS deletes files in Windows System directory
+    crit: hostile
+    conf: 0.98
+    for: [dos_com, data]
+    all:
+      - id: micro-behaviors/fs/delete/file/syscall::dos-int21-delete-file
+      - id: micro-behaviors/fs/path/system::windows-system-directory

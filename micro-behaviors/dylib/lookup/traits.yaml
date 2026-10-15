@@ -188,11 +188,12 @@ traits:
     not:
       - substr: RTLD_NEXT used in code not dynamically loaded
       - substr: RTLD_DEFAULT/RTLD_NEXT are not implemented
+      - regex: 'RTLD_NEXT\s+\(\(void\s*\*\)\s*-1'
     unless:
       # Static glibc's loader diagnostics contain this pseudo-handle name;
       # text alone is not evidence of a dlsym interposition call.
       - id: metadata/binary/linking/runtime::glibc-runtime-markers
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
   - id: rtld-next-source
     desc: RTLD_NEXT in source code
     crit: notable
@@ -204,6 +205,27 @@ traits:
     if:
       type: text
       word: RTLD_NEXT
+  # macOS RTLD_DEFAULT is (void *)-2. Each site is `mov rdi, -2` (sign-extended
+  # imm32) immediately followed by a direct call, consistent with
+  # dlsym(RTLD_DEFAULT, name). This byte pattern does not resolve the call target
+  # or establish import concealment. Rust's macOS compatibility shims repeat
+  # it for optional APIs, caching results and falling back when unavailable.
+  # Rspack 0.7.3 and 0.7.4 both contain the same eleven such lookup sites.
+  # Intent requires additional evidence in the consuming loader composite.
+  - id: rtld-default-direct-calls
+    desc: Repeated RTLD_DEFAULT direct-call sequences
+    crit: notable
+    conf: 0.92
+    for: [macho]
+    platforms: [macos]
+    arch: [x86-64]
+    count_min: 8
+    if:
+      type: hex
+      section: __text
+      pattern: "48 C7 C7 FE FF FF FF E8"
+    unless:
+      - id: metadata/lang/compiler/native::clang-availability-check
   # VB6 source declaring the runtime's own late-bound dispatcher. Legitimate
   # VB code uses `Declare ... Lib "kernel32"`; reaching for DllFunctionCall
   # resolves APIs from names built at runtime, leaving no Declare to read.

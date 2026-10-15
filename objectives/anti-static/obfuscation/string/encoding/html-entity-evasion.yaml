@@ -1,31 +1,52 @@
-# Decimal HTML character references used to hide page text from scanners:
-# when every visible word is `&#20320;&#22909;` instead of UTF-8, keyword and
-# brand scanners matching cleartext never fire. A stray `&#160;` or `&copy;`
-# is ordinary markup; dozens of decimal references per kilobyte is concealment.
-# The `makefile` scope is deliberate: extensionless kit pages mistype as
-# makefile in the file sniffer, so html-only scoping would leave them blind.
+# Consecutive decimal entities conceal complete text runs. Repeated isolated
+# spacing entities (such as Doxygen API-index separators) do not qualify.
+# Extensionless kit pages can be classified as makefile by the file sniffer.
 defaults:
   platforms: [windows, unix]
   for: [html, makefile]
   attack: T1027.010
 
 traits:
-  - id: dense-decimal-char-refs
-    desc: Dense decimal HTML character references
+  - id: long-decimal-entity-text
+    desc: 15+ consecutive decimal HTML text entities
     crit: suspicious
     conf: 0.9
-    count_min: 15
-    per_kb_min: 12.0
     if:
       type: text
-      regex: '&#[0-9]{2,7};'
+      regex: '(&#[0-9]{2,7};){15,}'
+    not:
+      # Runs made purely of spacing entities are layout, not concealment:
+      # NBSP padding in Arabic/French typography and Doxygen API-index
+      # separators. Obfuscated text mixes letter/punctuation codepoints.
+      - regex: '^(?:&#(?:32|160|8194|8195|8196|8201|8286|65279);)+$'
+    unless:
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
 
 composite_rules:
-  - id: entity-obfuscated-harvest-form
-    desc: Entity-obfuscated credential harvest form
+  - id: entity-encoded-password-post
+    desc: Entity-encoded text beside password POST
+    crit: suspicious
+    conf: 0.96
+    # The encoded run and the credential form must sit together: the claim is
+    # that the entities conceal THE FORM, not that a page contains entity
+    # padding somewhere and a login widget somewhere else (every Blogger-era
+    # page carries the standard Google login widget far from its NBSP runs).
+    near_lines: 40
+    all:
+      - id: long-decimal-entity-text
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+      - id: micro-behaviors/communications/http/post::html-form-post-method
+  # The narrow hostile twin: decimal entities layered under percent-byte
+  # unescape, rendered only through document.write. One encoding layer is
+  # suspicious; both stacked with a runtime decoder is a concealment kit,
+  # not typography.
+  - id: dual-encoded-concealed-page-write
+    desc: Percent and entity encoding stacked in page write
     crit: hostile
     conf: 0.96
+    for: [html]
     all:
-      - id: dense-decimal-char-refs
-      - id: objectives/credential-access/phishing/landing::harvest-password-input
-      - id: objectives/credential-access/phishing/landing::harvest-form-post
+      - id: long-decimal-entity-text
+      - id: micro-behaviors/data/decode/url::js-percent-byte-unescape
+      - id: micro-behaviors/ui/window/insert-html::browser-document-write-unescape

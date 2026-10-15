@@ -20,13 +20,6 @@ traits:
   # attack-mode labels.  A count_min on one alternation counts repeated
   # occurrences, so a normal networking utility's repeated BROADCAST help
   # text was previously enough to look like an IoT bot.
-  - id: stop-all-attack-label
-    desc: STOP_ALL attack command label
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      word: STOP_ALL
   - id: udp-flood-attack-label
     desc: UDP_FLOOD attack command label
     crit: notable
@@ -77,16 +70,6 @@ traits:
       type: text
       exact: udpplain
       section: rodata
-
-  - id: xor54-source-engine-query-payload
-    desc: XOR-0x54-obfuscated Source Engine query payload
-    crit: suspicious
-    conf: 0.97
-    attack: T1498.001
-    if:
-      type: hex
-      section: .rodata
-      pattern: 07 3B 21 26 37 31 74 11 3A 33 3D 3A 31 74 05 21 31 26 2D 54
 
   - id: source-engine-query-xor18-a
     desc: XOR-obfuscated Source Engine query
@@ -229,7 +212,7 @@ composite_rules:
     crit: suspicious
     conf: 0.98
     any:
-      - id: stop-all-attack-label
+      - id: micro-behaviors/data/control-flow/dispatch::stop-all-label
       - id: udp-flood-attack-label
       - id: syn-bypass-attack-label
       - id: http2-flood-attack-label
@@ -249,7 +232,7 @@ composite_rules:
       - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
       - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
       - id: metadata/arch/iot::exotic-arch
-      - id: metadata/binary/linking/static::static-linked-heuristic
+      - id: "metadata/binary/linking/records::elf-dynamic-linker-metadata-absent"
     any:
       - id: objectives/impact/dos/amplification::service-discovery-reflection
       - id: micro-behaviors/communications/http/request/ssdp::ssdp-discovery
@@ -265,20 +248,24 @@ composite_rules:
     all:
       - id: iot-attack-command-cluster
       - type: trait
-        id: objectives/impact/dos/attack/flood::udp-flood
+        id: micro-behaviors/communications/flood::udp-flood
       - type: trait
         id: micro-behaviors/communications/http/message::http2-preface
 
   - id: http2-underscore-flood-iot-bot
-    desc: HTTP/2 IoT bot with underscore-named flood tasking
+    desc: IoT bot with UDP/HTTPS flood tasking verbs
     crit: hostile
     conf: 0.99
-    attack: T1498.001
+    attack: T1498.001,T1071
     mbc: B0030
     all:
       - id: udp-flood-attack-label
       - id: https-flood-attack-label
+      - id: metadata/binary/linking/records::elf-dynamic-linker-metadata-absent
+    any:
       - id: micro-behaviors/communications/http/message::http2-preface
+      - id: micro-behaviors/communications/socket/tcp::ping-pong-keepalive-elf
+    needs: 1
 
   - id: source-query-anti-analysis-ddos-bot
     desc: Source query payload with debugger and CPU checks
@@ -312,14 +299,16 @@ composite_rules:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
   - id: source-query-cipher-ddos-bot
-    desc: Static Source-query bot with stream-cipher support
+    desc: Source-query client with flood attack routines
     crit: hostile
     conf: 0.99
     attack: T1498.001,T1027
     mbc: B0030
     all:
+      - id: objectives/impact/dos/variant-flood::raw-tcp-attack-function
+      - id: objectives/impact/dos/variant-flood::flood-method-target-diagnostic
       - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
     any:
       - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha-salsa-constant
       - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha20-block-constant-native
@@ -335,7 +324,7 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
       - id: metadata/arch/iot::mips
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
       - id: objectives/lateral-movement/brute-force/iot-creds::iot-default-credential-token-cluster
     any:
       - id: micro-behaviors/os/syscall/raw::mips-direct-syscall-instruction-be
@@ -343,28 +332,40 @@ composite_rules:
     needs: 1
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+    # source-query-watchdog-ddos-bot convicts the same Source-query flood
+    # bot from its payload and watchdog paths; step down when it fires so
+    # one flood capability is not counted as two hostile findings.
+    downgrade:
+      any:
+        - id: source-query-watchdog-ddos-bot
 
   # The XOR-0x54 string table (VSE payload, /proc/net/tcp, watchdog paths)
   # is shared by every architecture build of the same Mirai fork, so the
   # architecture is carried only by which direct-socket syscall atom fires:
   # a MIPS-only form left the PowerPC build of the same bot without it.
   - id: xor54-source-query-static-ddos-bot
-    desc: Static watchdog bot with encoded VSE flood
+    desc: Encoded VSE query, IoT credentials and C2 status
     crit: hostile
     conf: 0.99
     attack: T1498.001,T1106
     mbc: B0030
     all:
-      - id: xor54-source-engine-query-payload
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: micro-behaviors/communications/socket/udp::xor54-source-engine-query-payload
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
       - id: micro-behaviors/fs/path/device/special::watchdog-device
+      - id: objectives/lateral-movement/brute-force/iot-creds::mirai-credential-access
+      - id: micro-behaviors/communications/socket/connect::xor54-cnc-connection-status
     any:
       - id: micro-behaviors/communications/socket/syscall::mips-direct-network-syscalls
       - id: micro-behaviors/communications/socket/syscall::ppc-socketcall-network-io
       - id: micro-behaviors/communications/socket/syscall::arm-direct-network-syscalls
       - id: micro-behaviors/communications/socket/syscall::arm-oabi-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-network-syscalls
       - id: micro-behaviors/communications/socket/syscall::nios2-network-io-syscalls
       - id: micro-behaviors/communications/socket/syscall::m68k-socketcall-wrapper
+      - id: micro-behaviors/communications/socket/connect::superh-direct-network-client
+      - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-socket-connect-pair
+      - id: micro-behaviors/communications/socket/syscall::i386-socketcall-wrapper
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
@@ -376,9 +377,29 @@ composite_rules:
     mbc: B0030
     all:
       - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
       - id: micro-behaviors/fs/path/device/terminal::dev-ptmx
       - id: micro-behaviors/os/random/crypto::urandom
+    any:
+      - id: metadata/arch/iot::arm
+      - id: metadata/arch/iot::mips
+    needs: 1
+    unless:
+      - id: arm-source-query-mirai-credential-bot
+      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+
+  - id: arm-source-query-mirai-credential-bot
+    desc: ARM Source-query bot with Mirai default credentials
+    crit: hostile
+    conf: 0.98
+    attack: T1498.001,T1110.001
+    mbc: B0030
+    all:
+      - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
+      - id: micro-behaviors/fs/path/device/terminal::dev-ptmx
+      - id: micro-behaviors/os/random/crypto::urandom
+      - id: objectives/lateral-movement/brute-force/iot-creds::mirai-credential-access
     any:
       - id: metadata/arch/iot::arm
       - id: metadata/arch/iot::mips
@@ -387,16 +408,19 @@ composite_rules:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
   - id: source-query-static-cipher-pty-bot
-    desc: Static Source-query bot with cipher and PTY
+    desc: Source-query payload beside Telnet credential staging and cipher
     crit: hostile
     conf: 0.99
-    attack: T1498.001,T1027
-    mbc: B0030
+    attack: T1498.001
     all:
       - id: micro-behaviors/communications/socket/udp::source-engine-query-marker
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
       - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha-salsa-constant
       - id: micro-behaviors/fs/path/device/terminal::dev-ptmx
+      # Query clients, encrypted transports and libc PTY support are ordinary
+      # capabilities. Require the independent credential propagation routine.
+      - id: objectives/lateral-movement/brute-force/iot-creds::mirai-credential-shell-stager
+      - id: micro-behaviors/process/create/local-exec::chmod-then-local-execute-command
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 
@@ -410,6 +434,8 @@ composite_rules:
       - id: source-engine-query-xor18-b
 
   - id: iot-ddos-attack-vector-set
+    all:
+      - id: objectives/impact/dos/attack/flood::native-ddos-mode-vocabulary
     desc: IoT bot DDoS vector set
     crit: suspicious
     conf: 0.96
@@ -441,30 +467,25 @@ composite_rules:
     all:
       - id: objectives/impact/dos/attack/flood::native-ddos-mode-vocabulary
       - id: metadata/arch/iot::arm
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
       - id: well-known/lib/native/uclibc::static-uclibc-string-tables
       - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-network-syscalls
       - id: micro-behaviors/communications/ip/literal::external-ipv4-host-literal-binary
-  # Stripped static MIPS builds that dial out with raw socket syscalls and
-  # retain a /bin/sh path match many IoT botnet droppers even when they omit
-  # Mirai credential tables, Source-query markers, or watchdog strings.
-  - id: static-mips-syscall-network-iot-bot
-    desc: Static stripped MIPS IoT bot with raw socket syscalls
+  # MIPS controller tasking must accompany the actual packet rewrite loop.
+  - id: mips-commanded-raw-packet-flood
+    desc: MIPS command dispatcher with raw socket and packet rewrite loop
     crit: hostile
-    conf: 0.97
-    attack: T1071,T1106
+    conf: 0.99
+    attack: T1498.001
     mbc: B0030
     platforms: [linux]
     arch: [mips]
     all:
-      - id: metadata/arch/iot::mips
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
-      - id: metadata/hardening/missing::stripped-binary
-      - id: micro-behaviors/communications/socket/syscall::mips-socket-operation
-      - id: micro-behaviors/os/syscall/raw::mips-direct-syscall-instruction
-      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
-    unless:
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+      - id: micro-behaviors/data/control-flow/branch::mips-r6-byte-command-switch
+      - id: micro-behaviors/communications/socket/raw::mips-r6-ipv4-raw-socket-arguments
+      - id: micro-behaviors/communications/socket/udp::mips-r6-udp-port-checksum-rewrite-loop
+      - id: micro-behaviors/fs/proc/info/cmdline::downloader-shell-command-target-table
+
   - id: mirai-iot-ddos-bot
     desc: Mirai IoT bot with DDoS and raw-IP control
     crit: hostile
@@ -522,7 +543,7 @@ composite_rules:
       - id: micro-behaviors/fs/path/device/special::dev-misc-watchdog-xor18
     any:
       - id: well-known/lib/native/uclibc::static-uclibc-string-tables
-      - id: micro-behaviors/process/create/shell/spawn::bin-sh-binary-text
+      - id: micro-behaviors/fs/path/binary::bin-sh-path-reference
 
   - id: ddos-bot-bandwidth-tiering
     desc: DDoS bot bandwidth tiering logic
@@ -590,23 +611,25 @@ composite_rules:
       - id: gre-flood-status-label
       - id: gtcp-flood-status-label
       - id: metadata/arch/iot::arm
-      - id: metadata/binary/linking/static::elf-needed-libs-zero
+      - id: "metadata/binary/linking/dynamic::elf-needed-libs-zero"
       - id: micro-behaviors/fs/path/device/special::watchdog-device
 
   - id: source-query-watchdog-ddos-bot
-    desc: Source Engine query DDoS bot with watchdog suppression
+    desc: Source-query flood and watchdog path cluster
     crit: hostile
     conf: 0.99
-    attack: T1498.001,T1562.001
+    attack: T1498.001
     mbc: B0030
     platforms: [linux]
     all:
-      - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
+      - id: micro-behaviors/communications/socket/udp::source-query-flood-payload
       - id: micro-behaviors/fs/path/device/special::multi-watchdog-device-cluster
     any:
+      - id: objectives/impact/dos/attack/flood::vse-attack-function-name
       - id: metadata/arch/iot::arm
-      - id: objectives/lateral-movement/brute-force/iot::busybox-applet-probe
+      - id: micro-behaviors/process/argument/subcommand::busybox-uppercase-applet-command
       - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
     unless:
       - id: metadata/package/testing/
       - id: well-known/tool/detection/
+      - id: "metadata/file/naming::test-directory-component"

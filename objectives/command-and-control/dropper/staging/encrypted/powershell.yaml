@@ -43,9 +43,11 @@ traits:
   conf: 0.93
   if:
     type: text
-    # Match reconstructed stage vars ($finalScript, $payload, …). Do not match
-    # bare $cmd — that is ordinary automation Invoke-Expression.
-    regex: 'Invoke-Expression\s+\$(final\w*|payload\w*|decrypted\w*)'
+    # Match reconstructed stage vars ($finalScript, $payload, …) and result
+    # objects carrying the decrypted stage ($wrapperResult.Data,
+    # $response.Content). Do not match bare $cmd — that is ordinary
+    # automation Invoke-Expression.
+    regex: 'Invoke-Expression\s+\$(final\w*|payload\w*|decrypted\w*|[A-Za-z_]\w*\.\w+)'
 - id: encoded-powershell-bxor
   desc: Encoded PowerShell XOR operation
   crit: suspicious
@@ -65,7 +67,7 @@ traits:
     encoding: base64
     regex: '(?i)rotation\w*.{0,80}%\s*\d+'
 composite_rules:
-# micro-behaviors/data/decode/base64::powershell-base64-symmetric-decrypt is
+# micro-behaviors/crypto/decrypt::powershell-base64-decryption-cooccurrence is
 # `for: [powershell]` only, so it can never fire on a batch leaf even though
 # its own legs (dotnet-frombase64string-text, dotnet-create-decryptor) are
 # both batch-compatible. Mirror it here for batch ONLY (not the union --
@@ -106,7 +108,7 @@ composite_rules:
   - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-aes-create
   - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
   any:
-  - id: metadata/binary/layout/embedded::large-embedded-b64-blob
+  - id: metadata/file/line::very-long-source-line
   - id: multiple-base64-literals
 
 # BAT→PS stagers that AES-CBC decrypt a hex blob, WriteAllBytes a temp
@@ -124,3 +126,49 @@ composite_rules:
   - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
   - id: micro-behaviors/fs/write/file/full::write-all-bytes
   - id: micro-behaviors/process/create/hidden::windowstyle-hidden
+
+- id: batch-xor-decrypt-dropper
+  desc: Batch XOR-decrypts encoded payload and drops executable
+  crit: hostile
+  conf: 0.98
+  attack: T1027.005,T1059.001,T1059.003
+  mbc: C0025,B0030
+  for: [batch]
+  all:
+  - id: encoded-powershell-bxor
+  - id: micro-behaviors/fs/write/file/full::write-all-bytes
+  - id: micro-behaviors/process/create/hidden::powershell-hidden-window
+
+- id: batch-aes-decrypt-staged-payload
+  desc: Batch stages encrypted payload and executes AES-decrypted code
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1059.001,T1059.003
+  mbc: C0025,B0030
+  for: [batch]
+  all:
+  - id: base64-symmetric-decrypt-stage-batch
+  - id: micro-behaviors/crypto/cipher::dotnet-transform-final-block
+  any:
+  - id: micro-behaviors/fs/read/file/full::powershell-file-readallbytes
+  - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden
+
+- id: ps-aes-encrypted-staged-payload
+  desc: PowerShell stages encrypted payload and executes AES-decrypted code
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1059.001
+  mbc: C0025,B0030
+  for: [powershell]
+  all:
+  - id: micro-behaviors/crypto/decrypt::powershell-base64-decryption-cooccurrence
+  # Any AES/Rijndael spelling convicts: AesManaged, Aes.Create, and
+  # RijndaelManaged are the same decryptor capability, and the claim above
+  # does not depend on which factory spelling the stub uses.
+  - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
+  - id: iex-finalscript
+  any:
+  - id: micro-behaviors/crypto/library/stdlib::dotnet-cryptostream
+  - id: micro-behaviors/crypto/cipher::dotnet-transform-final-block
+
+

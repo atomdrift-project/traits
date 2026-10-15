@@ -19,24 +19,6 @@ traits:
       type: text
       exact: main.elevateFodhelper
 
-  - id: ms-settings-curver
-    desc: ms-settings CurVer registry modification
-    crit: suspicious
-    conf: 0.95
-    unless:
-      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-    if:
-      type: text
-      regex: '(?i)HKCU\\\\?Software\\\\?Classes\\\\?ms-settings\\\\?CurVer'
-  - id: ms-settings-shell-open-command
-    desc: ms-settings Shell Open command key
-    crit: suspicious
-    conf: 0.95
-    unless:
-      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-    if:
-      type: text
-      regex: '(?i)Software\\Classes\\ms-settings\\Shell\\Open\\Command'
   - id: delegateexecute-value
     desc: DelegateExecute registry value
     crit: suspicious
@@ -46,13 +28,6 @@ traits:
       regex: '(?i)(HKCU|Classes).{0,80}DelegateExecute'
     unless:
       - id: well-known/app/utility/eraigosa-dotfiles/
-  - id: delegateexecute-value-name
-    desc: DelegateExecute value name
-    crit: notable
-    conf: 0.88
-    if:
-      type: text
-      word: DelegateExecute
   - id: launcher-systemsettings-command
     desc: Launcher.SystemSettings Shell Open command key
     crit: suspicious
@@ -160,15 +135,6 @@ traits:
     if:
       type: text
       exact: Elevation:Administrator!new:%s
-  - id: windir-value-assignment
-    desc: windir registry-property name
-    crit: suspicious
-    conf: 0.94
-    if:
-      type: text
-      # A plain variable assignment is common platform setup.  The UAC
-      # technique specifically names windir as a registry property.
-      regex: '(?i)-Name\s+["\x27]?windir\b'
   - id: sdclt-kickoff-elev
     desc: Launches sdclt.exe with KickOffElev
     crit: suspicious
@@ -222,22 +188,20 @@ traits:
       regex: '(?is)\b(create_key|create_subkey|set_value)\s*\([^;\n]{0,80}\b(DelegateExecute|del)\b'
 
 composite_rules:
-  - id: user-windir-environment-hijack
-    desc: SilentCleanup per-user windir hijack
-    crit: suspicious
-    conf: 0.96
-    all:
-      - id: micro-behaviors/os/registry/keys::user-environment-registry-key
-      - id: windir-value-assignment
-    near_bytes: 180
   - id: fodhelper-uac-bypass
-    desc: fodhelper.exe UAC bypass technique
-    crit: hostile
+    for: [batch]
+    # Active bypass mechanics also occur in inert security demonstrators.
+    # Without an unwanted payload, they support suspicion, not hostility.
+    desc: Per-user CurVer redirection with fodhelper launch
+    crit: suspicious
     conf: 0.98
     mbc: "E1548"
     all:
       - id: micro-behaviors/fs/path/system::fodhelper-exe-reference
-      - id: ms-settings-curver
+      - id: micro-behaviors/os/registry/association::ms-settings-curver
+      - id: micro-behaviors/os/registry/write::batch-ms-settings-curver-write
+      - id: micro-behaviors/process/create/shellexec::batch-start-fodhelper
+    near_lines: 4
   - id: fodhelper-ms-settings-hijack
     desc: fodhelper ms-settings protocol hijack
     crit: hostile
@@ -245,7 +209,7 @@ composite_rules:
     mbc: "E1548"
     all:
       - id: micro-behaviors/fs/path/system::fodhelper-exe-reference
-      - id: ms-settings-shell-open-command
+      - id: "micro-behaviors/os/registry/keys/execution::shell-association-command-path"
       - id: delegateexecute-value
   - id: fodhelper-delegateexecute-hijack
     desc: fodhelper DelegateExecute hijack
@@ -254,21 +218,24 @@ composite_rules:
     mbc: "E1548"
     all:
       - id: micro-behaviors/fs/path/system::fodhelper-exe-reference
-      - id: ms-settings-shell-open-command
-      - id: delegateexecute-value-name
+      - id: "micro-behaviors/os/registry/keys/execution::shell-association-command-path"
+      - id: "micro-behaviors/os/registry/keys/execution::delegateexecute-value-name"
   - id: protocol-hijack-ms-settings
-    desc: ms-settings protocol UAC bypass
+    for: [batch]
+    desc: Per-user CurVer write with shell-command key
     crit: suspicious
     conf: 0.9
     all:
-      - id: ms-settings-curver
-      - id: micro-behaviors/os/registry/keys::shell-open-command-key
+      - id: micro-behaviors/os/registry/write::batch-ms-settings-curver-write
+      - id: micro-behaviors/os/registry/association::shell-open-command-key
+    unless:
+      - id: fodhelper-uac-bypass
   - id: protocol-hijack-ms-settings-shell
     desc: ms-settings Shell Open command hijack
     crit: suspicious
     conf: 0.93
     all:
-      - id: ms-settings-shell-open-command
+      - id: "micro-behaviors/os/registry/keys/execution::shell-association-command-path"
       - id: delegateexecute-value
   - id: protocol-hijack-mscfile
     desc: mscfile protocol UAC bypass
@@ -276,7 +243,7 @@ composite_rules:
     conf: 0.9
     all:
       - id: mscfile-curver
-      - id: micro-behaviors/os/registry/keys::shell-open-command-key
+      - id: micro-behaviors/os/registry/association::shell-open-command-key
   - id: wsreset-appx-uac-bypass
     desc: WSReset AppX class hijack UAC bypass
     crit: hostile
@@ -285,7 +252,7 @@ composite_rules:
     all:
       - id: wsreset-exe
       - id: appx-shell-open-command
-      - id: delegateexecute-value-name
+      - id: "micro-behaviors/os/registry/keys/execution::delegateexecute-value-name"
   - id: wsreset-delegateexecute-payload-launch
     desc: WSReset DelegateExecute payload launch
     crit: hostile
@@ -294,7 +261,7 @@ composite_rules:
     all:
       - id: wsreset-exe
       - id: appx-shell-open-command
-      - id: delegateexecute-value-name
+      - id: "micro-behaviors/os/registry/keys/execution::delegateexecute-value-name"
       - id: "micro-behaviors/process/create"
   - id: python-wsreset-delegateexecute-uac-bypass
     desc: Python WSReset DelegateExecute UAC bypass
@@ -308,7 +275,7 @@ composite_rules:
       - id: python-delegateexecute-registry-write
     any:
       - id: wsreset-python-method-label
-      - id: delegateexecute-value-name
+      - id: "micro-behaviors/os/registry/keys/execution::delegateexecute-value-name"
   - id: eventvwr-uac-bypass
     desc: eventvwr.exe UAC bypass technique
     crit: hostile
@@ -327,7 +294,7 @@ composite_rules:
       - id: well-known/app/ai/coding-agent/yana-ai::yana-ai-security-audit-product-context
     all:
       - id: computerdefaults-exe
-      - id: micro-behaviors/os/registry/keys::shell-open-command-key
+      - id: micro-behaviors/os/registry/association::shell-open-command-key
   - id: sysprep-wusa-uac-bypass
     desc: sysprep cryptbase WUSA UAC bypass
     crit: hostile
@@ -364,7 +331,7 @@ composite_rules:
     mbc: "E1548"
     all:
       - id: launcher-systemsettings-command
-      - id: delegateexecute-value-name
+      - id: "micro-behaviors/os/registry/keys/execution::delegateexecute-value-name"
       - id: slui-exe
       - id: micro-behaviors/os/privilege/elevation::runas-string
       - id: micro-behaviors/process/create/shellexec::shell-execute-call
@@ -376,9 +343,12 @@ composite_rules:
     mbc: "E1548"
     unless:
       - id: well-known/lib/platform/microsoft-shell32::microsoft-shell32-system-context
+    near_bytes: 180
     all:
       - id: micro-behaviors/os/autorun/scheduled::silentcleanup-task-path
-      - id: user-windir-environment-hijack
+      - id: "micro-behaviors/os/registry/keys/path::user-environment-registry-key"
+      - id: micro-behaviors/os/registry/access::powershell-windir-property-access
+      - id: micro-behaviors/os/registry/write/
   - id: sdclt-folder-uac-bypass
     desc: sdclt.exe UAC bypass through a per-user Folder open-command hijack
     crit: hostile
@@ -413,3 +383,14 @@ composite_rules:
       - id: sdclt-folder-uac-bypass
     near_bytes: 4096
 
+  - id: eventvwr-mscfile-command-hijack
+    desc: Event Viewer launch with mscfile command override and registry writes
+    crit: hostile
+    conf: 0.98
+    for: [pe]
+    all:
+      - id: micro-behaviors/fs/path/application/executable::eventvwr-exe-reference
+      - id: micro-behaviors/os/registry/keys/execution::mscfile-open-command-path
+      - id: micro-behaviors/os/registry/write::reg-set-value-ex-a
+      - id: micro-behaviors/process/create/shellexec::shell-execute-call
+    near_bytes: 16384

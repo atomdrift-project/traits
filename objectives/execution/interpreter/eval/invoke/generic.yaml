@@ -6,35 +6,38 @@ defaults:
   mbc: E1059
   platforms: [unix, windows]
 composite_rules:
+# The deserialization leg requires Deserialize *syntax* on the
+# BinaryFormatter, not the mere type reference: a bare BinaryFormatter
+# mention is satisfied by serialize-only helpers (the classic
+# serialize-to-a-MemoryStream object-size probe, which never touches
+# untrusted bytes) that ship inside large line-of-business suites next to
+# COM late-binding, assembly probing resolvers and full-file reads. Those
+# suites match every other leg here without deserializing anything, so
+# presence alone convicts them of "deserializes and reflectively invokes
+# code" they never perform. The syntax atom is a component precisely
+# because it is only the call shape; this composite supplies the
+# surrounding load/invoke chain that turns the shape into the attack.
 - id: dotnet-deserialized-reflective-exec
   desc: Unsigned .NET binary deserializes and reflectively invokes code
   crit: hostile
   conf: 0.96
-  for: [pe, dll]
+  for:
+  - pe
+  - dll
   attack: T1059,T1140
   all:
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
-  - id: micro-behaviors/data/serialize/unsafe::binary-formatter
-  - id: micro-behaviors/data/embedded/payload/resource::assemblyresolve-hook
+  - id: micro-behaviors/data/serialize/unsafe::binary-formatter-deserialize-syntax
+  - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
   - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-member-token
   - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
   unless:
   - id: metadata/signed/platform/
-  # A self-contained single-file publish bundles the entire BCL (BinaryFormatter,
-  # AppDomain.AssemblyResolve, reflection InvokeMember, File.ReadAllBytes) as
-  # metadata string tables inside the native host stub. Those are the runtime
-  # library's own API surface, not the application calling them together.
   - id: metadata/binary/framework::dotnet-singlefilehost-runtime
   - id: metadata/binary/framework::dotnet-framework-api-surface
-  # The framework's own assemblies. `dotnet-framework-api-surface` covers the
-  # single-file host that inlines the BCL; this covers the BCL shipped as
-  # discrete DLLs. Windows 11's netfx3 on-demand CAB carries System.Web.dll and
-  # System.Workflow.ComponentModel.dll, which *implement* BinaryFormatter and
-  # reflective invoke -- and are catalog-signed, not Authenticode-signed, so the
-  # `unsigned-missing-signature-record` leg above matches them.
   - id: well-known/lib/runtime/managed/dotnet-runtime::microsoft-dotnet-system-assembly-original
   - id: well-known/tool/sysadmin/chocolatey::official-library-dll
-
+  - id: well-known/tool/offensive/peas::winpeas-current-audit-assembly
 - id: shell-eval
   desc: Dynamic code evaluation
   crit: notable
@@ -45,4 +48,4 @@ composite_rules:
   unless:
   - id: metadata/build/autotools/
   - id: well-known/tool/development/cli/fzf::fzf-binary
-  - id: metadata/file/format/structured::sourcemap-sources-content
+  - id: metadata/file/format/source-map::sourcemap-sources-content

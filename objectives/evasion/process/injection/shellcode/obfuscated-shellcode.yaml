@@ -18,20 +18,19 @@ traits:
       regex: '@signalapp([\\/]|\\+)sqlcipher'
 
 composite_rules:
-  # Shellcode injection + string obfuscation = hostile implant profile.
-  # Legitimate compression/utility libraries do not combine W^X injection
-  # with stack-string obfuscation.
+  # Require the obfuscation profile, not the count of stack-built strings.
+  # Rust code generation materializes short strings in ordinary executables.
   - id: obfuscated-shellcode-injection
-    desc: Shellcode injection with string obfuscation
+    desc: Stack-obfuscated PE with buffer thread-start code
     crit: hostile
     conf: 0.93
     all:
-      - id: micro-behaviors/mem/protect/modify::rw-to-rx-protection-with-thread-start
-      - id: objectives/anti-static/obfuscation/string/stack::many-stack-strings
+      - id: micro-behaviors/mem/protect/modify::rw-rx-constants-protection-thread-apis
+      - id: objectives/anti-static/obfuscation/string/stack::stack-string-obfuscated-pe
     any:
-      - id: micro-behaviors/crypto/symmetric/xor/loop::native-byte-xor-loop
-      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
-      - id: micro-behaviors/process/create/thread::create-thread
+      - id: micro-behaviors/process/create/thread::create-thread-buffer-resolved-x64
+      - id: micro-behaviors/process/create/thread::create-thread-buffer-resolved-x64-stack-args
+      - id: micro-behaviors/process/create/thread::create-thread-buffer-import-x64-stack-args
     unless:
       - id: metadata/signed/trust-level::signer-evidence-present
       - id: metadata/binary/framework/
@@ -46,6 +45,28 @@ composite_rules:
       # their stack strings are statically linked C, not an implant profile.
       - id: metadata/binary/provenance/source::npm-native-toolchain-context
 
+  # Dynamically-resolved variant of the above: the addon never imports
+  # VirtualAlloc or CreateThread, so the static RWX/thread legs stay silent.
+  # Instead it decodes API names on the stack with counted imm8 XOR loops,
+  # resolves them through GetProcAddress, and stages executable memory. The
+  # stack-XOR loop plus live export resolution is the discriminator:
+  # ordinary addons link their imports and have no counted XOR decoders.
+  - id: node-addon-obfuscated-dynamic-loader
+    desc: Node addon resolves RWX staging from XOR-decoded APIs
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: metadata/binary/symbols/exports::node-api-addon-export
+      - id: micro-behaviors/os/module/load::module-export-resolution-imports
+      - id: micro-behaviors/mem/protect/modify::executable-memory-staging
+      - id: micro-behaviors/crypto/symmetric/xor/loop::x64-rbp-xor-imm8-counted-loop
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/lib/runtime/scripted/electron/
+      - id: well-known/lib/media/skia/
+      - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-cli-member
+      - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-audio-member
+      - id: metadata/binary/provenance/source::npm-native-toolchain-context
   # Shellcode injection in a Node-API native addon (supply-chain context).
   # A compression utility should not need W^X memory transitions.
   - id: node-addon-shellcode-injection
@@ -53,13 +74,13 @@ composite_rules:
     crit: hostile
     conf: 0.95
     all:
-      - id: metadata/binary/framework::node-api-addon-export
-      - id: micro-behaviors/mem/protect/modify::rw-to-rx-protection-with-thread-start
+      - id: metadata/binary/symbols/exports::node-api-addon-export
+      - id: micro-behaviors/mem/protect/modify::rw-rx-constants-protection-thread-apis
       - id: micro-behaviors/mem/alloc/executable::virtualalloc-rwx-commit-x64
     any:
-      - id: objectives/anti-static/obfuscation/string/stack::many-stack-strings
+      - id: objectives/anti-static/obfuscation/string/stack::stack-string-obfuscated-pe
       - id: micro-behaviors/crypto/symmetric/xor/loop::native-byte-xor-loop
-      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+      - id: micro-behaviors/os/module/load::module-export-resolution-imports
     unless:
       - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-cli-member
       - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-audio-member

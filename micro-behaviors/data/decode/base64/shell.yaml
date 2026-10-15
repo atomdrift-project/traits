@@ -2,22 +2,6 @@ defaults:
   platforms: [unix, windows]
   for: [shell]
 traits:
-  - id: decode-pipe-bash
-    desc: References base64 decoding piped to bash
-    crit: notable
-    conf: 0.95
-    for: [shell, github-actions]
-    if:
-      type: text
-      regex: 'base64\s+-d\s*\|\s*bash\b'
-  # `printf %s "$cfg" | base64 -d | sudo tee /etc/foo.conf` is how you ship a
-  # generated config file over a shell command channel without quoting it --
-  # minikube writes containerd's hosts.toml this way. The decoded bytes land
-  # in a file, not in an interpreter, so this is a file write that happens to
-  # be encoded in transit. Declared for source languages too, because the
-  # command string is usually built inside a program.
-    unless:
-      - id: metadata/file/format/structured::serialized-news-article-catalog
   - id: base64-decode-piped-to-file-write
     desc: Base64 decode piped into a file write
     crit: notable
@@ -66,33 +50,17 @@ traits:
     if:
       type: text
       regex: '(kubectl|jq|jsonpath)[^\r\n]{0,240}\|\s*base64\s+-d'
-  - id: base64-d-cmd
-    desc: base64 -d/-D decode command
+  - id: base64-decode-command
+    desc: base64 short or long decode option
     crit: notable
     conf: 0.6
     for: [shell, github-actions, text, batch, makefile]
     if:
       type: text
-      # `\b` keeps `base64` off a preceding word char so unit-test binaries named
-      # `test_base64 -d` (Mercury/Notmuch bower Makefile) do not look like the
-      # base64(1) tool: `_base64` has no boundary before `base64`, but a backtick,
-      # pipe, space, or line start does. cleave's regex engine
-      # (regex_automata::meta) has no lookbehind, and `\b` is the clean
-      # equivalent here — the earlier `(?<!\w)` form silently never matched.
-      regex: '\bbase64\s+-(d|D)'
+      regex: '\bbase64\s+(-[dD]|--decode)\b'
     unless:
+      - id: metadata/file/format/security-corpus::trait-expectation-catalog
       - id: metadata/file/format/structured::serialized-news-article-catalog
-      - id: metadata/package/files/system-package::shell-completion-script
-      - id: metadata/file/naming::rust-source-file-context
-  - id: base64-decode-cmd
-    desc: base64 --decode command
-    crit: notable
-    conf: 0.6
-    for: [shell, github-actions, text, batch]
-    if:
-      type: text
-      substr: 'base64 --decode'
-    unless:
       - id: metadata/package/files/system-package::shell-completion-script
       - id: metadata/file/naming::rust-source-file-context
   - id: shell-embedded-atob-decode
@@ -125,14 +93,6 @@ traits:
       - id: metadata/file/format/structured::serialized-news-article-catalog
       - type: text
         regex: '(\{|<)[A-Za-z_][A-Za-z0-9_]*(>|\})\s*\|\s*\bbase64\b'
-  - id: decode-pipe-env-shell
-    desc: Base64 decode-to-shell pipeline through env
-    crit: notable
-    conf: 0.9
-    for: [shell, applescript, text, python]
-    if:
-      type: text
-      regex: '\bbase64\s+(-[dD]|--decode)\s*\|\s*env\s+(\w{1,20}=\S{1,20}\s+)?(/bin/)?(ba|da|z|k)?sh\b'
 composite_rules:
   - id: base64-decode-piped-shell
     desc: Base64 decode-to-shell pipeline
@@ -144,9 +104,9 @@ composite_rules:
     near_bytes: 256
     any:
       - id: decode-pipe-shell
-      - id: decode-pipe-env-shell
+      - id: micro-behaviors/process/create/shell/pipeline::decode-pipe-env-shell
     unless:
-      - id: serialized-security-input-context
+      - id: serialized-or-heuristic-input-context
       - id: micro-behaviors/process/create/shell/guard::python-command-risk-classifier-context
       - id: metadata/file/naming::rust-source-file-context
       # Static-scan fixtures ship dangerous shell text as scanner input by
@@ -158,17 +118,9 @@ composite_rules:
       - id: metadata/package/tooling::the-situation-provisioner
       - id: well-known/tool/detection/security-scanner/
       - id: well-known/tool/detection/skill-scanner::source-context
-      # Printf-fed Base64 transport round trip, built as a wider block.
-      - id: micro-behaviors/process/create/shell/bridge::printf-fed-base64-shell-transport
-  - id: base64-decode-shell
-    desc: Shell base64 decode command
-    crit: notable
-    conf: 0.6
-    any:
-      - id: base64-d-cmd
-      - id: base64-decode-cmd
-    unless:
-      - id: metadata/file/naming::rust-source-file-context
+      # Base64 transport round trip (runtime, printf-fed, or shell).
+      - id: micro-behaviors/process/create/shell/bridge::base64-shell-transport-context
+      - id: "metadata/file/naming::test-directory-component"
   # One reference for the two "the decoded bytes land in a file, not in an
   # interpreter" spellings, so a consuming rule spends a single suppression
   # slot -- `base64-exec-proximity` is already at the limit.
@@ -181,9 +133,10 @@ composite_rules:
       - id: base64-decode-piped-to-file-write
       - id: base64-decode-redirected-to-data-file
 
-  - id: serialized-security-input-context
-    desc: Serialized news or labeled security test input
+  - id: serialized-or-heuristic-input-context
+    desc: Serialized data or heuristic YAML fragments
     crit: exception
     any:
     - id: metadata/package/testing/corpus/
     - id: metadata/file/format/structured::serialized-news-article-catalog
+    - id: "metadata/lang/source/syntax::yaml-heuristic-source-fragment"

@@ -4,6 +4,11 @@
 # complete standalone context observation -- hostile-looking bytes that are
 # inert test data. Consumers use the member fact in `downgrade:` so container
 # context softens inherited findings without erasing their direct evidence.
+# When the inherited finding alone would convict the container (a parser
+# library whose test/ tree holds real malware specimens), they use `unless:`
+# instead, which also quiets the member-level finding -- the same tradeoff
+# the harness test-directory suppressors already make. Downgrade alone cannot
+# move container verdicts, which are counted from undowngraded findings.
 defaults:
   platforms: [windows, unix]
   for: [binaries, zip, tar, 7z]
@@ -32,16 +37,34 @@ traits:
 
   # Corpus directories also cover fuzzing corpora (testdata/fuzz, corpus/),
   # where binary fixtures concentrate; scripts/source fixtures are already
-  # covered by the harness test-fixture-directory-path component.
-  - id: binary-test-fixture-member
+  # covered by the harness test-fixture-directory-path component. Parser
+  # libraries commonly keep their adversarial fixture sets in a bare test/
+  # tree (saferwall/pe ships sha-named malware PEs under test/), so any
+  # test-prefixed directory name counts here too (61 chars, under the 64
+  # path-regex cap).
+  - id: binary-fixture-corpus-directory-member
     desc: Binary stored under a test fixture directory
     crit: baseline
     conf: 0.95
-    for: [pe, dll, elf, macho, zip, tar, 7z]
+    for: [pe, dll, elf, macho, zip, tar, 7z, lnk]
     if:
       type: path
       dirname: true
-      regex: '(^|[\\/])(_?fixtures?_?|testdata|corpus(_files)?)([\\/]|$)'
+      regex: '(^|[\\/])(_?fixtures?_?|corpus(_files)?|test[a-z]*)([\\/]|$)'
+      case_insensitive: true
+
+  # Syft's binary classifiers retain ELF headers plus selected version data,
+  # not executable images. Recognize the test-prefixed fixture convention
+  # separately to keep both directory matchers short and shallow.
+  - id: binary-test-prefixed-fixture-member
+    desc: Binary stored under a test-fixtures directory
+    crit: baseline
+    conf: 0.95
+    for: [pe, dll, elf, macho, zip, tar, 7z, lnk]
+    if:
+      type: path
+      dirname: true
+      regex: '(^|[\\/])test[-_]fixtures?([\\/]|$)'
       case_insensitive: true
 
   # The OpenSSF malicious-packages dataset ships each sample as a zip whose
@@ -66,7 +89,30 @@ traits:
       path: "archive.members[*].path"
       regex: 'package_info-.{1,80}\.json$'
 
+  - id: binary-test-prefixed-filename
+    desc: Binary fixture with test-prefixed filename
+    crit: baseline
+    conf: 0.95
+    for: [pe, dll, elf, macho, zip, tar, 7z]
+    if:
+      type: path
+      basename: true
+      regex: '^test[-_]'
+      case_insensitive: true
+
 composite_rules:
+  - id: binary-test-fixture-member
+    desc: Binary stored under a test fixture directory
+    crit: baseline
+    conf: 0.95
+    for: [pe, dll, elf, macho, zip, tar, 7z]
+    any:
+      - id: binary-fixture-corpus-directory-member
+      - id: binary-test-prefixed-fixture-member
+      - id: binary-test-prefixed-filename
+      - id: metadata/file/naming::sha256-hex-basename
+      - id: metadata/file/naming::sha256-hex-layer-path
+
   # Some archives nest test executables inside a ZIP, so PE analyzers only see
   # the member basename and cannot recover the outer tests/ path. Combine the
   # generic path evidence with the explicit BCJ filter fixture identity.
@@ -76,6 +122,6 @@ composite_rules:
     conf: 0.98
     for: [pe]
     any:
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
       - id: binary-test-fixture-member
       - id: metadata/package/testing/presence/integration::bcj-filter-regression-fixture-basename

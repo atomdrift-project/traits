@@ -21,7 +21,20 @@ traits:
     for: [html, php, batch]
     if:
       type: text
-      regex: '<form\b[^>]{0,180}action\s*=\s*["'']https?://'
+      regex: '(?i)<form\b[^>]{0,180}action\s*=\s*["'']https?://'
+
+  - id: html-form-actionless-post
+    desc: Form self-posts without an action
+    conf: 0.9
+    # An action-less POST form submits to its own URL. Ordinary settings and
+    # search forms do this, so this stays notable; the phishing and webshell
+    # composites reference it and add the credential context. Scoped to forms
+    # whose only attribute is the POST method so styled multi-attribute
+    # benign forms stay out.
+    for: [html, php]
+    if:
+      type: text
+      regex: '(?i)<form\s+method\s*=\s*[''"]post[''"]\s*>'
 
   - id: batch-html-onload-form-submit
     desc: Auto-submits generated HTML form
@@ -36,7 +49,11 @@ traits:
     conf: 0.8
     if:
       type: text
-      regex: '(?i)\bfetch\s*\('
+      # No dot receiver: carousel and video plugins ship same-named
+      # `this.fetch(...)` helpers, which are not the Fetch API. The
+      # linear-time engine has no lookbehind, so the guard consumes the
+      # preceding character instead; bare `fetch(...)` still matches.
+      regex: '(?i)(^|[^.\w])fetch\s*\('
 
   - id: html-fetch-post-call
     desc: HTML script sends a fetch POST request
@@ -49,9 +66,42 @@ traits:
       # rather than a generic fetch reference.
       regex: '(?is)\bfetch\s*\([^)]{0,600}\bmethod\s*:\s*["'']POST["'']'
 
+  - id: html-jquery-ajax-absolute-url
+    desc: jQuery ajax call specifies an absolute URL
+    conf: 0.9
+    if:
+      type: text
+      # The fetch twin above misses the jQuery spelling that phishing kits
+      # favour (`$.ajax({url: "...", type: "POST", ...})`): same POST-to-URL
+      # capability through the library call. The absolute URL keeps this a
+      # submission target rather than a same-origin endpoint reference.
+      regex: '(?is)\$\.ajax\s*\(\s*\{[^}]{0,400}\burl\s*:\s*[\"'']https?://'
+  - id: html-jquery-ajax-relative-php-url
+    desc: jQuery ajax targets relative PHP script
+    conf: 0.9
+    if:
+      type: text
+      # Same-origin twin of the absolute-URL atom above: standalone phishing
+      # pages POST harvested credentials to a co-hosted collector
+      # (`connect.php`) instead of an absolute endpoint, so the absolute
+      # spelling misses the whole kit. The bare filename admits no scheme
+      # colon and no slash, so absolute, protocol-relative, rooted and
+      # subdirectory targets cannot match; only a sibling collector script
+      # does. Data fetches (`data.json`) miss on the extension.
+      regex: '(?is)\$\.ajax\s*\(\s*\{[^}]{0,300}\burl\s*:\s*["''][A-Za-z0-9_~.-]+\.php["'']'
+
   - id: html-control-form-field
     desc: HTML form supplies a control field
     conf: 0.96
     if:
       type: text
       regex: '(?i)<input\b[^>]{0,140}\bname\s*=\s*["'']?(command|cmd|scriptpath|seqfile)\b'
+
+composite_rules:
+  - id: html-jquery-ajax-post-call
+    desc: jQuery ajax call with absolute URL and POST option
+    crit: notable
+    all:
+      - id: html-jquery-ajax-absolute-url
+      - id: micro-behaviors/communications/http/post::request-options-post-method
+    near_bytes: 400

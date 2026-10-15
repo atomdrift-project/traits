@@ -5,24 +5,14 @@ defaults:
   attack: T1027
 
 traits:
-  - id: direct-base64-exec
-    desc: Direct Python base64 decode passed to exec
-    crit: suspicious
-    conf: 0.96
+  - id: b64decode-variable-argument
+    desc: b64decode argument is an interpolated variable
+    crit: notable
+    conf: 0.9
+    for: [shell, powershell]
     if:
-      # Match an executable call node, not the same text inside a quoted
-      # command assembled for a sandbox or shown in documentation.
-      type: tree-sitter
-      kind: call
-      regex: '^exec\s*\(\s*(base64\.)?b64decode\s*\('
-    unless:
-      - id: well-known/lib/ai/unsloth::unsloth-package-context
-      - id: well-known/tool/detection/agent-glovebox::archive-context
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      - id: well-known/tool/detection/security-scanner::skilltotal-scanner-module-path
-      - id: well-known/tool/detection/security-scanner::skilltotal-package-import-marker
-      - id: well-known/tool/detection/tirith::tirith-defensive-scanner-context
-      - id: sshpilot-flatpak-agent-context
+      type: text
+      regex: 'b64decode\(\s*[''"]?\$\{?\w+'
 
   # Text fallback for the two AST traits here. tree-sitter does not parse a
   # line past its size limit, and these stagers put a multi-megabyte base64
@@ -71,7 +61,7 @@ composite_rules:
     crit: suspicious
     conf: 0.9
     any:
-      - id: direct-base64-exec
+      - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
       - id: imported-base64-exec
     unless:
       - id: well-known/lib/vendor-sdk/omdev::omdev-library
@@ -93,4 +83,17 @@ composite_rules:
     conf: 0.99
     all:
       - id: well-known/app/communication/sshpilot::python-module
-      - id: micro-behaviors/process/create/subprocess::subprocess-detached-session
+      - id: micro-behaviors/process/daemonize/detach::python-subprocess-new-session-option
+
+  # Shell/PowerShell scripts that both encode a local payload and pass that
+  # same variable to a remote b64decode are transporting their own source
+  # across ssh, not staging hidden code — a stager embeds a constant blob
+  # and never carries its cleartext encoder.
+  - id: remote-python-payload-roundtrip
+    desc: Local payload encoded then decoded over ssh
+    crit: exception
+    conf: 0.95
+    for: [shell, powershell]
+    all:
+      - id: micro-behaviors/data/encode/base64::shell-or-powershell-base64-encode
+      - id: b64decode-variable-argument

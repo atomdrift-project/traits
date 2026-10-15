@@ -3,30 +3,6 @@
 defaults:
   platforms: [windows, linux, macos, unix, android, ios]
 composite_rules:
-  # Custom crypter shell shape: a nonstandard RWX section whose body is
-  # junk-instruction padding (the decrypt stub hides between the floods)
-  # paired with a large encrypted writable section that holds the payload.
-  # Compilers never emit opcode floods, and legitimate protectors use their
-  # well-known section names, so the combination identifies a bespoke
-  # crypter independent of family strings, which sit inside the blob.
-  - id: custom-rwx-crypt-section-encrypted-blob
-    desc: Junk-padded custom RWX section with encrypted payload blob
-    crit: hostile
-    conf: 0.97
-    attack: T1027.002
-    mbc: B0032
-    for: [pe]
-    all:
-      - id: objectives/anti-static/pack/loader-noise::junk-opcode-flood-padding
-      - id: metadata/binary/section/entropy::large-high-entropy-writable-data-section
-    any:
-      - id: metadata/binary/section/label::htext-rwx-section
-      - id: metadata/binary/section/permission::random-uppercase-rwx-section
-      - id: metadata/binary/section/permission::random-rwx-cavity-section
-      - id: metadata/binary/section/permission::random-mixed-case-rwx-section
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
   - id: rwx-packed-loader
     desc: PE with RWX section flood and packed payload
     crit: hostile
@@ -37,7 +13,7 @@ composite_rules:
     all:
       - id: metadata/hardening/memory::extreme-wx-section-count-10
       - id: metadata/binary/section/layout::large-low-entropy-rwx-section
-      - id: metadata/binary/section/permission::random-rwx-cavity-section
+      - id: metadata/binary/section/permission::near-zero-entropy-rwx-section
       - id: objectives/anti-static/pack/loader-noise::rsrc-rwx-null-payload-section
   - id: packed-ad-targeting
     desc: Packed binary with Active Directory and Terminal Services imports
@@ -47,7 +23,7 @@ composite_rules:
     for: [pe]
     all:
       - id: micro-behaviors/dylib/load/dsprop/
-      - id: micro-behaviors/dylib/load/wtsapi/
+      - id: micro-behaviors/dylib/library/family::pe-terminal-services-library-reference
       - id: metadata/binary/section/ratio::largest-section-at-least-90-percent
   - id: payload-unpacking
     desc: Embedded payload with unpacking capability
@@ -125,9 +101,75 @@ composite_rules:
     all:
       - id: metadata/hardening/memory::extreme-wx-section-count-10
       - id: metadata/binary/layout/overlay::low-entropy-large-overlay
-      - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+      - id: micro-behaviors/os/module/load::module-export-resolution-imports
       - id: metadata/binary/symbols/count::imported-functions-under-80
       - id: metadata/binary/section/entropy::random-exec-payload-section
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/framework/
+
+  - id: short-dotted-packer-high-entropy-payload
+    desc: Packed PE with entry in short dotted section and high-entropy payload mass
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002"
+    mbc: "B0032,F0001"
+    for: [pe]
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-short-dotted-packer-section
+      - id: metadata/binary/section/label::multiple-nonstandard-section-names
+      - id: metadata/binary/section/entropy::small-high-entropy-executable-section-without-text
+      - id: metadata/binary/layout/entropy::high-entropy-region-mass-64k
+    any:
+      - id: metadata/binary/provenance/signature::pe-signature-digest-mismatch
+      - id: metadata/binary/layout/checksum::pe-checksum-mismatch
+      - id: metadata/binary/provenance/build::header-timestamp-pre-2000
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+  # Large-section sibling of the rule above: NSPack-style loaders keep a ~90 KB
+  # high-entropy payload section, so the 64 KB small-section leg never fires
+  # even though the shape (dotted entry, nonstandard names, dominant opaque
+  # section, broken signature) is the same packer. The tampered-signature leg
+  # is required rather than alternative: a dominant high-entropy section alone
+  # also describes packed games and SFX installers that still verify.
+  - id: short-dotted-packer-dominant-tampered-payload
+    desc: Tampered packed PE with dominant payload in short dotted section
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002,T1553.002"
+    mbc: "B0032,F0001"
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: metadata/binary/section/header::pe-entry-in-short-dotted-packer-section
+      - id: metadata/binary/section/label::multiple-nonstandard-section-names
+      - id: metadata/binary/section/ratio::largest-section-at-least-90-percent
+      - id: metadata/binary/layout/entropy::high-entropy-region-mass-64k
+      - id: metadata/binary/code/entropy::code-region-entropy-78
+      - id: metadata/binary/provenance/signature::pe-signature-digest-mismatch
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: blank-section-packer-high-entropy-payload
+    desc: Packed PE with blank-named section and high-entropy payload mass
+    crit: hostile
+    conf: 0.98
+    attack: "T1027.002"
+    mbc: "B0032,F0001"
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: metadata/binary/section/label::blank-named-section
+      - id: metadata/binary/section/label::multiple-nonstandard-section-names
+      - id: metadata/binary/section/entropy::small-high-entropy-executable-section-without-text
+      - id: metadata/binary/layout/entropy::high-entropy-region-mass-64k
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+    any:
+      - id: metadata/binary/layout/checksum::pe-checksum-mismatch
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/binary/provenance/signature::pe-signature-digest-mismatch
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

@@ -68,7 +68,7 @@ composite_rules:
   all:
   - id: micro-behaviors/os/privilege/token::rtl-enable-debug-privilege-x64
   - id: micro-behaviors/process/enumerate/snapshot::toolhelp-process-enumeration-symbol
-  - id: micro-behaviors/process/create/spawn::open-process
+  - id: micro-behaviors/process/attach/rights::open-process
   - id: objectives/anti-static/obfuscation/string/conceal::db-substitution-browser-target-set
   - id: metadata/binary/header/characteristics::pe-dll-characteristics
   any:
@@ -85,6 +85,7 @@ composite_rules:
   - id: well-known/tool/sysadmin/
   - id: well-known/app/system/iobit/
   - id: well-known/app/utility/ccleaner::ccleaner-icarus-sfx-context
+  - id: well-known/app/utility/shunwang-mainproc/
 - id: privilege-launch-utility-vendor-markers
   desc: Recognized utility vendor identity
   crit: notable
@@ -102,7 +103,7 @@ composite_rules:
   - id: micro-behaviors/os/privilege/token::lookup-privilege-value-any
   - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
   - id: micro-behaviors/process/debug/detect::is-debugger-present-import
-  - id: objectives/anti-static/pack/runtime::unpacking-api-pattern
+  - id: micro-behaviors/mem/protect/modify::allocation-protection-opaque-image
   - id: objectives/anti-static/obfuscation/payload/section/layout::large-high-entropy-gfx-section
   unless:
   - id: metadata/signed/platform/
@@ -121,19 +122,6 @@ composite_rules:
   - id: micro-behaviors/os/privilege/manifest::require-administrator
   - id: objectives/anti-analysis/sandbox-detect/suite::named-native-anti-analysis-check-cluster
 
-- id: runas-verb
-  desc: ShellExecute or Start-Process runas elevation
-  crit: notable
-  conf: 0.9
-  all:
-  - id: micro-behaviors/os/privilege/elevation::runas-string
-  any:
-  - id: micro-behaviors/process/create/shellexec::lpverb-field
-  - id: micro-behaviors/process/create/shellexec::shell-execute-call
-  - id: micro-behaviors/process/create/shellexec::shell-executeex-call
-  - id: micro-behaviors/process/create/start-process::start-process-call
-  unless:
-  - id: metadata/binary/symbols/count::many-exports-100
 - id: rust-token-privilege-adjustment
   desc: Rust token privilege adjustment chain
   crit: notable
@@ -155,28 +143,7 @@ composite_rules:
   - id: micro-behaviors/os/privilege/token::lookup-privilege-value-any
   - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
   - id: micro-behaviors/os/privilege/token::rtl-adjust-privilege
-  - id: runas-verb
-- id: direct-ntdll-privilege-adjustment
-  desc: Direct ntdll privilege adjustment
-  crit: suspicious
-  conf: 0.9
-  attack: T1134.001
-  for: [pe, dll]
-  all:
-  - id: micro-behaviors/os/privilege/token::rtl-adjust-privilege
-  - id: micro-behaviors/os/syscall/invoke::ntdll-import
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
-    - id: metadata/binary/vendor::microsoft-corp-versioninfo
-  unless:
-  - id: metadata/binary/symbols/count::many-exports-100
-  - id: well-known/tool/sysadmin/chroot-win/
-  - id: well-known/app/system/reactos::system-component
-  # IObit Advanced SystemCare's boot-time RegistryDefrag helpers adjust
-  # shutdown privileges to do their documented job; the verified vendor
-  # identity marks the known-benign suite.
-  - id: well-known/app/system/iobit::iobit-signed-component-context
+  - id: micro-behaviors/os/privilege/elevation::runas-api-context
 - id: token-spawn-api-chain-binary
   desc: User-token process spawn chain (binary)
   crit: notable
@@ -227,17 +194,6 @@ composite_rules:
   - id: token-credential-logon-command-source
   - id: token-privilege-command-source
   needs: 2
-- id: mimikatz-driver-native-token-duplication
-  desc: Mimikatz driver duplicates process tokens
-  crit: hostile
-  conf: 0.99
-  attack: T1134
-  mbc: E1134
-  for: [pe, dll]
-  all:
-  - id: well-known/tool/offensive/mimikatz::mimidrv-driver-identity
-  - id: micro-behaviors/os/privilege/token::native-duplicate-token
-  - id: micro-behaviors/process/attach/address-space::lookup-process-by-id
 - id: source-token-and-kerberos-abuse-suite
   desc: Source code combines token abuse with Kerberos ticket actions
   crit: hostile
@@ -285,6 +241,7 @@ composite_rules:
   - id: metadata/signed/unknown::google-llc
   - id: metadata/signed/unknown::adobe-inc.
   - id: well-known/tool/browser/
+  - id: well-known/app/security/
 - id: system-token-theft-winlogon
   desc: SYSTEM token theft via winlogon
   crit: hostile
@@ -292,7 +249,7 @@ composite_rules:
   attack: T1134
   all:
   - id: token-spawn-api-chain
-  - id: objectives/evasion/masquerade/process/name::winlogon-name
+  - id: micro-behaviors/process/info/name::winlogon-executable-reference
   - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
   any:
   - id: micro-behaviors/os/privilege/token::token-privilege-adjustment-references
@@ -312,13 +269,13 @@ composite_rules:
   for: [pe, dll]
   all:
   - id: micro-behaviors/process/enumerate/wts::wts-enumerate-processes
-  - id: objectives/privilege-escalation/process-injection::lsass-target
+  - id: micro-behaviors/process/info/name::lsass-executable-reference
   - id: micro-behaviors/os/privilege/token::open-process-token-any
   - id: micro-behaviors/os/privilege/token::duplicate-token-ex
   - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
   any:
   - id: micro-behaviors/os/privilege/token::set-thread-token
-  - id: micro-behaviors/process/create/sudo::create-process-as-user
+  - id: micro-behaviors/process/create/exec::create-process-as-user
   unless:
   - id: metadata/signed/platform/
   - id: metadata/binary/vendor::microsoft-corp-versioninfo
@@ -331,10 +288,14 @@ composite_rules:
   attack: T1134.001
   for: [csharp, powershell, python]
   all:
-  - id: micro-behaviors/process/enumerate/managed::privileged-process-lookup-by-name
   - id: micro-behaviors/os/privilege/token::open-process-token-source
   - id: micro-behaviors/os/privilege/token::duplicate-token-ex-source
   - id: micro-behaviors/os/privilege/token::impersonate-logged-on-user-source
+  any:
+  - id: micro-behaviors/process/enumerate/managed::privileged-process-lookup-by-name
+  - id: micro-behaviors/process/enumerate/shell::powershell-get-process-lsass
+  - id: micro-behaviors/process/enumerate/shell::powershell-get-process-winlogon
+  needs: 1
   unless:
   - id: well-known/tool/sysadmin/sysinternals::process-explorer-build-identity
 
@@ -354,3 +315,37 @@ composite_rules:
   - id: objectives/evasion/anti-av/driver::antivirus-process-enumeration-routine
   - id: micro-behaviors/os/privilege/check::is-elevated-property
   needs: 1
+
+- id: debug-privilege-process-access
+  desc: Enables debug privilege for process access or termination
+  crit: hostile
+  conf: 0.95
+  attack: T1134.001
+  for: [pe, dll]
+  all:
+  - id: micro-behaviors/os/privilege/token::sedebug-privilege-name
+  - id: micro-behaviors/os/privilege/token::open-process-token-any
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+  - id: micro-behaviors/process/attach/rights::open-process
+  any:
+  - id: micro-behaviors/process/enumerate/snapshot::dynamic-toolhelp-process-traversal
+  - id: micro-behaviors/process/enumerate/snapshot::create-toolhelp32-snapshot
+  - id: micro-behaviors/process/terminate/kill::terminate-process-name-text
+  - id: micro-behaviors/process/terminate/kill::terminate-process
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/vendor::microsoft-corp-versioninfo
+  - id: token-adjustment-benign-tool-context
+  - id: well-known/tool/
+  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
+  - id: well-known/lib/platform/advanced-installer::advanced-installer-helper-context
+  - id: metadata/binary/installer/builder::advanced-installer-bootstrapper
+
+  # A compiled AutoIt script embeds the interpreter's token and process APIs
+  # regardless of what the script does; that runtime surface alone shows no
+  # privilege escalation.
+  - id: metadata/lang/compiled::autoit-compiled-script
+  # A native scripting-addon module (Python, Ruby, Node) exposes the runtime's
+  # token and process APIs to its host language regardless of what the calling
+  # script does; that library surface alone shows no privilege escalation.
+  - id: metadata/lang/compiler/native::native-scripting-addon-module

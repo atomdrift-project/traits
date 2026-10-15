@@ -4,35 +4,6 @@ defaults:
   attack: "T1027"
   mbc: "B0032"
 traits:
-# Metamorphic crypters pad their decrypt stubs with hundreds of consecutive
-# junk instructions (bswap reg / 16-bit or reg,reg variants) so the section
-# disassembles as noise around the real code islands. A compiler never
-# emits 40+ back-to-back copies of these one-byte-register idioms; the
-# repetition threshold keeps compressed data and legitimate code from matching.
-- id: junk-opcode-flood-padding
-  desc: Repeated junk-instruction flood padding
-  crit: suspicious
-  conf: 0.93
-  arch: [x86, x86-64]
-  if:
-    type: raw
-    regex: '(\x0f[\xc8-\xcf]){40,}|(\x66\x09[\xc9\xd0\xd2\xd3]){40,}'
-  unless:
-  # Statically linked PCRE Unicode tables in .rdata (16-bit runs around
-  # 0x0FC8) decode as bswap-reg floods; OCaml binaries routinely link them
-  # (e.g. semgrep-core.exe), so the byte flood is data, not a stub.
-  - id: metadata/lang/compiler/native::ocaml-native-runtime-marker
-  # Bun single-file executables bundle asset and runtime Unicode tables in
-  # the .bun section that decode as 16-bit integer runs.
-  - id: metadata/binary/section/name::bun-section-name
-  - id: well-known/lib/runtime/scripted/bun-runtime/
-  # Large Rust portable-pty / node-pty Windows addons embed table-like .rdata
-  # that decodes as bswap-reg floods; the PDB path marks legitimate PTY code.
-  - id: well-known/lib/network/node-pty::portable-pty-crate-source-path
-  # Multi-grammar Tree-sitter native addons embed large DFA parse tables and
-  # regex tables in .rdata that decode as bswap-reg floods.
-  - id: well-known/lib/development/tree-sitter/
-  - id: well-known/lib/data/ibm-db/
 - id: write-only-high-entropy-section
   desc: Write-only high-entropy section payload
   crit: suspicious
@@ -64,23 +35,11 @@ traits:
   - id: metadata/binary/section/label/
   - id: objectives/anti-static/pack/asprotect
   - id: metadata/binary/framework::dotnet-metadata
-  - id: metadata/binary/installer/script::nsis-sfx-deadbeef-magic
-  - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: metadata/binary/installer/script::nsis
+  - id: "metadata/file/naming::test-directory-component"
   downgrade:
     any:
     - id: metadata/signed/platform/
-- id: oversized-reloc-masking
-  desc: Oversized low-entropy .reloc masking section
-  crit: suspicious
-  conf: 0.92
-  if:
-    type: section
-    exact: ".reloc"
-    length_min: 1048576
-    entropy_max: 4.2
-  unless:
-  - id: well-known/lib/ai/triton::triton-native-extension
-  - id: well-known/app/storage/syncback::syncback-backup-benign-context
 - id: reloc-rwx-payload-section
   desc: Large RWX .reloc payload section
   crit: suspicious
@@ -92,27 +51,6 @@ traits:
     executable: true
     length_min: 262144
     entropy_max: 4.7
-- id: reloc-rwx-encrypted-payload
-  desc: RWX .reloc encrypted payload staging
-  crit: suspicious
-  conf: 0.98
-  if:
-    type: section
-    exact: ".reloc"
-    writable: true
-    executable: true
-    length_min: 65536
-    entropy_min: 6.0
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
-  unless:
-  - id: metadata/signed/unknown::open-source-developer-martin-tofall
-  - id: well-known/app/browser/internet-explorer/
-# Mid-entropy RWX .reloc fills the gap between low-entropy packed
-# stubs (entropy_max 4.7) and high-entropy encrypted stages (entropy_min
-# 6.0). Expiro Gen.7 and similar infectors store a partially compressed
-# viral body here at ~5.0 entropy while keeping the host .text intact.
 - id: reloc-rwx-mid-entropy-payload
   desc: Mid-entropy RWX .reloc payload section
   crit: suspicious
@@ -506,7 +444,7 @@ composite_rules:
   all:
   - id: lol-rwx-payload-section
   - id: metadata/binary/section/header::pe-entry-in-writable-section
-  - id: metadata/binary/layout/entropy::high-overall-entropy-70
+  - id: metadata/file/entropy::high-overall-entropy-70
   - id: metadata/binary/section/label::multiple-nonstandard-section-names
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   unless:
@@ -542,7 +480,7 @@ composite_rules:
   crit: suspicious
   conf: 0.96
   all:
-  - id: objectives/anti-static/obfuscation/payload/section/layout::empty-text-section
+  - id: metadata/binary/section/layout::empty-executable-text-section
   - id: metadata/binary/header/malformed::pe-bss-like-sections-multiple
   - id: metadata/binary/code/entropy::high-code-entropy
   - id: metadata/binary/symbols/count::importless-signer-or-layout-profile
@@ -550,12 +488,12 @@ composite_rules:
     any:
     - id: metadata/signed/platform/
 - id: self-issued-empty-text-packed-loader
-  desc: Self-issued PE with empty decoy text and packed code
-  crit: hostile
+  desc: Self-issued PE with unbacked high-entropy code
+  crit: suspicious
   conf: 0.97
   attack: T1027.002
   all:
-  - id: objectives/anti-static/obfuscation/payload/section/layout::empty-text-section
+  - id: metadata/binary/section/layout::empty-executable-text-section
   - id: metadata/binary/header/malformed::pe-bss-like-sections-multiple
   - id: metadata/binary/code/entropy::high-code-entropy
   - id: metadata/binary/symbols/imports::pe-imports-max-six
@@ -568,7 +506,7 @@ composite_rules:
   conf: 0.97
   attack: T1027.002
   all:
-  - id: objectives/anti-static/obfuscation/payload/section/layout::empty-text-section
+  - id: metadata/binary/section/layout::empty-executable-text-section
   - id: metadata/binary/header/malformed::pe-bss-like-sections-multiple
   - id: metadata/binary/code/entropy::high-code-entropy
   - id: metadata/binary/symbols/imports::pe-imports-max-six
@@ -582,11 +520,11 @@ composite_rules:
   attack: "T1027.002"
   ref: sha256:194bef1eb8770c78baf6b4fb42b7866943d15c0cb8d96ca9fbed44171ceab307
   all:
-  - id: objectives/anti-static/obfuscation/payload/section/layout::empty-text-section
+  - id: metadata/binary/section/layout::empty-executable-text-section
   - id: metadata/binary/header/malformed::pe-bss-like-sections-multiple
   - id: metadata/binary/section/header::pe-entry-in-writable-section
   - id: metadata/binary/section/entropy::hex-suffix-rwx-high-entropy-section
-  - id: metadata/binary/layout/entropy::high-overall-entropy-binary
+  - id: metadata/file/entropy::high-overall-entropy-binary
   - id: metadata/binary/symbols/count::imported-functions-under-80
   unless:
   - id: metadata/signed/platform/
@@ -641,7 +579,7 @@ composite_rules:
   size_min: 2000000
   all:
   - id: metadata/binary/layout/ratio::text-section-dominates-file
-  - id: metadata/binary/layout/entropy::low-overall-entropy-binary
+  - id: metadata/file/entropy::low-overall-entropy-binary
   - id: "metadata/file/profile/string-population::few-high-entropy-strings-20"
   - id: decoy-resource-string-suite
   - id: text-noise-token-suite
@@ -652,8 +590,8 @@ composite_rules:
   attack: "T1027.002"
   all:
   - id: lol-rwx-payload-section
-  - id: micro-behaviors/process/create/spawn::create-process-a
-  - id: micro-behaviors/process/create/exec::shell-execute-a
+  - id: micro-behaviors/process/create/exec::create-process-a
+  - id: micro-behaviors/process/create/shellexec::shell-execute-a
   - id: micro-behaviors/fs/shell-ops::shell-get-folder-path-a
   any:
   - id: micro-behaviors/fs/file/attributes::set-file-attributes-a
@@ -786,7 +724,7 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/decoy-imports::rare-kernel-utility-import-cluster
   - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
-  - id: metadata/binary/code/entropy::native-code-entropy-78
+  - id: metadata/binary/code/entropy::code-region-entropy-78
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   any:
   - id: metadata/binary/instruction::golden-ratio-immediate-mov
@@ -840,7 +778,7 @@ composite_rules:
   any:
   - id: metadata/binary/section/ratio::pe-largest-section-65-percent
   - id: metadata/binary/resource/size::resource-heavy-low-entropy-rsrc
-  - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
+  - id: micro-behaviors/process/debug/detect::local-and-remote-debugger-api-references
   downgrade:
     any:
     - id: metadata/signed/platform/
@@ -853,10 +791,10 @@ composite_rules:
   attack: "T1027.002"
   all:
   - id: packed-rwx-process-shell-import-cluster
-  - id: objectives/anti-static/obfuscation/payload/section/layout::empty-text-section
+  - id: metadata/binary/section/layout::empty-executable-text-section
   any:
   - id: metadata/binary/layout/checksum::pe-checksum-mismatch
-  - id: metadata/binary/layout/entropy::high-overall-entropy-70
+  - id: metadata/file/entropy::high-overall-entropy-70
 - id: rwx-reloc-service-loader
   desc: Packed service loader in RWX reloc
   crit: suspicious
@@ -866,7 +804,7 @@ composite_rules:
   needs: 3
   any:
   - id: reloc-dominates-image
-  - id: oversized-reloc-masking
+  - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
   - id: micro-behaviors/os/service/dispatch::service-control-dispatch
   - id: micro-behaviors/os/service/dispatch::service-dispatch-triad
   - id: objectives/evasion/masquerade/debug::chrome-elevation-service-decoy
@@ -899,10 +837,10 @@ composite_rules:
   needs: 4
   any:
   - id: reloc-dominates-image
-  - id: oversized-reloc-masking
+  - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
   - id: objectives/evasion/masquerade/debug::fake-chrome-service-facade
   - id: micro-behaviors/os/service/dispatch::service-control-dispatch
-  - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+  - id: micro-behaviors/os/module/load::module-export-resolution-imports
   - id: micro-behaviors/dylib/load/runtime::load-library-ex
   - id: micro-behaviors/os/security/descriptor::acl-rewrite-cluster
   - id: metadata/lang/compiler/native::lld-pdb-marker
@@ -913,28 +851,13 @@ composite_rules:
   all:
   - id: reloc-rwx-payload-section
   - id: reloc-dominates-image
-  - id: objectives/anti-static/obfuscation/payload/self-read::self-read-file-chain
+  - id: micro-behaviors/fs/read/file/handle::pe-module-path-file-io-overlay
   any:
-  - id: oversized-reloc-masking
+  - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
   - id: micro-behaviors/process/create/spawn::create-process-w
   - id: micro-behaviors/fs/write/file/handle::write-file
   - id: micro-behaviors/dylib/load/runtime::load-library-ex-w
   - id: micro-behaviors/dylib/lookup::get-proc-address-import
-  needs: 2
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
-- id: rwx-reloc-dynamic-loader
-  desc: Dynamic loader staged in RWX reloc
-  crit: suspicious
-  conf: 0.98
-  all:
-  - id: reloc-rwx-encrypted-payload
-  any:
-  - id: objectives/anti-static/obfuscation/payload/section/layout::unusual-alignment-pe
-  - id: micro-behaviors/dylib/lookup::get-proc-address-import
-  - id: micro-behaviors/dylib/load/runtime::load-library-a
-  - id: metadata/binary/symbols/count::recovered-function-count-under-10
   needs: 2
   downgrade:
     any:
@@ -945,13 +868,13 @@ composite_rules:
   conf: 0.97
   attack: T1027.002
   all:
-  - id: reloc-rwx-encrypted-payload
+  - id: metadata/binary/section/entropy::large-high-entropy-rwx-reloc
   - id: micro-behaviors/process/create/spawn::create-process-w
   any:
   - id: metadata/binary/section/layout::reloc-payload-geometry
   - id: micro-behaviors/os/random/generator::system-function-036-symbol
-  - id: objectives/discovery/system/locale::locale-and-environment-profiling
-  - id: micro-behaviors/crypto/hash/fnv::fnv1a-prime-64bit-literal
+  - id: micro-behaviors/os/sysinfo/platform/locale::windows-locale-time-process-api-cluster
+  - id: micro-behaviors/data/checksum::fnv1a-prime-64bit-literal
   - id: micro-behaviors/process/terminate/kill::terminate-process
   needs: 2
   downgrade:
@@ -963,7 +886,7 @@ composite_rules:
   conf: 0.98
   attack: T1027.002,T1027.009
   all:
-  - id: reloc-rwx-encrypted-payload
+  - id: metadata/binary/section/entropy::large-high-entropy-rwx-reloc
   - id: metadata/binary/layout/overlay::high-entropy-overlay
   - id: metadata/binary/layout/ratio::overlay-over-90pct
   unless:
@@ -974,7 +897,7 @@ composite_rules:
   conf: 0.99
   attack: T1027.002,T1055,T1622
   all:
-  - id: reloc-rwx-encrypted-payload
+  - id: metadata/binary/section/entropy::large-high-entropy-rwx-reloc
   - id: reloc-dominates-image
   - id: micro-behaviors/os/api-resolution/manual::peb-access-both-architectures
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
@@ -1009,8 +932,8 @@ composite_rules:
   - id: reloc-dominates-image
   - id: objectives/evasion/masquerade/version-resource/python-dll::python-launcher-version-resource
   any:
-  - id: oversized-reloc-masking
-  - id: objectives/anti-static/obfuscation/payload/self-read::self-read-file-chain
+  - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
+  - id: micro-behaviors/fs/read/file/handle::pe-module-path-file-io-overlay
   - id: micro-behaviors/process/create/spawn::create-process-w
   - id: micro-behaviors/fs/write/file/handle::write-file
   - id: metadata/binary/debug::venvlauncher-pdb
@@ -1027,7 +950,7 @@ composite_rules:
   - id: asus-armoury-sdk-path
   - id: getdeviceversion-pdb-path
   - id: metadata/hardening/memory::wx-section
-  - id: micro-behaviors/os/module/load::dynamic-self-resolution-imports
+  - id: micro-behaviors/os/module/load::module-export-resolution-imports
   needs: 2
 - id: trojanized-asus-lightingservice-loader
   desc: Trojanized ASUS Lighting Service loader
@@ -1035,7 +958,7 @@ composite_rules:
   conf: 0.995
   all:
   - id: objectives/evasion/masquerade/version-resource/claim::unsigned-asus-lightingservice-masquerade
-  - id: objectives/anti-static/obfuscation/payload/section/layout::empty-text-section
+  - id: metadata/binary/section/layout::empty-executable-text-section
   - id: metadata/binary/section/header::pe-nonstandard-entry
   any:
   - id: metadata/binary/symbols/imports::pe-imports-max-six

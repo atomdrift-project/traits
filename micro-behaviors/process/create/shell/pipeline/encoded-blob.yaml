@@ -15,7 +15,7 @@
 defaults:
   platforms: [unix]
   for: [scripts, source, makefile, dockerfile, text, pbxproj]
-  crit: suspicious
+  crit: notable
   conf: 0.9
   attack: T1027,T1059.004
   mbc: B0032
@@ -41,6 +41,10 @@ traits:
         regex: '(?m)^\s*(//[/!]?|\*)\s*(echo|printf)\s+[''"]?[0-9a-fA-F]{32,}'
       # bind9's nsupdate system tests echo DNS wire images into a pipeline.
       - id: metadata/package/testing/presence/harness::test-directory
+      - id: metadata/package/testing/presence/path::git-tests-directory
+      # Checksum and digest calculations pipe input to compute hashes, not to decode payloads.
+      - type: raw
+        regex: '\|\s*([a-zA-Z0-9_-]*(sum|digest)|openssl\s+dgst|cksum)\b'
 
   # The full shape: an encoded blob whose pipeline terminates in a shell. The
   # decoder between the two is left open so a reversed-flag `xxd -p -r`, a
@@ -57,6 +61,8 @@ traits:
     if:
       type: text
       regex: '(echo|printf)\s+[''"]?[A-Za-z0-9+/]{40,}={0,2}[''"]?\s*\|'
+    not:
+      - regex: '(echo|printf)\s+[''"]?[0-9a-fA-F]{40,}[''"]?\s*\|'
     unless:
       - id: metadata/package/testing/corpus/
       # Autotools output pipes long encoded literals through sed/tr as a matter
@@ -73,14 +79,20 @@ traits:
       # staging: with no shell sink and no file redirect past the decoder,
       # nothing executes and nothing is written. sigstore/scaffolding's
       # getting-started.md shows `echo '<attestation>' | base64 -d` so the
-      # reader can eyeball a payload. A stager pipes onward (`| sh`) or
-      # redirects (`> payload`), which the end anchor keeps matching.
+      # reader can eyeball a payload, and command substitutions `$(echo ... | base64 -d)`
+      # or chained checks `echo ... | base64 -d;` decode without piping onward. A stager
+      # pipes onward (`| sh`) or redirects (`> payload`), which the end anchor keeps matching.
       - type: raw
-        regex: '(?m)\|\s*base64\s+(-d|-D|--decode)\s*$'
+        regex: '(?i)(?m)\|\s*base64\s+(-d|--decode)\s*$'
+      - type: raw
+        regex: '(?i)(?m)\|\s*base64\s+(-d|--decode)\s*(\)|;)'
       - id: well-known/tool/development/ci/github-actions/setup-github-auth::setup-github-auth-context
       # Scanner unit tests retain dangerous command strings as inert fixtures.
       - id: metadata/package/testing/harness/unit::javascript-vitest-unit-test-context
       - id: metadata/package/testing/presence/harness::test-directory
+      # Checksum and digest calculations pipe input to compute hashes, not to decode payloads.
+      - type: raw
+        regex: '\|\s*([a-zA-Z0-9_-]*(sum|digest)|openssl\s+dgst|cksum)\b'
 
   # The terminating half of the same pipeline. Split from the blob match
   # because one regex covering both ends exceeded the length the validator
@@ -103,13 +115,14 @@ composite_rules:
   # than either spelling so a campaign that switches encodings stays covered.
   - id: encoded-blob-piped-onward
     desc: Encoded blob echoed into a pipeline
-    crit: suspicious
+    crit: notable
     conf: 0.9
     any:
       - id: hex-blob-piped-onward
       - id: base64-blob-piped-onward
     unless:
-    - id: metadata/package/testing/corpus/
+    - id: metadata/package/testing/
+    - id: "metadata/file/naming::test-directory-component"
   - id: encoded-blob-piped-to-shell
     desc: Encoded blob piped into a shell
     crit: suspicious
@@ -121,5 +134,6 @@ composite_rules:
     # The inner decoder supplies curl's URL; only the HTTP response reaches
     # the outer shell. This is covered by the encoded-destination loader.
     unless:
-      - id: metadata/package/testing/corpus/
+      - id: metadata/package/testing/
       - id: curl-decoded-destination-shell-stdin
+      - id: "metadata/file/naming::test-directory-component"

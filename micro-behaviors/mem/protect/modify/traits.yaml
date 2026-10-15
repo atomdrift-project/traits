@@ -99,31 +99,8 @@ traits:
       word: VirtualProtect
     unless:
       - id: virtual-protect
-  - id: vr-virtual-alloc-string
-    desc: VirtualAlloc name in .vr unpacker section
-    crit: notable
-    conf: 0.94
-    for: [pe, dll]
-    if:
-      type: text
-      exact: VirtualAlloc
-      section: .vr
-    unless:
-    # The symbol records the API being used; this also sees the name sitting in
-    # data. Standing down there keeps one use from counting twice.
-    - id: virtual-alloc
-    # The symbol records the API being used; this also sees the name sitting in
-    # data. Standing down there keeps one use from counting twice.
-    - id: micro-behaviors/mem/alloc/virtual::virtual-alloc-source
-  - id: vr-virtual-free-string
-    desc: VirtualFree name in .vr unpacker section
-    crit: notable
-    conf: 0.94
-    for: [pe, dll]
-    if:
-      type: text
-      exact: VirtualFree
-      section: .vr
+      - type: export
+        exact: VirtualProtect
   - id: vr-virtual-protect-string
     desc: VirtualProtect name in .vr unpacker section
     crit: notable
@@ -152,55 +129,6 @@ traits:
       any:
         - type: text
           substr: Valve Corp.
-  - id: virtual-alloc
-    desc: Allocate virtual memory
-    crit: notable
-    conf: 0.9
-    attack: T1587.001
-    if:
-      type: import
-      exact: VirtualAlloc
-    unless:
-      - id: metadata/lang/compiler/systems::go-binary
-      - id: metadata/lang/compiler/systems::go-binary-comp
-      - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
-  - id: virtual-alloc-string
-    desc: VirtualAlloc API string reference
-    crit: notable
-    conf: 0.9
-    attack: T1587.001
-    for: [pe, javascript]
-    if:
-      type: text
-      word: VirtualAlloc
-    unless:
-      # The symbol records the API being used; this also sees the name sitting in
-      # data. Standing down there keeps one use from counting twice.
-      - id: virtual-alloc
-      # The symbol records the API being used; this also sees the name sitting in
-      # data. Standing down there keeps one use from counting twice.
-      - id: micro-behaviors/mem/alloc/virtual::virtual-alloc-source
-      - id: metadata/lang/compiler/systems::go-pe-symtab
-      - id: well-known/tool/sysadmin/logapi::logapi-pipe-marker
-      - id: metadata/binary/symbols/plugin::ollydbg-plugin-export
-      - id: metadata/binary/layout/ratio::svk-packed-section
-  - id: virtual-alloc-string-text-section
-    desc: VirtualAlloc string in PE code section
-    crit: notable
-    conf: 0.94
-    attack: T1587.001
-    for: [pe]
-    if:
-      type: text
-      word: VirtualAlloc
-      section: .text
-    unless:
-    # The symbol records the API being used; this also sees the name sitting in
-    # data. Standing down there keeps one use from counting twice.
-    - id: virtual-alloc
-    # The symbol records the API being used; this also sees the name sitting in
-    # data. Standing down there keeps one use from counting twice.
-    - id: micro-behaviors/mem/alloc/virtual::virtual-alloc-source
   - id: virtual-alloc-ex-python-source
     desc: Python VirtualAllocEx remote memory allocation
     crit: notable
@@ -212,24 +140,6 @@ traits:
       type: symbol
       kind: call
       regex: '(^|\.)VirtualAllocEx$'
-  - id: virtual-free
-    desc: Free virtual memory
-    crit: baseline
-    conf: 0.9
-    if:
-      type: import
-      exact: VirtualFree
-  - id: virtual-free-ex
-    desc: Release memory allocated in a remote process
-    crit: notable
-    conf: 0.95
-    attack: T1055
-    mbc: C0032
-    if:
-      type: import
-      exact: VirtualFreeEx
-    unless:
-      - id: well-known/game/mod::bedrockboot-preload-injector-pdb
   - id: virtualprotect-rwx-stack-arg-x86
     desc: VirtualProtect RWX stack argument
     crit: notable
@@ -333,15 +243,6 @@ composite_rules:
     all:
       - id: virtual-protect-ex
       - id: micro-behaviors/mem/protect/constant::page-noaccess-source
-  - id: virtual-memory-api-string-triad
-    desc: VirtualAlloc Free and Protect API string triad
-    crit: notable
-    conf: 0.96
-    for: [pe, dll]
-    all:
-      - id: vr-virtual-alloc-string
-      - id: vr-virtual-free-string
-      - id: vr-virtual-protect-string
   - id: non-pagespeed-memory-protection
     desc: Memory protection change outside PageSpeed
     crit: notable
@@ -357,7 +258,7 @@ composite_rules:
     conf: 0.9
     for: [pe, dll]
     all:
-      - id: virtual-alloc
+      - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
       - id: virtual-protect
   # Union of the surfaces that actually produce executable memory: the
   # PAGE_EXECUTE_* constant in the clear, or a call site whose protection
@@ -377,12 +278,10 @@ composite_rules:
       - id: virtualprotect-executable-read-register-x64
   # Neutral union of the x64 page-protection surfaces (plain VirtualProtect
   # import or a resolved/register-indirect call to it). A bare import
-  # satisfies it — every runtime that JITs or maps code has one — so it
-  # stays baseline; objectives/evasion/process/injection/ composites add the
-  # RW->RX transition that makes it a loader signal.
+  # satisfies it; callers must supply their own attack-specific evidence.
   - id: page-protection-api-x64
     desc: x64 memory-protection API (imported or resolved)
-    crit: baseline
+    crit: notable
     conf: 0.92
     for: [pe, dll]
     arch: [x86-64]
@@ -390,10 +289,10 @@ composite_rules:
       - id: virtual-protect
       - id: virtualprotect-executable-resolved-x64
       - id: virtualprotect-executable-read-register-x64
-  # A neutral x64 RW-to-RX transition paired with a thread-start API. Intent
-  # comes from the objective composites that reference this capability.
-  - id: rw-to-rx-protection-with-thread-start
-    desc: x64 RW-to-RX protection with thread start
+  # These independent observations do not establish a memory transition,
+  # data flow into a thread, or remote process injection.
+  - id: rw-rx-constants-protection-thread-apis
+    desc: x64 RW/RX constants coexist with protection and thread-start APIs
     crit: notable
     conf: 0.9
     for: [pe, dll]

@@ -1,4 +1,3 @@
-# Completed encrypted payload chain classified by its activation sink; embedded-source evaluation.
 defaults:
   # Batch droppers often embed the AES stage as a PowerShell here-string /
   # labeled region; keep these atoms on both so invoice/Rechnung-style
@@ -10,7 +9,7 @@ defaults:
 
 composite_rules:
 - id: ps-aes-iex-stage-loader
-  desc: PowerShell AES-decrypts an embedded stage and evaluates it
+  desc: PowerShell AES decryptor with stage execution
   crit: hostile
   conf: 0.99
   attack: T1027,T1059.001
@@ -18,12 +17,10 @@ composite_rules:
   all:
   - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
   - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
   any:
-  - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-aes-create
-  - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-aes-managed
-  - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
-  - id: micro-behaviors/process/interpreter/eval/direct::embedded-powershell-iex
-  needs: 2
+  - id: micro-behaviors/process/deploy::powershell-inline-crypto-transform-evaluation
+  - id: objectives/command-and-control/dropper/staging/encrypted::iex-finalscript
   near_lines: 120
 - id: ps-aes-iex-self-deleting-stage-loader
   desc: AES-decrypted PowerShell stage with self-delete
@@ -34,7 +31,37 @@ composite_rules:
   mbc: C0025,E1059,F0007
   all:
   - id: ps-aes-iex-stage-loader
-  - id: micro-behaviors/fs/delete/file/command::powershell-delete-command-literal
+  - id: micro-behaviors/fs/delete/file/self::powershell-self-delete
+- id: ps-iwr-aes-scriptblock-stage-loader
+  desc: PowerShell downloads AES ciphertext and runs decrypted ScriptBlock
+  crit: hostile
+  conf: 0.99
+  attack: T1105,T1027,T1059.001
+  mbc: C0025,B0030,E1059
+  for: [powershell]
+  all:
+  - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+  - id: micro-behaviors/fs/read/file/full::powershell-file-readallbytes
+  - id: micro-behaviors/process/interpreter/eval/compile::powershell-scriptblock-constructor-text
+  - id: micro-behaviors/communications/http/lib/invoke-webrequest::download
+  any:
+  - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
+  - id: micro-behaviors/process/info/name::windows-script-host-executable-reference
+  needs: 1
+- id: ps-remote-panel-wscript-bootstrap
+  desc: PowerShell pulls remote agent files and launches hidden WScript
+  crit: hostile
+  conf: 0.98
+  attack: T1105,T1059.001,T1564.003
+  mbc: B0030,E1059
+  for: [powershell]
+  all:
+  - id: micro-behaviors/communications/http/lib/invoke-webrequest::invoke-webrequest
+  - id: micro-behaviors/communications/http/lib/invoke-webrequest::download
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-url-script
+  - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
+  - id: micro-behaviors/process/info/name::windows-script-host-executable-reference
+  - id: micro-behaviors/fs/path/app-data::localappdata-env-var-reference
 - id: ps-aes-chunked-stage-loader
   desc: AES-decrypts many embedded chunks and evals the joined script
   crit: hostile
@@ -51,7 +78,7 @@ composite_rules:
   - id: objectives/command-and-control/dropper/staging/encrypted::decrypted-string-join
   - id: objectives/command-and-control/dropper/staging/encrypted::iex-finalscript
   any:
-  - id: micro-behaviors/data/decode/base64::powershell-base64-symmetric-decrypt
+  - id: micro-behaviors/crypto/decrypt::powershell-base64-decryption-cooccurrence
   - id: objectives/command-and-control/dropper/staging/encrypted::base64-symmetric-decrypt-stage-batch
   near_lines: 40
 - id: ps-document-masquerade-stage-loader
@@ -71,8 +98,8 @@ composite_rules:
   - id: objectives/command-and-control/dropper/staging/encrypted::encoded-powershell-bxor
   - id: objectives/command-and-control/dropper/staging/encrypted::encoded-powershell-modulo-rotation
   any:
-  - id: objectives/execution/interpreter/eval/invoke::encoded-iex
-  - id: objectives/execution/interpreter/eval/invoke::encoded-scriptblock-create
+  - id: micro-behaviors/process/interpreter/eval/direct::base64-powershell-eval-command
+  - id: micro-behaviors/process/interpreter/eval/compile::encoded-powershell-scriptblock-constructor
 
 - id: ps-custom-base32-stage-loader
   desc: Custom base32 PowerShell stage loader
@@ -80,10 +107,10 @@ composite_rules:
   conf: 0.99
   for: [powershell]
   all:
-    - id: micro-behaviors/data/decode/base32::ps-custom-base32-decoder
-    - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
-    - id: metadata/file/line::powershell-long-line
-    - id: micro-behaviors/data/decode/base32::ps-custom-base32-carrier
+  - id: micro-behaviors/data/decode/base32::ps-custom-base32-decoder
+  - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
+  - id: metadata/file/line::powershell-long-line
+  - id: micro-behaviors/data/decode/base32::ps-custom-base32-carrier
 - id: ps-base64-rc4-gzip-stage-loader
   desc: PowerShell Base64 RC4 gzip stage loader
   crit: hostile
@@ -120,7 +147,7 @@ composite_rules:
   for: [powershell]
   scope: file
   all:
-    - id: micro-behaviors/communications/http/client/managed::downloadstring
-    - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-    - id: micro-behaviors/crypto/symmetric/xor/loop::repeating-key-indexed-bxor-loader
-    - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
+  - id: micro-behaviors/communications/http/client/managed::downloadstring
+  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  - id: micro-behaviors/crypto/symmetric/xor/loop::repeating-key-indexed-bxor-loader
+  - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call

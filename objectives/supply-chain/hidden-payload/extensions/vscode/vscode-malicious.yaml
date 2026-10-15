@@ -14,14 +14,6 @@ traits:
   if:
     type: string_literal
     substr: postInstall
-- id: vscode-request-post-call
-  desc: request.post call
-  crit: notable
-  conf: 0.92
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: "request\\.post\\s*\\("
 - id: vscode-devcto-upload-endpoint
   desc: VSCode extension uploads to devcto API
   crit: suspicious
@@ -53,7 +45,6 @@ composite_rules:
   - id: well-known/lib/development/vscode::activate-export
   - id: micro-behaviors/communications/http/download/curl::curl-pipe-shell-in-js-exec
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::strong-js-obfuscation
-
 - id: vscode-encoded-powershell-sidecar
   desc: Extension hides an encoded PowerShell sidecar
   crit: hostile
@@ -67,7 +58,6 @@ composite_rules:
   - id: objectives/anti-static/obfuscation/encoding/content::encoded-powershell
   - id: micro-behaviors/process/create/spawn::detached-true
   - id: micro-behaviors/process/create/shell/script-host::powershell-exe-spawn
-
 - id: vscode-activated-powershell-drop
   desc: Startup extension stages a PowerShell payload drop
   crit: hostile
@@ -94,7 +84,6 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/powershell/command::encoded-command-line
   - id: micro-behaviors/fs/path/extension::ps1
   needs: 2
-
 - id: vscode-startup-debug-powershell-fetch
   desc: Startup extension writes hidden fetch debug config
   crit: hostile
@@ -109,7 +98,6 @@ composite_rules:
   - id: micro-behaviors/fs/write/file/full::js-fs-write-sync
   - id: micro-behaviors/fs/path/config/app::vscode-launch-json-filename
   - id: micro-behaviors/process/create/shell/terminal::vscode-hidden-debug-fetch-runtime
-
 - id: vscode-bundled-dns-code-execution
   desc: Extension bundles DNS TXT code execution
   crit: hostile
@@ -125,7 +113,6 @@ composite_rules:
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: objectives/command-and-control/dns/tunneling::node-dns-txt-callback-code-exec
-
 - id: vscode-eval-network-typosquat
   desc: Extension evaluates code fetched from a network
   crit: hostile
@@ -142,6 +129,7 @@ composite_rules:
   unless:
   - id: metadata/package/testing/
 
+  - id: "metadata/file/naming::test-directory-component"
 - id: vscode-ssh-mode-sidecar
   desc: Extension stages a hidden SSH sidecar
   crit: hostile
@@ -154,10 +142,7 @@ composite_rules:
   - id: well-known/lib/development/vscode::activate-export
   - id: micro-behaviors/process/create/spawn::detached-true
   - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
-  any:
   - id: micro-behaviors/fs/chmod/modify::node-chmod-owner-only-700
-  - id: micro-behaviors/fs/chmod/modify::node-chmod-owner-only-600
-
 - id: vscode-startup-language-facade
   desc: Language-themed VS Code extension executes hidden startup code
   crit: suspicious
@@ -185,9 +170,9 @@ composite_rules:
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: metadata/permission/activation::on-startup-finished
-  - id: micro-behaviors/communications/http/download/encoded::encoded-fetch-insecure-tls
+  - id: micro-behaviors/communications/tls/verify/disable::encoded-curl-insecure-tls
   - id: micro-behaviors/fs/path/temp::temporary-batch-path-reference
-  - id: micro-behaviors/fs/write/content::batch-command-extension-literal
+  - id: micro-behaviors/fs/path/extension::batch-command-extension-literal
   - id: micro-behaviors/process/create/shell/bridge::js-exec-wrapper-with-hidden-options
 - id: vscode-insecure-downloader
   desc: VS Code extension launches insecure download
@@ -246,25 +231,20 @@ composite_rules:
   - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling-with-string-table-rotation
   - id: micro-behaviors/process/create/shell/bridge
   - id: micro-behaviors/process/create/hidden
-
 - id: vscode-local-file-upload
   desc: VSCode extension exfiltrates local files
   crit: hostile
   conf: 0.98
   attack: T1041
   mbc: B0024
-  # This is a file-level source composite. Applying it to an archive
-  # container lets unrelated members satisfy the read/upload legs (for
-  # example, a telemetry dependency plus an extension manifest), producing a
-  # false hostile finding on an otherwise benign VSIX. Malicious archive
-  # handling is provided by the archive-scoped composites below, which consume
-  # this finding from the relevant JavaScript/TypeScript member.
-  for: [javascript, typescript]
+  for:
+  - javascript
+  - typescript
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: micro-behaviors/fs/read/stream::create-read-stream
   any:
-  - id: vscode-request-post-call
+  - id: micro-behaviors/communications/http/post::client-wrapper-post-call
   - id: micro-behaviors/communications/http/form::form-data-append
   - id: micro-behaviors/communications/http/request/client::fetch-http-scheme-url
   needs: 2
@@ -305,9 +285,9 @@ composite_rules:
   near_bytes: 4096
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
-  - id: objectives/command-and-control/dropper/script-eval/response-eval::response-end-then-eval
+  - id: objectives/command-and-control/dropper/script-eval/response-eval/module-response::response-end-then-eval
   any:
-  - id: micro-behaviors/communications/http/request/client::http-get-dup
+  - id: micro-behaviors/communications/http/get::node-http-get-reference
   - id: metadata/import/builtin::require-http
 - id: vscode-remote-installer-exec
   desc: VSCode extension runs a downloaded installer
@@ -367,6 +347,26 @@ composite_rules:
   any:
   - id: micro-behaviors/os/env/modify::electron-run-as-node-env-injection
   - id: micro-behaviors/process/create/spawn::windowshide-option
+# The published module is a legible stub that does nothing; the bytes beside it
+# are an opaque blob that is everything. The stub reads a sidecar shipped in the
+# package, transforms it (XOR, decompress), and hands the result to a Function
+# constructor built with the CommonJS module parameters -- so the code the
+# marketplace reviews and the code the editor activates are different bytes, and
+# the second set is invisible to any reviewer who stops at the package contents.
+# The handoff alone is the anti-static composite's claim (a bare local file
+# stays suspicious); the engines.vscode manifest leg adds the distribution
+# context that makes the decoy stub an abuse of package inspection.
+- id: vscode-sidecar-hidden-module-body
+  desc: Extension module body hidden in decoded sidecar
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1059.007,T1195.002
+  mbc: B0032
+  for: [vsix, package.json, javascript, typescript]
+  scope: archive
+  all:
+  - id: metadata/package/runtime::vscode-extension
+  - id: objectives/anti-static/obfuscation/eval/require::sidecar-blob-decoded-into-module-body
 - id: hostile-geofencing
   desc: Evasive geofencing targeting restricted regions (CIS/Iran/DPRK)
   crit: hostile
@@ -399,7 +399,7 @@ composite_rules:
   - id: micro-behaviors/communications/url/parse::oauth-code-capture
   - id: micro-behaviors/communications/http/request/client::https-request
   - id: micro-behaviors/communications/http/request/verb::post-method-text
-  - id: micro-behaviors/communications/url/host::webhook-site
+  - id: micro-behaviors/communications/url/host/oob::webhook-site
 - id: post-install-exec
   desc: Post-install script execution (dropper pattern)
   crit: suspicious
@@ -461,9 +461,11 @@ composite_rules:
   - id: metadata/package/testing/
   - id: well-known/lib/
   - id: well-known/tool/development/editor/vscode/
+  - id: "metadata/file/naming::test-directory-component"
   downgrade:
     any:
     - id: objectives/anti-static/obfuscation/code-metrics/structure/
+    - id: objectives/anti-static/obfuscation/string/reconstruct::lua-nested-escaped-string-reassembly
     - id: metadata/build/recognized-contexts::benign-build-tooling-context
 # The autostart-location legs are inlined rather than wrapped in a local
 # `persistence-locations` composite. That wrapper matched any JS naming a
@@ -487,7 +489,7 @@ composite_rules:
   - id: micro-behaviors/fs/write/file/full::js-file-write
   any:
   - id: micro-behaviors/fs/path/autostart::windows-startup-directory
-  - id: micro-behaviors/os/registry/keys::software-run-key-reference
+  - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run-key-path"
   - id: micro-behaviors/os/autorun/keyword::launchd-keyword
   - id: micro-behaviors/os/autorun/cron::crontab-keyword
   - id: micro-behaviors/os/service/config::systemd-keyword
@@ -540,5 +542,5 @@ composite_rules:
   all:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: micro-behaviors/process/create/local-exec::node-exec-bundled-package-file
-  - id: micro-behaviors/process/create/local-exec::node-execfile-exe-path
-  - id: objectives/evasion/masquerade/naming/data-extension::node-exec-data-file-extension
+  - id: micro-behaviors/process/create/exec::node-launch-exe-literal
+  - id: objectives/evasion/masquerade/naming::node-exec-data-file-extension

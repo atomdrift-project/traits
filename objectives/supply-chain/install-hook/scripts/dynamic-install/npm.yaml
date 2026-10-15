@@ -14,28 +14,6 @@ traits:
   if:
     type: string_literal
     regex: npm\s+install\s+clx-cookie-signature(\s|$)
-- id: node-tar-gzip-strip-extract
-  desc: Node extracts gzipped tarball
-  crit: notable
-  conf: 0.9
-  attack: T1195.002
-  if:
-    type: text
-    regex: tar\s+-xzf[\s\S]{0,160}--strip-components=1
-- id: node-tar-gzip-flag
-  desc: Tar extraction uses gzip flag
-  crit: component
-  conf: 0.95
-  if:
-    type: string_literal
-    exact: -xzf
-- id: node-tar-strip-components-flag
-  desc: Tar extraction strips archive directory
-  crit: notable
-  conf: 0.95
-  if:
-    type: string_literal
-    exact: --strip-components=1
 - id: node-downloaded-tgz-write
   desc: Node writes downloaded tgz
   crit: notable
@@ -44,24 +22,6 @@ traits:
   if:
     type: text
     regex: writeFileSync\s*\([\s\S]{0,160}(Buffer\.concat\(chunks\)|["'][^"']{0,80}\.tgz["'])
-- id: node-dynamic-require-destructure
-  desc: Destructures export from dynamic require
-  crit: notable
-  conf: 0.9
-  attack: T1059.007
-  if:
-    # A text regex also matches the pattern inside comments and string
-    # literals (e.g. codemod utilities documenting or generating
-    # `require(...)` calls). Tree-sitter only matches real destructuring
-    # declarations, and (#eq?) binds the callee where regexes cannot.
-    type: tree-sitter
-    query: |
-      ((variable_declarator
-         name: (object_pattern)
-         value: (call_expression
-           function: (identifier) @req_function
-           arguments: (arguments (identifier))))
-       (#eq? @req_function "require"))
 - id: encoded-npm-install
   desc: Base64-encoded npm install command
   crit: suspicious
@@ -75,8 +35,11 @@ traits:
   unless:
   - id: micro-behaviors/process/interpreter/vm/
   - id: well-known/lib/development/vscode-webview::acquire-vscode-api
-  - id: metadata/file/format/structured::sourcemap-inline-base64
+  - id: metadata/file/format/source-map::sourcemap-inline-base64
   - id: metadata/file/format/markup::astrojs-package-reference
+# Base64-only like the sibling encoded-npm-install leg: without it, any
+# minified line carrying unrelated \uXXXX escapes Unicode-decodes wholesale
+# and a plaintext "--no-save" argv nearby counts as "encoded stealth".
 - id: encoded-stealth-no-save
   desc: Encoded stealth flag --no-save
   crit: notable
@@ -84,9 +47,10 @@ traits:
   attack: T1195.002
   if:
     type: encoded
+    encoding: base64
     substr: --no-save
   unless:
-  - id: metadata/file/format/structured::sourcemap-inline-base64
+  - id: metadata/file/format/source-map::sourcemap-inline-base64
 - id: encoded-stealth-silent
   desc: Encoded stealth flag --silent
   crit: notable
@@ -94,9 +58,10 @@ traits:
   attack: T1195.002
   if:
     type: encoded
+    encoding: base64
     substr: --silent
   unless:
-  - id: metadata/file/format/structured::sourcemap-inline-base64
+  - id: metadata/file/format/source-map::sourcemap-inline-base64
 - id: encoded-stealth-no-audit
   desc: Encoded stealth flag --no-audit
   crit: notable
@@ -104,9 +69,10 @@ traits:
   attack: T1195.002
   if:
     type: encoded
+    encoding: base64
     substr: --no-audit
   unless:
-  - id: metadata/file/format/structured::sourcemap-inline-base64
+  - id: metadata/file/format/source-map::sourcemap-inline-base64
 - id: api-install-package-call
   desc: Programmatic package install API call
   crit: notable
@@ -171,41 +137,13 @@ traits:
   if:
     type: text
     regex: require\(\s*["']npm["']\s*\)|\bfrom\s+["']npm["']
-- id: pkg-install-in-catch
-  desc: Package install inside catch handler
-  crit: notable
-  conf: 0.88
-  attack: T1195.002
-  if:
-    type: text
-    regex: catch\s*\([^)]{0,20}\)\s*\{[\s\S]{0,150}\.install\s*\(
+# Invoking npm install at runtime is how CLIs and project bootstrappers
+# install a requested package. Hidden or scripted abuse is the stealth and
+# secondary-tgz composites, which keep their own criticality.
 composite_rules:
-- id: node-tar-gzip-strip-array
-  desc: Node extracts gzipped tarball with tar flags
-  crit: notable
-  conf: 0.98
-  attack: T1105
-  all:
-  - id: micro-behaviors/data/archive/extract/tar::node-spawn-tar-extract
-  - id: node-tar-gzip-flag
-  - id: node-tar-strip-components-flag
-- id: runtime-npm-install-process-call
-  desc: Runtime npm install through child process
-  crit: notable
-  conf: 0.95
-  attack: T1059.007
-  all:
-  - id: micro-behaviors/process/create/system::js-execfile-call
-  any:
-  - id: micro-behaviors/os/package-manager/runtime-install::exec-npm-install
-  - id: micro-behaviors/os/package-manager/runtime-install::exec-npm-install-array
-  - id: micro-behaviors/os/package-manager/runtime-install::exec-npm-install-package
-  unless:
-  - id: well-known/tool/development/vscode-extension/zephyr-ide::zephyr-ide-extension
-  - id: metadata/package/files/dependency::node-modules-path
 - id: runtime-npm-install-comp
   desc: Runtime code invokes npm install to modify dependencies
-  crit: suspicious
+  crit: notable
   conf: 0.93
   attack: T1059.007
   all:
@@ -251,10 +189,10 @@ composite_rules:
   attack: T1195.002,T1059.007,T1105
   mbc: B0024
   all:
-  - id: runtime-npm-install-process-call
-  - id: node-tar-gzip-strip-array
+  - id: micro-behaviors/os/package-manager/runtime-install::runtime-npm-install-process-call
+  - id: micro-behaviors/data/archive/extract/tar::node-tar-gzip-strip-array
   any:
-  - id: node-tar-gzip-strip-extract
+  - id: micro-behaviors/data/archive/extract/tar::gzip-extract-strip-one-component
   - id: node-downloaded-tgz-write
   - id: micro-behaviors/os/package-manager/runtime-install::npm-no-audit-no-fund-command
   - id: micro-behaviors/os/package-manager/runtime-install::npm-omit-dev-option
@@ -270,7 +208,7 @@ composite_rules:
   mbc: B0024
   all:
   - id: secondary-tgz-npm-bootstrap
-  - id: node-dynamic-require-destructure
+  - id: micro-behaviors/os/module/require::node-dynamic-require-destructure
   unless:
   - id: micro-behaviors/os/package-manager/runtime-install::npm-install-build-combo
   - id: micro-behaviors/process/interpreter/vm/
@@ -310,7 +248,7 @@ composite_rules:
   all:
   - id: metadata/import/builtin::child-process-api-destructure
   - id: encoded-npm-install
-  - id: micro-behaviors/process/create/spawn::stdio-ignore
+  - id: micro-behaviors/process/fd/stdio::child-stdio-ignore-option
 - id: runtime-api-stealth-install
   desc: Covert runtime package install via API
   crit: hostile
@@ -334,7 +272,7 @@ composite_rules:
   mbc: B0024
   near_bytes: 400
   all:
-  - id: pkg-install-in-catch
+  - id: micro-behaviors/data/control-flow/error-handling::install-call-in-catch
   any:
   - id: install-opt-no-save-prop
   - id: install-opt-silent-loglevel-prop
@@ -351,7 +289,7 @@ composite_rules:
   all:
   - id: metadata/import/builtin::require-child-process
   - id: micro-behaviors/data/decode/base64::buffer-from-base64-literal-to-text
-  - id: micro-behaviors/process/create/spawn::stdio-ignore
+  - id: micro-behaviors/process/fd/stdio::child-stdio-ignore-option
   - id: micro-behaviors/process/create/spawn::windowshide-option
   - id: encoded-npm-install
 - id: postinstall-cloud-host-body-pingback
@@ -385,4 +323,4 @@ composite_rules:
   - id: micro-behaviors/communications/http/request/client::node-scheme-selected-http-client
   - id: micro-behaviors/fs/write/file/full::node-write-file-sync
   - id: micro-behaviors/os/module/dynamic-load::node-variable-require-call
-  - id: node-tar-gzip-strip-extract
+  - id: micro-behaviors/data/archive/extract/tar::gzip-extract-strip-one-component

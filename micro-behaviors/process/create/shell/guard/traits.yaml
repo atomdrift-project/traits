@@ -5,12 +5,13 @@ defaults:
   conf: 0.88
 
 traits:
-- id: command-filter-blocklist
+- id: shell-command-risk-classifier
+  desc: Shell command safety risk classifier
   crit: notable
-  desc: Shell command blocklist
+  conf: 0.95
   if:
     type: text
-    regex: '(?i)\b(TERMINAL_)?BLOCKED_(PATTERNS|TOKENS|COMMANDS)\b'
+    regex: '(?i)\b(classifyCommand|isHardDenied|looksLikeCredentialExfiltration)\b'
 
 - id: powershell-inline-flag-token-set
   desc: PowerShell inline flag token allowlist Set
@@ -123,6 +124,33 @@ traits:
     type: text
     regex: '(?i)(guard blocked refinement|blocked by guardrail|action must be blocked)'
 
+- id: agent-guard-command-safety
+  desc: AI agent command safety guardrail
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)(CommandSafetyGuardrail|check_command_safety|CommandSafetyResult|blocked_reason)'
+
+- id: agent-tool-execution-command-policy
+  desc: AI agent tool execution command safety policy
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)(ToolExecutionCommandRule|shell_command_rules|shellCommandRules)'
+
+- id: agent-dangerous-command-blocked-warning
+  desc: AI agent blocked dangerous command warning
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)(Command appears to be a fork bomb|dangerous redirect to device file)'
+
 - id: agent-guard-llm-verdict-prompt
   desc: AI agent LLM security verdict prompt
   crit: notable
@@ -141,6 +169,15 @@ traits:
     type: text
     regex: '(?i)rm\s+-rf[^\n]{0,60}(denied|blocked|not allowed|rejected)'
 
+- id: agent-command-pattern-guard
+  desc: Agent destructive command guard pattern
+  crit: notable
+  conf: 0.95
+  for: [pe, elf, macho, scripts, source]
+  if:
+    type: text
+    regex: '(?i)("match_pattern"\s*:\s*|[''"]rm\s+-rf[^\n]{0,30}[''"]\s+does not match)'
+
 - id: command-security-test-fixture
   desc: Defensive command security test fixture
   crit: notable
@@ -148,7 +185,7 @@ traits:
   for: [pe, elf, macho, scripts, source]
   if:
     type: text
-    regex: '(?i)(fail_mode:\s*hard_fail|expected:\s*BLOCK)'
+    regex: '(?i)(fail_mode:\s*hard_fail|expected:\s*BLOCK|SUPER_AIDE_CANARY_BLOCK)'
 
 - id: agent-tool-permission-rules
   desc: Agent permission rules guard tool execution
@@ -223,6 +260,14 @@ traits:
   if:
     type: text
     word: require_confirmation
+- id: python-command-safety-blocklists--deny-cmd
+  desc: Python command safety (deny_cmd)
+  crit: baseline
+  conf: 0.95
+  for: [python]
+  if:
+    type: text
+    word: deny_cmd
 - id: python-command-safety-always-blocked
   desc: Python always_blocked command list
   crit: notable
@@ -277,14 +322,33 @@ traits:
     type: text
     # A hardcoded comparison literal near an exec() call: the knee of a
     # shared-secret remote-command gate (`k !== 'secret'` ... `exec(cmd)`).
-    # Generalized beyond one spelling — `==`/`===` allowlist checks gate the
-    # same way, and the sunk call need not wrap its argument in String().
-    regex: '[!]==?\s*[''"][A-Za-z0-9_\-]{4,32}[''"][\s\S]{0,240}?\bexec\s*\('
+    # The exec argument need not be wrapped in String().
+    # Require a direct exec call; .exec() also denotes RegExp matching and
+    # database query methods and does not establish Node process execution.
+    regex: '[!]==?\s*[''"][\w-]{4,32}[''"][\s\S]{0,240}?[^\w$.]exec\s*\('
   not:
     # `typeof it != 'function'` (the core-js aFunction guard, bundled into
     # thousands of dist files) is a type check: typeof yields a fixed type
     # keyword, never a shared secret.
     - regex: '==?\s*[''"](function|object|string|number|boolean|undefined|symbol|bigint)[''"]'
+
+- id: command-guard-pattern-fixtures
+  desc: Command block patterns with test fixtures
+  crit: notable
+  conf: 0.98
+  if:
+    type: tree-sitter
+    query: |
+      ((object
+        (pair key: (property_identifier) @source)
+        (pair key: (property_identifier) @severity value: (string) @block)
+        (pair key: (property_identifier) @matches value: (array))
+        (pair key: (property_identifier) @misses value: (array))) @guard
+      (#eq? @source "source")
+      (#eq? @severity "severity")
+      (#match? @block "block")
+      (#eq? @matches "matches")
+      (#eq? @misses "notMatches"))
 
 composite_rules:
 - id: destructive-command-prohibited-prose
@@ -296,6 +360,11 @@ composite_rules:
   - id: destructive-command-ban-list
   - id: agent-guard-action-blocked
   - id: agent-guard-llm-verdict-prompt
+  - id: agent-guard-command-safety
+  - id: agent-tool-execution-command-policy
+  - id: agent-dangerous-command-blocked-warning
+  - id: destructive-command-denied-prose
+  - id: agent-command-pattern-guard
 - id: ai-cli-destructive-command-deny-rules
   desc: AI CLI blocks destructive root rm commands
   crit: notable
@@ -320,6 +389,7 @@ composite_rules:
   - id: python-command-safety-always-blocked
   - id: python-command-safety-always-allowed
   - id: python-command-safety-block-reasons
+  - id: python-command-safety-blocklists--deny-cmd
 - id: guarded-shell-command-tool
   desc: Guarded shell command tool
   crit: notable
@@ -336,7 +406,7 @@ composite_rules:
   crit: component
   conf: 0.92
   all:
-  - id: command-filter-blocklist
+  - id: metadata/lang/source/naming::blocked-or-destructive-list-identifier
   any:
   - id: command-filter-verdicts
   - id: shell-command-safety-gate
@@ -349,18 +419,3 @@ composite_rules:
   all:
   - id: python-command-safety-rule-class
   - id: python-command-safety-blocklists
-
-- id: node-temp-exec-benign-context
-  desc: Benign Node temp execution context
-  crit: component
-  conf: 0.9
-  any:
-  - id: metadata/package/testing/
-  - id: well-known/lib/
-  - id: metadata/file/policy/config/xcode::plutil-xml-convert-command
-  unless:
-  - id: well-known/app/
-  - id: well-known/lib/
-  - id: well-known/tool/
-  - id: metadata/file/policy/config/xcode::xcode-scheme-config-rewrite
-  - id: metadata/build/bundler/runtime::js-webpack-bundle

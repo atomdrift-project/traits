@@ -23,14 +23,6 @@ traits:
       type: text
       substr: 'voip flood'
 
-  - id: native-raw-socket-error
-    desc: Native raw socket creation failure message
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      regex: '(?i)(could not open raw socket|raw\s+socket\s+(failed|error))'
-
   - id: native-hdrincl-setsockopt-error
     desc: HDRINCL socket option failure banner
     crit: notable
@@ -96,16 +88,29 @@ traits:
     if:
       type: text
       word: dsthost
+    unless:
+      # libcurl embeds dsthost/dstport symbol names for URL destination parsing.
+      - id: well-known/lib/network/curl::runtime-library
+      - id: well-known/tool/sysadmin/network::iproute2-utility-banner
 
-  - id: raping-flood-banner
-    desc: Raping-style flood status banner
-    crit: suspicious
-    conf: 0.94
+  - id: raping-word-token
+    desc: Raping word with non-letter boundaries
+    crit: notable
+    conf: 0.9
     if:
       type: text
+      encoding: none
       # "scraping" contains this letter sequence. Require a non-letter
       # boundary so a scraper that opens a socket is not a flooder.
       regex: '(?i)(^|[^a-z])raping([^a-z]|$)'
+    unless:
+      # Passphrase and petname generators embed comma-delimited English word
+      # lists (an SSO server shipped one and reported the DDoS banner), and
+      # Go string-table soup yields boundary artifacts ("QLabel raping").
+      # A bare delimited word is dictionary material, not a status line.
+      - id: metadata/file/format/wordlist::comma-delimited-word-run
+      - id: well-known/app/productivity/1password::onepassword-runtime-context
+      - id: well-known/app/productivity/1password::onepassword-native-module-context
   - id: native-now-flooding-banner
     desc: Now-flooding status banner
     crit: notable
@@ -172,6 +177,40 @@ traits:
       substr: flood
 
 composite_rules:
+  # The raping-word atom alone is a dictionary word; real raping-family
+  # flooders carry their tool vocabulary beside the banner (dsthost args,
+  # HDRINCL raw sockets, flooding progress lines). A binary that has the
+  # word and none of the vocabulary is word soup, not a flooder.
+  - id: raping-flood-banner
+    desc: Raping-style flood banner with flood-tool vocabulary
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: raping-word-token
+    any:
+      - id: dsthost-flood-arg
+      - id: ip-hdrincl-token
+      - id: native-now-flooding-banner
+      - id: sending-oversized-packets
+      - id: native-raw-flood-status
+      - id: native-preparing-flood-banner
+      - id: native-flooding-now-banner
+      - id: ports-to-flood-usage
+
+  - id: start-flood-raw-socket-ddos-bot
+    desc: Multi-vector flood controls include UDP and raw-socket errors
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/impact/dos/attack/flood::start-flood-dispatcher-usage
+      - id: objectives/impact/dos/attack/flood::start-flood-mode-name-cluster
+      - id: micro-behaviors/communications/socket/raw::raw-socket-error
+    any:
+      - id: objectives/impact/dos/attack/flood::start-flood-mode-udp-legit
+      - id: objectives/impact/dos/attack/flood::start-flood-mode-udpcustom
+    unless:
+      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+
   - id: native-raw-udp-flooder
     desc: Native raw UDP flooder with rate-controlled target interface
     crit: hostile
@@ -179,10 +218,10 @@ composite_rules:
     all:
       - id: native-raw-flood-argument-schema
       - id: native-raw-flood-status
-      - id: native-raw-socket-error
+      - id: micro-behaviors/communications/socket/raw::raw-socket-error
       - id: native-flood-worker-symbol
       - id: micro-behaviors/communications/socket/send::sendto-libc-symbol
-      - id: micro-behaviors/communications/socket/options::options-set
+      - id: micro-behaviors/communications/socket/configure::setsockopt-api-reference
 
   - id: native-threaded-raw-udp-flooder
     desc: Threaded native raw UDP flooder
@@ -201,7 +240,7 @@ composite_rules:
     all:
       - id: native-preparing-flood-banner
       - id: native-flooding-now-banner
-      - id: native-raw-socket-error
+      - id: micro-behaviors/communications/socket/raw::raw-socket-error
       - id: native-hdrincl-setsockopt-error
 
   - id: native-threaded-raw-flood-status-cluster
@@ -255,12 +294,12 @@ composite_rules:
       - id: ip-hdrincl-token
       - id: micro-behaviors/communications/socket/create::posix-socket-import
     unless:
-      # CPython's own `_socket` C extension module exposes the IP_HDRINCL constant
-      # and imports the posix socket API; standard library socket modules are not flooders.
-      - id: metadata/lang/compiler/native::python-pyinit-export
-      - id: metadata/file/extension/identity::cpython-native-extension-module
+      # Interpreted runtime native extension modules (Python, Ruby, Node.js)
+      # wrapping raw sockets / IP_HDRINCL
+      - id: metadata/lang/compiler/native::native-scripting-addon-module
       - id: well-known/lib/
       - id: well-known/app/infrastructure/frr::frr-protocol-daemon
+      - id: well-known/app/network/bird::bird-routing-daemon
       - id: metadata/package/tooling::socat-binary
 
   - id: dsthost-socket-flooder
@@ -270,6 +309,9 @@ composite_rules:
     all:
       - id: dsthost-flood-arg
       - id: micro-behaviors/communications/socket/create::posix-socket-import
+    unless:
+      - id: well-known/lib/
+      - id: well-known/tool/sysadmin/
 
   - id: raping-socket-flooder
     desc: Raping flooder opens a socket
@@ -278,6 +320,9 @@ composite_rules:
     all:
       - id: raping-flood-banner
       - id: micro-behaviors/communications/socket/create::posix-socket-import
+    unless:
+      - id: well-known/app/productivity/1password::onepassword-runtime-context
+      - id: well-known/app/productivity/1password::onepassword-native-module-context
   - id: now-flooding-raw-socket
     desc: Now-flooding banner with a raw socket
     crit: hostile
@@ -401,6 +446,7 @@ composite_rules:
       - id: micro-behaviors/communications/socket/create::posix-socket-import
     unless:
       - id: well-known/app/infrastructure/frr::frr-protocol-daemon
+      - id: well-known/app/network/bird::bird-routing-daemon
   - id: cant-set-hdrincl-token
     desc: HDRINCL set-failure with HDRINCL token
     crit: hostile
@@ -410,3 +456,4 @@ composite_rules:
       - id: ip-hdrincl-token
     unless:
       - id: well-known/app/infrastructure/frr::frr-protocol-daemon
+      - id: well-known/app/network/bird::bird-routing-daemon

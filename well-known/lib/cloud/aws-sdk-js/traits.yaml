@@ -5,6 +5,15 @@ defaults:
   conf: 0.98
 
 traits:
+  # Match the provider implementation, not SDK imports or endpoint constants
+  # shared by credential-harvesting scripts.
+  - id: aws-sdk-js-v2-remote-credentials
+    desc: AWS SDK JS v2 RemoteCredentials implementation
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bAWS\.RemoteCredentials\s*=\s*AWS\.util\.inherit\(AWS\.Credentials\s*,'
+
   - id: v2-package-path
     desc: AWS SDK JS v2 package path
     if:
@@ -57,14 +66,6 @@ traits:
       path: repository.url
       regex: '^https://github\.com/aws/aws-sdk-js-v3(\.git)?$'
 
-  - id: v3-official-author
-    desc: AWS SDK JS v3 official author name
-    for: [package.json]
-    if:
-      type: value
-      path: author.name
-      exact: AWS SDK for JavaScript Team
-
   - id: v2-client-loader
     for: [javascript, typescript]
     desc: AWS SDK JS v2 generated client loader
@@ -97,6 +98,20 @@ traits:
       type: text
       substr: /latest/meta-data/iam/security-credentials/
 
+  # The credential-providers package's public surface: `fromIni` (and its
+  # FromIniInit type) are the mandated export names of
+  # @aws-sdk/credential-provider-ini, re-exported through
+  # @aws-sdk/credential-providers. Dist type shims carry both together with
+  # no manifest or path context.
+  - id: credential-provider-ini-types-source
+    desc: fromIni credential provider TypeScript types
+    crit: notable
+    conf: 0.9
+    for: [typescript]
+    if:
+      type: text
+      regex: '(?i)fromini[\s\S]{0,400}@aws-sdk/credential-provider-ini'
+
   - id: v3-package-member-path
     desc: AWS SDK JS v3 package member path
     crit: notable
@@ -125,7 +140,8 @@ traits:
       substr: smithy.ts.sdk.synthetic.
 
   # v3 is published as one scoped package per service, so a bundle carries the
-  # scope rather than a single SDK path.
+  # scope rather than a single SDK path. Require a bundled implementation
+  # path, not an import in code that merely consumes the SDK.
   - id: aws-sdk-js-v3-bundle
     unless:
       - id: metadata/package/testing/corpus::inert-security-input-module
@@ -134,7 +150,7 @@ traits:
     conf: 0.96
     if:
       type: text
-      regex: '@aws-sdk/(client-[a-z0-9-]+|credential-providers?|signature-v4)'
+      regex: 'node_modules/@aws-sdk/(client-[a-z0-9-]+|credential-providers?)/dist-'
 
   # v3 service clients are codegen barrels: each service root re-exports its
   # *Command classes from a sibling commands/ directory. Tarball member paths
@@ -148,6 +164,30 @@ traits:
       type: text
       regex: 'from\s+["'']\./commands/[A-Za-z]+Command["'']'
 
+  # Codegen barrels of the other layout declare every *Command inline as
+  # `extends client.Command.classBuilder()....s("<Service>", "<Operation>", {})
+  # .n("<Client>", "<Op>Command")...build()`. That builder chain is emitted by
+  # the SDK generator for every v3 service and survives in flat dist files
+  # that carry no @aws-sdk path, manifest or commands/ directory.
+  - id: v3-command-codegen-chain
+    for: [javascript, typescript]
+    desc: AWS SDK v3 codegen command declaration chain
+    conf: 0.97
+    if:
+      type: text
+      regex: '\.s\("[A-Za-z0-9]+", "[A-Za-z0-9]+", \{\}\)\s*\.n\("[A-Za-z0-9]+", "[A-Za-z0-9]+Command"\)'
+
+  # Bundled dist files strip node_modules paths, so aws-sdk-js-v3-bundle
+  # cannot see them; the provider's own fromHttp debug marker survives
+  # minification and separates the shipped SDK from hand-written
+  # container-credential probes.
+  - id: v3-http-credential-provider-impl
+    desc: AWS SDK JS v3 fromHttp credential provider
+    for: [javascript, typescript]
+    if:
+      type: literal
+      substr: "@aws-sdk/credential-provider-http - fromHttp"
+
 composite_rules:
   - id: aws-sdk-js-v3-official-package-context
     desc: Recognized official AWS SDK JS v3 npm package
@@ -158,7 +198,7 @@ composite_rules:
     all:
       - id: v3-scoped-package-name
       - id: v3-official-repository
-      - id: v3-official-author
+      - id: metadata/package/author/identity::aws-sdk-javascript-team-author
 
   - id: aws-sdk-js-archive-context
     desc: Recognized AWS SDK for JavaScript v2 package context
@@ -188,5 +228,4 @@ composite_rules:
     all:
       - id: v3-imds-endpoint-marker
       - id: v3-imds-credential-path
-
 

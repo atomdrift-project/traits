@@ -6,51 +6,16 @@ defaults:
   - windows
   attack: T1003.001
   mbc: B0005
-traits:
-- id: lsass-system-path
-  desc: LSASS system path reference
-  crit: suspicious
-  conf: 0.92
-  if:
-    type: text
-    regex: (?i)systemroot[/\\]+system32[/\\]+lsass\.exe
-  unless:
-  - id: well-known/app/utility/360-file-guard::360-file-guard-identity
 composite_rules:
-- id: lsass-memory-target
-  desc: LSASS memory access target
-  crit: suspicious
-  conf: 0.94
-  any:
-  - id: objectives/privilege-escalation/process-injection::lsass-target
-  - id: lsass-system-path
-  unless:
-  - id: well-known/tool/offensive/peas/
-  # Wine builtin DLLs reimplement the Windows API surface and carry the originals metadata by design.
-  - id: metadata/lang/upstream::windows-system-implementer-dll
-  - id: well-known/app/utility/siw::siw-family-identity
-  # Service control and logon components name LSASS because they manage it.
-  - id: well-known/app/system/reactos::system-component
-  # An anti-malware or system-maintenance engine names lsass.exe in its
-  # protected-process and self-defence tables; IObit Malware Fighter's GUI and
-  # service and Advanced SystemCare's ASC.exe / ASCService.exe / diagnosis.exe
-  # all embed the bare string with no dumping API around it. Widened from the
-  # Malware Fighter product to the signed-IObit-component context, which is
-  # what four other traits already use for this vendor.
-  - id: well-known/app/system/iobit::iobit-component-context
-  # The Aha sandbox lists Windows process names, including lsass.exe.
-  - id: well-known/app/ai/trae::aha-sandbox-pdb
-  # AngelDriver cheat protection driver and game cheats whitelist critical system processes from threatkill.
-  - id: well-known/game/cheat/
 - id: lsass-memory-scrape
   desc: LSASS process memory credential scraping
   crit: suspicious
   conf: 0.97
   all:
-  - id: lsass-system-path
+  - id: micro-behaviors/fs/path/system::lsass-system-path
   - id: micro-behaviors/process/enumerate/snapshot::create-toolhelp32-snapshot
-  - id: micro-behaviors/process/create/spawn::open-process
-  - id: micro-behaviors/process/inject/runtime/call::read-process-memory
+  - id: micro-behaviors/process/attach/rights::open-process
+  - id: micro-behaviors/mem/read/cross-process::read-process-memory
   unless:
   - id: metadata/signed/platform/
 - id: minidump-admin-process-dump
@@ -61,22 +26,8 @@ composite_rules:
   - id: micro-behaviors/process/debug/dump::minidump-write-dump-symbol
   - id: micro-behaviors/os/privilege/manifest::admin-manifest
   any:
-  - id: lsass-memory-target
-  - id: micro-behaviors/process/create/spawn::open-process
-  unless:
-  - id: metadata/signed/platform/
-- id: service-lsass-memory-dumper
-  desc: Dispatched service targets LSASS memory
-  crit: hostile
-  conf: 0.97
-  # The dispatch triplet means the code RUNS as a service (dispatcher,
-  # control handler, status reporter) -- not a manager that merely opens
-  # or stops other services. An unsigned service image that also targets
-  # LSASS memory is a dumper or injector service; EDR and admin services
-  # name LSASS too, but they ship signed.
-  all:
-  - id: micro-behaviors/os/service/dispatch::service-dispatch-triad
-  - id: lsass-memory-target
+  - id: micro-behaviors/process/info/name::lsass-process-reference
+  - id: micro-behaviors/process/attach/rights::open-process
   unless:
   - id: metadata/signed/platform/
 - id: lsass-memory-scrape-loader
@@ -89,19 +40,6 @@ composite_rules:
   - id: objectives/evasion/process/injection/hollowing/process::mstsc-ppid-loader
   - id: objectives/anti-static/obfuscation/payload/section/content::encrypted-loader-data-geometry
   - id: micro-behaviors/crypto/library/cryptoapi::capi-keyed-buffer-crypto-chain
-- id: mimilove-lsass-process-access
-  desc: Mimilove opens targeted LSASS process
-  crit: hostile
-  conf: 0.98
-  mbc: E1003
-  all:
-  - id: well-known/tool/offensive/mimikatz::mimilove-identity
-  - id: objectives/privilege-escalation/process-injection::lsass-target
-  - id: micro-behaviors/process/create/spawn::open-process
-# Generic MiniDump route to the same goal: the binary references the
-# MiniDumpWriteDump API (import table or plain strings, which is how .NET
-# P/Invoke and packed samples carry it) and names LSASS or a `*.dmp` output.
-# Unsigned only — signed dump utilities are identified separately.
 - id: minidump-lsass-memory-dump
   desc: LSASS memory dump via MiniDump API
   crit: hostile
@@ -112,7 +50,7 @@ composite_rules:
   # CrashSender1500.exe beside siw7-x64.exe) pools into a phantom LSASS dump.
   scope: file
   all:
-  - id: lsass-memory-dump-target
+  - id: micro-behaviors/process/info/name::lsass-target-token
   any:
   - id: micro-behaviors/process/debug/dump::minidump-write-dump-symbol
   - id: micro-behaviors/process/debug/dump::minidump-write-dump-name
@@ -124,6 +62,7 @@ composite_rules:
   # is the dump provider, not a dumper. Same provider exclusion the
   # lsass-memory-target composite already uses.
   - id: metadata/lang/upstream::windows-system-implementer-dll
+  - id: well-known/lib/platform/microsoft-imagehlp/
   # The Aha sandbox lists lsass.exe and declares MiniDumpWriteDump as an API name.
   - id: well-known/app/ai/trae::aha-sandbox-pdb
   # File infectors can append unrelated whole PE programs. Their pooled facts

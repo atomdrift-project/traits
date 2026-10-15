@@ -86,25 +86,6 @@ traits:
   # TARGETED SECRET HARVESTING (Python/Shell specific)
   # NOTE: JavaScript patterns use existing traits from node.yaml
   # ============================================================
-- id: py-harvest-secret-key
-  desc: Python harvests secret key env vars
-  crit: notable
-  conf: 0.85
-  for: [python]
-  if:
-    type: text
-    regex: '(getenv|environ\.get)\(.{0,20}SECRET.{0,20}KEY'
-    case_insensitive: true
-  # --- Cloud Provider: GCP (Python/Shell specific) ---
-  # --- Database (Python specific) ---
-- id: py-harvest-db-password
-  desc: Python harvests database password env var
-  crit: notable
-  conf: 0.9
-  for: [python]
-  if:
-    type: text
-    regex: '(getenv|environ).{0,30}DB_PASSWORD'
 - id: py-harvest-database-url
   unless:
     - id: metadata/package/testing/corpus::inert-security-input-module
@@ -241,7 +222,7 @@ composite_rules:
   conf: 0.9
   scope: leaf
   all:
-  - id: py-harvest-secret-key
+  - id: micro-behaviors/os/env/secret-name::python-secret-key-environment-read
   - id: metadata/build/pip::root-setup-py
   unless:
   - id: metadata/file/magic/identity::zip-archive
@@ -309,7 +290,7 @@ composite_rules:
   conf: 0.9
   for: [javascript, typescript]
   any:
-  - id: objectives/credential-access/env/secrets/source-control::node-git-token
+  - id: micro-behaviors/os/env/vcs::node-source-control-token-code-literal
   - id: micro-behaviors/os/env/package-manager::node-registry-token-env-read
   # === Python Env Harvesting ===
 - id: python-env-harvest
@@ -328,6 +309,9 @@ composite_rules:
   - id: micro-behaviors/os/env/enumeration::python-environ-iteration
   all:
   - id: micro-behaviors/communications/http/request/body::python-environment-http-body-flow
+  unless:
+  - id: micro-behaviors/communications/http/request/credentials::byok-llm-chat-client-context
+  - id: well-known/app/ai/agent-runtime/
 
 # A package can serialize or encrypt a filtered subset rather than posting
 # os.environ directly. Iterating the environment and selecting credential
@@ -355,6 +339,7 @@ composite_rules:
 # A custom build command that materializes every environment entry crosses the
 # package-install boundary and captures credentials even without a network
 # transport. The separate staging objective adds temporary-path intent.
+  - id: "metadata/file/naming::test-directory-component"
 - id: pypi-build-hook-environment-file-harvest
   desc: PyPI build hook writes complete environment
   crit: hostile
@@ -437,6 +422,8 @@ composite_rules:
   all:
   - id: micro-behaviors/os/env/secret-name::js-secret-keyword-list
   - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
+  unless:
+  - id: well-known/app/ai/browser-agent/phi-code-browser/
 
 - id: npm-postinstall-filtered-environment-exfil
   desc: npm postinstall exfiltrates filtered environment credentials
@@ -521,6 +508,7 @@ composite_rules:
   - id: metadata/package/documentation/
   - id: metadata/package/testing/
   # === Any Supply Chain Env Theft ===
+  - id: "metadata/file/naming::test-directory-component"
 - id: supply-chain-env-theft
   desc: Supply chain environment credential theft
   crit: suspicious
@@ -534,3 +522,20 @@ composite_rules:
   - id: objectives/exfiltration/stealer/env::env-secret-dump-piped-to-network-client
   - id: cloud-credential-harvest
   - id: package-token-harvest
+  # Shell twin of npm-postinstall-jwt-env-harvest above for hooks written as
+  # inline shell (`env | grep -iE "token|jwt|auth" | base64 … wget …oastify`):
+  # token-named env vars are filtered, staged and shipped to an OAST endpoint
+  # from a lifecycle hook. The OAST endpoint (never a legitimate install
+  # dependency) is what keeps this hostile rather than diagnostic.
+- id: sh-lifecycle-secret-env-oast-exfil
+  desc: Lifecycle hook harvests secret env vars to OAST endpoint
+  crit: hostile
+  conf: 0.98
+  attack: "T1195.002,T1552.001,T1041"
+  scope: archive
+  for: [npm, package.json, shell]
+  all:
+  - id: micro-behaviors/os/env/pipeline::shell-token-env-secret-filter
+  - id: objectives/supply-chain/recon-exfil/oast/secret::oastify-url
+  - id: objectives/supply-chain/install-hook/build/behavioral/execute::npm-install-shell-command-string
+  - id: objectives/supply-chain/install-hook/scripts/encoded-body::script-base64-word

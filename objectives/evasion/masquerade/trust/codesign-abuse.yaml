@@ -31,9 +31,46 @@ composite_rules:
       - id: metadata/binary/provenance/signature::pe-signature-digest-mismatch
     any:
       - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/signed/leaf::mozilla-corporation
       - id: metadata/signed/platform/
     unless:
       - id: well-known/tool/sysadmin/sysinternals::process-explorer-build-identity
+      # StormAttack-style service DLL hijack already reports the hostile
+      # persistence chain; keep digest mismatch from stacking a third verdict.
+      - id: objectives/persistence/system/service/loader::lanmanserver-resource-injection-hijack
+      - id: well-known/app/browser/mozilla-firefox::firefox-cache2-entry-context
+
+  # Certificate table points outside the image while the body walks the
+  # filesystem to touch other executables — transplanted signing on an infector.
+  - id: cert-transplant-file-walker-infector
+    desc: Transplanted-cert PE enumerates files and timestomps
+    crit: hostile
+    conf: 0.97
+    attack: T1553.002,T1554,T1070.006
+    all:
+      - id: metadata/binary/layout/checksum::cert-transplant-indicators
+      - id: micro-behaviors/fs/directory/readdir::find-file-walker
+    any:
+      - id: micro-behaviors/fs/file/timestamp::set-file-time
+      - id: micro-behaviors/fs/delete/file/library::deletefile-a
+      - id: metadata/binary/section/header::pe-entry-in-writable-section
+    needs: 1
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
+  - id: cert-transplant-fake-upx-carrier
+    desc: Transplanted certificate on stripped UPX-layout PE
+    crit: hostile
+    conf: 0.96
+    attack: T1553.002,T1027.002
+    all:
+      - id: metadata/binary/layout/checksum::cert-transplant-indicators
+      - id: metadata/binary/section/label::upx-section-pair
+    unless:
+      - id: objectives/anti-static/pack/upx::upx-magic-bytes
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
 
   - id: signed-nsis-zero-width-overlay-carrier
     desc: Microsoft-signed NSIS carrier hides a zero-width-marked high-entropy overlay
@@ -43,7 +80,7 @@ composite_rules:
     all:
       - id: metadata/signed/leaf::microsoft-corporation
       - id: metadata/binary/installer/script::nsis
-      - id: metadata/binary/layout/checksum::signed-pe-checksum-mismatch
+      - id: metadata/binary/layout/checksum::certificate-directory-checksum-mismatch
       - id: metadata/binary/layout/overlay::high-entropy-overlay
       - id: metadata/binary/layout/ratio::overlay-over-90pct
       - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206d
@@ -62,39 +99,6 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206d
       - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206f
 
-  # The trait engine exposes a large non-section span after subtracting the
-  # declared certificate size, but does not identify which side of the
-  # certificate holds it. Multiple embedded PEs in that span remain a useful
-  # suspicious carrier signal; recognized installers, platform-signed
-  # software, and verified bundled runtimes are excluded below.
-  - id: signed-host-large-executable-overlay
-    desc: Signed host large overlay embeds PEs
-    crit: suspicious
-    conf: 0.96
-    attack: T1553.002,T1027.009
-    all:
-      - id: metadata/binary/layout/checksum::cert-table-present
-      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
-      - id: metadata/binary/layout/ratio::multiple-pe-embedded
-    unless:
-      # Embedded-PE extraction may extend a child through its following
-      # siblings; that synthetic span is not an overlay on the child image.
-      - id: metadata/binary/layout/embedded::embedded-pe-child
-      # A .NET single-file publish appends the framework and application
-      # assemblies to the signed native runtime host as overlay, so the
-      # host trivially satisfies all three legs above: the embedded PEs
-      # are the published program, not a grafted payload. A bare host-stub
-      # identity (the runtime's own corehost build path, not settable by
-      # an application) is the cheap structural gate; genuine tampering
-      # still breaks the image digest, which the hostile
-      # vendor-signature-over-modified-image rule judges directly.
-      - id: metadata/binary/framework::dotnet-runtime-host-stub
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/sfx::qsetup-signed-self-extracting-installer-context
-      - id: metadata/binary/installer/sfx::installaware-verified-7z-sfx-context
-      - id: metadata/signed/platform/
-      - id: recognized-signed-component-overlay-known-benign-context
-
   # Keep identity-based product/runtime exceptions in one context. Each leg is
   # a notable identity; the composite is used only as a benign suppressor.
   - id: recognized-signed-component-overlay-known-benign-context
@@ -110,42 +114,8 @@ composite_rules:
       - id: well-known/tool/development/observability/inspect::inspect-devtools-nsis-uninstaller-context
       - id: well-known/lib/vendor-sdk/nsoftware-ipworks::ipworks-library-benign-context
       - id: well-known/app/utility/core-temp::core-temp-identity
-
-  # The same carrier without an embedded PE. The span's content and position
-  # relative to the certificate are unknown, so this stays suspicious without
-  # claiming a pre- or post-signature append.
-  - id: signed-host-large-noncertificate-overlay
-    desc: Signed host has large non-certificate overlay
-    crit: suspicious
-    conf: 0.9
-    all:
-      - id: metadata/binary/layout/checksum::cert-table-present
-      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
-    unless:
-      # The executable-overlay rule is the more specific interpretation of
-      # this same structural anomaly; do not report both for one carrier.
-      - id: signed-host-large-executable-overlay
-      # An extracted child can inherit following sibling bytes in its analysis
-      # slice even though its own PE extent has no overlay.
-      - id: metadata/binary/layout/embedded::embedded-pe-child
-      # Same bundle-host packaging as the executable-overlay sibling
-      # above: a .NET single-file publish appends the program to the
-      # signed native runtime host as overlay, so the host meets both
-      # legs by construction. Same host-stub gate as above.
-      - id: metadata/binary/framework::dotnet-runtime-host-stub
-      # Installer payloads are normally placed between the PE sections and
-      # the certificate table before the final signing step.
-      - id: metadata/binary/installer/
-      - id: metadata/signed/platform/
-      - id: well-known/tool/development/observability/inspect::inspect-devtools-nsis-uninstaller-context
-      - id: recognized-signed-component-overlay-known-benign-context
-      # JetBrains' verified native launcher carries its managed bootstrapper
-      # and application payload as part of the signed distribution image.
-      - id: well-known/tool/development/editor/jetbrains::signed-jetbrains-native-launcher
-      # Unstripped PE builds leave the COFF symbol table between the last
-      # mapped section and the Authenticode blob; that padding is debug
-      # residue, not a grafted pre-certificate carrier.
-      - id: metadata/binary/symbols/count::pe-coff-symbol-table-overlay-context
+      - id: well-known/app/system/dell-update::dell-update-package-binary
+      - id: well-known/app/browser/mozilla-firefox::firefox-cache2-entry-context
 
   # Carries a code-signing certificate AND conceals an encrypted payload in an
   # oversized .reloc. A genuinely signed product never hides an encrypted stage
@@ -189,7 +159,7 @@ composite_rules:
     all:
       - id: metadata/signed/leaf::microsoft-corporation
       - id: metadata/binary/header/malformed::malformed-pe-structure
-      - id: objectives/anti-static/pack/loader-noise::oversized-reloc-masking
+      - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
 
   # Signed hosts abused as injection carriers often keep Authenticode metadata
   # from the donor product while grafting thread-context control and memory
@@ -226,3 +196,43 @@ composite_rules:
       - id: metadata/binary/installer/
       - id: metadata/signed/platform/
       - id: recognized-signed-component-overlay-known-benign-context
+
+  # Signed binary with a high-entropy non-certificate overlay and process memory injection
+  # (e.g. trojanized signed binary injecting decrypted payload into memory).
+  - id: signed-host-encrypted-overlay-process-injection
+    desc: Signed host with encrypted overlay and process memory injection
+    crit: hostile
+    conf: 0.98
+    attack: T1553.002,T1027.002,T1055
+    all:
+      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
+      - id: metadata/file/entropy::overall-entropy-78
+      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-binary
+    any:
+      - id: micro-behaviors/mem/sync/cache::flush-instruction-cache
+      - id: micro-behaviors/process/create/thread::create-thread
+    unless:
+      - id: metadata/binary/installer/
+      - id: metadata/signed/platform/
+      - id: recognized-signed-component-overlay-known-benign-context
+
+  # Signed binary with a high-entropy non-certificate overlay and obfuscated
+  # memory allocation or protection API (e.g. parasitic infectors like Floxif
+  # or trojanized signed hosts unpacking payload into memory).
+  - id: signed-host-encrypted-overlay-obfuscated-memory-protect
+    desc: Signed host with encrypted overlay and obfuscated memory protection
+    crit: hostile
+    conf: 0.98
+    attack: T1553.002,T1027.002,T1620
+    all:
+      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
+      - id: metadata/binary/layout/overlay::overlay-80kb-high-entropy
+    any:
+      - id: micro-behaviors/mem/protect/modify::xor-decoded-virtual-protect-api
+      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-process-write-api
+      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-virtual-alloc-api
+    unless:
+      - id: metadata/binary/installer/
+      - id: metadata/signed/platform/
+      - id: recognized-signed-component-overlay-known-benign-context
+

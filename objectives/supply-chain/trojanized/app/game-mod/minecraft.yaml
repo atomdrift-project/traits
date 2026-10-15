@@ -92,6 +92,33 @@ traits:
       type: text
       regex: '(?i)"description"\s*:\s*"[^"\r\n]{0,200}\bhack\s+pack\b'
 
+  - id: java-class-duckdns-https-url
+    desc: Java class embeds DuckDNS HTTPS URL
+    crit: notable
+    conf: 0.95
+    for: [class, java_class]
+    if:
+      type: text
+      regex: '(?i)https?://[a-z0-9][-a-z0-9]{0,62}\.duckdns\.org/'
+
+  - id: net-fabric-injected-class-member
+    desc: Class file under net.fabric package
+    crit: notable
+    conf: 0.96
+    for: [class, java_class]
+    if:
+      type: text
+      regex: net/fabric/[A-Za-z_$][\w$]{2,}
+
+  - id: net-fabric-injected-jar-member
+    desc: Archive member path under net.fabric package
+    crit: notable
+    conf: 0.96
+    if:
+      type: value
+      path: archive.members[*].path
+      regex: net/fabric/[A-Za-z_$][\w$]{2,}\.class
+
 composite_rules:
   # Forge loads mods through its own lifecycle and does not need a Main-Class.
   # A directly runnable Forge mod with a root EXE and separate key resource is
@@ -247,6 +274,7 @@ composite_rules:
 
   # Republished Fabric mod that also ships a class posting Minecraft
   # username/uuid/accessToken JSON — session theft bolted onto a real mod.
+      - id: "metadata/file/naming::test-directory-component"
   - id: fabric-mod-session-json-exfil
     for: [jar, zip, class]
     desc: Fabric mod posts Minecraft session JSON
@@ -337,10 +365,10 @@ composite_rules:
       - id: objectives/credential-access/gaming/minecraft::minecraft-session-getter-tok
       - id: well-known/game/mod::minecraft-uuid-getter-ref
       - id: micro-behaviors/data/format/json::gson-jsonobject-add-property
-      - id: micro-behaviors/data/source/dynamic/reflect::java-class-forname-bytecode
-      - id: micro-behaviors/data/source/dynamic/reflect::java-class-getmethod-bytecode
-      - id: micro-behaviors/data/source/dynamic/reflect::java-method-invoke-bytecode
-      - id: micro-behaviors/data/source/dynamic/reflect::set-accessible-reference
+      - id: micro-behaviors/metaprogramming/reflection::java-class-forname-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::java-class-getmethod-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::java-method-invoke-bytecode
+      - id: "micro-behaviors/metaprogramming/reflection::set-accessible-reference"
       - id: micro-behaviors/data/string/mutate::java-junk-padded-string-cleanup
       - id: micro-behaviors/data/string/mutate::java-obfuscated-httpclient-class-fragment
       - id: micro-behaviors/process/thread/lifecycle::jvm-thread-start-bytecode
@@ -355,3 +383,63 @@ composite_rules:
     all:
       - id: metadata/package/config::fabric-runnable-mod-archive
       - id: fabric-manifest-net-fabric-main-entrypoint
+    unless:
+      - id: fabric-mod-net-fabric-injected-bytecode-loader
+
+  - id: fabric-mod-net-fabric-injected-bytecode-loader
+    desc: net.fabric manifest with injected loader classes
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1059
+    scope: outer
+    for: [jar, zip, json, class]
+    all:
+      - id: metadata/package/config::fabric-mod-metadata
+      - id: fabric-manifest-net-fabric-main-entrypoint
+    any:
+      - id: net-fabric-injected-class-member
+      - id: net-fabric-injected-jar-member
+
+  - id: fabric-mod-chacha-duckdns-reflective-stager
+    desc: Fabric mod stages ChaCha20 payload to a DuckDNS HTTPS endpoint
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1105,T1071.001
+    scope: archive
+    for: [jar, zip, json, class]
+    all:
+      - id: metadata/package/config::fabric-mod-metadata
+      - id: well-known/game/mod::minecraft-client-class-ref
+      - id: java-class-duckdns-https-url
+      - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha20-poly1305-algorithm-reference
+      - id: micro-behaviors/crypto/key/representation::secretkeyspec
+      - id: micro-behaviors/communications/http/lib/urlconnection::java-url-class-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::java-class-forname-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::java-method-invoke-bytecode
+
+  - id: fabric-mod-obfuscated-chacha-https-stager
+    desc: Fabric mod obfuscated constants with ChaCha20 HTTPS staging
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1027,T1071.001
+    scope: archive
+    for: [jar, zip, class]
+    all:
+      - id: metadata/package/config::fabric-mod-metadata
+      - id: metadata/file/encoded::java-control-prefixed-long-string
+      - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha20-poly1305-algorithm-reference
+      - id: micro-behaviors/crypto/key/representation::secretkeyspec
+      - id: micro-behaviors/communications/http/lib/urlconnection::jvm-urlconnection-open-connection
+      - id: micro-behaviors/metaprogramming/reflection::java-class-forname-bytecode
+
+  - id: fabric-mod-staged-in-memory-account-loader
+    desc: Fabric mod staged in-memory account loader
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1528,T1129,T1620
+    scope: archive
+    for: [jar, zip, json, class]
+    all:
+      - id: metadata/package/config::fabric-mod-metadata
+      - id: objectives/credential-access/gaming/minecraft::minecraft-session-token-access
+      - id: objectives/command-and-control/backdoor/loader/classloader::in-memory-jar-entry-classload

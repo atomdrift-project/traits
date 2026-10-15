@@ -27,13 +27,6 @@ traits:
       type: text
       regex: I('m|\s+am)\s+not\s+a\s+robot
       case_insensitive: true
-  - id: turnstile-callback-handler
-    desc: Turnstile completion callback handler
-    crit: notable
-    conf: 0.88
-    if:
-      type: text
-      substr: function onTurnstileComplete
   - id: turnstile-error-callback-complete
     desc: Turnstile error callback uses completion handler
     crit: notable
@@ -48,13 +41,6 @@ traits:
     if:
       type: text
       substr: data-expired-callback="onTurnstileComplete"
-  - id: turnstile-obfuscated-callback
-    desc: Obfuscated Turnstile completion callback body
-    crit: suspicious
-    conf: 0.92
-    if:
-      type: text
-      regex: 'function onTurnstileComplete[\s\S]{0,240}(function _0x|\(function\(_0x)'
   - id: checking-human-text
     desc: Challenge text checks for humanity
     crit: suspicious
@@ -90,13 +76,6 @@ traits:
     if:
       type: text
       regex: "&copy;.{0,10}20[0-9]{2}.{0,10}Cloudflare"
-  - id: checking-browser-text
-    desc: Fake browser verification progress text
-    crit: notable
-    conf: 0.65
-    if:
-      type: text
-      regex: "[Cc]hecking your browser"
   - id: security-check-heading
     desc: Security check heading in HTML
     crit: suspicious
@@ -124,15 +103,6 @@ traits:
     if:
       type: text
       substr: verification-box
-  - id: loading-spinner-element
-    desc: Loading spinner element identifier
-    crit: notable
-    conf: 0.5
-    unless:
-      - id: metadata/lang/scripted::dts-declaration-file
-    if:
-      type: text
-      word: loadingSpinner
   - id: captcha-click-handler
     desc: CAPTCHA click opens redirect tab
     crit: notable
@@ -140,6 +110,28 @@ traits:
     if:
       type: text
       substr: handleCaptchaClick
+  - id: turnstile-error-completion-call
+    # Mirrors turnstile-expired-completion-call with a wider body window:
+    # obfuscator decoder shims push the completion call further into the
+    # error handler (observed ~870 chars), so the call is matched within
+    # the function body rather than at its opening brace.
+    desc: CAPTCHA failure callback invokes completion
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '''error-callback''\s*:\s*function[\s\S]{0,1000}\bonTurnstileComplete\b'
+  - id: turnstile-expired-completion-call
+    # Same decoder-shim prologue variance as the error leg above: this kit
+    # variant declares two shim functions before the conditional completion
+    # call (measured ~710 chars in ticketcathayoct12-1.0.2), just past the
+    # old 700-char window, so the window matches the error leg's 1000.
+    desc: CAPTCHA failure callback invokes completion
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '''expired-callback''\s*:\s*function[\s\S]{0,1000}\bonTurnstileComplete\b'
 composite_rules:
   - id: captcha-click-window-open
     desc: CAPTCHA click opens redirect tab
@@ -163,68 +155,53 @@ composite_rules:
     all:
       - id: micro-behaviors/ui/controls/captcha::verify-human-text
       - id: turnstile-ui-elements
+  - id: turnstile-error-fallback-callback
+    desc: Turnstile error path wired to completion handler
+    crit: notable
+    conf: 1.0
+    any:
+    - id: turnstile-error-callback-complete
+    - id: turnstile-error-completion-call
+  - id: turnstile-expired-fallback-callback
+    desc: Turnstile expiry path wired to completion handler
+    crit: notable
+    conf: 1.0
+    any:
+    - id: turnstile-expired-callback-complete
+    - id: turnstile-expired-completion-call
   - id: turnstile-unified-fallback-callbacks
     desc: Turnstile failure callbacks reuse completion handler
     crit: suspicious
     conf: 0.9
     all:
-      - id: turnstile-error-callback-complete
-      - id: turnstile-expired-callback-complete
-  - id: cloudflare-turnstile
-    desc: Cloudflare Turnstile verification lure markers
-    crit: suspicious
-    conf: 0.95
-    mbc: B0021
-    attack: T1204.001
-    any:
-    - id: micro-behaviors/ui/controls/captcha::turnstile-verification-markers
-    - id: turnstile-verify-with-ui
-    all:
-    - id: micro-behaviors/ui/window/navigation::browser-window-open-variable-blank
-  - id: cloudflare-turnstile-camouflaged
-    desc: Cloudflare Turnstile lure with explicit Cloudflare branding
-    crit: suspicious
-    conf: 0.92
-    all:
-      - id: cloudflare-turnstile
-    any:
-      - id: well-known/app/development/cloudflare::cloudflare-title-element
-      - id: well-known/app/development/cloudflare::turnstile-integration-url
-      - id: well-known/app/development/cloudflare::turnstile-challenge-api-script
+      - id: turnstile-error-fallback-callback
+      - id: turnstile-expired-fallback-callback
   - id: cloudflare-turnstile-phishing-page
-    desc: Fake Cloudflare Turnstile page redirects after challenge
+    desc: Cloudflare lure redirects despite CAPTCHA failure
     crit: hostile
     conf: 0.96
     mbc: B0021
     attack: T1204.001
-    for: [html]
+    for:
+    - html
     all:
-      - id: cloudflare-turnstile-camouflaged
-      - id: turnstile-callback-handler
-      - id: micro-behaviors/ui/window/navigation::obfuscated-query-navigation
-      - id: turnstile-unified-fallback-callbacks
-  - id: cloudflare-turnstile-query-redirect
-    desc: Obfuscated Turnstile callback redirects with query data
-    crit: hostile
-    conf: 0.97
-    mbc: B0021
-    attack: T1204.001
-    for: [html]
-    all:
-      - id: cloudflare-turnstile-camouflaged
-      - id: turnstile-obfuscated-callback
-      - id: micro-behaviors/ui/window/navigation::obfuscated-query-navigation
+    - id: micro-behaviors/ui/controls/captcha::cloudflare-branded-turnstile-navigation
+    - id: micro-behaviors/ui/controls/captcha::turnstile-callback-handler
+    - id: micro-behaviors/ui/window/navigation::obfuscated-query-navigation
+    - id: turnstile-unified-fallback-callbacks
   - id: turnstile-keyval-deaddrop-redirect
     desc: Fake Turnstile page loads next hop from a KV dead drop
     crit: hostile
     conf: 0.96
     mbc: B0021
     attack: T1204.001,T1102
-    for: [html, javascript]
+    for:
+    - html
+    - javascript
     all:
-      - id: cloudflare-turnstile-camouflaged
-      - id: micro-behaviors/communications/http/services/file-hosting::keyval-api-host
-      - id: micro-behaviors/ui/window/navigation::browser-location-replace
+    - id: micro-behaviors/ui/controls/captcha::cloudflare-branded-turnstile-navigation
+    - id: micro-behaviors/communications/http/services/file-hosting::keyval-api-host
+    - id: micro-behaviors/ui/window/navigation::browser-location-replace
   - id: cloudflare-turnstile-click-redirect
     desc: Cloudflare Turnstile click redirect
     crit: hostile
@@ -232,8 +209,8 @@ composite_rules:
     mbc: B0021
     attack: T1204.001
     all:
-      - id: cloudflare-turnstile-camouflaged
-      - id: captcha-click-window-open
+    - id: micro-behaviors/ui/controls/captcha::cloudflare-branded-turnstile-navigation
+    - id: captcha-click-window-open
   - id: cloudflare-style-verification-page
     desc: Cloudflare styled human verification page
     crit: suspicious
@@ -257,7 +234,7 @@ composite_rules:
     any:
       - id: well-known/app/development/cloudflare::cloudflare-title-element
       - id: fake-cloudflare-copyright
-      - id: checking-browser-text
+      - id: micro-behaviors/ui/controls/credential::checking-browser-progress-text
       - id: security-check-heading
     needs: 2
   - id: recaptcha
@@ -269,11 +246,11 @@ composite_rules:
     all:
       - id: not-a-robot-text
       - id: well-known/app/browser/google-web::google-recaptcha-checkbox-element
-      - id: well-known/app/browser/google-web::google-recaptcha-url-fragment
+      - id: micro-behaviors/communications/http/services/google::google-recaptcha-url-reference
     unless:
       - id: metadata/build/bundler/asset::google-tag-manager-bundle
       - id: well-known/app/browser/google-web::google-recaptcha-api-loader
-      - id: well-known/app/browser/google-web::google-recaptcha-api-script
+      - id: micro-behaviors/communications/http/services/google::google-recaptcha-api-script-url
       - id: well-known/app/browser/google-web::google-recaptcha-runtime
   - id: checkbox-verification-flow
     desc: Checkbox verification flow indicators
@@ -283,7 +260,7 @@ composite_rules:
     any:
       - id: bot-check-element
       - id: verification-box-element
-      - id: loading-spinner-element
+      - id: micro-behaviors/ui/window/state::loading-spinner-identifier
       - id: micro-behaviors/ui/keywords::success-message-literal
   - id: fake-verification-deaddrop-redirect
     for: [javascript]

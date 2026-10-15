@@ -41,15 +41,6 @@ traits:
       type: metrics
       field: consistency.extension_content_mismatch.binary_as_text
       min: 1
-  - id: script-content-as-image-extension
-    desc: Script content under image extension
-    crit: notable
-    conf: 0.9
-    for: [scripts]
-    if:
-      type: metrics
-      field: consistency.extension_content_mismatch.script_as_image
-      min: 1
   - id: binary-content-as-audio-extension
     desc: Executable content under an audio extension
     crit: notable
@@ -85,15 +76,6 @@ traits:
     if:
       type: metrics
       field: consistency.extension_content_mismatch.script_as_video
-      min: 1
-  - id: archive-content-as-image-extension
-    desc: Archive content under an image extension
-    crit: notable
-    conf: 0.95
-    for: [zip, tar, gz, bz2, xz, zst, jar, phar]
-    if:
-      type: metrics
-      field: consistency.extension_content_mismatch.archive_as_image
       min: 1
   - id: archive-content-as-audio-extension
     desc: Archive content under an audio extension
@@ -131,6 +113,22 @@ traits:
       # resource-only PE containers, not executable Rust-source disguises.
       - id: metadata/binary/section/ratio::pe-no-executable-sections
 composite_rules:
+  - id: executable-archive-as-image
+    desc: Executable archive under an image extension
+    crit: suspicious
+    conf: 0.96
+    platforms: [android, unix, windows]
+    for: [zip, tar, jar]
+    scope: leaf
+    all:
+      - id: metadata/file/extension/mismatch::archive-content-as-image-extension
+      - id: metadata/file/archive::archive-contains-executable-member
+    unless:
+      # Native-library asset packs travel under distributor-chosen names
+      # (ABI-split `assets/*.so` protector libraries fetched as `cfg.jpg`):
+      # the packed members are loadable libraries, not a runnable stage.
+      - id: metadata/package/files/archive-member::assets-native-library-member
+
   - id: binary-disguised-as-image-extension
     desc: Executable disguised as an image file
     crit: suspicious
@@ -176,7 +174,7 @@ composite_rules:
     crit: notable
     conf: 0.9
     any:
-      - id: script-content-as-image-extension
+      - id: metadata/file/extension/mismatch::script-content-as-image-extension
       - id: script-content-as-document-extension
       - id: script-content-as-audio-extension
       - id: script-content-as-video-extension
@@ -222,7 +220,7 @@ composite_rules:
     crit: notable
     conf: 0.95
     any:
-      - id: archive-content-as-image-extension
+      - id: metadata/file/extension/mismatch::archive-content-as-image-extension
       - id: archive-content-as-audio-extension
 
   # The residue cases: content sniffing never identified the payload, so no
@@ -279,6 +277,12 @@ composite_rules:
     unless:
       - id: metadata/file/format/media::media-container-recognized
       - id: metadata/file/format/media::png-signature-missing-cr
+      - id: metadata/file/format/media::svg-or-data-uri-image-at-start
+      # Plain source code under an asset name is a repository accident (an
+      # icon's implementation saved as microphone.png), not a smuggled blob:
+      # the text is wordy, readable, and declares itself as a program.
+      - id: metadata/file/format/media::media-content-is-source-text
+      - id: metadata/file/format/media::media-content-is-placeholder-comment
       # Test suites deliberately ship malformed assets to exercise the
       # mismatch path: Django's tests/mail/attachments/file_txt.png is a text
       # file with a .png name (that IS the fixture), and Chocolatey's
@@ -310,7 +314,7 @@ composite_rules:
     all:
       - id: metadata/file/format/media::media-content-is-opaque-blob
     unless:
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
       - id: metadata/file/format/media::media-container-recognized
       - id: metadata/file/format/media::png-signature-missing-cr
       # Mislabeled-but-decodable audio: apps ship MP3 bytes under a .wav

@@ -156,13 +156,6 @@ traits:
   if:
     type: text
     regex: 'Path\s*\(.{0,50}\.ssh/id_[a-z0-9_]{2,16}.{0,40}\)\.read_'
-- id: js-env-home-cred-npmrc
-  desc: npmrc credential path marker
-  crit: component
-  conf: 0.85
-  if:
-    type: text
-    regex: '(^|[/\\~''"\s])\.npmrc\b'
 # A project snapshotter keeps .npmrc as text and base64s every other
 # file in the else branch. That is not encoding the npmrc itself.
 - id: project-snapshot-npmrc-text-branch
@@ -193,11 +186,16 @@ traits:
   conf: 0.9
   for: [shell]
   unless:
-  - id: metadata/package/testing/corpus/
+  - id: metadata/package/testing/
   - id: well-known/tool/development/aube::aube-package-test-fixture
+  - id: "metadata/file/naming::test-directory-component"
   if:
     type: text
-    regex: cat\s+[^<\n]{0,30}\.npmrc
+    # A credential read names a path: ~/.npmrc, $HOME/.npmrc, /root/.npmrc.
+    # Bare `cat .npmrc` with no path character is build-script merging and
+    # doc prose (`timeout 1.5 cat .npmrc` classifier measurements), not a
+    # credential read; real theft cannot rely on the reader's CWD.
+    regex: cat\s+[^<\n]{0,30}[\/~$][^<\n]{0,30}\.npmrc
   not:
   - substr: 'cat << EOF > "$HOME/.npmrc"'
   - regex: 'cat\s+<<\s*EOF\s*>\s*"\$HOME/\.npmrc"'
@@ -211,7 +209,9 @@ traits:
   conf: 0.9
   for: [shell]
   unless:
+    - id: metadata/package/testing/
     - id: well-known/tool/detection/agent-glovebox::archive-context
+    - id: "metadata/file/naming::test-directory-component"
   if:
     type: text
     regex: cat\s+[^<\n]{0,30}\.pypirc
@@ -233,90 +233,10 @@ traits:
   - id: well-known/tool/detection/tool-guard-core::defensive-attack-corpus-context
   - id: well-known/tool/detection/tool-guard-core::postgres-attack-fixture
   - id: well-known/tool/detection/agent-glovebox::archive-context
+  - id: "metadata/file/naming::test-directory-component"
   if:
     type: text
     regex: cat\s+[^<\n]{0,30}\.git-credentials
-- id: shell-curl-netrc-long
-  desc: Shell curl uses netrc
-  crit: suspicious
-  conf: 0.9
-  for: [shell]
-  if:
-    type: symbol
-    kind: call
-    exact: curl
-    arg:
-      kind: identifier
-      name: --netrc
-  unless:
-  - type: raw
-    regex: '\bcomplete\s+(--command|-c)\s+curl\b|#compdef\s+curl\b'
-  - id: micro-behaviors/communications/http/services/github::github-api-host
-  - id: metadata/package/files/system-package::julia-runtime-path
-  - id: metadata/package/files/system-package::shell-completion-script
-  - id: well-known/tool/sysadmin/fish-bash-zsh/
-  - id: well-known/tool/sysadmin/alpine-packages/binary::alpine-parseable-binary
-  - id: well-known/tool/sysadmin/alpine-packages/binary::parseable-binary-name
-  downgrade:
-    any:
-    - id: metadata/binary/code/density::shell-high-import-density
-- id: shell-curl-netrc-short
-  desc: Shell curl uses -n
-  crit: suspicious
-  conf: 0.9
-  for: [shell]
-  if:
-    type: symbol
-    kind: call
-    exact: curl
-    arg:
-      kind: identifier
-      name: -n
-  unless:
-  - type: raw
-    regex: '\bcomplete\s+(--command|-c)\s+curl\b|#compdef\s+curl\b'
-  - id: micro-behaviors/communications/http/services/github::github-api-host
-  - id: metadata/package/files/system-package::julia-runtime-path
-  - id: metadata/package/files/system-package::shell-completion-script
-  - id: well-known/tool/sysadmin/fish-bash-zsh/
-  - id: well-known/tool/sysadmin/alpine-packages/binary::alpine-parseable-binary
-  - id: well-known/tool/sysadmin/alpine-packages/binary::parseable-binary-name
-  downgrade:
-    any:
-    - id: metadata/binary/code/density::shell-high-import-density
-- id: js-npmrc-readfile-to-axios
-  desc: Reads npmrc with readFile before Axios
-  crit: suspicious
-  conf: 0.9
-  for: [javascript, typescript]
-  unless:
-  - id: well-known/tool/detection/
-  - id: well-known/tool/development/aube::aube-package-test-fixture
-  if:
-    type: text
-    regex: 'readFile\s*\([^)]{0,60}\.npmrc[\s\S]{0,120}axios\s*\.\s*(post|put|request)\s*\('
-- id: js-npmrc-readfilesync-to-axios
-  desc: Reads npmrc with readFileSync before upload
-  crit: suspicious
-  conf: 0.9
-  for: [javascript, typescript]
-  unless:
-  - id: well-known/tool/detection/
-  - id: well-known/tool/development/aube::aube-package-test-fixture
-  if:
-    type: text
-    regex: 'readFileSync\s*\([^)]{0,60}\.npmrc[\s\S]{0,120}axios\s*\.\s*(post|put|request)\s*\('
-- id: js-npmrc-stream-to-axios
-  desc: Streams npmrc through Axios upload
-  crit: suspicious
-  conf: 0.9
-  for: [javascript, typescript]
-  unless:
-  - id: well-known/tool/detection/
-  - id: well-known/tool/development/aube::aube-package-test-fixture
-  if:
-    type: text
-    regex: 'createReadStream\s*\([^)]{0,60}\.npmrc[\s\S]{0,120}axios\s*\.\s*(post|put|request)\s*\('
 - id: js-npmrc-to-http
   desc: npmrc reference near an HTTP request
   crit: suspicious
@@ -368,19 +288,6 @@ composite_rules:
   all:
   - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
   - id: objectives/exfiltration/serialization::js-npmrc-http-post
-- id: js-npmrc-to-fetch
-  desc: JS references an npm credentials file near fetch
-  crit: notable
-  conf: 0.9
-  for: [javascript, typescript]
-  unless:
-  - id: well-known/tool/detection/
-  - id: well-known/tool/development/aube::aube-package-test-fixture
-  - id: well-known/app/ai/coding-agent/qwen-code::qwen-code-bundle-text
-  all:
-  - id: micro-behaviors/fs/path/secret-config::npmrc-credentials
-  - id: micro-behaviors/communications/http/request/client::js-fetch-call
-  near_bytes: 300
 - id: cargo-registry-token
   desc: Cargo token environment access
   crit: notable
@@ -410,6 +317,7 @@ composite_rules:
   unless:
   - id: metadata/package/testing/
   - id: well-known/tool/detection/
+  - id: "metadata/file/naming::test-directory-component"
 - id: shell-cat-cred
   desc: Shell reads credential file
   crit: suspicious
@@ -421,6 +329,7 @@ composite_rules:
   - id: shell-cat-git-credentials
   unless:
   - id: metadata/package/testing/
+  - id: metadata/file/format/source-map::sourcemap-sources-content
   # A credential helper reads the credential file and hands the secret back to
   # the build -- that is the documented git/Bazel protocol, not theft.
   - id: metadata/build/recognized-contexts::credential-helper-script
@@ -429,19 +338,13 @@ composite_rules:
   # checker: it enumerates `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`
   # and quotes `cat /etc/passwd` in its comments in order to refuse them.
   - id: well-known/lib/ai/unsloth::unsloth-package-context
-- id: shell-curl-cred
-  desc: Shell curls with credential file
-  crit: suspicious
-  conf: 0.9
-  any:
-  - id: shell-curl-netrc-long
-  - id: shell-curl-netrc-short
+  - id: "metadata/file/naming::test-directory-component"
 - id: creds-base64-encode
   desc: Credentials base64 encoded
   crit: suspicious
   conf: 0.85
   all:
-  - id: micro-behaviors/data/parse/vocabulary::credentials-path-tail
+  - id: micro-behaviors/fs/path/credential::credentials-path-tail
   any:
   - id: micro-behaviors/data/encode/base64::base64-encoding
   - id: micro-behaviors/data/encode/base64::btoa-symbol
@@ -450,6 +353,7 @@ composite_rules:
   - id: metadata/build/recognized-contexts::benign-trojanized-fp-context
   - id: metadata/package/testing/
   - id: well-known/lib/runtime/scripted/node-runtime::bundled-npm-source
+  - id: "metadata/file/naming::test-directory-component"
   downgrade:
     any:
     - id: well-known/lib/cloud/aws-sdk-js::aws-sdk-js-v3-bundle
@@ -459,7 +363,7 @@ composite_rules:
   crit: suspicious
   conf: 0.9
   all:
-  - id: js-env-home-cred-npmrc
+  - id: micro-behaviors/fs/path/secret-config::npmrc-credentials
   - id: micro-behaviors/fs/read/file/full::file-content-read-operation
   any:
   - id: micro-behaviors/data/encode/base64::base64-encoding
@@ -469,6 +373,7 @@ composite_rules:
   - id: metadata/package/testing/
   - id: well-known/tool/development/lint/dprint::dprint-cli
   - id: project-snapshot-npmrc-text-branch
+  - id: "metadata/file/naming::test-directory-component"
 - id: cred-base64-encode
   desc: Credentials base64 encoded before send
   crit: suspicious
@@ -487,31 +392,6 @@ composite_rules:
   all:
   - id: pypirc-read
   - id: micro-behaviors/communications/http/request/credentials::python-credential-file-near-http-upload
-- id: js-npmrc-to-axios
-  desc: JS uploads npmrc contents through Axios
-  crit: suspicious
-  conf: 0.9
-  for: [javascript, typescript]
-  unless:
-  - id: well-known/tool/detection/
-  - id: well-known/tool/development/aube::aube-package-test-fixture
-  any:
-  - id: js-npmrc-readfile-to-axios
-  - id: js-npmrc-readfilesync-to-axios
-  - id: js-npmrc-stream-to-axios
-- id: cred-to-http-js
-  desc: JS credential path plus HTTP
-  crit: suspicious
-  conf: 0.9
-  any:
-  - id: js-npmrc-to-fetch
-  - id: js-npmrc-to-axios
-  - id: js-npmrc-to-http
-  - id: js-netrc-to-axios
-  - id: js-netrc-to-http
-  - id: js-creds-to-fetch
-  - id: js-creds-to-axios
-  - id: js-creds-to-http
 - id: npm-script-npmrc-token-theft
   desc: npm script exfiltrates .npmrc
   crit: hostile
@@ -541,6 +421,8 @@ composite_rules:
   any:
   - id: rubygems-api-key-var
   - id: gem-host-api-key-var
+  unless:
+  - id: metadata/build/ci/github-actions::workflow-definition-path
 - id: ci-credential-theft
   desc: CI/CD credential theft
   crit: hostile
@@ -571,73 +453,6 @@ composite_rules:
   - id: cargo-credential-theft
   - id: gem-credential-theft-comp
   - id: ci-credential-theft
-- id: js-env-home-cred
-  desc: JS reads credential file from user home directory
-  crit: suspicious
-  conf: 0.85
-  near_bytes: 512
-  all:
-  - id: js-env-home-read-api
-  - id: js-env-home-var
-  any:
-  - id: js-env-home-cred-npmrc
-  - id: micro-behaviors/fs/path/token::git-credentials
-  - id: js-env-home-cred-cargo
-  - id: js-env-home-cred-gem
-  not:
-  - substr: 'userconfig:{default:be.join(process.env.HOME||nr.homedir(),".npmrc")}'
-  - substr: 'cache:{default:be.join(process.env.HOME||nr.homedir(),".npm")}'
-  - substr: 'configNames:{default:["npmrc",".npmrc"]}'
-  unless:
-  - id: micro-behaviors/process/interpreter/vm/
-  - id: well-known/tool/detection/sast/
-  - id: well-known/tool/detection/security-scanner/
-  - id: metadata/package/testing/
-  - id: well-known/lib/
-- id: js-env-home-read-api
-  desc: JS home credential read API
-  crit: component
-  conf: 0.85
-  any:
-  - id: micro-behaviors/fs/read/stream::create-read-stream
-  - id: micro-behaviors/fs/read/file/full::read-node
-  - id: micro-behaviors/fs/read/file/handle::node-open-sync
-- id: js-env-home-var
-  desc: JS home environment variable
-  crit: component
-  conf: 0.85
-  any:
-  - id: micro-behaviors/os/env/read::js-process-env-home
-  - id: micro-behaviors/process/user/query::os-homedir-call
-  - id: micro-behaviors/os/env/user-paths::userprofile-var
-- id: js-creds-to-fetch
-  desc: JS credential path with fetch
-  crit: suspicious
-  conf: 0.9
-  for: [javascript]
-  near_lines: 60
-  all:
-  - id: js-creds-path
-  - id: micro-behaviors/communications/http/request/client::js-fetch-call
-  any:
-  - id: metadata/import/builtin::require-fs
-  - id: micro-behaviors/fs/read/file/full::read-node
-  - id: micro-behaviors/fs/read/file/full::read-text-utf8
-  - id: js-env-home-read-api
-  unless:
-  - id: metadata/package/testing/presence/fixture/
-  - id: metadata/package/testing/presence/harness/
-  not:
-  - substr: credentialsInUrl
-  - regex: RequestCredentials\s*=
-  - regex: \bthis\.credentials\s*=\s*credentials\b
-  - regex: \bcredentials\s*:\s*credentials\s*\?\?\s*this\.credentials\b
-  - regex: '[\./]credentials\s*=\s*["''](include|same-origin|omit)["'']'
-  - regex: '[\./]credentials\s*:\s*["''](include|same-origin|omit)["'']'
-  - regex: '[\./]credentials\s*,\s*headers'
-  - regex: '\.credentials\s*&&[\s\S]{0,300}fetch'
-  - regex: crossOrigin\s*=\s*["'']use-credentials["'']
-  - regex: /\.d\.ts["'`]?[\s\S]{0,80}fetch
 - id: js-creds-to-axios
   desc: JS credential path with axios
   crit: suspicious
@@ -645,30 +460,10 @@ composite_rules:
   unless:
   - id: well-known/tool/detection/
   all:
-  - id: js-creds-path
+  - id: micro-behaviors/fs/path/credential::package-manager-credential-path
   - id: micro-behaviors/communications/http/lib/axios::request-axios
   any:
   - id: metadata/import/builtin::require-fs
   - id: micro-behaviors/fs/read/file/full::read-node
   - id: micro-behaviors/fs/read/file/full::read-text-utf8
-  - id: js-env-home-read-api
-- id: js-creds-to-http
-  desc: JS credential path with http.request
-  crit: suspicious
-  conf: 0.9
-  all:
-  - id: js-creds-path
-  - id: micro-behaviors/communications/http/request/client::http-request
-  any:
-  - id: metadata/import/builtin::require-fs
-  - id: micro-behaviors/fs/read/file/full::read-node
-  - id: micro-behaviors/fs/read/file/full::read-text-utf8
-  - id: js-env-home-read-api
-- id: js-creds-path
-  desc: JS package credential path
-  crit: component
-  conf: 0.9
-  any:
-  - id: micro-behaviors/fs/path/secret-config::cargo-credentials-path-marker
-  - id: micro-behaviors/fs/path/secret-config::rubygems-credentials-path-marker
-  - id: micro-behaviors/fs/path/token::git-credentials
+  - id: micro-behaviors/fs/read/file/full::file-content-read-operation

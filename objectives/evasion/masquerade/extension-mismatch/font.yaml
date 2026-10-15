@@ -101,7 +101,20 @@ traits:
       # Scan text so malformed tasks.json files with trailing commas remain
       # detectable, while anchoring the interpreter invocation to command.
       type: text
-      regex: '"command"\s*:\s*"[^"]{0,400}\bnode(\.exe)?\s+[^"\s]{1,160}\.(woff2?|[ot]tf|eot)\b'
+      regex: '"command"\s*:\s*"[^"]{0,400}\bnode(\.exe)?\s+[^"\s]{1,160}\.(woff2?|[ot]tf|eot)[\s";&|)]'
+      case_insensitive: true
+    unless:
+      - id: metadata/package/repository::osm-forage-threat-report-context
+
+  # PolinRider rotated off `.woff2` to a fake `.llf` font suffix.
+  - id: node-task-executes-llf-named-file
+    desc: Node task executes an llf-named file
+    crit: suspicious
+    conf: 0.95
+    for: [json]
+    if:
+      type: text
+      regex: '"command"\s*:\s*"[^"]{0,400}\bnode(\.exe)?\s+[^"\s]{1,160}\.llf[\s";&|)]'
       case_insensitive: true
     unless:
       - id: metadata/package/repository::osm-forage-threat-report-context
@@ -208,7 +221,7 @@ traits:
     for: [javascript, typescript, python, shell, batch, powershell, json]
     if:
       type: text
-      regex: '\b(node|deno|bun|python3?|ruby|perl|php)\s+[''"]?[^\s''"]{1,120}\.(woff2?|ttf|otf|eot)\b'
+      regex: '\b(node|deno|bun|python3?|ruby|perl|php)\s+[''"]?[^\s''"]{1,99}\.(woff2?|[ot]tf|eot)[^\w./-]'
       case_insensitive: true
     unless:
       - id: metadata/file/format/structured::serialized-news-article-catalog
@@ -216,15 +229,17 @@ traits:
 
 composite_rules:
   - id: vscode-folder-open-executes-font-script
-    desc: Folder-open task executes a script disguised as a font
+    desc: Concealed folder-open task invokes a font as code
     crit: hostile
     conf: 0.99
     attack: "T1204.002,T1036.008,T1059"
     for: [json]
     all:
       - id: metadata/permission/activation::vscode-task-folder-open-activation
+      - id: objectives/execution/trigger/ide::vscode-task-concealment
     any:
       - id: node-task-executes-font-named-file
+      - id: node-task-executes-llf-named-file
       - id: bun-task-executes-font-named-file
       - id: deno-task-executes-font-named-file
       - id: python-task-executes-font-named-file
@@ -252,10 +267,13 @@ composite_rules:
     crit: hostile
     conf: 0.97
     attack: "T1036.008,T1027"
-    for: [data]
+    for: [data, font]
     all:
       - id: metadata/file/format/media::font-no-signature
       - id: metadata/file/format/media::font-body-is-text
+    unless:
+      - id: metadata/file/naming::test-directory-component
+      - id: micro-behaviors/data/format/repository::git-lfs-pointer
 
   # Same disguise, binary payload. An executable or archive wearing a font
   # name is caught by content sniffing when the magic is recognisable, so this
@@ -266,7 +284,7 @@ composite_rules:
     crit: suspicious
     conf: 0.93
     attack: "T1036.008,T1027.001"
-    for: [data]
+    for: [data, font]
     all:
       - id: metadata/file/format/media::font-no-signature
       - id: metadata/file/padding::leading-whitespace-data-padding
@@ -290,7 +308,7 @@ composite_rules:
     near_bytes: 16
     all:
       - id: quoted-interpreter-argv-head
-      - id: micro-behaviors/fs/path/extension::quoted-font-path
+      - id: micro-behaviors/fs/path/font::quoted-font-path
     unless:
       - id: well-known/app/system/ankidroid::package-member
       - id: well-known/tool/packaging/pipenv::pipenv-package-path
@@ -319,6 +337,7 @@ composite_rules:
       - id: interpreter-command-on-font-path
       - id: interpreter-argv-on-font-path
       - id: node-task-executes-font-named-file
+      - id: node-task-executes-llf-named-file
       - id: bun-task-executes-font-named-file
       - id: deno-task-executes-font-named-file
       - id: python-task-executes-font-named-file
@@ -337,10 +356,14 @@ composite_rules:
     crit: suspicious
     conf: 0.94
     attack: "T1036.008,T1027"
-    for: [data]
+    for: [data, font]
     all:
       - id: metadata/file/format/media::font-no-signature
       - id: metadata/file/format/media::font-content-is-encrypted-blob
+    unless:
+      # A PFB-wrapped Type 1 has eexec-encrypted charstrings by design, so
+      # it reads as high-entropy; the sfnt/WOFF analyzer just never walks it.
+      - id: metadata/file/format/media::postscript-type1-font
 
   # An executable image wearing a font name: the bytes are a PE/ELF/Mach-O and
   # the filename says font. Unlike a text payload — which could conceivably be
@@ -373,7 +396,7 @@ composite_rules:
     crit: hostile
     conf: 0.97
     attack: "T1036.008,T1027,T1027.001"
-    for: [data]
+    for: [data, font]
     all:
       - id: metadata/file/format/media::font-no-signature
       - id: metadata/file/format/media::font-content-is-executable
@@ -383,7 +406,7 @@ composite_rules:
     crit: suspicious
     conf: 0.95
     attack: "T1036.008,T1027,T1027.001"
-    for: [data]
+    for: [data, font]
     all:
       - id: metadata/file/format/media::font-no-signature
       - id: metadata/file/format/media::font-content-is-archive
@@ -401,6 +424,12 @@ composite_rules:
       - id: archive-named-as-font
       - id: script-named-as-font
       - id: metadata/file/format/media::font-no-signature
+    unless:
+      - id: metadata/file/naming::test-directory-component
+      - id: micro-behaviors/data/format/repository::git-lfs-pointer
+      # PostScript Type 1 is a font the signature walk does not cover; the
+      # bare no-signature leg must not convict it on its own.
+      - id: metadata/file/format/media::postscript-type1-font
 
   # An archive wearing a font name: a second stage packed for delivery, past
   # any reviewer who sees a font asset and any scanner that skips media. Held

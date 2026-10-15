@@ -7,14 +7,18 @@ traits:
   # MOV BH,40h / XCHG AX,BX leaves the write service in AH and the
   # returned handle in BX. The bytes before the write INT 21h load the
   # buffer (often the COM image at 0100h) and the transfer length.
+  # Trivial.21 instead loads AX from its entry bytes: 4E86h, 3C4Fh, 4080h.
+  # Its dispatcher doubles AL into DX: mask at 010Ch, DTA name at 009Eh,
+  # then its own image at 0100h. Require that table and the complete dispatcher;
+  # INT 21h / XCHG / JMP alone does not prove a file-write service.
   - id: dos-int21-handle-write-setup
     for: [dos_com, data, c]
-    desc: DOS interrupt result becomes write handle
+    desc: DOS handle-write service setup
     crit: notable
     conf: 0.90
     if:
       type: hex
-      pattern: "(CD 21 [0-4] 93 [0-4] B4 40|CD 21 93 EB|CD 21 [0-8] B7 40 [0-4] 93 [0-8] CD 21|CD 21 [0-8] B7 40 [0-4] 93 EB|EF BF BD 21 EF BF BD EF BF BD 40)"
+      pattern: "(86 4E 4F 3C 80 40 AD 99 8A D0 D1 E2 2A 2E 2A 00 CD 21 93 EB F1|CD 21 [0-4] 93 [0-8] B4 40|CD 21 [0-8] B7 40 [0-4] 93 [0-8] CD 21|CD 21 [0-8] B7 40 [0-4] 93 EB|EF BF BD 21 EF BF BD EF BF BD 40)"
   - id: dos-int21-write
     for: [dos_com, static-lib, data]
     desc: DOS writes a file via INT 21h
@@ -23,6 +27,8 @@ traits:
     if:
       type: hex
       pattern: "B4 40 [0-32] CD 21"
+    unless:
+      - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
   - id: dos-int21-write-ax
     for: [dos_com, static-lib, data]
     desc: DOS write via MOV AX
@@ -47,14 +53,6 @@ traits:
     if:
       type: hex
       pattern: "B4 40 [0-16] 2E FF 1E"
-  - id: dos-int21-write-near
-    for: [dos_com, static-lib, data]
-    desc: DOS write through a near call
-    crit: notable
-    conf: 0.86
-    if:
-      type: hex
-      pattern: "B4 40 [0-12] E8"
   - id: dos-int21-write-saved-vector
     for: [dos_com, static-lib, data]
     desc: DOS write via a saved handler
@@ -69,13 +67,21 @@ traits:
   # interrupt is anything except 21h: the real DOS service would recurse
   # into the hook.
   - id: dos-aliased-int-write
-    for: [dos_com, static-lib, data]
+    for: [dos_com, static-lib, data, text]
     desc: DOS write via an aliased interrupt
     crit: notable
     conf: 0.9
     if:
-      type: hex
-      pattern: "B4 40 CD ~21"
+      type: yara
+      source: |
+        rule dos_aliased_int_write {
+          meta:
+            filetypes = "com,dos,static-lib,dat,bin,payload,raw,map,text,data,dos_com"
+          strings:
+            $write = { B4 40 CD ~21 }
+          condition:
+            $write
+        }
 
   # DOS COM infectors can keep INT 21h service numbers in a table and load
   # AH from memory immediately before the interrupt, hiding the usual
@@ -113,9 +119,25 @@ traits:
     if:
       type: hex
       pattern: "B4 40 [0-8] BA 00 01 [0-8] CD 21"
+  # The BH-load form (Trivial.37): MOV AH,3Dh/INC AX opens the DTA name
+  # for write, MOV BH,40h/XCHG AX,BX leaves the write service in AH and
+  # the handle in BX, and DX=0100h plus the byte count writes the image.
   # The write-only SI-buffer form (3D01h) copies SI into DX and CX
   # before writing through the returned handle. The DTA
   # filename and returned handle remain bound to the image-buffer write.
+  # The cwd/MOV DL form spells the same DX=009Eh open in three bytes
+  # (CWD clears DX after the positive AX load) and points the write at
+  # the 0100h image with INC DH after a CWD-clearing seek; up to 32 bytes
+  # of host setup may separate the handle from the image write.
+  # The write-only MOV BX,AX form keeps the handle with 8B D8 (not XCHG)
+  # The byte-register DTA-open form (MOV AH,3Dh / MOV DL,9Eh) opens the
+  # DTA filename and immediately overwrites it with the 0100h COM image.
+  # The attribute-clear form queries that same DTA name (4300h), zeroes CX,
+  # and stores the cleared attributes (4301h) so a read-only match can be
+  # opened for update. Copy length and the CX-clear spelling (SUB, XOR, or
+  # MOV CX,0) are not part of the signature.
+  # The SI form requires the complete wildcard entry sequence and relies on
+  # conventional DOS COM initial SI=0100h; isolated MOV DX,SI proves no origin.
   - id: dos-com-self-image-handle-write
     for: [dos_com, data]
     desc: DOS writes COM image through file handle
@@ -123,7 +145,9 @@ traits:
     conf: 0.99
     if:
       type: hex
-      pattern: "(B8 02 3D BA 9E 00 CD 21 93 B4 40 83 C2 62 B1 ?? CD 21|B8 02 3D BA 9E 00 CD 21 93 B4 40 83 C2 62 B9 ?? ?? CD 21|B8 02 3D BA 9E 00 CD 21 93 B4 40 89 F2 CD 21|B8 01 3D BA 9E 00 CD 21 93 B4 40 8B D6 8B CE CD 21|BA 1B BC 8B D8 F5 81 EA 1B BB B9 ?? ?? B4 4F 80 EC 0F [0-4] CD 21)"
+      pattern: "(B8 02 3D BA 9E 00 CD 21 93 B4 40 83 C2 62 B1 ?? CD 21|B8 02 3D BA 9E 00 CD 21 93 B4 40 83 C2 62 B9 ?? ?? CD 21|2A 2E 2A 00 B4 4E 89 F2 CD 21 B8 02 3D BA 9E 00 CD 21 93 B4 40 89 F2 CD 21|B8 01 3D BA 9E 00 CD 21 93 B4 40 8B D6 8B CE CD 21|B8 01 3D BA 9E 00 CD 21 93 B4 40 89 F2 8B CE CD 21|B8 02 3D 99 B2 9E CD 21 93 [0-32] B4 40 FE C6 [0-4] CD 21|BA 1B BC 8B D8 F5 81 EA 1B BB B9 ?? ?? B4 4F 80 EC 0F [0-4] CD 21|B8 01 3D [0-4] BA 9E 00 [0-4] CD 21 [0-4] 8B D8 [0-6] BA 00 01 [0-6] B4 40 [0-6] B9 ?? ?? [0-4] CD 21|B4 3D B2 9E CD 21 93 B4 40 BA 00 01 B1 ?? CD 21|B4 3D B2 9E CD 21 93 B4 40 BA 00 01 B9 ?? ?? CD 21|B4 3D BA 9E 00 CD 21 93 B4 40 BA 00 01 B1 ?? CD 21|B4 3D BA 9E 00 CD 21 93 B4 40 BA 00 01 B9 ?? ?? CD 21|B4 3D [0-4] BA 9E 00 [0-4] CD 21 [0-4] B7 40 [0-4] 93 [0-8] BA 00 01 [0-8] B1 ?? [0-4] CD 21|B4 3D [0-4] BA 9E 00 [0-4] CD 21 [0-4] B7 40 [0-4] 93 [0-8] BA 00 01 [0-8] B9 ?? ?? [0-4] CD 21|B8 00 43 BA 9E 00 CD 21 [0-4] 2B C9 [0-4] B8 01 43 CD 21 [0-8] B8 02 3D [0-4] CD 21 [0-2] 93 [0-4] B4 40 [0-6] BA 00 01 [0-6] CD 21|B8 00 43 BA 9E 00 CD 21 [0-4] 33 C9 [0-4] B8 01 43 CD 21 [0-8] B8 02 3D [0-4] CD 21 [0-2] 93 [0-4] B4 40 [0-6] BA 00 01 [0-6] CD 21|B8 00 43 BA 9E 00 CD 21 [0-4] B9 00 00 [0-4] B8 01 43 CD 21 [0-8] B8 02 3D [0-4] CD 21 [0-2] 93 [0-4] B4 40 [0-6] BA 00 01 [0-6] CD 21)"
+    unless:
+      - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
   - id: dos-int21-write-jump
     for: [dos_com, static-lib, data]
     desc: DOS write jumps to shared call
@@ -152,7 +176,7 @@ composite_rules:
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write-batch
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write-ax
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write-xchg-bx
-      - id: micro-behaviors/fs/write/file/handle::dos-int21-write-near
+      - id: metadata/binary/code/control-transfer::x86-ah40-e8-byte-proximity
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write-far
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write-ax-far
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write-jump

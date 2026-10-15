@@ -2,67 +2,24 @@
 defaults:
   platforms: [unix, windows]
   for: [package.json]
+  attack: "T1195.002"
 traits:
 composite_rules:
-- id: sparse-package-install-hook
-  desc: Sparse package metadata accompanies install hook
-  crit: suspicious
-  conf: 0.85
-  for: [npm, package.json]
-  scope: archive
-  all:
-  - id: metadata/package/scripts/lifecycle::install-hooks
-  any:
-  - id: metadata/package/repository::manifest-lacks-repository-metadata
-  - id: metadata/package/entrypoint::manifest-lacks-bin-field
-  - id: metadata/package/empty::npm-no-keywords
-  needs: 1
-  unless:
-  - id: metadata/package/publishing::is-private
-  - id: metadata/package/repository/
-  - id: metadata/package/dependencies/manifest/presence::has-dev-deps
-  - id: objectives/supply-chain/impersonation/package/manifest/
-  - id: objectives/supply-chain/install-hook/package/manifest::tabby-builtin-plugin-keyword
-  - id: metadata/package/scripts/lifecycle::preinstall-engine-requirements-script
-  - id: well-known/app/ai/coding-agent/kendex-pi-extension::archive-context
-  # A hook that only runs a second package manager (`bower install`,
-  # `composer install`, ...) delivers nothing itself; it hands off to another
-  # manifest the same tooling already reads.
-  - id: metadata/package/scripts/lifecycle::package-manager-bootstrap-hook
-  downgrade:
-    any:
-    - id: metadata/package/freeform::pkg-skeleton-small
-- id: multiple-install-hooks
-  desc: Manifest declares two or more install hooks
-  crit: notable
-  conf: 0.85
-  needs: 2
-  any:
-  - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
-  - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
-  - id: metadata/package/scripts/lifecycle::has-install-script
-  # A package that publishes repository metadata is the ordinary build-tooling
-  # case (pre/post pairs are standard there); relocated from
-  # objectives/supply-chain/impersonation/manifest/skeleton in 2026-07.
-  unless:
-  - id: metadata/package/repository/
 - id: redundant-hook-network
   desc: Multiple hooks with network commands (redundancy)
   crit: suspicious
   conf: 0.9
-  attack: "T1195.002"
   all:
   - id: objectives/supply-chain/install-hook/scripts/host-profile::script-network-exfil-vars
-  - id: multiple-install-hooks
+  - id: metadata/package/scripts/lifecycle::multiple-install-hooks
         # GuardDog: Install hook existence (supply chain risk)
 - id: preinstall-local-node-inflated-package
   desc: preinstall local Node script in inflated empty-author package
   crit: hostile
   conf: 0.98
-  attack: "T1195.002"
   all:
-  - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
-  - id: metadata/package/versioning/sentinel::npm-version-inflated-major
+  - id: metadata/package/scripts/lifecycle::preinstall-runs-node-local-script
+  - id: "metadata/package/versioning/scheme::npm-multidigit-major-starting-nine"
   - id: metadata/package/empty::npm-empty-author
 # Alpine/Wolfi (and other image) layouts install the package under
 # `usr/lib/node_modules/`, which suppresses empty-author and has-preinstall
@@ -72,12 +29,16 @@ composite_rules:
   desc: preinstall runs Node index.js in an inflated-major package
   crit: hostile
   conf: 0.97
-  attack: "T1195.002"
+  scope: archive
+  for: [npm, tar, package.json]
   unless:
   - id: preinstall-local-node-inflated-package
   all:
-  - id: objectives/supply-chain/install-hook/package/direct-url::preinstall-node-index-hook
-  - id: metadata/package/versioning/sentinel::npm-version-inflated-major
+  - id: metadata/package/scripts/lifecycle::preinstall-node-index-hook
+  any:
+  - id: "metadata/package/versioning/scheme::npm-multidigit-major-starting-nine"
+  - id: metadata/package/versioning/sentinel::npm-version-999
+  - id: metadata/package/versioning/sentinel::npm-version-9999
 - id: preinstall-metadata-only-inflated-package
   desc: preinstall hook in sparse package with inflated version metadata
   # A 9-leading major is not an odd version, it is the exploit primitive:
@@ -95,13 +56,31 @@ composite_rules:
   # already hostile on strictly less evidence.
   crit: hostile
   conf: 0.96
-  attack: "T1195.002"
+  unless:
+  - id: preinstall-local-node-inflated-package
   all:
   - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
   - id: metadata/package/freeform::pkg-skeleton-small
-  - id: metadata/package/versioning/sentinel::npm-version-inflated-major
+  - id: "metadata/package/versioning/scheme::npm-multidigit-major-starting-nine"
   any:
   - id: metadata/package/empty::npm-empty-author
   - id: metadata/package/empty::npm-no-license
   - id: metadata/package/dependencies/manifest/presence::npm-no-deps-devdependencies
   needs: 2
+- id: postinstall-metadata-only-inflated-package
+  desc: postinstall hook in sparse inflated-major package
+  crit: hostile
+  conf: 0.96
+  scope: archive
+  for: [npm, tar, package.json]
+  unless:
+  - id: preinstall-local-node-inflated-package
+  all:
+  - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
+  - id: metadata/package/versioning/scheme::npm-major-version-prefix-90-plus
+  any:
+  - id: metadata/package/empty::npm-empty-author
+  - id: metadata/package/empty::npm-no-author
+  - id: metadata/package/empty::npm-no-license
+  - id: metadata/package/dependencies/manifest/presence::npm-no-deps-devdependencies
+  needs: 1

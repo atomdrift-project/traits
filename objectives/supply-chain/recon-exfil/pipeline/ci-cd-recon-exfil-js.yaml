@@ -6,6 +6,21 @@ defaults:
   crit: hostile
   attack: "T1195.001"
   for: [javascript, typescript]
+traits:
+  - id: node-github-api-repo-contents-url
+    desc: Node builds GitHub repo contents URL
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      substr: '/repos/${repo}/contents/'
+  - id: node-fetch-repo-contents-put
+    desc: Node fetch PUT on repo contents API
+    crit: notable
+    conf: 0.93
+    if:
+      type: text
+      regex: 'contents/\$\{path\}`[\s\S]{0,280}method:\s*["'']PUT["'']'
 composite_rules:
   # =====================================================
   # HTTP EXFILTRATION (fetch, axios, http)
@@ -19,16 +34,17 @@ composite_rules:
     near_bytes: 4096
     all:
       - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
-      - id: objectives/discovery/system/fingerprint/cicd::runner-fingerprinting
+      - id: micro-behaviors/os/env/cicd::ci-environment-reference-context
       - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
       - id: micro-behaviors/communications/http/request/verb::post-method-text
     any:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-tunnel
     unless:
       - id: metadata/package/testing/
       - id: metadata/package/files/dependency::node-modules-path
       - id: metadata/build/ci/github-actions::actions-sdk
+      - id: "metadata/file/naming::test-directory-component"
   - id: node-runner-profile-native-http
     desc: Node exfiltrates CI profile via HTTP
     conf: 0.98
@@ -38,11 +54,12 @@ composite_rules:
       - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
       - id: micro-behaviors/communications/http/request/verb::post-method-text
     any:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-tunnel
     unless:
       - id: metadata/package/testing/
       - id: metadata/build/ci/github-actions::actions-sdk
+      - id: "metadata/file/naming::test-directory-component"
   # =====================================================
   # DNS EXFILTRATION
   # =====================================================
@@ -52,7 +69,7 @@ composite_rules:
     attack: "T1048.003"
     near_bytes: 8192
     all:
-      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+      - id: micro-behaviors/os/env/ci-credentials::javascript-ci-token-env-access
     any:
       - id: micro-behaviors/communications/dns/resolver::node-dns-lookup
     unless:
@@ -67,42 +84,46 @@ composite_rules:
     attack: "T1567"
     near_bytes: 1024
     all:
-      - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
+      - id: micro-behaviors/os/env/ci-credentials::javascript-ci-token-env-access
       - id: micro-behaviors/communications/http/request/verb::post-method-text
       - id: micro-behaviors/data/serialize/json::json-stringify-payload-call
     any:
       - id: micro-behaviors/communications/http/webhook::generic-webhook-url
       - id: micro-behaviors/communications/http/webhook::discord-webhook-path-any
       - id: micro-behaviors/communications/http/services/slack::slack-incoming-webhook-url
-  # =====================================================
-  # TOKEN THEFT + EXFILTRATION
-  # =====================================================
-  - id: npm-token-theft
-    desc: npm package steals CI/CD tokens
+  - id: npm-postinstall-github-contents-ci-snapshot
+    desc: npm postinstall commits CI host snapshot via GitHub API
     conf: 0.98
-    attack: T1552.001
-    near_bytes: 8192
+    attack: "T1195.002,T1041,T1082"
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    near_bytes: 12000
     all:
-    - id: objectives/credential-access/env/secrets/cicd::js-cicd-token-access
-    any:
-    - id: micro-behaviors/communications/http/client/
-    - id: micro-behaviors/communications/http/request/client/
-    - id: micro-behaviors/communications/http/post/
-    - id: micro-behaviors/communications/http/request/verb/
-    - id: micro-behaviors/communications/http/request/url/
-    - id: micro-behaviors/communications/dns/resolver::node-dns-lookup
-    - id: objectives/exfiltration/messaging/
-    - id: objectives/exfiltration/stealer/file::file-search-telegram-send
-    - id: objectives/exfiltration/stealer/wallet::wallet-search-telegram-send
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
+      - id: micro-behaviors/os/env/cicd::process-env-ci
+      - id: micro-behaviors/os/env/cicd::process-env-github-workspace
+      - id: micro-behaviors/os/env/cicd::process-env-github-repository
+      - id: micro-behaviors/os/env/vcs::node-github-token-member
+      - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+      - id: node-github-api-repo-contents-url
+      - id: node-fetch-repo-contents-put
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call
     unless:
-    - id: well-known/tool/detection/threat-intel/
-    - id: well-known/tool/detection/sast/
-    - id: micro-behaviors/communications/http/services/github
-    - id: objectives/credential-access/env/secrets/npm-registry/
-    - id: micro-behaviors/os/env/package-manager::node-registry-token-env-read
-    - id: well-known/tool/development/aube::aube-external-tools-download-context
-    - id: well-known/tool/development/vcs/github-desktop/
-    - id: metadata/build/ci/github-actions::action-bundle-context
-    downgrade:
-      any:
+      - id: metadata/package/testing/
+      - id: metadata/build/ci/github-actions::actions-sdk
+  - id: npm-postinstall-probes-actions-oidc-mint
+    desc: npm postinstall probes GitHub Actions OIDC mint
+    conf: 0.97
+    attack: "T1195.002,T1552.001"
+    for: [npm, tar, zip, package.json, javascript]
+    scope: archive
+    near_bytes: 8000
+    all:
+      - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
+      - id: micro-behaviors/os/env/cicd::process-env-ci
+      - id: micro-behaviors/os/env/cicd::process-env-github-workspace
+      - id: micro-behaviors/os/env/ci-credentials::actions-oidc-request-token-name
+      - id: micro-behaviors/communications/http/download/curl::node-execsync-curl-download
+    unless:
+      - id: metadata/package/testing/
       - id: metadata/build/ci/github-actions::actions-sdk

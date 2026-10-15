@@ -2,17 +2,17 @@
 defaults:
   platforms: [windows]
   for: [scripts, source, pe, dll]
-  attack: T1098
 
 traits:
   - id: net-add-group-command-text
+    attack: T1098
     desc: Net group membership addition command text
     crit: notable
     conf: 0.92
     for: [scripts, "!powershell"]
     if:
       type: text
-      regex: '(?i)\bnet(\.exe)?[ \t]+(group|localgroup)[ \t]+.{0,80}/add\b'
+      regex: '(?i)\bnet1?(\.exe)?[ \t]+(group|localgroup)[ \t]+.{0,80}/add\b'
 
   - id: privileged-domain-group-name
     desc: References a privileged domain group
@@ -22,15 +22,26 @@ traits:
       type: text
       regex: '(?i)\b(Domain Admins|DnsAdmins|Enterprise Admins|Schema Admins)\b'
 
-  - id: privileged-local-group-name
+  - id: privileged-local-group-text
     desc: References a privileged local group
+    for: [pe, dll, powershell, batch]
     crit: notable
     conf: 0.9
     if:
       type: text
-      regex: '(?i)\b(Administrators|Hyper-V Administrators)\b'
+      regex: '(?i)(^|[^\w-])(Administrators|Hyper-V Administrators)\b'
+
+  - id: privileged-local-group-literal
+    desc: Source literal names a privileged local group
+    crit: notable
+    conf: 0.9
+    for: [source, scripts]
+    if:
+      type: literal
+      regex: '(?i)^(BUILTIN\\)?(Administrators|Hyper-V Administrators)$'
 
   - id: powershell-add-group-command
+    attack: T1098
     desc: Uses PowerShell to add group membership
     crit: notable
     conf: 0.9
@@ -52,6 +63,7 @@ traits:
       regex: '^(Remove-ADGroupMember|Remove-LocalGroupMember)$'
 
   - id: windows-group-membership-api
+    attack: T1098
     desc: Calls Windows group membership API
     crit: notable
     conf: 0.9
@@ -61,23 +73,33 @@ traits:
       regex: '^(NetGroupAddUser|NetLocalGroupAddMembers)$'
 
   - id: net-localgroup-administrators-add-text
+    attack: T1098
     desc: Net administrator-add command text
     crit: notable
     conf: 0.95
     for: [scripts, binaries, source, "!powershell"]
     if:
       type: text
-      regex: '(?i)net\s+localgroup\s+administrators\s+\S+\s+/add'
+      regex: '(?i)net1?\s+localgroup\s+administrators\s+\S+\s+/add'
     unless:
       - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
       - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
       - id: well-known/tool/offensive/bingo/
       - id: metadata/build/ci/agent::packer-windows-ci-image-context
       # Detection-corpus tests assert the net-command payloads they detect.
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
 
 composite_rules:
+  - id: privileged-local-group-name
+    desc: References a privileged local group
+    crit: notable
+    conf: 0.9
+    any:
+      - id: privileged-local-group-text
+      - id: privileged-local-group-literal
+
   - id: net-add-group-command
+    attack: T1098
     desc: Net group membership addition command
     crit: notable
     conf: 0.95
@@ -88,6 +110,7 @@ composite_rules:
       - id: powershell-net-group-add-call
 
   - id: net-localgroup-administrators-add
+    attack: T1098
     desc: Net localgroup administrator addition command
     crit: notable
     conf: 0.95
@@ -98,6 +121,7 @@ composite_rules:
       - id: powershell-net-admin-add-call
   - id: net-privileged-group-add
     for: [scripts, '!applescript', '!jcl', '!shell']
+    attack: T1098
     desc: Uses net to add privileged group membership
     crit: suspicious
     conf: 0.96
@@ -113,14 +137,17 @@ composite_rules:
       - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
       - id: well-known/tool/offensive/bingo/
       - id: metadata/build/ci/agent::packer-windows-ci-image-context
+      - id: well-known/tool/development/ci/skia-buildbot/
+      - id: well-known/app/infrastructure/tracebloc::tracebloc-client-context
     downgrade:
       any:
         - id: well-known/tool/development/vscode-extension/database-client::extension-context
 
   - id: powershell-privileged-group-add
     for: [powershell]
+    attack: T1098
     desc: PowerShell adds privileged group membership
-    crit: suspicious
+    crit: notable
     conf: 0.94
     all:
       - id: powershell-add-group-command
@@ -133,8 +160,12 @@ composite_rules:
       - id: well-known/app/enterprise/dotmatics-dtx::dtx-cloud-management-context
       - id: well-known/tool/development/crabbox::crabbox-context
       - id: well-known/tool/development/ci/skia-buildbot/
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
       - id: well-known/app/data/sql-server-dsc::benign-module-context
+      - id: well-known/app/infrastructure/tracebloc::tracebloc-client-context
+    downgrade:
+      any:
+        - id: metadata/build/docker::dockerfile-basename
 
   - id: powershell-privileged-group-remove
     for: [powershell]

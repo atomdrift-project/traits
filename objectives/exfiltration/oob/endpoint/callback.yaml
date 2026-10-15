@@ -18,7 +18,7 @@ composite_rules:
     all:
       - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
       - id: objectives/supply-chain/install-hook/scripts/postinstall::curl-stdin-body-post
-      - id: micro-behaviors/communications/url/host::ngrok-free-domain
+      - id: micro-behaviors/communications/url/host/oob::ngrok-free-domain
 
   - id: js-remote-script-oob-loader
     desc: Loads xss.report browser collector script
@@ -31,10 +31,31 @@ composite_rules:
       - id: micro-behaviors/ui/window/insert-html::browser-create-script-element
       - id: micro-behaviors/communications/http/client/resource::js-remote-src-assignment
       - id: micro-behaviors/data/collection/dom::append-child-reference
-      - id: micro-behaviors/communications/url/host::xss-report-callback
+      - id: micro-behaviors/communications/http/url/endpoint::xss-report-callback
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: well-known/tool/detection/
+
+  # A script that reads local files into memory, packs them as multipart
+  # form data, and POSTs the form to an out-of-band collector. The read +
+  # form + POST + OOB combination is the file-theft shape: crash reporters
+  # and update checkers POST JSON or telemetry, not local file bytes as
+  # multipart to a callback service.
+  - id: js-file-form-post-oob
+    desc: Posts local files to an OOB endpoint
+    crit: hostile
+    conf: 0.97
+    attack: T1048,T1041
+    for: [javascript, typescript]
+    near_bytes: 8192
+    all:
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
+      - id: micro-behaviors/communications/http/form::form-data-append
+      - id: micro-behaviors/fs/read/file/full::readfilesync-call
+      - id: micro-behaviors/communications/http/post::request-options-post-method
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/security-scanner/
 
   - id: js-fetch-json-post-oob
     desc: JavaScript fetch JSON POST to OOB
@@ -42,10 +63,11 @@ composite_rules:
     conf: 0.97
     attack: T1048,T1041
     for: [javascript, typescript]
+    near_bytes: 4096
     all:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: micro-behaviors/communications/http/post::fetch-post-call
-      - id: micro-behaviors/communications/http/request/payload::fetch-post-json-body
+      - id: micro-behaviors/communications/http/post::json-body-post
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: well-known/tool/detection/security-scanner/
@@ -54,6 +76,33 @@ composite_rules:
       # data to be blocked, not a callback endpoint the program contacts.
       - id: metadata/file/catalog/identity::embedded-domain-blocklist-context
       - id: objectives/supply-chain/impersonation/brand::npm-wix-registry-facade-command-exfil
+      - id: well-known/tool/development/testing/empiricalrun/
+      # A fetch POST to a free-host endpoint that the package manifest names
+      # as its own homepage is the vendor's documented API, not a callback.
+      - id: objectives/exfiltration/oob/endpoint::documented-vendor-api-endpoint-post
+      # File-scope twin: clears the member-level finding, where the manifest
+      # leg of the archive twin cannot match.
+      - id: objectives/exfiltration/oob/endpoint::documented-vendor-endpoint-post-file
+
+  # The https.request spelling of the fetch OOB beacon: install-time and
+  # telemetry callbacks built on node:https POST a marker body to an OOB
+  # collector (webhook.site UUID) with errors resolved away, so the
+  # fetch/empty-catch legs of the sibling rules never see them.
+  - id: js-https-post-oob
+    desc: JavaScript HTTPS request POSTs body to OOB endpoint
+    crit: hostile
+    conf: 0.97
+    attack: T1041
+    for: [javascript, typescript]
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
+      - id: micro-behaviors/communications/http/request/client::https-request
+      - id: micro-behaviors/communications/http/request/verb::post-method-text
+      - id: micro-behaviors/communications/http/request/body::node-http-request-end-body
+    unless:
+      - id: metadata/package/testing/harness/runtime/
+      - id: well-known/tool/detection/security-scanner/
 
   - id: browser-page-snapshot-oob-exfil
     desc: Full browser page snapshot exfiltrated to OOB collector
@@ -63,7 +112,7 @@ composite_rules:
     for: [javascript, typescript]
     near_bytes: 4096
     all:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: micro-behaviors/data/parse/html::browser-document-html-snapshot-read-any
       - id: micro-behaviors/data/encode/base64::btoa-symbol
       - id: micro-behaviors/communications/http/request/client::js-fetch-call
@@ -79,7 +128,7 @@ composite_rules:
     for: [javascript, typescript]
     near_lines: 120
     all:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: micro-behaviors/communications/http/url/path::js-relative-route-fetch
       - id: micro-behaviors/communications/http/client/response-body::js-response-text-read
       - id: micro-behaviors/communications/http/request/verb::post-method-text
@@ -99,7 +148,7 @@ composite_rules:
     attack: T1041
     for: [php]
     all:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: micro-behaviors/communications/http/post::php-stream-context-http-post
       - id: micro-behaviors/data/serialize/json::php-json-encode
     near_bytes: 4096
@@ -119,10 +168,11 @@ composite_rules:
     scope: file
     near_lines: 80
     all:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: micro-behaviors/communications/http/request/json::requests-post-json-payload
     unless:
       - id: metadata/package/testing/harness/runtime/
+      - id: well-known/app/system/anthropic-cybersecurity-skills::cybersecurity-skill-template-guide
 
   # Keep the suppression evidence in the same file as the OOB request. At
   # archive scope, an unrelated empty catch in another package member must not
@@ -154,7 +204,7 @@ composite_rules:
     scope: file
     near_lines: 10
     all:
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
       - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
       - id: micro-behaviors/data/control-flow/error-handling::silent-exception-pass
     unless:
@@ -177,8 +227,61 @@ composite_rules:
     attack: T1041,T1082,T1087
     for: [javascript]
     all:
-      - id: micro-behaviors/communications/url/host::webhook-site-uuid-path
+      - id: micro-behaviors/communications/http/url/endpoint::webhook-site-uuid-path
       # The recon engine: a shell-out from the lifecycle script (the commands
       # collected -- whoami, hostname, ip, secrets listings -- ride inside
       # the spawned shell's text, not the JS).
       - id: metadata/import/builtin::child-process-api-destructure
+
+  # A documented vendor API endpoint on a free host is not an OOB callback.
+  # srebps-ai ships an SDK whose manifest homepage names the same
+  # srebps-ai.gt.tc host its code POSTs caller-supplied prompts to. The
+  # legs below are mechanism-level parents, not per-store lists: harvesting
+  # browser, token, file or registry stores needs a file read (fs/read) and
+  # host or user profiling needs sysinfo/discovery -- so a package showing
+  # any collection, recon, execution, socket or install-hook evidence keeps
+  # its hostile. Per-store leaves are deliberately not enumerated: several
+  # cover only native types the rule does not declare, and fs/read already
+  # spans their mechanism. The hostile below evaluates file-locally, so this
+  # archive rule alone cannot clear the member-level finding; the file-scope
+  # twin after it covers the member file itself.
+  - id: documented-vendor-api-endpoint-post
+    desc: Documented vendor endpoint with no collection
+    crit: exception
+    for: [npm, tar, javascript, typescript, package.json]
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/url/reference::srebps-ai-api-endpoint
+      - id: metadata/package/repository::manifest-homepage-srebps-endpoint
+    unless:
+      - id: objectives/collection/
+      - id: objectives/discovery/
+      - id: micro-behaviors/os/sysinfo/
+      - id: micro-behaviors/fs/read/
+      - id: micro-behaviors/process/create/spawn/
+      - id: micro-behaviors/process/create/shell/command-string/
+      - id: metadata/package/scripts/lifecycle::install-hooks
+
+  # File-scope twin of the rule above: the fetch-POST OOB hostile evaluates
+  # inside one member file, where the manifest leg cannot match, so the
+  # archive twin alone leaves the member-level finding standing. The vendor
+  # binding here is the endpoint literal in the posting file itself: a file
+  # that POSTs JSON to srebps-ai.gt.tc with no collection, recon, file-read
+  # or execution legs is an API client call site, not a beacon. Anything
+  # harvesting, profiling, reading files or spawning processes keeps firing.
+  - id: documented-vendor-endpoint-post-file
+    desc: Vendor endpoint POST with no collection
+    crit: exception
+    for: [javascript, typescript]
+    scope: file
+    near_bytes: 8192
+    all:
+      - id: micro-behaviors/communications/url/reference::srebps-ai-api-endpoint
+      - id: micro-behaviors/communications/http/post::json-body-post
+    unless:
+      - id: objectives/collection/
+      - id: objectives/discovery/
+      - id: micro-behaviors/os/sysinfo/
+      - id: micro-behaviors/fs/read/
+      - id: micro-behaviors/process/create/spawn/
+      - id: micro-behaviors/process/create/shell/command-string/

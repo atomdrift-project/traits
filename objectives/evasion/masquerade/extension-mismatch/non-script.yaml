@@ -17,31 +17,6 @@ defaults:
   attack: T1036.008
 
 traits:
-  # Any JSON command string: VS Code tasks, per-OS command blocks, and the
-  # tasks block some campaigns embed in workspace settings.
-  - id: node-task-executes-non-script-suffix
-    desc: Node command runs a non-script-suffix file
-    crit: suspicious
-    conf: 0.93
-    for: [json]
-    if:
-      type: text
-      regex: '[";&|(]\s*node(\.exe)?(\s+-\S{0,40}){0,3}\s+[^"\s-][^"\s]{0,99}\.[a-z]\w{0,4}[^\w./]'
-    not:
-      - regex: '(?i)\.(m?js|cjs|[mc]?ts|[jt]sx|json|node)\W?$'
-      - regex: '(?i)\.(woff2?|[ot]tf|eot)\W?$'
-      # `-e/--eval/-p` run the next argument as code, not as a file path.
-      - regex: '\s(-e|--eval|-p|--print)(\s|=)'
-      # Node resolves an extensionless compound name (`retry.integ.spec`) to
-      # `.spec.js`; these trailing words are conventions, not real suffixes.
-      - regex: '(?i)\.(spec|test|e2e|bench|cy|min|dev|prod)\W?$'
-      - regex: '(?i)\.(conf|config|setup|mock|fixtures?|stories|story|worker)\W?$'
-      # Prose cites source files after `node` ("(node route_registry.rs)");
-      # node cannot execute another language's source, so a source suffix
-      # here is a documentation reference, not a masqueraded payload.
-      # Unanchored like the matcher itself: citations sit mid-sentence.
-      - regex: '(?i)\.(rs|go|py|rb|java|c|cpp|h|hpp|cs|php|swift|kt|scala|lua)[^\w./]'
-
   # Bun and Deno run the same payloads Node does; `deno run` takes the
   # subcommand before its flags.
   - id: bun-deno-task-executes-non-script-suffix
@@ -90,6 +65,10 @@ traits:
       - regex: '(?i)\.(m?js|cjs|[mc]?ts|[jt]sx|json|node)\W?$'
       - regex: '(?i)\.(woff2?|[ot]tf|eot)\W?$'
       - regex: '\s(-e|--eval|-p|--print)(\s|=)'
+      # --prof-process consumes V8 profiling data rather than executing the
+      # positional file. Filter only this invocation's matched span so a
+      # separate disguised-script command cannot hide behind the profiler.
+      - regex: '\s--prof-process(\s|=)'
       - regex: '(?i)\.(spec|test|e2e|bench|cy|min|dev|prod)\W?$'
       - regex: '(?i)\.(conf|config|setup|mock|fixtures?|stories|story|worker)\W?$'
 
@@ -159,6 +138,10 @@ traits:
           arguments: (arguments (string) @target)
           (#match? @loader "^(require|import)$")
           (#match? @target "^['\"](\\.{1,2}[/\\\\]|[/\\\\]|[a-zA-Z]:[/\\\\])[^'\"]{0,120}\\.(dat|bin|llf|dll|exe|so|dylib|pdf|zip|tar|gz|7z|pem|key|der)['\"]$"))
+    unless:
+      # React Native and Expo bundle document/media assets (e.g. .pdf) through require()
+      - type: text
+        regex: 'from [''"](react-native|expo(-[^''"]+)?|@react-native/[^''"]+)[''"]'
 
   - id: createrequire-of-non-script-suffix
     desc: createRequire non-script argument
@@ -202,7 +185,12 @@ traits:
     for: [json]
     if:
       type: text
-      regex: '[";&|( ]node(\.exe)?(\s+-\S{0,40}){0,3}\s+["'']?(\$\(|`)'
+      # The backtick alternative needs a command shape (word + space): prose
+      # backticks hold identifiers ("pass a node to `sidebar`") or CSS
+      # ("the old node `position: ...`"), not commands. `$(` stays loose —
+      # `node $(cat .cfg)` hides the executed script in a config file, so a
+      # script operand must NOT be required there.
+      regex: '[";&|( ]node(\.exe)?(\s+-\S{0,40}){0,3}\s+["'']?((\S+\s+)?\$\(|`[a-z]+\s)'
 
 composite_rules:
   # One id for a module loader call paired closely with a data/binary suffix,

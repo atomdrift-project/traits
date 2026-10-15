@@ -102,14 +102,6 @@ traits:
     type: text
     regex: '(?i)\brun\s+dialog\b'
     case_insensitive: true
-- id: run-dialog-instruction-generic--rx-2
-  desc: Presses a Windows shortcut key
-  crit: notable
-  conf: 0.9
-  platforms: [windows]
-  if:
-    type: text
-    regex: '(?i)\bpress\s+((the|your)\s+)?(windows?\s+key|win\s*\+\s*r|r\s+key|run\s+dialog)\b'
 - id: run-dialog-instruction-generic--rx-3
   desc: Regex component marker
   crit: component
@@ -145,21 +137,6 @@ traits:
   if:
     type: text
     regex: '(?i)\bopen\s+(up\s+)?(the\s+)?(Windows\s+)?Run\s+(dialog|box|window|prompt)\b'
-- id: paste-then-enter-instruction
-  desc: String instructs paste then Enter
-  crit: notable
-  conf: 0.88
-  platforms: [windows]
-  # InstallFix/ClickFix delivery scripts are often shipped as .js as well as .html
-  for: [html, javascript]
-  if:
-    # Require one user-facing string to contain the full instruction. Source
-    # keywords such as `return` must not complete an unrelated "paste" label.
-    type: literal
-    kind: string
-    # A source map's sourcesContent is one literal holding a whole file, so
-    # the gap may not cross an escape, statement or block boundary.
-    regex: '(?i)(Ctrl\s*(\+|and)\s*V|\bpaste\b)[^\\;{}]{0,120}\b(Enter|Return)\b'
 - id: enter-after-paste-instruction
   desc: String instructs Enter around a paste
   crit: notable
@@ -169,15 +146,6 @@ traits:
     type: literal
     kind: string
     regex: '(?i)\b(Enter|Return)\b[^\\;{}]{0,120}(Ctrl\s*(\+|and)\s*V|\bpaste\b)'
-- id: macos-terminal-open-paste-instruction
-  desc: Instructs opening Terminal and pasting text
-  crit: notable
-  conf: 0.93
-  for: [html, markdown, javascript, typescript]
-  platforms: [macos]
-  if:
-    type: text
-    regex: '(?is)\b(open|launch)\s+(the\s+)?terminal\b[\s\S]{0,320}\b(copy\s+and\s+paste|paste)\b'
 - id: remote-winr-instruction
   desc: Page instructs the Windows Run shortcut
   crit: suspicious
@@ -194,6 +162,14 @@ traits:
   if:
     type: text
     regex: '(?i)Ctrl.{0,80}\+\s*<b>V</b>'
+- id: remote-ctrls-instruction
+  desc: Page instructs a Ctrl-S save keystroke
+  crit: suspicious
+  conf: 0.97
+  for: [html, powershell]
+  if:
+    type: text
+    regex: '(?i)Ctrl.{0,80}\+\s*<b>S</b>'
 - id: html-winr-shortcut-instruction
   desc: Displays Windows Run keyboard shortcut
   # Notable, matching its win-x-key-instruction and
@@ -225,6 +201,18 @@ traits:
   if:
     type: text
     regex: '(?i)\bmanual\s+(repair|verification)\s+required\b'
+# Right-clicking Start to reach the terminal is genuine Windows 11 help-desk
+# wording too, so like its Win+X sibling this stays notable: the clipboard
+# write plus an obfuscated staged command in the composites below supplies
+# the ClickFix intent.
+- id: right-click-start-instruction
+  desc: Instructs right-clicking the Start menu
+  crit: notable
+  conf: 0.9
+  platforms: [windows]
+  if:
+    type: text
+    regex: '(?i)\bright-click\b.{0,80}\bstart\b'
 - id: macos-terminal-paste-word
   desc: Terminal paste instruction word
   # A generic “paste” word only contributes to the nearby Terminal instruction
@@ -248,6 +236,43 @@ composite_rules:
   - id: objectives/execution/lure/clipboard/page::remote-human-check-page
   - id: remote-winr-instruction
   - id: remote-ctrlv-instruction
+- id: fake-captcha-winr-paste-execution-lure
+  desc: Fake verification instructs Win+R paste run
+  crit: hostile
+  conf: 0.99
+  attack: T1204.001,T1204.004
+  for: [html, powershell]
+  all:
+  - id: fake-captcha-winr-paste-instructions
+  any:
+  - id: micro-behaviors/os/clipboard/write::browser-execcommand-copy
+  - id: micro-behaviors/os/clipboard/write::browser-clipboarddata-setdata
+  - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
+# Save-dialog ClickFix variant: instead of Win+R the page walks the victim
+# through Ctrl+S (browser save dialog) then Ctrl+V paste plus Enter, with the
+# copied text a Windows shell command. The staged interpreter command is a
+# required leg: bare save-then-paste wording without a shell payload is only
+# odd documentation, not a paste-run lure.
+- id: fake-captcha-savedialog-paste-instructions
+  desc: Fake verification page gives save-dialog paste instructions
+  crit: suspicious
+  conf: 0.97
+  all:
+  - id: objectives/credential-access/phishing/captcha::not-a-robot-text
+  - id: remote-ctrls-instruction
+  - id: remote-ctrlv-instruction
+- id: fake-captcha-savedialog-paste-execution-lure
+  desc: Fake verification instructs save-dialog paste run
+  crit: hostile
+  conf: 0.98
+  attack: T1204.001,T1204.004
+  all:
+  - id: fake-captcha-savedialog-paste-instructions
+  - id: micro-behaviors/process/argument/option::windows-interpreter-command-syntax
+  any:
+  - id: micro-behaviors/os/clipboard/write::browser-execcommand-copy
+  - id: micro-behaviors/os/clipboard/write::browser-clipboarddata-setdata
+  - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
 - id: windows-terminal-launch-instruction
   desc: Win plus X followed by terminal launch guidance
   crit: notable
@@ -255,7 +280,7 @@ composite_rules:
   platforms: [windows]
   all:
   - id: win-x-key-instruction
-  - id: micro-behaviors/ui/help::windows-terminal-name-reference
+  - id: micro-behaviors/process/info/name::windows-terminal-name-reference
   near_bytes: 220
 - id: windows-run-instruction
   desc: Windows Run dialog execution instruction
@@ -278,14 +303,14 @@ composite_rules:
   - id: paste-enter-instruction-generic
   - id: objectives/execution/lure/clipboard/fake-verification::manual-verification-failure-lure
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
-  - id: micro-behaviors/process/create/shell/command-mode::windows-command-shell-invocation
+  - id: micro-behaviors/process/argument/option::windows-interpreter-command-syntax
 - id: run-dialog-instruction-generic-verb
   desc: Run dialog instruction verb
   crit: component
   conf: 0.84
   platforms: [windows]
   any:
-  - id: run-dialog-instruction-generic--rx-2
+  - id: micro-behaviors/ui/dialog/prompt::windows-key-instruction
   - id: run-dialog-instruction-generic--rx-5
   - id: open-run-dialog-instruction
 - id: run-dialog-instruction-generic-marker
@@ -315,7 +340,7 @@ composite_rules:
   platforms: [windows]
   for: [html, javascript]
   any:
-  - id: paste-then-enter-instruction
+  - id: micro-behaviors/ui/dialog/prompt::paste-then-enter-instruction
   - id: enter-after-paste-instruction
 - id: macos-terminal-command-paste
   desc: Terminal paste-and-return instruction
@@ -324,6 +349,6 @@ composite_rules:
   platforms: [macos]
   near_lines: 8
   all:
-  - id: objectives/execution/lure/clipboard/page::macos-terminal-name
+  - id: micro-behaviors/process/info/name::terminal-name-reference
   - id: macos-terminal-paste-word
-  - id: objectives/execution/lure/clipboard/page::macos-terminal-return-word
+  - id: micro-behaviors/ui/help::press-return-wording

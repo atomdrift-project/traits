@@ -8,7 +8,7 @@ defaults:
 
 traits:
   - id: pe-signature-digest-mismatch
-    desc: File changed after it was signed
+    desc: Authenticode signed/image digest mismatch
     conf: 0.97
     if:
       type: value
@@ -22,32 +22,27 @@ traits:
       # way while Procmon.exe itself verifies clean. The digest comparison is
       # only meaningful on a whole file.
       - id: metadata/binary/layout/embedded::embedded-pe-child
-      # The stored CheckSum is a second, independent whole-file measurement,
-      # and signtool restamps it when it embeds the signature. Patching a
-      # signed image therefore breaks the checksum too, unless the patcher
-      # repairs it. When the checksum still matches the bytes, the two
-      # measurements contradict each other and the digest reading is the one
-      # to distrust -- the recomputation has image geometries it gets wrong.
-      # IObit's bundled HWiNFO32.dll is one: it declares SizeOfHeaders 0x1000
-      # while its packed sections start at 0x400, so a header-span-then-
-      # sections walk hashes the overlap twice. Its signed SpcIndirectData
-      # digest (75508b53…ae01) equals a spec-correct hash of the file as it
-      # ships, i.e. nothing was changed after REALiX signed it.
-      - id: metadata/binary/layout/checksum::pe-checksum-valid
-      # IPWorks ZIP is also sold as a signed self-extractor engine. Vendors
-      # append extractor payloads after its certificate table, which changes
-      # the whole-file Authentihash without changing the signed library image.
-      - id: well-known/lib/vendor-sdk/nsoftware-ipworks::ipworks-library-benign-context
+      # HWiNFO's packed header/section overlap is a known digest-recomputation
+      # limitation. A valid PE checksum alone is never signature evidence:
+      # Bad Rabbit carries a copied Symantec certificate and repaired checksum.
+      - id: well-known/app/utility/hwinfo::hwinfo-component-context
       - id: well-known/tool/sysadmin/sysinternals::process-explorer-build-identity
+      # Signed PE images with recognized benign appended trailers (package payloads,
+      # self-extractors, or browser cache metadata) past the certificate table.
+      - id: signed-image-recognized-trailer-context
     downgrade:
       # Contexts where the reading is known to be weak evidence: a leaf cert
       # issued to an individual, Apowersoft's re-stamped installers, and
       # MinGW-linked images, whose section layout the Authentihash
-      # recomputation gets wrong often enough to distrust on its own.
+      # recomputation gets wrong often enough to distrust on its own. Archive
+      # scope also lets vendored test-corpus members (whose own paths lose
+      # ancestor directories past one nesting level) see the fixture fact.
+      scope: archive
       any:
         - id: metadata/signed/certificate/subject::binary-signed-with-individual-cert
         - id: metadata/lang/compiler/native::mingw-built-pe
         - id: metadata/signed/leaf::apowersoft-ltd
+        - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 
   # `invalid` covers every way the Authenticode verification pipeline can come
   # back false, and only one of those ways is about the file: the bytes no
@@ -113,3 +108,15 @@ traits:
   # depends on the scanning host's clock rather than anything in the file.
   # `pe.signature_expired_days` is available as a metric for rules that want to
   # opt in; it is a day count so a threshold can absorb clock skew.
+
+composite_rules:
+  # Signed PE images with recognized benign appended trailers (package payloads,
+  # self-extractors, or browser cache metadata) past the certificate table.
+  - id: signed-image-recognized-trailer-context
+    desc: Signed PE with recognized benign trailer context
+    crit: exception
+    conf: 0.99
+    any:
+      - id: well-known/lib/vendor-sdk/nsoftware-ipworks::ipworks-library-benign-context
+      - id: well-known/app/system/dell-update::dell-update-package-binary
+      - id: well-known/app/browser/mozilla-firefox::firefox-cache2-entry-context

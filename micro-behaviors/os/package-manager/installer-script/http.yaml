@@ -23,7 +23,7 @@ traits:
     conf: 0.8
     if:
       type: text
-      regex: curl\s+.{0,100}install|wget\s+.{0,100}install|install\.sh
+      regex: '(curl|wget)\s+.{0,100}install|install\.sh|(apt-get|dnf|yum|zypper)\s+.{0,30}install'
   # Vendor offline installers (Intel oneAPI, similar GPU/SDK bootstraps) download
   # a local .sh/.run payload, chmod it, then invoke it with the documented
   # silent + EULA-accept flags. That shape is installer UX, not a dropper.
@@ -52,7 +52,10 @@ traits:
     for: [shell, github-actions, makefile, dockerfile, powershell]
     if:
       type: text
-      regex: '(curl|wget)\b[^\n|]{0,200}/(install|[\w.-]*-installer)[\w.-]*\s*\|\s*(bash|sh)\b'
+      # The fetched URL is routinely shell-quoted in composite actions
+      # (`curl -fsSL "https://host/install.sh" | bash`), so allow one
+      # closing quote between the script name and the pipe.
+      regex: '(curl|wget)\b[^\n|]{0,200}/(install|[\w.-]*-installer)[\w.-]*["'']?\s*\|\s*(bash|sh)\b'
   # Relocated from objectives/command-and-control/dropper/delivery/pipe,
   # where it was `curl-pipe-install-sh-url`. Covers the same idiom quoted in
   # help text and install hints of non-shell sources (huggingface_hub prints
@@ -72,7 +75,8 @@ traits:
     for: [shell, github-actions, makefile, dockerfile, powershell]
     if:
       type: text
-      regex: '(curl|wget)\b[^\n|]{0,200}/(get|setup)[\w.-]*\s*\|\s*(bash|sh)\b'
+      # Same shell-quoted-URL allowance as install-script-pipe above.
+      regex: '(curl|wget)\b[^\n|]{0,200}/(get|setup|[\w.-]*[-_]setup)[\w.-]*["'']?\s*\|\s*(bash|sh)\b'
   - id: clickhouse-installer-pipe
     desc: ClickHouse installer piped to shell
     crit: notable
@@ -91,6 +95,43 @@ traits:
       regex: 'https?://(sh\.rustup\.rs|static\.rust-lang\.org/rustup(\.sh)?)[^\n|]{0,80}\|\s*(bash|sh)\b'
     unless:
       - id: metadata/file/format/structured::serialized-news-article-catalog
+  # jbang's documented bootstrap (`curl -Ls https://sh.jbang.dev | bash -s -
+  # app setup`) — the canonical install command for the Java script runner,
+  # used by project CI (Quarkus's action helpers) the same way as rustup's.
+  - id: jbang-installer-pipe
+    desc: jbang installer piped to shell
+    crit: notable
+    conf: 0.98
+    for: [scripts, build, source, github-actions]
+    if:
+      type: text
+      regex: 'https?://sh\.jbang\.dev[^\n|]{0,80}\|\s*(bash|sh)\b'
+    unless:
+      - id: metadata/file/format/structured::serialized-news-article-catalog
+  - id: pyenv-installer-pipe
+    desc: pyenv installer piped to shell
+    crit: notable
+    conf: 0.98
+    for: [scripts, build, source, github-actions]
+    if:
+      type: text
+      regex: 'https?://pyenv\.run[^\n|]{0,80}\|\s*(bash|sh)\b'
+  - id: install-node-vercel-bootstrap-url
+    desc: Vercel install-node bootstrap host
+    crit: notable
+    conf: 0.98
+    for: [shell, markdown, text, github-actions]
+    if:
+      type: text
+      substr: install-node.vercel.app
+  - id: precc-peria-install-script-url
+    desc: PRECC peria.ai install script URL
+    crit: notable
+    conf: 0.98
+    for: [shell, markdown, text]
+    if:
+      type: text
+      substr: peria.ai/install.sh
   - id: browser-use-profile-installer-pipe
     desc: browser-use profile installer piped to shell
     crit: notable
@@ -109,12 +150,6 @@ traits:
     if:
       type: text
       regex: aka\.ms/(DevTunnelCliInstall|TunnelsCliDownload)
-  - id: release-download-reference
-    desc: Release download URL reference
-    conf: 0.86
-    if:
-      type: text
-      substr: releases/latest/download
 
   - id: linuxdeploy-appimage-release-download
     desc: linuxdeploy AppImage release download
@@ -144,7 +179,7 @@ traits:
       regex: 'github\.com/AppImage/(appimagetool|AppImageKit)/releases/download/'
 
   - id: appimagetool-build-command
-    desc: appimagetool AppImage packaging command
+    desc: "appimagetool name or --appimage-extract option"
     crit: notable
     conf: 0.96
     for:
@@ -157,21 +192,6 @@ traits:
       type: text
       regex: '(?i)(^|[/\s"''`])\.?/?appimagetool\b|--appimage-extract\b'
 
-  - id: sha256sums-verification-reference
-    desc: Installer references SHA256SUMS verification
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      substr: SHA256SUMS
-  - id: macos-quarantine-codesign-repair
-    desc: "macOS quarantine clear plus codesign repair"
-    conf: 0.92
-    platforms: [macos]
-    for: [shell]
-    if:
-      type: text
-      regex: 'xattr\s+-d\s+com\.apple\.quarantine[\s\S]{0,700}codesign'
   - id: dotnet-local-publish
     desc: Local dotnet publish build
     conf: 0.9
@@ -293,13 +313,13 @@ composite_rules:
       - id: health-check-fetch
       - id: health-check-local
   - id: verified-release-installer
-    desc: Installer downloads release artifact with checksum verification
+    desc: Installer release URL and checksum label
     conf: 0.94
     any:
       - id: installer-script
     all:
-      - id: release-download-reference
-      - id: sha256sums-verification-reference
+      - id: micro-behaviors/communications/http/download/release::release-download-path-reference
+      - id: "metadata/package/integrity::sha256sums-checksums-or-compute-label"
 
   - id: verified-github-release-installer
     desc: GitHub release installer verifies downloaded artifact
@@ -311,6 +331,7 @@ composite_rules:
     any:
       - id: micro-behaviors/crypto/hash/file::downloaded-artifact-sha256-compare
       - id: micro-behaviors/crypto/hash/file::downloaded-artifact-sha256-helper-compare
+      - id: micro-behaviors/crypto/hash/file::shell-sha256-actual-expected-equal
   - id: linuxdeploy-appimage-build-context
     desc: Recognized linuxdeploy AppImage build context
     crit: exception
@@ -329,6 +350,7 @@ composite_rules:
       - id: appimagetool-build-command
   - id: staged-new-binary-install
     desc: Staged .new binary install before atomic rename
+    crit: notable
     conf: 0.9
     for: [shell]
     near_bytes: 1600
@@ -336,25 +358,28 @@ composite_rules:
       - id: staged-new-binary-copy-to-new
       - id: staged-new-binary-rename
   - id: macos-quarantine-repair-installer
-    desc: Verified release installer repairs macOS quarantine metadata
+    desc: Release labels and quarantine/codesign co-occur
+    crit: notable
     conf: 0.96
     platforms: [macos]
     for: [shell]
     all:
-      - id: release-download-reference
-      - id: sha256sums-verification-reference
-      - id: macos-quarantine-codesign-repair
+      - id: micro-behaviors/communications/http/download/release::release-download-path-reference
+      - id: "metadata/package/integrity::sha256sums-checksums-or-compute-label"
+      - id: micro-behaviors/os/security/gatekeeper::quarantine-clear-codesign-cooccurrence
   - id: macos-local-build-quarantine-repair-installer
-    desc: Local build installer repairs macOS quarantine metadata on staged binary
+    desc: Local publish, staged install and xattr co-occur
+    crit: notable
     conf: 0.95
     platforms: [macos]
     for: [shell]
     all:
       - id: dotnet-local-publish
       - id: staged-new-binary-install
-      - id: macos-quarantine-codesign-repair
+      - id: micro-behaviors/os/security/gatekeeper::quarantine-clear-codesign-cooccurrence
   - id: macos-local-pyinstaller-quarantine-repair
-    desc: Local PyInstaller archive build repairs macOS quarantine metadata
+    desc: PyInstaller archive build and xattr co-occur
+    crit: notable
     conf: 0.94
     platforms: [macos]
     for: [shell]
@@ -362,3 +387,4 @@ composite_rules:
       - id: pyinstaller-local-build
       - id: staged-dir-var
       - id: tar-gzip-create
+      - id: micro-behaviors/fs/attributes/xattr::xattr-quarantine-remove

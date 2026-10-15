@@ -9,7 +9,7 @@ traits:
     # ZIP and TAR have dedicated types; 7z, RAR, CAB, and the remaining general
     # container parsers use the generic archive type. tar.gz is its own file
     # type (e.g. handler testdata test.tgz), not covered by tar.
-    for: [zip, tar, tar.gz, cab]
+    for: [zip, tar, tar.gz, cab, pkg, 7z, rar]
     if:
       type: basename
       exact: __cleave_builtin_path_traversal_hook__
@@ -40,8 +40,9 @@ traits:
       - id: metadata/package/testing/presence/path::test-fixture-directory-path
       - id: metadata/package/testing/presence/path::test-fixture-directory-name
       - id: metadata/package/files/bsd::openbsd-pkg-rcscript-manifest
-      - type: basename
-        regex: '\.pkg$'
+      # Parsed pkg identity plus Zstandard wrapping identifies FreeBSD's
+      # rooted package format; a renamed ZIP ending in .pkg must still alert.
+      - id: metadata/package/files/bsd::freebsd-pkg-zstd-archive
 
   - id: builtin-anti-analysis-archive-symlink-escape
     desc: Absolute or escaping archive symlink
@@ -55,12 +56,15 @@ traits:
       - id: pkg-safe-symlink-archive-context
       # Android-x86 ramdisks ship absolute platform links (bin -> /system/bin).
       - id: well-known/app/system/android-x86::android-x86-ramdisk-path
+      # Tailscale Gokrazy appliances ship rootfs overlay archives (bin -> /user).
+      - id: well-known/dual-use/tunnel/tailscale::tailscale-gokrazy-usr-dir-overlay
       # Recognized system-package containers install through their own
       # tooling, which resolves payload symlinks itself: an absolute link
       # inside an APK/RPM/DEB/Arch package is packaging, not an extraction
       # escape. Referenced directly — the outer-scoped exception above does
       # not suppress this hook at scan time, this file-scoped context does.
       - id: system-package-archive-context
+      - id: metadata/package/testing/
 
   # Engine emits anti-analysis/archive/zip-bomb for high compression ratios.
   # Library fuzz corpora and scientific array datasets intentionally ship
@@ -81,6 +85,7 @@ traits:
       # are rebased, so suppress on the entry name itself.
       - id: metadata/package/testing/scripted::go-fuzz-corpus-entry-basename
       - id: metadata/package/testing/scripted::zip-bomb-regression-fixture-basename
+      - id: metadata/package/testing/scripted::declared-zip-bomb-fixture-basename
       - id: metadata/package/manager::go-module-source-archive
       - id: well-known/lib/runtime/scripted/php-runtime::phpt-test-file-basename
       - id: well-known/lib/runtime/scripted/php-runtime::source-tree
@@ -116,8 +121,6 @@ composite_rules:
       - id: well-known/tool/detection/sast::trufflehog-package-exception
       - id: metadata/package/testing/scripted::go-fuzz-corpus-archive-member
       - id: metadata/package/manager::go-module-source-archive
-      # dpkg tar streams conventionally include a root `./` member, which the
-      # extractor skips but currently reports through the traversal hook.
       - id: metadata/package/files/system-package::debian-package-archive
       - id: metadata/package/files/system-package::rpm-package-payload-archive
       - id: metadata/build/archive::opa-policy-bundle-manifest
@@ -138,20 +141,6 @@ composite_rules:
       - id: metadata/package/files/bsd::pkgsrc-maintainer-archive-context
       - id: metadata/package/files/bsd::pkgsrc-maintainer-script-basename
       - id: archive-package-context
-      # Any well-formed RPM, not a list of vendors.
-      #
-      # The first fix here added Fedora to the signed-vendor list beside SUSE,
-      # Rocky and Qubes -- and then TorGuard's RPM turned up with the same
-      # finding, which is the tell that the list was the wrong shape. A
-      # relative symlink in an RPM payload (`/usr/bin/torguard ->
-      # ../lib/torguard/torguard`) is not an escape attempt; it is what the
-      # format is for. The escape-during-extraction threat this hook exists
-      # for belongs to archives a user unpacks by hand, not to a package
-      # format installed through rpm's own path handling.
-      #
-      # Reached directly rather than through `system-package-archive-context`:
-      # a composite over an archive-scoped composite resolves inconsistently,
-      # and going the long way left the finding in place.
       - id: metadata/package/files/system-package::rpm-package-payload-archive
       - id: well-known/lib/runtime/scripted/electron::electron-source-symlink-archive-context
       - id: well-known/tool/sysadmin/alpine-packages/
@@ -159,8 +148,8 @@ composite_rules:
       - id: peazip-package-context
       - id: metadata/package/files/bsd::guile-slib-package-archive-basename
       - id: well-known/dual-use/tunnel/tailscale::tailscale-source-token
+      - id: well-known/dual-use/tunnel/tailscale::tailscale-gokrazy-usr-dir-overlay
       - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
-
   - id: archive-package-context
     desc: Recognized package archive context
     crit: exception

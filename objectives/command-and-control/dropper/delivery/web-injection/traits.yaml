@@ -34,6 +34,21 @@ traits:
       type: text
       regex: '<script[^>]{0,240}\bsrc=["'']https?://[^/"'']{1,253}/t\.js\?site=[0-9a-fA-F]{32}["'']'
 
+  # The same zero-size iframe written from two or more separate script sites
+  # is an injection footprint: an author embeds a widget once, while a
+  # compromised page carries the injected block wherever the injector landed
+  # (head, body and after </html> are the common sites). Zero sizing keeps
+  # the written iframe out of ordinary layout markup.
+  - id: repeated-concealed-iframe-write
+    desc: Writes zero-size iframes at many script sites
+    crit: notable
+    conf: 0.9
+    for: [html]
+    count_min: 2
+    if:
+      type: text
+      regex: 'document\.write\s*\(\s*[''"][^''"]{0,80}<iframe[^>]{0,240}\bwidth=0\b[^>]{0,200}\bheight=0\b'
+
 composite_rules:
   - id: extension-contextual-remote-script-loader
     desc: Extension assembles and injects a remote script
@@ -47,33 +62,6 @@ composite_rules:
       - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-api
       - id: micro-behaviors/data/db/web-storage::chrome-storage-local-get
     near_bytes: 4096
-
-  - id: browser-cookie-remote-script-loader
-    desc: Browser loader reads cookies while pulling remote script code
-    crit: hostile
-    conf: 0.95
-    attack: T1105,T1539
-    for: [javascript]
-    near_bytes: 4096
-    all:
-      - id: micro-behaviors/communications/http/cookie-store::document-cookie-read
-      - id: micro-behaviors/process/create/load/remote-code::js-remote-script-element
-      - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
-    unless:
-      - id: metadata/package/testing/
-      - id: metadata/signed/platform/
-      # A page that gates the canonical gtag.js endpoint on a consent cookie is
-      # implementing analytics consent, not fetching an attacker-controlled
-      # script stage.
-      - id: micro-behaviors/communications/http/url/query::gtag-js-measurement-id-query
-      # Bundled auth clients load the fixed, documented Google Identity
-      # Services SDK endpoint next to their own first-party cookie handling
-      # (One Tap / "Sign in with Google"); that is a vendor SDK fetch, not a
-      # cookie-adjacent script stage.
-      - id: micro-behaviors/communications/http/url/domain::google-gsi-client-script-url
-      # Marketing bundles load the standard Oracle Eloqua tracking script endpoint
-      # alongside visitor tracking cookies for analytics.
-      - id: micro-behaviors/communications/http/url/domain::eloqua-tracking-script-url
 
   - id: financial-page-remote-loader
     desc: Financial-page gate delivers a remote script stage
@@ -93,6 +81,7 @@ composite_rules:
   # assignment in the same script. Legitimate pages rarely pack scripts with
   # Dean Edwards anymore; a packed script that pulls remote code has no
   # legitimate use.
+      - id: "metadata/file/naming::test-directory-component"
   - id: packed-page-script-external-inject
     desc: Packed page script injects external script
     crit: hostile
@@ -167,7 +156,7 @@ composite_rules:
     for: [javascript, typescript]
     all:
       - id: micro-behaviors/process/create/load/remote-code::js-external-script-loader
-      - id: micro-behaviors/process/create/load/remote-code::js-computed-document-member-call
+      - id: micro-behaviors/ui/window/dom-access::computed-document-member-call
     any:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::cfg-flatten-state-list
@@ -197,7 +186,7 @@ composite_rules:
     attack: T1105,T1204.001,T1059.001
     for: [html]
     all:
-      - id: micro-behaviors/process/create/load/script::external-script-element-load
+      - id: micro-behaviors/process/deploy::external-script-element-load
       - id: micro-behaviors/communications/http/user-agent::navigator-useragent-conditional
       - id: objectives/execution/lure/clipboard/instruction::fake-captcha-winr-paste-instructions
   - id: timestamped-remote-script-injection
@@ -207,7 +196,7 @@ composite_rules:
     attack: T1105,T1059.001
     for: [javascript, typescript]
     all:
-      - id: micro-behaviors/process/create/load/script::dynamic-script-element-load
+      - id: micro-behaviors/process/deploy::dynamic-script-element-load
       - id: micro-behaviors/communications/http/client/resource::unix-timestamp-src-cache-bust
       - id: micro-behaviors/data/collection/dom::insert-before-call
     near_bytes: 2048
@@ -228,9 +217,96 @@ composite_rules:
     for: [javascript, typescript]
     all:
       - id: micro-behaviors/process/create/load/remote-code::js-computed-external-script-loader
-      - id: micro-behaviors/process/create/load/remote-code::js-computed-document-member-call
+      - id: micro-behaviors/ui/window/dom-access::computed-document-member-call
     any:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::cfg-flatten-state-list
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
     needs: 1
+
+  - id: repeated-concealed-iframe-write-injection
+    desc: Remote iframe written into page at multiple sites
+    crit: hostile
+    conf: 0.95
+    attack: T1189,T1105
+    for: [html]
+    near_bytes: 800
+    all:
+      - id: repeated-concealed-iframe-write
+      - id: micro-behaviors/communications/http/client/resource::external-iframe-element-load
+  # Miner loader behind a blocklist-evasive host: the page pulls its script
+  # from a root-dotted domain while an AuthedMine constructor and throttle
+  # option name the payload. The dotted host alone is only presentation
+  # evasion; the miner API legs convict the use.
+  - id: dotted-host-miner-loader-injection
+    desc: Root-dotted host delivers a throttled miner bootstrap
+    crit: hostile
+    conf: 0.97
+    attack: T1496,T1105
+    for: [html]
+    all:
+      - id: micro-behaviors/communications/http/client/resource::dotted-root-script-src
+      - id: objectives/impact/cryptojacking/miner/signatures::authedmine-anonymous-construct
+      - id: objectives/impact/cryptojacking/miner/signatures::miner-throttle-option
+  # Stored attribute breakout: a script element smuggled inside an alt/title
+  # value breaks out with closers and loads a remote script. The smuggled
+  # tag plus the external load name the injection; hand-written markup
+  # never nests elements inside attribute values.
+  - id: attribute-breakout-script-injection
+    desc: Attribute-smuggled script loads remotely
+    crit: hostile
+    conf: 0.97
+    attack: T1189,T1105
+    for: [html]
+    all:
+      - id: micro-behaviors/communications/http/client/resource::attribute-value-script-tag
+      - id: micro-behaviors/process/deploy::external-script-element-load
+  # External CoinHive loader delivers started browser miner: the page loads
+  # CoinHive from an external script source beside the Anonymous constructor
+  # and start call. Loading and starting the miner delivers in-browser
+  # cryptojacking via external script injection.
+  - id: coinhive-script-miner-loader-injection
+    desc: External script delivers started CoinHive browser miner
+    crit: hostile
+    conf: 0.97
+    attack: T1496,T1105
+    for: [html]
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/process/deploy::external-script-element-load
+      - id: objectives/impact/cryptojacking/miner/signatures::coinhive-library-url
+      - id: objectives/impact/cryptojacking/miner/signatures::coinhive-miner-construct
+      - id: objectives/impact/cryptojacking/miner/signatures::miner-start-invocation
+  # Encoded twin of the loader above: the miner bootstrap arrives
+  # percent-encoded inside document.write(unescape(...)) rather than as a
+  # named library URL, so the library leg cannot see it. Decoding markup
+  # that constructs and starts a CoinHive miner is the same delivery act
+  # through concealment (T1027) rather than a remote script element.
+  - id: coinhive-unescape-loader-injection
+    desc: Encoded document write injects started CoinHive miner
+    crit: hostile
+    conf: 0.96
+    attack: T1496,T1105,T1027
+    for: [html]
+    near_bytes: 4096
+    all:
+      - id: micro-behaviors/ui/window/insert-html::browser-document-write-unescape
+      - id: objectives/impact/cryptojacking/miner/signatures::coinhive-miner-construct
+      - id: objectives/impact/cryptojacking/miner/signatures::miner-start-invocation
+  # Mass-repeated loader tags: the injector splices the same remote script
+  # element hundreds of times into page content, so consecutive script tags
+  # pile up far beyond any authored head block. Either leg alone is
+  # ordinary (sites load remote scripts); the massed repetition beside the
+  # remote loads is the injection footprint.
+  - id: repeated-remote-script-injection
+    desc: Mass-repeated remote script tags injected in page
+    crit: hostile
+    conf: 0.96
+    attack: T1189,T1105
+    for: [html]
+    all:
+      - id: micro-behaviors/process/deploy::massed-remote-script-tags
+      - id: micro-behaviors/process/deploy::external-script-element-load
+      - id: micro-behaviors/communications/http/client/resource::remote-script-element-source
+    unless:
+      - id: well-known/app/media/pinterest::pinterest-web-context

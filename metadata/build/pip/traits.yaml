@@ -29,12 +29,32 @@ traits:
     desc: setup.py at or near the source root
     crit: notable
     conf: 0.98
-    for: [python]
+    for: [python, makefile]
     # Install-time setup.py conclusions should come from a packaging script at
     # the source root, not an arbitrary runtime module named setup.py.
+    # The path suffix alone cannot express depth, so vendored copies nested
+    # under third-party directories (PyFoam's ThirdParty/ply, /tqdm,
+    # /Gnuplot) are excluded the same way vendor/ and site-packages/ are.
     if:
       type: path
-      regex: '^([^/]+/)?setup\.py$'
+      regex: '([^/]+/)?setup\.py$'
+    unless:
+      - type: path
+        regex: '[\\/](_vendor|vendor|site-packages|thirdparty|third_party|third-party)[\\/]'
+        case_insensitive: true
+
+  # A PEP 625 sdist extracts under a single `<name>-<version>` root, and the
+  # distribution's own build script sits directly inside it. A setup.py under
+  # any other directory shape (a repository module, a loose standalone script)
+  # makes no such layout claim.
+  - id: versioned-sdist-root-setup-py
+    desc: setup.py inside a versioned sdist root
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: path
+      regex: '(^|/)[A-Za-z0-9][A-Za-z0-9._]*-[0-9][A-Za-z0-9._+-]*/setup\.py$'
     unless:
       - type: path
         regex: '[\\/](_vendor|vendor|site-packages)[\\/]'
@@ -43,7 +63,7 @@ traits:
     desc: setuptools packaging import
     crit: notable
     conf: 0.95
-    for: [python]
+    for: [python, makefile]
     if:
       type: text
       regex: '(?m)^\s*(from\s+setuptools\b|import\s+setuptools\b)'
@@ -61,8 +81,9 @@ traits:
     conf: 0.95
     for: [python]
     if:
-      type: text
-      substr: 'setuptools.setup('
+      type: symbol
+      kind: call
+      exact: setuptools.setup
 
   # `from setuptools import setup` exposes the call as `setup(...)` rather
   # than `setuptools.setup(...)`; keep the import and call in one anchored
@@ -93,15 +114,6 @@ traits:
         kind: string
         exact: python setup.py sdist upload
 
-  - id: pyproject-toml
-    desc: Python project manifest (pyproject.toml)
-    crit: baseline
-    conf: 1.0
-    for: [pyproject.toml]
-    if:
-      type: path
-      basename: true
-      exact: pyproject.toml
 
   - id: requirements-txt
     desc: Python requirements (requirements.txt)
@@ -112,30 +124,6 @@ traits:
       type: path
       basename: true
       exact: requirements.txt
-  - id: pip-req-pycrypto
-    desc: Requirements pin pycrypto or pycryptodome
-    crit: notable
-    conf: 0.92
-    for: [requirements.txt, text]
-    if:
-      type: text
-      regex: '(?im)^(pycrypto|pycryptodome)\b'
-  - id: pip-req-wmi
-    desc: Requirements pin the Windows WMI package
-    crit: notable
-    conf: 0.94
-    for: [requirements.txt, text]
-    if:
-      type: text
-      regex: '(?im)^wmi\b'
-  - id: pip-req-netifaces
-    desc: Requirements pin the netifaces package
-    crit: notable
-    conf: 0.9
-    for: [requirements.txt, text]
-    if:
-      type: text
-      regex: '(?im)^netifaces\b'
   - id: pip-req-enum34
     desc: Requirements pin the enum34 package
     crit: notable
@@ -313,7 +301,7 @@ composite_rules:
     desc: Packaging setup API import or call
     crit: notable
     conf: 0.95
-    for: [python]
+    for: [python, makefile]
     any:
       - id: packaging-setuptools-import
       - id: packaging-distutils-import
@@ -323,10 +311,20 @@ composite_rules:
     desc: Root Python setup.py packaging file
     crit: notable
     conf: 0.98
-    for: [python]
+    for: [python, makefile]
     all:
       - id: root-setup-py-path
       - id: packaging-setup-api-import
+
+  - id: root-setup-dependency-links
+    desc: Root setup.py declares direct dependency link
+    crit: notable
+    conf: 0.92
+    for: [python]
+    scope: leaf
+    all:
+      - id: root-setup-py
+      - id: micro-behaviors/os/package-manager/install::python-legacy-dependency-link-url
 
   - id: site-packages
     desc: References the site-packages directory
@@ -342,6 +340,6 @@ composite_rules:
     any:
       - id: setup-py
       - id: root-setup-py
-      - id: pyproject-toml
+      - id: "metadata/file/naming::pyproject-toml-basename"
       - id: requirements-txt
       - id: site-packages

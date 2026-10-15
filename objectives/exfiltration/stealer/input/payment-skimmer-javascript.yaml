@@ -6,19 +6,6 @@ defaults:
   platforms: [linux, macos, windows, unix, android, ios]
   attack: "T1041"
 composite_rules:
-  - id: js-payment-form-json-ajax-exfil
-    desc: Payment form serialized and sent remotely
-    crit: hostile
-    conf: 0.99
-    attack: "T1056.002,T1041"
-    for: [javascript]
-    near_bytes: 4096
-    all:
-      - id: objectives/credential-access/financial/credit-card/form-capture::payment-form-serialize-array
-      - id: micro-behaviors/communications/http/request/client::jquery-ajax-call
-      - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
-      - id: micro-behaviors/data/serialize/json::json-stringify-identifier
-
   - id: credit-card-websocket-stealer
     desc: Live payment-card input streamed over a WebSocket
     crit: hostile
@@ -27,7 +14,7 @@ composite_rules:
     for: [javascript, typescript, html]
     near_bytes: 3000
     all:
-      - id: micro-behaviors/data/parse/payment::browser-payment-card-field-set
+      - id: micro-behaviors/data/parse/payment::payment-card-field-set
       - id: micro-behaviors/ui/window/form-input::document-input-listener
       - id: micro-behaviors/communications/websocket/handler::websocket-javascript-constructor
       - id: micro-behaviors/ui/window/form-input::browser-json-event-value-send-call
@@ -52,7 +39,7 @@ composite_rules:
     near_bytes: 3400
     all:
       - id: credit-card-websocket-stealer
-      - id: micro-behaviors/data/parse/payment::browser-cardholder-billing-field-set
+      - id: micro-behaviors/data/parse/payment::cardholder-billing-field-set
 
   - id: js-obfuscated-encrypted-checkout-pii-exfil
     desc: Obfuscated script encrypts checkout PII for remote upload
@@ -63,7 +50,7 @@ composite_rules:
     scope: file
     all:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::javascript-obfuscator-string-array-runtime
-      - id: micro-behaviors/data/parse/payment::browser-checkout-pii-field-set
+      - id: micro-behaviors/data/parse/payment::checkout-pii-field-set
       - id: objectives/exfiltration/http/encrypted::browser-webcrypto-hybrid-http-exfil
 
   - id: npm-obfuscated-checkout-analytics-skimmer
@@ -77,3 +64,23 @@ composite_rules:
     all:
       - id: js-obfuscated-encrypted-checkout-pii-exfil
       - id: objectives/supply-chain/impersonation/manifest/skeleton::keywords-single-entry
+
+  # Whole-document markup theft to an anonymous drop: documentElement
+  # outerHTML harvests the full page (forms, tokens, embedded state) and a
+  # fetch carries it to a webhook.site UUID endpoint. Archivers and error
+  # reporters POST page content to their own product backends; a UUID-
+  # addressed request bin is never a product backend, and the snapshot plus
+  # the bin plus the transfer are three required roles.
+  # Worked example: zxcvb90-utils-helper 1.0.1 index.js (142-byte root
+  # module fetching outerHTML.slice(0,4000) to webhook.site/<uuid>).
+  - id: whole-page-html-webhook-exfil
+    desc: Whole page HTML sent to anonymous webhook drop
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript]
+    scope: file
+    near_bytes: 3000
+    all:
+      - id: micro-behaviors/data/parse/html::browser-document-html-snapshot-read
+      - id: micro-behaviors/communications/http/url/endpoint::webhook-site-uuid-path
+      - id: micro-behaviors/communications/http/request/client::js-fetch-call

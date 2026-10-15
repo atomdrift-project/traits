@@ -24,6 +24,13 @@ traits:
       type: import
       regex: '^litellm(\.proxy(\.proxy_server)?)?$'
 
+  - id: litellm-root-import
+    desc: Imports the litellm package root
+    for: [python]
+    if:
+      type: import
+      exact: litellm
+
   - id: litellm-params-key
     desc: LiteLLM request params key
     for: [python]
@@ -45,15 +52,36 @@ traits:
       type: text
       regex: '\blitellm_(provider|settings)\b'
 
+  # Upstream lays its own source under litellm/ (or a top-level litellm.py);
+  # a member carrying the pipeline keys from anywhere else is relocated
+  # code, which is what the rebranding composite must require. Suppression
+  # only: never a conviction leg on its own.
+  - id: litellm-module-path
+    desc: Member path places file in LiteLLM distribution
+    crit: notable
+    conf: 0.95
+    for: [python]
+    if:
+      type: path
+      regex: '(?i)(^|[\\/])litellm([\\/]|\\.py$)'
+
   # The honest publication of the same code: the distribution says it is
   # LiteLLM. Referenced from `unless:` so the rebranding composite cannot fire
   # on upstream's own releases.
-  - id: litellm-distribution-name
-    desc: Distribution is named LiteLLM
+  - id: litellm-pkginfo-name
+    desc: Distribution is named LiteLLM in PKG-INFO
     for: [pkginfo]
     if:
       type: value
-      path: Name
+      path: name
+      regex: '(?i)^litellm'
+
+  - id: litellm-pyproject-name
+    desc: pyproject.toml package is named LiteLLM
+    for: [pyproject.toml]
+    if:
+      type: value
+      path: project.name
       regex: '(?i)^litellm'
 
   # The other honest shape: a wrapper that depends on LiteLLM instead of
@@ -63,9 +91,34 @@ traits:
     for: [pkg-info]
     if:
       type: text
-      regex: '(?im)^Requires-Dist:\s*litellm\b'
+      # PEP 508 tails (pins, extras, markers) follow the name, so accept an
+      # explicit terminator instead of end-of-line: `litellm>=1.0`,
+      # `litellm[proxy]`, `litellm; extra == 'x'` all declare it, while
+      # `litellm-foo` and `litellmlib` do not (`\b` alone would accept the
+      # hyphenated prefix, so the class spells the boundary out).
+      regex: '(?im)^Requires-Dist:\s*litellm([\s;,<>=!~\[()\]]|$)'
+
+  # The disclosed redistribution: the summary names LiteLLM as the code's
+  # origin ("AIYou distribution of LiteLLM ..."). The rebranding composites
+  # target republishes that hide their lineage, so a summary that states it
+  # is an `unless:` leg, like the name and dependency legs above.
+  - id: litellm-redistribution-disclosure
+    desc: Summary discloses LiteLLM redistribution
+    for: [pkginfo]
+    if:
+      type: value
+      path: summary
+      regex: '(?i)\b(distribution|fork)\s+of\s+litellm\b'
 
 composite_rules:
+  - id: litellm-distribution-name
+    desc: Distribution is named LiteLLM
+    crit: notable
+    conf: 0.99
+    any:
+      - id: litellm-pkginfo-name
+      - id: litellm-pyproject-name
+
   - id: litellm-codebase
     desc: LiteLLM library source
     crit: notable
@@ -75,3 +128,17 @@ composite_rules:
       - id: litellm-params-key
       - id: litellm-call-id-key
       - id: litellm-provider-key
+
+  # The relocation-sensitive form of the codebase fact: the pipeline keys
+  # in a member outside the module path. Upstream's own members never
+  # satisfy the `unless:`, so the rebranding composite built on this leg
+  # cannot fire on upstream's releases at any criticality.
+  - id: litellm-codebase-outside-module-path
+    desc: LiteLLM codebase outside its module path
+    crit: notable
+    conf: 0.97
+    for: [python]
+    all:
+      - id: litellm-codebase
+    unless:
+      - id: litellm-module-path

@@ -20,25 +20,6 @@ traits:
       type: value
       path: class.class_refs[*]
       exact: java/lang/ClassLoader
-  - id: java-urlclassloader-bytecode
-    desc: JVM URLClassLoader class reference
-    crit: notable
-    conf: 0.94
-    for: [class, java_class]
-    if:
-      type: value
-      path: class.class_refs[*]
-      exact: java/net/URLClassLoader
-  - id: java-defineclass
-    for: [class, java_class]
-    desc: Java defineClass class definition
-    crit: notable
-    conf: 0.88
-    if:
-      type: value
-      path: class.strings[*]
-      exact: defineClass
-
   # Source-form defineClass for JVM source and JSP/servlet implants. Generic
   # JavaScript libraries also use defineClass for CSS and parser definitions.
   - id: java-defineclass-source
@@ -67,14 +48,6 @@ traits:
       type: text
       substr: Class.forName
 
-  - id: java-class-forname-bytecode
-    desc: JVM Class.forName invocation
-    crit: notable
-    for: [class, java_class]
-    if:
-      type: import
-      exact: java/lang/Class.forName
-
   - id: java-classloader
     desc: Java source ClassLoader reference
     crit: notable
@@ -86,43 +59,6 @@ traits:
       - type: basename
         regex: \.sig$
 
-  - id: java-context-classloader-setter
-    desc: Java context ClassLoader setter
-    crit: notable
-    conf: 0.92
-    for: [java, class, java_class]
-    if:
-      type: text
-      substr: setContextClassLoader
-
-  - id: java-set-accessible
-    desc: Java reflection accessibility override
-    crit: notable
-    conf: 0.86
-    for: [java, class]
-    if:
-      type: symbol
-      kind: call
-      exact: setAccessible
-    unless:
-      - id: well-known/lib/runtime/managed/openjdk::jdk-distribution-artifact
-  # Constant-pool form of the call above: some class files reference
-  # setAccessible only in the constant pool without an emitted call record.
-  - id: java-set-accessible-string
-    desc: Java reflection accessibility override string
-    crit: notable
-    conf: 0.84
-    for: [class, java_class]
-    if:
-      type: value
-      path: class.strings[*]
-      substr: setAccessible
-    unless:
-      - id: well-known/lib/runtime/managed/openjdk::jdk-distribution-artifact
-  # A bare `.invoke()` call is not enough to identify Java reflection: Clojure
-  # IFn, callbacks, and ordinary application interfaces use the same method
-  # name. Keep the source-side evidence tied to a declared java.lang.reflect
-  # Method variable; bytecode uses java-method-invoke-bytecode below.
   - id: java-method-invoke
     desc: Java reflection Method variable invoke call
     crit: notable
@@ -131,15 +67,6 @@ traits:
     if:
       type: text
       regex: '(?s)\bMethod\s+\w+\s*(=|;)[\s\S]{0,300}\.\s*invoke\s*\('
-
-  - id: java-loadclass
-    desc: Java loadClass reference
-    crit: notable
-    for: [java, class, java_class]
-    if:
-      type: value
-      path: class.strings[*]
-      exact: loadClass
 
   - id: java-newinstance
     desc: Java newInstance reference
@@ -157,22 +84,6 @@ traits:
       type: import
       exact: java/lang/reflect/Constructor.newInstance
 
-  - id: java-method-invoke-bytecode
-    desc: JVM reflective method invocation
-    crit: notable
-    for: [class, java_class]
-    if:
-      type: import
-      exact: java/lang/reflect/Method.invoke
-
-  - id: java-class-getmethod-bytecode
-    desc: JVM reflective method lookup
-    crit: notable
-    for: [class, java_class]
-    if:
-      type: import
-      exact: java/lang/Class.getMethod
-
   - id: java-getdeclaredconstructor
     desc: Java reflective constructor lookup
     crit: notable
@@ -181,16 +92,6 @@ traits:
     if:
       type: import
       exact: java/lang/Class.getDeclaredConstructor
-
-  - id: java-get-system-classloader
-    desc: Java getSystemClassLoader call
-    crit: notable
-    conf: 0.9
-    for: [class, java_class]
-    if:
-      type: value
-      path: class.strings[*]
-      exact: getSystemClassLoader
 
   - id: java-findclass
     desc: Java class loader findClass reference
@@ -221,24 +122,6 @@ traits:
       exact: java/lang/Class.getConstructor
 
   # Relocated from objectives/anti-static/obfuscation/reflection/class (dalvik-*).
-  - id: jvm-reflect-method-descriptor
-    desc: JVM reflect.Method type descriptor
-    crit: notable
-    for: [class]
-    if:
-      type: text
-      substr: "Ljava/lang/reflect/Method;"
-    unless:
-      - id: well-known/tool/development/build/gradle-wrapper::gradle-wrapper-package-class
-
-  - id: jvm-reflect-field-descriptor
-    desc: JVM reflect.Field type descriptor
-    crit: notable
-    for: [class]
-    if:
-      type: text
-      substr: "Ljava/lang/reflect/Field;"
-
   - id: jvm-reflect-constructor-descriptor
     desc: JVM reflect.Constructor type descriptor
     crit: notable
@@ -255,21 +138,6 @@ traits:
       type: text
       word: "getDeclaredMethod"
 
-  - id: jvm-get-declared-field
-    desc: JVM getDeclaredField reflection
-    crit: notable
-    for: [class]
-    if:
-      type: text
-      word: "getDeclaredField"
-  # A class that defines its own invokedynamic bootstrap taking one extra
-  # String: `(Lookup, String, MethodType, String) -> CallSite`. javac never
-  # emits this shape (string concat carries `[Object`, lambdas carry
-  # MethodType/MethodHandle), so it is either a language runtime linking its
-  # own call sites (JRuby has three) or a string-concealment obfuscator that
-  # resolves every literal through `invokedynamic ()String` with the encrypted
-  # text as the static argument -- every obfuscated class of a JNA HVNC jar
-  # (2026-09) did the latter.
   - id: jvm-custom-string-indy-bootstrap
     desc: Class defines a string-argument indy bootstrap
     crit: notable
@@ -291,22 +159,6 @@ traits:
     unless:
       - id: well-known/lib/runtime/managed/openjdk::jdk-distribution-artifact
 composite_rules:
-  # URLClassLoader plus reflective invocation is a dynamic-loading capability.
-  # Source and bytecode facts are mutually exclusive on a file node, so a
-  # two-of-four requirement pairs the corresponding forms without a mixed hit.
-  # The combination alone does not identify a dropper.
-  - id: java-urlclassloader-reflective-invoke
-    desc: Java URLClassLoader invokes reflectively
-    crit: notable
-    conf: 0.92
-    for: [java, class, java_class]
-    needs: 2
-    any:
-      - id: micro-behaviors/process/interpreter/runtime/jvm::java-urlclassloader-api
-      - id: java-urlclassloader-bytecode
-      - id: java-method-invoke
-      - id: java-method-invoke-bytecode
-
   - id: context-classloader-handoff
     desc: Thread context classloader activation
     crit: notable
@@ -321,15 +173,14 @@ composite_rules:
       - id: metadata/build/bundler/vscode::vscode-language-server-library
     all:
       - id: micro-behaviors/process/thread/lifecycle::java-current-thread-reference
-      - id: java-context-classloader-setter
-      - id: java-urlclassloader-bytecode
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-context-classloader-setter
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-urlclassloader-bytecode
       - id: java-getdeclaredconstructor
-      - id: java-method-invoke-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::java-method-invoke-bytecode
     any:
-      - id: java-defineclass
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-defineclass-name-constant
       - id: micro-behaviors/data/embedded/payload/resource::java-getresourceasstream
-      - id: java-class-forname-bytecode
-
+      - id: micro-behaviors/metaprogramming/reflection::java-class-forname-bytecode
   - id: dynamic-bytecode-loader
     desc: ClassLoader combines defineClass and resource streams
     crit: notable
@@ -346,7 +197,7 @@ composite_rules:
       - id: well-known/lib/development/apache-ant::package-path
     all:
       - id: jvm-classloader-class-ref
-      - id: java-defineclass
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-defineclass-name-constant
       - id: micro-behaviors/data/embedded/payload/resource::java-getresourceasstream
 
   - id: system-classloader-bytearray-streams
@@ -365,24 +216,8 @@ composite_rules:
       - id: well-known/lib/development/apache-ant::package-path
     all:
       - id: dynamic-bytecode-loader
-      - id: java-get-system-classloader
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-get-system-classloader
       - id: micro-behaviors/data/buffer/transfer::bytearrayinputstream-ref
-
-  - id: java-bytecode-reflective-method-invoke
-    desc: JVM resolves and invokes method reflectively
-    crit: notable
-    conf: 0.94
-    platforms: [unix, windows, android]
-    for: [class, java_class, jar, zip, apk]
-    all:
-      - id: java-class-forname-bytecode
-      - id: java-class-getmethod-bytecode
-      - id: java-method-invoke-bytecode
-    unless:
-      - id: well-known/lib/development/google-closure-compiler/
-      - id: well-known/lib/development/args4j
-      - id: well-known/lib/runtime/scripted/mozilla-rhino
-      - id: well-known/lib/format/google-protobuf-java::generated-message-lite-class
 
   - id: java-bytecode-reflective-constructor-invoke
     desc: JVM resolves and invokes constructor reflectively
@@ -391,7 +226,7 @@ composite_rules:
     platforms: [unix, windows, android]
     for: [class, java_class, jar, zip, apk]
     all:
-      - id: java-class-forname-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::java-class-forname-bytecode
       - id: java-class-getconstructor-bytecode
       - id: java-constructor-newinstance-bytecode
     unless:
@@ -406,7 +241,7 @@ composite_rules:
     conf: 0.9
     for: [jsp, java, class, java_class]
     any:
-      - id: java-defineclass
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-defineclass-name-constant
       - id: java-defineclass-source
       - id: java-reflective-defineclass-source
       - id: micro-behaviors/data/embedded/classfile::runtime-define-class
@@ -420,8 +255,8 @@ composite_rules:
     any:
       - id: java-class-forname
       - id: java-classloader
-      - id: java-defineclass
-      - id: java-loadclass
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-defineclass-name-constant
+      - id: micro-behaviors/process/interpreter/runtime/jvm::java-loadclass
       - id: java-newinstance
     unless:
       - id: metadata/package/testing/presence/platform_suites::java-test-directory

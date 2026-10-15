@@ -3,28 +3,32 @@ defaults:
   for: [javascript, typescript, python, shell, text]
   attack: T1552.001
 traits:
-  - id: claude-dir-secret-target
-    desc: Claude secret file target
-    crit: notable
-    conf: 0.88
-    for: [scripts, binaries, source]
-    if:
-      type: text
-      regex: (?i)[/\\]\.claude[/\\].{0,80}secrets?
-  - id: litellm-master-key-state-access
-    desc: Reads LiteLLM master key via getattr
+  - id: litellm-master-key-hash-read
+    desc: Reads LiteLLM master key hash via getattr
     crit: suspicious
     conf: 0.95
     for: [python, scripts, source]
-    # The in-memory extraction shape: getattr on a module/object with the
-    # master-key attribute quoted. The proxy's own code reads the key through
-    # plain attribute access, so this call form is the introspection probe.
     if:
       type: text
-      regex: 'getattr\s*\([^)]{0,60}[''"](litellm_master_key_hash|master_key)[''"]'
+      regex: 'getattr\s*\([^)]{0,60}[''"]litellm_master_key_hash[''"]'
     unless:
       - id: metadata/package/testing/
       - id: well-known/app/ai/gateway/litellm::litellm-package-path
+      - id: "metadata/file/naming::test-directory-component"
+      - id: well-known/app/communication/wechatauto/
+  - id: litellm-proxy-master-key-read
+    desc: Reads LiteLLM proxy master key via getattr
+    crit: suspicious
+    conf: 0.95
+    for: [python, scripts, source]
+    if:
+      type: text
+      regex: 'getattr\s*\(\s*(litellm\w*|ps|proxy\w*)[^)]{0,30}[''"]master_key[''"]'
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/app/ai/gateway/litellm::litellm-package-path
+      - id: "metadata/file/naming::test-directory-component"
+      - id: well-known/app/communication/wechatauto/
   - id: litellm-config-path
     desc: LiteLLM configuration file path
     crit: notable
@@ -36,23 +40,50 @@ traits:
 
   - id: vscode-anthropic-api-key-prompt
     desc: VS Code prompts for Anthropic API key
-    crit: suspicious
+    crit: notable
     conf: 0.97
     for: [javascript, typescript]
     if:
       type: text
       regex: '(?is)(showInputBox|inputbox).{0,220}(Anthropic|Claude).{0,40}api.?key'
-composite_rules:
-  - id: claude-code-config-target
-    desc: Claude Code credential config target
+  - id: cli-readline-anthropic-activation-key-prompt
+    desc: CLI readline prompts for sk-ant key
+    crit: notable
+    conf: 0.96
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?is)(readline|\.question\s*\().{0,260}sk-ant'
+  - id: codex-auth-powershell-command-plumbing
+    desc: Codex provider auth via PowerShell
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?is)model_providers?\.[\s\S]{0,400}\.auth[\s\S]{0,120}command\s*=\s*"powershell"'
+  - id: mcp-skill-fragment-filename
+    desc: Skill installer MCP fragment JSON basename
     crit: notable
     conf: 0.9
-    for: [scripts, binaries, source]
+    for: [javascript, typescript]
+    if:
+      type: text
+      substr: mcp-fragment.json
+composite_rules:
+  - id: litellm-master-key-state-access
+    desc: Reads LiteLLM master key via getattr
+    crit: suspicious
+    conf: 0.95
+    for: [python, scripts, source]
     any:
-      - id: micro-behaviors/os/env/secret-name::claude-code-secret-variable-name
-      - id: micro-behaviors/fs/path/credential::claude-directory-credential-reference
-      - id: micro-behaviors/fs/path/token::claude-directory-token-reference
-      - id: claude-dir-secret-target
+      - id: litellm-master-key-hash-read
+      - id: litellm-proxy-master-key-read
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/app/ai/gateway/litellm::litellm-package-path
+      - id: "metadata/file/naming::test-directory-component"
+      - id: well-known/app/communication/wechatauto/
   - id: claude-channels-token-read
     desc: Claude channels token read
     crit: notable
@@ -77,6 +108,13 @@ composite_rules:
       - id: well-known/tool/development/vscode-extension/salesforcedx-einstein-gpt/
       - id: well-known/app/ai/agent-runtime/parall/
       - id: well-known/app/ai/coding-agent/ozaiya/
+      - id: well-known/app/ai/coding-agent/pitroom/
+      - id: well-known/app/ai/coding-agent/nextspark/
+      - id: well-known/app/ai/coding-agent/loa/
+      - id: well-known/app/ai/coding-agent/cline/
+      - id: well-known/app/ai/agent-runtime/moda/
+      - id: well-known/app/ai/agent-runtime/pan-wizard/
+      - id: well-known/app/ai/agent-runtime/vibeflow/
   - id: ai-coding-tool-secret-harvest
     desc: AI coding tool secret harvesting
     crit: hostile
@@ -84,26 +122,29 @@ composite_rules:
     for: [javascript, typescript]
     all:
       - id: micro-behaviors/fs/path/agent-config/directory::ai-coding-tool-config-directory-cluster
-      - id: micro-behaviors/fs/directory/traverse::node-recursive-dirent-walk
+      - id: micro-behaviors/fs/directory/traverse::node-dirent-directory-walk
     any:
-      - id: micro-behaviors/fs/enumerate/directory::fs-readdir
+      - id: micro-behaviors/fs/directory/readdir::node-readdir-repeated
       - id: objectives/collection/file-targeting/filter::credential-files
-      - id: micro-behaviors/fs/path/private-key::pem-file-extension-reference
-      - id: metadata/file/extension/identity::key-extension
+      - id: micro-behaviors/fs/path/certificate::pem-file-extension-reference
+    # Each any-leg must establish a distinct collection role (repeated reads,
+    # two kinds of credential files, a key reference). A bare `.key` extension
+    # string is baseline evidence (conf 0.5) that exclusion lists, archive
+    # validators, and docs all contain; it must not satisfy the hostile
+    # threshold on its own pairing.
     needs: 2
     unless:
       - id: well-known/tool/detection/sast/
       - id: micro-behaviors/communications/mcp/
       - id: known-ai-assistant-workspace-index
       - id: well-known/tool/development/vcs/github-desktop/
-      - id: well-known/app/ai/coding-agent/cline/
       - id: well-known/app/development/cloudflare/
       # A sync/watch CLI whose capture policy names AI-tool config dirs AND
       # secret files next to junk markers is enumerating what it will NOT
       # upload (code-maverick ignores .claude/.cursor/.env/*.pem/*.key at every
       # eligibility and watcher path). The harvest verdict requires the
       # dirs/files to be read or sent, not listed as exclusions.
-      - id: objectives/credential-access/dev-tools/ai::capture-policy-secret-exclusion-context
+      - id: micro-behaviors/fs/watch::capture-policy-ignores-secret-files
       # An MCP server installer that registers its own server with the user's
       # AI clients (fern-dev writes its server URL into .cursor/mcp.json,
       # .claude.json, .codex/config.toml via the mcpServers entry). Naming
@@ -123,13 +164,13 @@ composite_rules:
       - id: micro-behaviors/fs/read/file/full::file-content-read-operation
     any:
       - id: micro-behaviors/fs/path/password-store::cline-secrets-json-store
-      - id: micro-behaviors/fs/path/password-store::continue-config-yaml-store
     unless:
       - id: well-known/tool/detection/
       - id: well-known/app/ai/coding-agent/cline/
       - id: metadata/package/testing/
       - id: objectives/credential-access/dev-tools/ai::mcp-server-install-context
 
+      - id: "metadata/file/naming::test-directory-component"
   - id: multi-ai-assistant-credential-store-harvest
     desc: Harvests multiple AI assistant credential stores
     crit: hostile
@@ -145,20 +186,20 @@ composite_rules:
       - id: metadata/package/testing/
       - id: objectives/credential-access/dev-tools/ai::mcp-server-install-context
 
-  - id: capture-policy-secret-exclusion-context
-    desc: Watcher capture policy skips secrets and AI tool dirs
-    crit: exception
-    for: [javascript, typescript]
-    all:
-      - id: micro-behaviors/fs/watch::capture-policy-ignores-secret-files
-      - id: micro-behaviors/fs/path/agent-config/directory::ai-coding-tool-config-directory-cluster
+      - id: "metadata/file/naming::test-directory-component"
+
+  # An MCP server installer that registers its own server with the user's
+  # AI clients (e.g. writing server entries into .cursor/mcp.json,
+  # .claude.json, .codex/config.toml, .gemini/settings.json via mcpServers).
   - id: mcp-server-install-context
     desc: MCP server installer registers with AI clients
     crit: exception
     for: [javascript, typescript, python]
     all:
-      - id: micro-behaviors/communications/mcp::mcp-client-config-filename
       - id: micro-behaviors/communications/mcp::mcp-client-config-key--mcpservers
+    any:
+      - id: micro-behaviors/communications/mcp::mcp-client-config-filename
+      - id: mcp-skill-fragment-filename
   - id: claude-leveldb-secret-harvest
     desc: Claude LevelDB secret harvesting
     crit: hostile
@@ -170,7 +211,10 @@ composite_rules:
     any:
       - id: micro-behaviors/os/env/ai-provider::openai-api-key-name-reference
       - id: micro-behaviors/os/env/ai-provider::anthropic-api-key-name-reference
-      - id: objectives/credential-access/dev-tools/ai::claude-code-config-target
+      - id: micro-behaviors/os/env/secret-name::claude-code-secret-variable-name
+      - id: micro-behaviors/fs/path/credential::claude-directory-credential-reference
+      - id: micro-behaviors/fs/path/token::claude-directory-token-reference
+      - id: micro-behaviors/fs/path/credential::claude-secret-path-reference
       - id: objectives/credential-access/env/secrets/api-key::api-key-generic
 
   - id: litellm-in-memory-master-key-harvest
@@ -186,6 +230,7 @@ composite_rules:
       - id: metadata/package/testing/
       - id: well-known/app/ai/gateway/litellm::litellm-package-path
 
+      - id: "metadata/file/naming::test-directory-component"
   - id: vscode-impersonating-anthropic-key-client
     desc: Impersonating extension collects provider key
     crit: hostile
@@ -196,3 +241,21 @@ composite_rules:
       - id: metadata/package/repository::vsix-publisher-repo-owner-mismatch
       - id: vscode-anthropic-api-key-prompt
       - id: micro-behaviors/communications/http/authorization-header::x-api-key-header-map-entry
+    unless:
+      - id: well-known/tool/development/vscode-extension/dbdeck::package-identity
+  - id: codex-shell-auth-credential-capture
+    desc: Prompts for cloud API key and pipes it through Codex shell auth
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript, package.json, npm, tar, zip]
+    scope: archive
+    all:
+      - id: cli-readline-anthropic-activation-key-prompt
+      - id: codex-auth-powershell-command-plumbing
+      - id: micro-behaviors/fs/path/agent-config/directory::codex-config-directory
+    any:
+      - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
+      - id: micro-behaviors/fs/write/file/full::js-file-write
+    unless:
+      - id: well-known/tool/detection/
+      - id: well-known/tool/development/agent/openai-codex/

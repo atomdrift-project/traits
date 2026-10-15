@@ -25,14 +25,6 @@ traits:
     type: text
     regex: '(?i)(locate|find).?shell_?code'
   # memcpy as raw match for source code (symbol detection misses C source)
-- id: memcpy-raw
-  desc: Shellcode memory copy in source
-  crit: notable
-  conf: 0.9
-  for: [c, cpp]
-  if:
-    type: text
-    regex: '(?is)\bshellcode\b.{0,120}\bmemcpy\b|\bPAGE_EXECUTE_READWRITE\b[\s\S]{0,120}\bmemcpy\b'
 - id: powershell-shellcode-bin-path
   desc: PowerShell shellcode bin path
   crit: notable
@@ -49,14 +41,6 @@ traits:
   if:
     type: text
     substr: "[Byte[]]"
-- id: rwx-memory-api-source
-  desc: RWX memory API call in source
-  crit: notable
-  conf: 0.92
-  for: [c, cpp]
-  if:
-    type: text
-    regex: \b(VirtualAlloc(Ex)?|VirtualProtect(Ex)?)\s*\([\s\S]{0,200}\bPAGE_EXECUTE_READWRITE\b
 - id: go-syscall-proc-call
   desc: Go PE Proc.Call symbol
   crit: notable
@@ -68,14 +52,6 @@ traits:
     # runtime's name table is not treated as a call site.
     type: symbol
     exact: syscall.(*Proc).Call
-- id: native-shellcode-word
-  desc: Native shellcode reference
-  crit: notable
-  conf: 0.84
-  for: [pe, dll]
-  if:
-    type: text
-    word: shellcode
 - id: go-sonic-loader-marker
   desc: bytedance sonic Go loader marker
   crit: notable
@@ -175,19 +151,6 @@ composite_rules:
   all:
   - id: powershell-shellcode-bin-path
   - id: powershell-shellcode-bytearray-output
-- id: rwx-allocation-source-or-binary
-  desc: Executable allocation indicator in source or binary
-  crit: component
-  conf: 0.95
-  for: [c, cpp, pe, dll]
-  any:
-  - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
-  - id: rwx-memory-api-source
-  unless:
-  - id: metadata/lang/compiler/native::python-msvc-extension
-  - id: well-known/lib/runtime/
-# Same-process binary code staging: require byte-local evidence. Import-table
-# memcpy and a loader stub can be thousands of bytes apart and unrelated.
 - id: rwx-memcpy-injection
   desc: RWX allocation with code copy
   crit: suspicious
@@ -195,10 +158,10 @@ composite_rules:
   for: [pe, dll]
   near_bytes: 1024
   all:
-  - id: rwx-allocation-source-or-binary
+  - id: micro-behaviors/mem/protect/modify::executable-memory-api-indicator
   any:
   - id: "micro-behaviors/mem/copy::memcpy"
-  - id: memcpy-raw
+  - id: micro-behaviors/mem/copy::source-memcpy-shellcode-or-rwx-context
   unless:
   - id: well-known/lib/native/memory-module::memory-module-source
   - id: metadata/lang/upstream::mingw-pseudo-reloc-source
@@ -211,38 +174,19 @@ composite_rules:
     - id: metadata/signed/leaf::microsoft-corporation
 # Source retains line-local matching because byte offsets are not meaningful
 # after parser normalization.
-- id: rwx-memcpy-staging-source
-  desc: Source allocates RWX memory and copies code into it
-  crit: suspicious
-  conf: 0.85
-  for: [c, cpp]
-  near_lines: 20
-  all:
-  - id: rwx-allocation-source-or-binary
-  any:
-  - id: "micro-behaviors/mem/copy::memcpy"
-  - id: memcpy-raw
-  unless:
-  - id: well-known/lib/native/memory-module::memory-module-source
-  - id: metadata/lang/upstream::mingw-pseudo-reloc-source
-  - id: metadata/lang/compiler/native::mingw-pseudo-reloc-runtime
-  - id: metadata/lang/upstream::reactos-crt-pseudo-reloc
-  - id: well-known/lib/platform/minhook/
-  - id: metadata/package/testing/presence/harness::c-source-test-directory
 - id: go-local-shellcode-loader
   desc: Go local shellcode loader with executable-memory evidence
   crit: suspicious
   conf: 0.92
   for: [pe]
   all:
-  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   - id: micro-behaviors/process/create/thread::create-thread
   - id: go-syscall-proc-call
   any:
   - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite-push
   - id: micro-behaviors/mem/alloc/executable::virtualalloc-rwx-commit-x86
   - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite-arg-x64
-  - id: native-shellcode-word
   - id: native-shellcode-function-marker
   - id: native-shellcode-execution-marker
   unless:
@@ -262,7 +206,6 @@ composite_rules:
   # A decoder symbol is present in ordinary Go programs. Require either an
   # encoded data region or an explicit shellcode marker as the payload leg.
   - id: metadata/file/encoded::pe-dense-data-base64-like-blobs
-  - id: native-shellcode-word
   - id: native-shellcode-function-marker
   - id: native-shellcode-execution-marker
   unless:
@@ -299,7 +242,7 @@ composite_rules:
   all:
     - id: native-shellcode-function-marker
     - id: micro-behaviors/fs/memory/mmap::win32-file-mapping
-    - id: micro-behaviors/mem/decompress/native::rtl-decompress-buffer
+    - id: micro-behaviors/data/codec::rtl-decompress-buffer
 
 - id: native-shellcode-loader-status
   desc: Native shellcode loader status cluster
@@ -322,7 +265,7 @@ composite_rules:
     - id: native-encrypted-shellcode-execution-marker
     - id: native-data-file-target-marker
     - id: native-data-file-read-marker
-    - id: micro-behaviors/mem/decompress/native::rtl-decompress-buffer
+    - id: micro-behaviors/data/codec::rtl-decompress-buffer
 - id: w-xor-x-injection
   desc: W^X memory protection transition (RW -> RX)
   crit: notable
@@ -336,6 +279,7 @@ composite_rules:
   downgrade:
     any:
     - id: metadata/binary/layout/
+    - id: metadata/file/entropy::overall-entropy-outside-middle-band
 # The "is a thread-start / page-protection API present" unions used below are
 # neutral capability groupings — a plain CreateThread or VirtualProtect import
 # satisfies either one, which every signed native addon and runtime DLL has.
@@ -350,7 +294,7 @@ composite_rules:
   arch: [x86-64]
   all:
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
-  - id: micro-behaviors/mem/protect/modify::rw-to-rx-protection-with-thread-start
+  - id: micro-behaviors/mem/protect/modify::rw-rx-constants-protection-thread-apis
   - id: micro-behaviors/communications/http/url/external-ip::url-external-ip-binary
 - id: concealed-shellcode-loader-x64
   desc: Concealed shellcode loader (PEB walk + W^X + minimal IAT)
@@ -429,7 +373,7 @@ composite_rules:
   - id: metadata/binary/installer/family/
   - id: well-known/tool/reverse-engineering/
 - id: executable-heap-shellcode-loader
-  desc: Concealed loader using HeapCreate(EXECUTE) to bypass VirtualAlloc detection
+  desc: PEB access with HeapCreate and executable-heap option constant
   crit: hostile
   conf: 0.96
   for: [pe, dll]
@@ -437,7 +381,6 @@ composite_rules:
   size_max: 5242880
   all:
   - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
-  - id: micro-behaviors/mem/alloc/heap::heap-create
   - id: micro-behaviors/mem/alloc/heap::heap-create-enable-execute-flag
   unless:
   - id: metadata/binary/framework/
@@ -475,7 +418,7 @@ composite_rules:
   arch: [x86-64]
   attack: T1027,T1055
   all:
-  - id: micro-behaviors/mem/protect/modify::rw-to-rx-protection-with-thread-start
+  - id: micro-behaviors/mem/protect/modify::rw-rx-constants-protection-thread-apis
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   - id: metadata/binary/section/entropy::high-entropy-rdata-section
   - id: micro-behaviors/crypto/symmetric/aes/runtime-library::rust-aes-gcm-crate-path
@@ -494,7 +437,7 @@ composite_rules:
   all:
   - id: micro-behaviors/os/api-resolution/manual::x64-pe-export-directory-walk
   - id: micro-behaviors/crypto/symmetric/xxtea::x64-xxtea-decrypt-round
-  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   - id: micro-behaviors/process/create/thread::create-thread
 
 - id: constant-xor-wx-thread-loader-x64
@@ -517,7 +460,7 @@ composite_rules:
 # one site, they are a hand-built shellcode loader (instapp padded dropper).
 - id: bitset-rwx-copy-jump-loader-x64
   desc: Disguised RWX alloc, byte copy, register jump
-  crit: hostile
+  crit: suspicious
   conf: 0.97
   attack: T1055,T1620,T1027
   for: [pe, dll]
@@ -528,3 +471,18 @@ composite_rules:
   - id: micro-behaviors/process/inject/runtime/call::byte-copy-loop-register-jump-x64
   unless:
   - id: metadata/signed/platform/
+
+# Obfuscated Lua allocates executable memory (PAGE_EXECUTE_READWRITE) for in-process execution.
+- id: lua-rwx-memory-shellcode-loader
+  desc: Obfuscated Lua allocates executable memory for shellcode execution
+  crit: hostile
+  conf: 0.99
+  attack: T1055,T1027
+  for: [lua]
+  all:
+  - id: micro-behaviors/mem/alloc/executable::lua-virtualalloc-rwx-alias-call
+  any:
+  - id: metadata/lang/encoding::lua-many-decimal-escaped-strings
+  - id: objectives/anti-static/obfuscation/obfuscator/lua-prometheus::lua-if-vm-branches
+  - id: micro-behaviors/data/string/concat::lua-double-indexed-concat-loop
+  - id: micro-behaviors/data/control-flow/return::lua-return-vararg-wrapper

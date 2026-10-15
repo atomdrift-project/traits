@@ -119,14 +119,13 @@ traits:
       # sibling provisioning (group checks, usermod into the sudo group),
       # which runs past 200 bytes while still creating and granting the same
       # fresh account in one step.
-      - type: text
-        regex: '(?s)(\b(useradd|adduser)\b.{0,400}|#cloud-config.{0,400})NOPASSWD'
+      - id: micro-behaviors/fs/config/sudo::nopasswd-after-account-creation
       # Some minimal CI images create their throwaway build account by writing
       # passwd/group records directly before granting that new account sudo.
       - type: text
         regex: '(?s)echo.{0,120}>>\s*/etc/passwd.{0,800}NOPASSWD'
       - id: metadata/package/testing/harness/runtime/
-      - id: objectives/privilege-escalation/elevation-control/sudo::managed-service-account-sudo
+      - id: managed-service-account-sudo
       - id: well-known/lib/ai/tensorflow::tensorflow-user-wrapper
     # A commented-out NOPASSWD line is documentation, not a grant -- same
     # required-absence shape as the sibling rule's `not:` below.
@@ -188,6 +187,32 @@ traits:
     if:
       type: text
       regex: '\binstall\b[^\n]{0,160}/etc/sudoers\.d/'
+
+  # Named form of the provisioning shape the sibling sudo-nopasswd carves out
+  # inline: the script creates an account and grants THAT fresh account
+  # passwordless sudo in the same breath. Cloud-init, Vagrant provisioners,
+  # Dockerfiles and package-build boxes all do this, because makepkg,
+  # rpmbuild and pbuilder refuse to run as root. A grant for an account the
+  # file itself creates is image/box provisioning; granting NOPASSWD to an
+  # account that already exists is the escalation shape and stays uncovered.
+  # Deliberately broad `for:` (still under the text cap): sudo-nopasswd
+  # references it from unless:, and its matcher is language-independent text.
+  - id: nopasswd-after-account-creation
+    desc: Passwordless sudo grant beside account creation
+    crit: notable
+    conf: 0.9
+    for: [scripts, source, elf, dockerfile]
+    if:
+      type: text
+      regex: '(?s)(\b(useradd|adduser)\b.{0,800}|#cloud-config.{0,400})NOPASSWD'
+  - id: nopasswd-before-account-creation
+    desc: NOPASSWD sudoers line near useradd in source
+    crit: notable
+    conf: 0.9
+    for: [scripts, source, python, dockerfile]
+    if:
+      type: text
+      regex: '(?s)\bNOPASSWD\b.{0,800}\b(useradd|adduser)\b'
   - id: python-writes-unrestricted-sudoers-rule
     desc: Python writes unrestricted sudoers rule
     crit: suspicious
@@ -200,8 +225,10 @@ traits:
     unless:
       - id: well-known/app/system/samba::samba-source-tree
       - id: well-known/lib/ai/ibm-watsonx-orchestrate::ibm-watsonx-orchestrate-context
+      - id: nopasswd-after-account-creation
+      - id: nopasswd-before-account-creation
       - type: text
-        regex: '(?s)\b(useradd|adduser)\b.{0,400}NOPASSWD'
+        regex: '(?s)\b(useradd|adduser)\b.{0,800}NOPASSWD'
     attack: T1548.004
   - id: visudo-validate
     desc: visudo validates sudoers configuration
@@ -264,3 +291,27 @@ composite_rules:
       - id: builder-system-groupadd
       - id: builder-system-useradd
       - id: cmake-ninja-build-script
+
+  - id: managed-service-account-sudo
+    desc: Managed service account sudo provisioning
+    crit: exception
+    conf: 0.99
+    all:
+      - id: micro-behaviors/fs/path/config/privesc::etc-sudoers-d
+      - id: micro-behaviors/fs/config/sudo::nopasswd-all-directive
+    any:
+      - id: well-known/app/infrastructure/gardener::gardener-user-sudoers-marker
+      - id: well-known/app/infrastructure/jenkins::service-home-path
+
+  # Passwordless grants are used by provisioners as well as attackers.
+  # Require the directive beside its destination; intent belongs to consumers.
+  - id: installs-unrestricted-sudoers-dropin
+    desc: Writes unrestricted passwordless sudo drop-in
+    crit: notable
+    conf: 0.97
+    for: [scripts, source]
+    near_lines: 12
+    all:
+      - id: micro-behaviors/fs/path/config/privesc::etc-sudoers-d
+      - id: nopasswd-all-directive
+      - id: writes-sudoers-dropin

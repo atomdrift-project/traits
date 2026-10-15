@@ -9,16 +9,17 @@ defaults:
 
 traits:
   - id: tls-ssl-command-dispatch
-    desc: OpenSSL input is dispatched to command execution
+    desc: OpenSSL read near a command execution reference
     crit: suspicious
     conf: 0.95
-    for: [shell, python, javascript, c, cpp, elf, macho, pe]
+    for: [shell, python, javascript, elf, macho, pe]
     if:
       type: text
       regex: '(?is)\bSSL_read\b.{0,500}(\b(popen|system|exec[a-z]{0,3})\s*\(|/bin/sh\b)'
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
   - id: tls-mbedtls-command-dispatch
     desc: Mbed TLS input is dispatched to commands
     crit: suspicious
@@ -29,6 +30,7 @@ traits:
       regex: '(?is)\bmbedtls_ssl_read\b.{0,500}(\b(popen|system|exec[a-z]{0,3})\s*\(|/bin/sh\b)'
     unless:
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
   - id: tls-script-command-dispatch
     desc: Script TLS input is dispatched to commands
     crit: suspicious
@@ -37,24 +39,6 @@ traits:
     if:
       type: text
       regex: '(?is)tls\.(read|recv).{0,500}(subprocess|child_process)'
-  - id: socket-command-dispatch
-    desc: Socket receive precedes shell execution
-    attack: T1059.004
-    crit: suspicious
-    conf: 0.95
-    for: [shell, python, javascript, c, cpp, elf, macho, pe]
-    if:
-      type: text
-      # `[\s(=s]\.?system\(` keeps os.system() and a bare C/Perl system() but
-      # not a method on another object: `platform.system()` is OS detection.
-      regex: '(?s)(socket|accept).{0,700}recv\(.{0,400}(shell=True|bin/sh|[\s(=s]\.?system\()'
-    unless:
-      # pwntools ships syscall tables and shellcraft templates as reference data.
-      - id: well-known/tool/offensive/pwntools::pwntools-distribution
-      # ldap3 imports platform.system and mentions recv() in a timeout comment.
-      - type: path
-        regex: ldap3/strategy/base\.py
-
 composite_rules:
   - id: tls-command-dispatch
     desc: TLS input is dispatched to command execution
@@ -62,6 +46,7 @@ composite_rules:
     conf: 0.96
     any:
       - id: tls-ssl-command-dispatch
+      - id: objectives/command-and-control/remote-command/dispatch::openssl-buffer-shell-dispatch
       - id: tls-mbedtls-command-dispatch
       - id: tls-script-command-dispatch
 
@@ -76,7 +61,7 @@ composite_rules:
       - id: micro-behaviors/communications/socket/ssl::tls-server-certificate-key-pair
       - id: micro-behaviors/communications/socket/ssl::tls-server-handshake
     any:
-      - id: micro-behaviors/communications/socket/listen::accepting-server-api-surface
+      - id: micro-behaviors/communications/socket/accept::accepting-server-api-surface
       - id: micro-behaviors/communications/socket/listen::server-socket-source
       - id: micro-behaviors/communications/socket/listen::node-tls-create-server
 
@@ -90,6 +75,11 @@ composite_rules:
       - id: micro-behaviors/communications/socket/ssl::tls-server-certificate-key-pair
     any:
       - id: micro-behaviors/communications/socket/listen
+      - id: micro-behaviors/communications/socket/accept::accept-sym
+      - id: micro-behaviors/communications/socket/accept::accept64-sym
+      - id: micro-behaviors/communications/socket/accept::accept-func
+      - id: micro-behaviors/communications/socket/accept::accepting-server-api-surface
+      - id: micro-behaviors/communications/socket/accept::accept-call-source
 
   - id: tls-command-listener-device-report
     for: [elf, macho, pe, c]
@@ -108,20 +98,7 @@ composite_rules:
     attack: T1059.004
     near_bytes: 1200
     all:
-      - id: socket-command-dispatch
+      - id: micro-behaviors/process/create/shell/command-mode::socket-receive-shell-cooccurrence
       - id: micro-behaviors/communications/socket/dial::python-dial
       - id: micro-behaviors/process/create/shell-subprocess::shell-true
       - id: micro-behaviors/process/daemonize/detach::python-fork-new-session
-
-  - id: tls-reverse-command-shell
-    for: [c, cpp, elf, macho, pe]
-    desc: Outbound TLS channel executes remote shell commands
-    crit: hostile
-    conf: 0.98
-    all:
-      - id: tls-command-dispatch
-    any:
-      - id: micro-behaviors/communications/socket/ssl::openssl-ssl-connect-function
-      - id: micro-behaviors/communications/socket/connect::connect-symbol
-      - id: micro-behaviors/communications/socket/connect::connect-import
-    near_lines: 100

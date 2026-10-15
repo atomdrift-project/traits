@@ -5,24 +5,6 @@ defaults:
   for:
   - package.json
 composite_rules:
-- id: npm-install-hook-oob-callback
-  desc: npm install hook contacts an OOB callback service
-  crit: hostile
-  conf: 0.98
-  attack: T1195.002,T1041
-  mbc: E1041
-  for: [npm, tar, package.json, javascript]
-  scope: archive
-  all:
-  - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
-  - id: micro-behaviors/communications/url/host::oob-endpoint-any
-  any:
-  - id: micro-behaviors/communications/http/request/client::https-get
-  - id: micro-behaviors/communications/http/request/client::http-get-dup
-  needs: 1
-  unless:
-  - id: metadata/package/testing/presence/harness/
-
 - id: npm-install-hook-id-oob-query
   desc: npm install hook runs id and reports to an OOB service
   crit: hostile
@@ -35,10 +17,26 @@ composite_rules:
   - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
   - id: micro-behaviors/process/user/query::node-shell-id-command
   - id: micro-behaviors/process/create/shell/bridge::execSync-call
-  - id: micro-behaviors/communications/url/host::oob-endpoint-any
-  - id: micro-behaviors/communications/http/request/client::https-get
+  - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
+  - id: micro-behaviors/communications/http/get::node-https-get-reference
   unless:
   - id: metadata/package/testing/presence/harness/
+  - id: "metadata/file/naming::test-directory-component"
+- id: npm-postinstall-oob-https-beacon
+  desc: npm postinstall beacons to OOB endpoint over HTTPS
+  crit: hostile
+  conf: 0.98
+  attack: T1195.002,T1041
+  mbc: E1041
+  for: [npm, tar, package.json, javascript, typescript]
+  scope: archive
+  all:
+  - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+  - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
+  - id: micro-behaviors/communications/http/request/client::https-request
+  unless:
+  - id: metadata/package/testing/presence/harness/
+  - id: "metadata/file/naming::test-directory-component"
 - id: depconf-beacon-package
   desc: Dependency confusion beacon with HTTPS callback
   crit: suspicious
@@ -47,40 +45,40 @@ composite_rules:
   for:
   - javascript
   all:
-  - id: micro-behaviors/communications/http/request/client::https-get
+  - id: micro-behaviors/communications/http/get::node-https-get-reference
   - id: metadata/file/size::javascript-small-file-5k
   any:
   - id: micro-behaviors/data/control-flow/module-exec::module-empty-export
   - id: metadata/package/dependencies/manifest/presence::npm-no-deps-at-all
   - id: objectives/supply-chain/impersonation/manifest/attack-label::placeholder-poc-or-squat-claim
   needs: 2
-- id: npm-preinstall-oob-host-profile
-  desc: npm preinstall sidecar exfiltrates host profile to OOB endpoint
+# Import-time twin of depconf-beacon-package for the standard two-file
+# placeholder shape (beacon in index.js, metadata in package.json): the
+# payload runs when the module loads, carries the machine owner, and
+# swallows every error so a failed callback never breaks the install.
+- id: depconf-import-time-identity-beacon
+  desc: Dependency-confusion placeholder beacons host identity at import
   crit: hostile
-  conf: 0.99
-  attack: "T1195.002, T1041, T1082"
+  conf: 0.97
+  attack: T1195.002,T1033,T1041
   mbc: E1041
-  for: [npm, package.json, javascript]
+  for: [npm, tar, package.json, javascript]
   scope: archive
   all:
-  - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
-  - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
-  - id: objectives/exfiltration/oob/oast::javascript-oob-hostname-http-proximity
-  - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
+    - id: micro-behaviors/communications/http/get::node-https-get-reference
+    - id: micro-behaviors/data/control-flow/module-exec::module-level-imported-method-call
+    - id: micro-behaviors/os/env/user-info::node-user-identity-env-reference
+    - id: micro-behaviors/data/control-flow/error-handling::empty-named-catch-text
+  # Corroboration only (see bare-import-beacon.yaml): attacker-chosen
+  # version and wording never gate the verdict.
   any:
-  - id: micro-behaviors/communications/http/request/configuration::node-http-request-configured-variable
-  - id: micro-behaviors/communications/http/ip-discovery::ipify-api
-  - id: micro-behaviors/communications/dns/resolver::node-dns-lookup
-  - id: micro-behaviors/os/env/cicd/
+    - id: metadata/package/versioning/scheme::npm-multidigit-major-starting-nine
+    - id: objectives/supply-chain/impersonation/manifest/attack-label::placeholder-poc-or-squat-claim
+    - id: metadata/package/description/function::description-simple
   needs: 1
   unless:
-  - id: micro-behaviors/fs/path/config/accounts::unix-account-database-path-reference
-  # Identical evidence to
-  # objectives/supply-chain/recon-exfil/registry/probe::dependency-confusion-preinstall-oob-callback,
-  # which owns this detection (it defines dependency-confusion-description
-  # locally) -- deleted here rather than merged, since both fired the same
-  # finding twice.
-
+    - id: metadata/package/testing/presence/harness/
+    - id: metadata/file/naming::test-directory-component
 - id: depconf-preinstall-base64-host-profile
   desc: Dependency-confusion npm preinstall exfiltrates base64 host profile
   crit: hostile
@@ -90,27 +88,13 @@ composite_rules:
   for: [npm, tgz, package.json, javascript]
   scope: archive
   all:
-  - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
+  - id: metadata/package/scripts/lifecycle::preinstall-runs-node-local-script
   - id: objectives/supply-chain/recon-exfil/oast/secret::node-json-base64-profile-payload
   - id: micro-behaviors/communications/http/request/get::node-http-client-get
   - id: metadata/package/description/disclosure::desc-dependency-confusion
   any:
-  - id: metadata/package/versioning/sentinel::npm-version-inflated-major
+  - id: "metadata/package/versioning/scheme::npm-multidigit-major-starting-nine"
   - id: objectives/supply-chain/install-hook/package/manifest::fake-security-research
-- id: npm-postinstall-oob-host-profile-beacon
-  desc: npm postinstall OOB callback carries host profile
-  crit: hostile
-  conf: 0.99
-  attack: T1195.002,T1041,T1082
-  mbc: E1041
-  for: [npm, tar, package.json, javascript]
-  scope: archive
-  all:
-  - id: metadata/package/scripts/lifecycle::filtered-postinstall-hook
-  - id: micro-behaviors/communications/url/host::oob-endpoint-any
-  - id: objectives/exfiltration/oob/oast::javascript-oob-hostname-http-proximity
-  unless:
-  - id: metadata/package/testing/presence/harness/
 - id: npm-disclosed-depconf-postinstall-beacon
   desc: Disclosed dependency-confusion install OOB beacon
   crit: hostile
@@ -121,18 +105,60 @@ composite_rules:
   scope: archive
   all:
   - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
-  - id: micro-behaviors/communications/ip/literal::http-ip-url
   - id: micro-behaviors/communications/http/request/verb::post-method-text
   - id: micro-behaviors/data/serialize/json::json-stringify-call
   - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
-  - id: micro-behaviors/os/sysinfo/hostname::node-inline-os-hostname-call
+  - id: micro-behaviors/os/sysinfo/hostname::os-hostname-call
   any:
+  - id: micro-behaviors/communications/ip/literal::http-ip-url
+  - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
   - id: metadata/package/description/disclosure::desc-dependency-confusion
   - id: metadata/package/description/disclosure::readme-authorized-dependency-confusion-test
-  needs: 1
+  needs: 2
   unless:
   - id: metadata/package/testing/presence/harness/
   # README-only "authorized depconf test" prose with a generic shim description
   # is a common typosquat cover; keep the install IP beacon composites instead.
   - id: metadata/package/description/disclosure::desc-compatibility-shim-placeholder
   - id: metadata/package/description/disclosure::npm-archive-compatibility-shim-description
+  - id: "metadata/file/naming::test-directory-component"
+- id: npm-postinstall-oob-dns-callback
+  desc: npm postinstall performs DNS lookup to an OOB callback
+  crit: hostile
+  conf: 0.98
+  attack: T1195.002,T1071.004
+  mbc: E1041
+  for: [npm, tar, package.json, javascript, typescript]
+  scope: archive
+  all:
+  - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+  - id: micro-behaviors/communications/dns/resolver::node-dns-lookup-with-oob-host-text
+  unless:
+  - id: metadata/package/testing/presence/harness/
+  - id: metadata/file/naming::test-directory-component
+  # A dependency-confusion ping needs no install hook: the entry module fires
+  # an HTTPS GET the moment it is required, and the empty catch hides the
+  # failure when the collector is unreachable. The top-level call proves the
+  # beacon runs at load rather than behind an exported API the victim must
+  # invoke. The required empty-response leg is what separates this from an
+  # ordinary updater whose caller reads the body (redirect handling, status
+  # checks); without it every release-fetch with defensive catches convicts.
+- id: npm-load-time-https-beacon-silent-errors
+  desc: npm load-time HTTPS beacon swallows errors
+  crit: hostile
+  conf: 0.97
+  attack: T1195.002,T1041
+  mbc: E1041
+  for: [npm, tar, package.json, javascript, typescript]
+  scope: archive
+  all:
+  - id: micro-behaviors/communications/http/get::node-https-get-reference
+  - id: micro-behaviors/data/control-flow/module-exec::module-level-imported-method-call
+  - id: micro-behaviors/data/control-flow/error-handling::empty-catch-block
+  any:
+  - id: micro-behaviors/communications/http/get::node-http-get-empty-arrow-callback
+  - id: micro-behaviors/communications/http/get::node-http-get-empty-function-callback
+  needs: 1
+  unless:
+  - id: metadata/package/testing/presence/harness/
+  - id: metadata/file/naming::test-directory-component

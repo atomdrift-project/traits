@@ -51,6 +51,7 @@ traits:
       # `home` and really is a home directory; it is just not the user's.
       # A wipe that only exists inside `#[cfg(test)]` never runs on anyone.
       - id: metadata/package/testing/harness/unit::rust-test
+      - id: metadata/package/testing/presence/harness::rust-tests-directory-path
 
   # `os.RemoveAll(os.UserHomeDir())` and the two-step form that binds the
   # result first (`home, _ := os.UserHomeDir(); os.RemoveAll(home)`).
@@ -74,6 +75,11 @@ traits:
       # Joined subdirectory or temp prefix (not bare home root):
       - type: text
         regex: '\bhome\s*:?=\s*filepath\.Join'
+      # Ephemeral/isolated home directory created in sandbox/tempdir:
+      - type: text
+        regex: 'Isolated\w*Home'
+
+
 
   # `shutil.rmtree(Path.home())` / `shutil.rmtree(os.path.expanduser("~"))`.
   # The `~` has to be bare: `expanduser("~/.ssh")` is a different behaviour
@@ -83,11 +89,11 @@ traits:
     for: [python]
     if:
       type: text
-      regex: 'rmtree\s*\(\s*(Path\.home\(\)|[\w.]{0,20}expanduser\(\s*["'']~["'']\))'
+      regex: 'rmtree\s*\(\s*(Path\.home\(\)|[\w.]{0,20}expanduser\(\s*["'']~["'']\))\s*[,)]'
 
   # `fs.rmSync(os.homedir(), {recursive: true})` and the rmdir spellings.
   - id: node-home-directory-wipe
-    desc: Node recursively deletes the home directory
+    desc: Node deletion call targets the home root
     for: [javascript, typescript]
     if:
       type: text
@@ -96,15 +102,41 @@ traits:
   # `rm -rf $HOME` / `rm -rf ~` with nothing following the home reference.
   # A trailing comment or shell operator is still the same command; a trailing
   # path component (`rm -rf ~/.cache`) is not and does not match.
+  #
+  # Written command text only. Text conditions also scan compiled binaries as
+  # extracted string runs, and the run splitter cuts Rust's adjacent string
+  # literals at punctuation: watchmen-cli's `rm -rf ~/.cache` cleanup surfaced
+  # as a bare `rm -rf ~` run -- byte-for-byte a wipe line -- while the same
+  # binary's real strings were a cache cleanup and its documented uninstall
+  # instruction. Fragment runs cannot be told from written commands, so
+  # compiled binaries are excluded outright; an embedded wipe needs
+  # call-shaped evidence, which the run fragments do not preserve either way.
   - id: shell-home-directory-wipe
     desc: Shell recursively deletes the home directory
-    for: [shell, batch, powershell, scripts]
+    crit: notable
+    conf: 0.9
+    for: [shell, batch, powershell, scripts, elf, binaries]
     platforms: [unix]
     if:
       type: text
-      regex: '(?m)(^|["'';|&])\s*rm\s+-[rRfF]{1,2}\s+["'']?(\$\{?HOME\}?|~)["'']?[ \t]*([;&|#].{0,80})?$'
+      # Leading [^\n]{0,30} brings the line start into the match so `not:`
+      # can filter out commented-out examples and documentation.
+      regex: '(?m)^[^\n]{0,30}[;"''|&]?\s*rm\s+-[rRfF]{1,2}\s+["'']?(\$\{?HOME\}?|~)/?["'']?\s*([;&|#]|$)'
+    not:
+      - substr: DANGEROUS_COMMAND_BLOCKED
+      - regex: '^\s*(#|//|\*|--)'
     unless:
-      - id: metadata/package/testing/
+      - id: micro-behaviors/process/create/shell/guard/
+      - id: metadata/package/testing/harness/unit::rust-test
+      # Decoding a constant in Go unit-test source does not execute it.
+      - id: metadata/file/encoding::go-test-base64-layer
+      - id: metadata/package/testing/harness/unit::terminal-osc52-wipe-test-context
+      - id: metadata/package/testing/harness/unit::rust-osc52-base64-wipe-terminal-test
+      - id: well-known/tool/offensive/dalfox::dalfox-scanner-context
+      - id: metadata/package/testing/presence/path::test-spec-path-benign-context
+      - id: metadata/file/naming::test-directory-component
+      - type: section
+        regex: '(\.text|__text|\.code)'
 
   # Commons-IO `FileUtils.deleteDirectory(new File(System.getProperty("user.home")))`
   # and the Kotlin `deleteRecursively()` spelling.
@@ -147,3 +179,5 @@ composite_rules:
       - id: csharp-home-directory-wipe
     unless:
       - id: well-known/tool/detection/
+      - id: micro-behaviors/process/create/shell/guard/
+      - id: well-known/tool/detection/pattern-catalog::dangerous-command-exec-gateway

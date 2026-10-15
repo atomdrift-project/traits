@@ -12,7 +12,7 @@ traits:
     for: [json]
     if:
       type: path
-      regex: '(?i)(^|[\\/])\.claude[\\/]settings\.json$'
+      regex: '(?i)(^|[\\/])\.claude[\\/]settings(\.local)?\.json$'
   - id: claude-settings-path-binary
     desc: Claude Code settings path in binary
     crit: notable
@@ -29,14 +29,22 @@ traits:
     if:
       type: string_literal
       regex: '(?i)(^|[\\/])\.claude[\\/]settings\.json$'
-  - id: claude-global-settings-path
-    desc: Claude Code global settings path
+  - id: claude-global-settings-home-path
+    desc: Claude Code global settings home path
     crit: notable
     conf: 0.96
     for: [python, shell]
     if:
       type: text
-      regex: '(?i)(~|[$]HOME)[\\/]\.claude[\\/]settings\.json|Path\.home\(\)\s*/\s*["'']\.claude["'']'
+      regex: '(?i)(~|[$]HOME)[\\/]\.claude[\\/]settings\.json'
+  - id: claude-global-settings-pathlib-path
+    desc: Path.home join for Claude settings.json
+    crit: notable
+    conf: 0.96
+    for: [python]
+    if:
+      type: text
+      regex: 'Path\.home\(\)\s*/\s*["'']\.claude["'']\s*/\s*["'']settings\.json["'']'
   - id: claude-global-settings-path-js
     desc: JavaScript Claude settings path
     crit: notable
@@ -99,20 +107,50 @@ traits:
     if:
       type: text
       regex: '\.claude[\\/]hooks\.json|["'']\.claude["''][\s\S]{0,300}["'']hooks\.json["'']'
-  - id: codex-global-hooks-path
-    desc: Codex global hooks path
+  - id: codex-global-hooks-home-path
+    desc: Codex global hooks home path
     crit: notable
     conf: 0.96
     for: [python, shell]
     if:
       type: text
-      regex: '(?i)(~|[$]HOME)[\\/]\.codex[\\/]hooks\.json|Path\.home\(\)\s*/\s*["'']\.codex["'']'
+      regex: '(?i)(~|[$]HOME)[\\/]\.codex[\\/]hooks\.json'
+  - id: codex-global-hooks-pathlib-path
+    desc: Path.home join for Codex hooks.json
+    crit: notable
+    conf: 0.96
+    for: [python]
+    if:
+      type: text
+      regex: 'Path\.home\(\)\s*/\s*["'']\.codex["'']\s*/\s*["'']hooks\.json["'']'
   - id: codex-config-toml
     desc: Codex config TOML path
     ref: sha256:a709234609a3c0423f68d9ebc1c219f349879cb4f29786d2d5e797e6b098cfd3
     if:
       type: text
       regex: '\.codex[\\/]config\.toml|["'']\.codex["'']\s*/\s*["'']config\.toml'
+
+  # The ChatGPT Desktop app's Electron persisted-state file beside
+  # config.toml in ~/.codex. It carries the app's own permission selections
+  # (agent mode per host, per-thread approval and sandbox policy, project
+  # rootPaths), so code that opens it by name is reading or rewriting the
+  # desktop app's guardrail state rather than its CLI config. The filename
+  # is fixed by the app, the same way config.toml is fixed by the CLI.
+  - id: codex-global-state-json
+    desc: Codex Desktop global state JSON path
+    conf: 0.96
+    if:
+      type: text
+      regex: '\.codex[\\/]\.codex-global-state\.json|["'']\.codex-global-state\.json["'']'
+
+  - id: codex-config-toml-second-join
+    desc: path.join target names config.toml
+    crit: notable
+    conf: 0.96
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'path\.join\(\w+,\s*[''"]config\.toml[''"]\s*\)'
   - id: agents-skills-path-join
     desc: Joins a Claude agents skills directory path
     crit: notable
@@ -170,6 +208,18 @@ traits:
       # Require path/IO context; a help paragraph that merely names the
       # configuration file is not a file-path operation.
       regex: '(?i)\b(path|open|read|write)\b.{0,24}claude[_-]desktop[_-]config\.json'
+  - id: claude-desktop-config-join-segment
+    desc: Desktop config filename after join
+    crit: notable
+    conf: 0.94
+    for: [javascript, typescript]
+    if:
+      type: text
+      # path.join(dir, 'Claude', 'claude_desktop_config.json'): the
+      # intermediate directory literal puts the filename beyond the
+      # verb-window atom above. The quoted pair is still a path
+      # construction, not prose.
+      regex: '(?i)["'']Claude["'']\s*,\s*["'']claude[_-]desktop[_-]config\.json["'']'
   - id: claude-desktop-local-storage-path
     desc: Claude Desktop Local Storage path
     crit: notable
@@ -212,7 +262,38 @@ traits:
     if:
       type: text
       substr: APPEND_SYSTEM.md
+  # Agent tooling that stages MCP schemas routinely stages a companion
+  # instruction file with them. On its own the filename is generic — most
+  # repos carry docs called instructions.md — so the atom stays a component
+  # and only the Antigravity-bound composite below claims an agent-config
+  # location.
+  - id: instructions-md-filename-literal
+    desc: instructions.md filename literal
+    crit: component
+    conf: 0.6
+    for: [javascript, typescript, python, shell]
+    if:
+      type: text
+      regex: '[''"]instructions\.md[''"]'
 composite_rules:
+  - id: claude-global-settings-path
+    desc: Claude Code global settings path
+    crit: notable
+    conf: 0.96
+    for: [python, shell]
+    any:
+      - id: claude-global-settings-home-path
+      - id: claude-global-settings-pathlib-path
+
+  - id: codex-global-hooks-path
+    desc: Codex global hooks path
+    crit: notable
+    conf: 0.96
+    for: [python, shell]
+    any:
+      - id: codex-global-hooks-home-path
+      - id: codex-global-hooks-pathlib-path
+
   - id: claude-global-settings-path-js-two-step
     desc: JS two-step Claude settings.json path
     crit: notable
@@ -222,6 +303,42 @@ composite_rules:
     all:
       - id: claude-global-settings-homedir-join
       - id: claude-settings-json-second-join
+
+  - id: codex-config-toml-js-two-step
+    desc: JS two-step Codex config.toml path
+    crit: notable
+    conf: 0.96
+    for: [javascript, typescript]
+    near_bytes: 240
+    all:
+      - id: micro-behaviors/fs/path/agent-config/directory::codex-home-join-argument
+      - id: codex-config-toml-second-join
+
+  # Installers build the Antigravity MCP tool directory with path.join and
+  # name the instruction file in a second join, so no single literal carries
+  # both segments. Either directory spelling bound to the instruction-file
+  # atom within one installer file recovers the planted agent-instruction
+  # path (`~/.gemini/antigravity/mcp/<name>/instructions.md`).
+  - id: antigravity-mcp-instructions-path
+    desc: Antigravity MCP agent instructions path
+    crit: notable
+    conf: 0.94
+    for: [javascript, typescript]
+    near_bytes: 1200
+    all:
+      - id: instructions-md-filename-literal
+    any:
+      - id: micro-behaviors/fs/path/agent-config/directory::gemini-antigravity-mcp-directory
+      - id: micro-behaviors/fs/path/agent-config/directory::gemini-antigravity-mcp-directory-join
+
+  - id: codex-config-toml-path-reference
+    desc: Codex config.toml path reference
+    crit: notable
+    conf: 0.97
+    for: [javascript, typescript]
+    any:
+      - id: codex-config-toml
+      - id: codex-config-toml-js-two-step
 
   - id: claude-settings-path-reference
     desc: Claude Code settings path reference

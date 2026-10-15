@@ -6,31 +6,6 @@ defaults:
   attack: T1552.001
   crit: suspicious
 traits:
-- id: aws-config-dup
-  desc: AWS credential directory reference
-  crit: notable
-  conf: 0.75
-  for:
-  - shell
-  - python
-  - ruby
-  - perl
-  - javascript
-  - typescript
-  if:
-    type: string_literal
-    exact: .aws
-  unless:
-  # Was `well-known/lib/data/`, now dissolved into well-known/ and the
-  # package-file facts. A bundled cloud SDK carries its own config-path literals.
-  - id: well-known/lib/cloud/
-  - id: well-known/tool/detection/security-scanner/
-  - id: well-known/tool/detection/proxy-sandbox
-  - id: well-known/app/storage/akm::akm-stash-safety-sensitive-dirs
-  - id: objectives/credential-access/theft/keywords::kiro-auth-token-filename
-  # Amazon Q Developer (AI coding assistant) keeps its MCP server config under
-  # ~/.aws/amazonq/mcp.json — an agent-config path, not AWS credential access.
-  - id: micro-behaviors/fs/path/agent-config/mcp::amazonq-mcp-json-path
 - id: aws-access-key
   desc: AWS access key ID pattern
   conf: 0.85
@@ -47,7 +22,7 @@ traits:
   unless:
   - id: metadata/package/testing/
   - id: well-known/tool/development/toolchain/go-toolchain::go-module-source-path
-  - id: well-known/tool/detection/redaction::sensitive-data-scanner
+  - id: micro-behaviors/data/string/redact::sensitive-data-scanner
   # Secret scanners intentionally carry credential regexes as data; a
   # catalog entry is not a credential present in the scanned artifact.
   - id: well-known/tool/detection/mcp-fence::context
@@ -60,6 +35,7 @@ traits:
   - type: value
     path: elf.type
     exact: core
+  - id: "metadata/file/naming::test-directory-component"
 - id: github-classic-pat
   desc: GitHub classic personal access token literal
   crit: notable
@@ -67,7 +43,7 @@ traits:
   for: [python, javascript, typescript, powershell]
   unless:
   - id: well-known/tool/detection/sast::python-secret-rule-catalog
-  - id: objectives/credential-access/api-harvest/catalog::redaction-credentials-marker
+  - id: micro-behaviors/data/string/redact::credential-redaction-label
   - id: metadata/package/testing/
   # UI/documentation placeholders commonly use a run of x characters; they
   # are not GitHub credentials and should not satisfy the token detector.
@@ -77,6 +53,7 @@ traits:
   # shape a fixture uses when it needs something token-shaped to redact.
   - type: string_literal
     regex: 'ghp_0123456789abcdef'
+  - id: "metadata/file/naming::test-directory-component"
   if:
     type: string_literal
     regex: 'ghp_[A-Za-z0-9]{36}'
@@ -108,6 +85,8 @@ traits:
   unless:
   - id: well-known/app/utility/cmdchamp/
   - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+  - id: metadata/file/naming::test-directory-component
+  - id: metadata/package/testing/
 # Notable, not suspicious. One provider's metadata endpoint in a JVM class
 # is what that provider's own SDK is for: msal4j's IMDSManagedIdentitySource
 # and azure-identity's IdentityClient carry the Azure IMDS path, and
@@ -231,15 +210,6 @@ traits:
   if:
     type: text
     regex: 'secretmanager\.googleapis\.com|google\.cloud\.secretmanager'
-- id: python-refresh-token-json-get
-  desc: Python reads refresh_token JSON key
-  crit: notable
-  conf: 0.94
-  attack: T1528
-  for: [python]
-  if:
-    type: text
-    regex: '\.get\s*\(\s*["'']refresh_token["'']\s*\)'
 - id: windows-token-broker-tbres-cache
   desc: Reads Token Broker .tbres cache file
   crit: suspicious
@@ -258,7 +228,8 @@ traits:
     regex: '(?i)\b\w*ACCESS_KEY_ID\b\s*=\s*["'']LTAI[A-Za-z0-9]{12,}["'']'
   unless:
     - id: metadata/package/testing/
-    - id: well-known/tool/detection/redaction::sensitive-data-scanner
+    - id: micro-behaviors/data/string/redact::sensitive-data-scanner
+    - id: "metadata/file/naming::test-directory-component"
 - id: google-api-key-fragment
   desc: Short Google API key fragment
   crit: notable
@@ -289,12 +260,24 @@ traits:
     # Word-boundary anchored so a compound settings field (default_api_key,
     # maps_api_key) is app config, not an api_key assignment by the code itself.
     regex: '\bapi_key\s*=\s*["'']AIzaSy[A-Za-z0-9_-]{20,}["'']'
+  not:
+    - regex: '(?i)AIzaSy[A-Za-z0-9_-]*(Example|Test|Fake|Placeholder|Sample)'
+  unless:
+    - id: metadata/package/testing/
+    - id: micro-behaviors/data/string/redact::sensitive-data-scanner
+    - id: "metadata/file/naming::test-directory-component"
 - id: gemini-api-key-assigned
   desc: Assigns a Gemini API key literal
   conf: 0.94
   if:
     type: text
     regex: '\bapi_key\s*=\s*["'']AQ\.Ab8[A-Za-z0-9_-]{12,}["'']'
+  not:
+    - regex: '(?i)AQ\.Ab8[A-Za-z0-9_-]*(Example|Test|Fake|Placeholder|Sample)'
+  unless:
+    - id: metadata/package/testing/
+    - id: micro-behaviors/data/string/redact::sensitive-data-scanner
+    - id: "metadata/file/naming::test-directory-component"
 - id: url-api-key-query
   desc: URL query carries an API key
   crit: notable
@@ -302,14 +285,6 @@ traits:
   if:
     type: text
     regex: '[?&]api-key=[A-Za-z0-9-]{20,}'
-- id: python-client-api-key-arg
-  desc: Client constructor takes an API key
-  crit: notable
-  conf: 0.88
-  for: [python]
-  if:
-    type: text
-    regex: '\.Client\(\s*api_key\s*='
 - id: aliyun-access-key-secret-assigned
   desc: Aliyun key secret assigned
   crit: notable
@@ -319,14 +294,8 @@ traits:
     regex: '(?i)\b\w*KEY_SECRET\b\s*=\s*["''][A-Za-z0-9]{16,}["'']'
   unless:
     - id: metadata/package/testing/
-    - id: well-known/tool/detection/redaction::sensitive-data-scanner
-- id: groq-api-key-literal
-  desc: Quoted Groq API key literal
-  crit: notable
-  conf: 0.93
-  if:
-    type: text
-    regex: '["'']gsk_[A-Za-z0-9]{20,}["'']'
+    - id: micro-behaviors/data/string/redact::sensitive-data-scanner
+    - id: "metadata/file/naming::test-directory-component"
 - id: python-groq-api-key-arg
   desc: Groq client takes an API key
   crit: notable
@@ -335,21 +304,6 @@ traits:
   if:
     type: text
     regex: 'Groq\(\s*api_key\s*='
-- id: huggingface-token-literal
-  desc: Quoted Hugging Face token literal
-  crit: notable
-  conf: 0.93
-  if:
-    type: text
-    regex: '["'']hf_[A-Za-z0-9]{20,}["'']'
-- id: python-hf-token-assignment
-  desc: Assigns a Hugging Face token name
-  crit: notable
-  conf: 0.88
-  for: [python]
-  if:
-    type: text
-    regex: '(?i)\bhf_token\s*='
 composite_rules:
 - id: python-groq-client-ships-api-key
   desc: Groq client ships an API key
@@ -358,8 +312,12 @@ composite_rules:
   for: [python]
   scope: file
   all:
-    - id: groq-api-key-literal
+    - id: micro-behaviors/data/format/credentials::groq-key-shaped-literal
     - id: python-groq-api-key-arg
+  unless:
+    - id: metadata/package/testing/
+    - id: metadata/file/naming::test-directory-component
+    - id: micro-behaviors/data/string/redact::sensitive-data-scanner
 - id: python-assigns-huggingface-token
   desc: Assigns a quoted Hugging Face token
   crit: hostile
@@ -367,8 +325,12 @@ composite_rules:
   for: [python]
   scope: file
   all:
-    - id: huggingface-token-literal
-    - id: python-hf-token-assignment
+    - id: micro-behaviors/data/format/credentials::huggingface-token-shaped-literal
+    - id: micro-behaviors/data/property/assign::python-hf-token-keyword
+  unless:
+    - id: metadata/package/testing/
+    - id: metadata/file/naming::test-directory-component
+    - id: micro-behaviors/data/string/redact::sensitive-data-scanner
 - id: python-split-google-api-key
   desc: Rejoins a split Google API key
   crit: hostile
@@ -399,7 +361,7 @@ composite_rules:
   scope: file
   near_lines: 6
   all:
-    - id: python-client-api-key-arg
+    - id: micro-behaviors/os/security/auth/secret::python-client-api-key-argument
   any:
     - id: google-api-key-assigned
     - id: gemini-api-key-assigned
@@ -436,7 +398,7 @@ composite_rules:
   - id: well-known/lib/development/typescript-compiler::compiler-diagnostics-bundle
   - id: well-known/lib/crypto/google-auth::js-sdk-bundle
   all:
-  - id: micro-behaviors/fs/directory/traverse::node-recursive-dirent-walk
+  - id: micro-behaviors/fs/directory/traverse::node-dirent-directory-walk
   any:
   - id: micro-behaviors/fs/path/credential::gcp-default-credentials
   - id: objectives/discovery/cloud/metadata::metadata-harvesting
@@ -448,7 +410,7 @@ composite_rules:
   all:
   - id: js-recursive-cloud-credential-scan
   any:
-  - id: micro-behaviors/os/env/cicd/
+  - id: micro-behaviors/os/env/read::ci-env-reference-set
   - id: micro-behaviors/os/container/runtime::dockerenv
   - id: micro-behaviors/fs/proc/container::container-self-cgroup
   unless:
@@ -473,12 +435,12 @@ composite_rules:
   attack: T1528
   for: [python]
   all:
-  - id: python-refresh-token-json-get
-  - id: micro-behaviors/data/serialize/json::json-load-call
-  - id: micro-behaviors/fs/enumerate/directory::python-json-glob
+  - id: micro-behaviors/data/property/access::python-refresh-token-key-get
+  - id: micro-behaviors/data/parse/json::json-load-call
+  - id: micro-behaviors/fs/directory/readdir::python-json-glob
   - id: micro-behaviors/fs/file/open::generic-dup
   any:
-  - id: micro-behaviors/data/source/syntax/credential::python-token-variable-set-add
+  - id: micro-behaviors/data/control-flow/dispatch::python-add-token-variable
   - id: micro-behaviors/data/source/syntax/credential::python-token-variable-print
 - id: jvm-cloud-metadata-token-harvest
   desc: JVM class harvests two clouds' metadata tokens
@@ -515,6 +477,7 @@ composite_rules:
     any:
     - id: objectives/discovery/cloud/metadata/
     - id: metadata/package/testing/
+    - id: "metadata/file/naming::test-directory-component"
 - id: azure-imds-access
   desc: Azure instance metadata identity request
   crit: suspicious
@@ -534,12 +497,12 @@ composite_rules:
   # MSAL Node bundles the Azure managed-identity/IMDS implementation as a
   # normal authentication feature; its library identity is stronger context
   # than the embedded token endpoint path alone.
-  - id: well-known/lib/crypto/msal-node::library-context
-  - id: well-known/lib/cloud/azure-identity::azure-identity-js-sdk
-  - id: well-known/lib/cloud/azure-identity::package-path
+  - id: well-known/lib/crypto/msal-node/
+  - id: well-known/lib/cloud/azure-identity/
   - id: metadata/package/scripts/lifecycle::azure-imds-benign-context
   - id: well-known/lib/data/mongodb::mongodb-js-driver-bundle
   - id: metadata/package/tooling::azure-agentbaker-tree
+  - id: metadata/package/tooling::opencomputer-source-tree
 - id: aws-credential-theft
   for: [shell, python, javascript, ruby, perl]
   desc: AWS credential theft
@@ -548,7 +511,7 @@ composite_rules:
   - id: micro-behaviors/fs/path/token::aws-credentials
   - id: aws-access-key
   all:
-  - id: objectives/credential-access/cloud/token/files::aws-config-dup
+  - id: micro-behaviors/fs/path/secret-config::aws-config-directory-literal
 - id: gcp-credential-theft
   desc: Reads a GCP credential file path
   crit: suspicious

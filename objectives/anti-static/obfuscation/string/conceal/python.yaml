@@ -13,8 +13,16 @@ traits:
     crit: suspicious
     conf: 0.9
     if:
-      type: text
-      regex: 'getattr\s*\([^,()]{1,30},\s*["''][^"'']{1,20}["'']\s*\+\s*["''][^"'']{1,20}["'']\)'
+      type: tree-sitter
+      query: |
+        (call
+          function: (identifier) @getattr
+          (#eq? @getattr "getattr")
+          arguments: (argument_list
+            (_)
+            (binary_operator
+              left: (string)
+              right: (string))))
     # A test suite for a permission/command checker tabulates the exact call
     # it must reject -- unsloth studio's `test_permission_mode.py` lists
     # `getattr(os, 'un' + 'link')('/tmp/victim')` as an expected-blocked case.
@@ -23,17 +31,32 @@ traits:
     downgrade:
       any:
         - id: metadata/package/testing/presence/harness/
+        - id: "metadata/file/naming::test-directory-component"
     unless:
       - id: well-known/tool/detection/cordon-scanner::cordon-defensive-scanner-context
       - id: metadata/package/testing/corpus::python-guardrail-signature-module
 
   - id: getattr-inline-dunder-import-concat
-    desc: Inline __import__ with concatenated getattr
+    desc: Imported module attribute joins string literals
     crit: suspicious
     conf: 0.9
     if:
-      type: text
-      regex: 'getattr\s*\(__import__\([^)]{0,20}\),\s*[^,)]{1,20}\+[^,)]{1,20}\)'
+      # Match executable syntax, not a detector's comment or quoted example.
+      # Literal fragments conceal the API name; prefix + variable dispatch
+      # follows ordinary naming conventions and does not establish concealment.
+      type: tree-sitter
+      query: |
+        (call
+          function: (identifier) @getattr
+          (#eq? @getattr "getattr")
+          arguments: (argument_list
+            (call
+              function: (identifier) @import
+              (#eq? @import "__import__"))
+            (binary_operator
+              left: (string)
+              operator: "+"
+              right: (string)))) @lookup
     unless:
       - id: metadata/package/testing/corpus::python-guardrail-signature-module
 
@@ -95,7 +118,7 @@ traits:
       regex: (?i)65786563
     unless:
       - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
   - id: py-bytes-fromhex-exec
     desc: Bytes fromhex containing 'exec'
     crit: suspicious
@@ -165,6 +188,7 @@ composite_rules:
   # is the combination a dependency-confusion stager uses: split `gethostbyname`
   # and `getlogin` so the DNS-exfil beacon in the install class does not show up
   # to a scan of setup.py.
+        - id: "metadata/file/naming::test-directory-component"
   - id: install-hook-with-name-fragment-obfuscation
     desc: Install-time package hides API names by fragment
     crit: hostile

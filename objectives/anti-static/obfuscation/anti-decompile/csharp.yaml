@@ -29,6 +29,7 @@ traits:
   # commercial obfuscator does. This rule was unreachable until inline YARA
   # started evaluating (2026-09); on first contact it flagged a CNET-hosted
   # freeware installer and a phone-flashing utility.
+      - id: "metadata/file/naming::test-directory-component"
   - id: suppress-ildasm-managed-pe
     desc: SuppressIldasm attribute in managed PE
     crit: notable
@@ -86,7 +87,7 @@ traits:
       - id: metadata/binary/framework::dotnet-singlefilehost-pdb
       # YARA's malformed managed-PE corpus deliberately contains CLR marker
       # strings; its test fixtures are not managed anti-analysis payloads.
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
       - id: well-known/app/security/adguard-vpn::benign-context
       - id: well-known/lib/ai/argutrack-dnn::official-runtime-binary
       - id: well-known/tool/sysadmin/chocolatey::official-library-pe-context
@@ -112,6 +113,10 @@ traits:
 
   # PE overlays are arbitrary embedded data; the marker bytes are meaningful
   # as obfuscated identifiers only when the PE also has a CLR metadata stream.
+  # Raw-byte hits also collide with compressed blobs: a 16 MiB high-entropy
+  # .text holds ~1 E2 81 AD triple by chance, so >= 2 is noise bandwidth.
+  # ConfuserEx renames every identifier (dozens of markers per alphabet),
+  # so require >= 10 to keep the atom above random-collision range.
   - id: zero-width-managed-pe-marker-206d
     desc: Repeated U+206D markers in managed PE
     crit: suspicious
@@ -126,9 +131,11 @@ traits:
             $clr = "BSJB" ascii
             $marker = { E2 81 AD }
           condition:
-            $clr and #marker >= 2
+            $clr and #marker >= 10
         }
 
+  # Same collision floor as the 206D twin above: raw E2 81 AF triples
+  # occur by chance in high-entropy sections, so keep both atoms at >= 10.
   - id: zero-width-managed-pe-marker-206f
     desc: Repeated U+206F markers in managed PE
     crit: suspicious
@@ -143,7 +150,7 @@ traits:
             $clr = "BSJB" ascii
             $marker = { E2 81 AF }
           condition:
-            $clr and #marker >= 2
+            $clr and #marker >= 10
         }
 
 composite_rules:
@@ -156,7 +163,7 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: metadata/binary/code/entropy::native-code-entropy-78
+      - id: metadata/binary/code/entropy::code-region-entropy-78
       - id: suppress-ildasm-managed-pe-string
       - id: metadata/build/manifest::pe-manifest-myapplication-template
       - id: metadata/binary/provenance/version-info::pe-non-architecture-filename-mismatch
@@ -198,7 +205,23 @@ composite_rules:
     all:
       - id: zero-width-managed-pe-marker-206d
       - id: zero-width-managed-pe-marker-206f
-      - id: micro-behaviors/data/embedded/payload/resource::assemblyresolve-hook
+      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-getmanifestresourcestream
-      - id: metadata/lang/compiler/managed::get-method-token
+      - id: micro-behaviors/metaprogramming/reflection::get-method-token
       - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-token
+
+  - id: unsigned-zero-width-singlefile-overlay-carrier
+    desc: Unsigned single-file .NET host with zero-width IDs and dominant overlay
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1027.009,T1036.005
+    for: [pe]
+    all:
+      - id: zero-width-managed-pe-marker-206d
+      - id: zero-width-managed-pe-marker-206f
+      - id: metadata/binary/layout/overlay::overlay-dominates-80pct
+      - id: micro-behaviors/metaprogramming/reflection::appdomain-unsigned-filename-mismatch
+      - id: metadata/binary/framework::dotnet-singlefilehost-runtime
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/app/

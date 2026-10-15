@@ -39,7 +39,13 @@ traits:
     if:
       type: text
       # Require ${x} or {x} interpolation — static ?id=page URLs must not match.
-      regex: 'https?://[^"''`\s]{1,160}[?&]([A-Za-z]+_)?id=(\$\{|\{)[A-Za-z_$][\w$]*'
+      # Require the bare `id` or `object_id` query key. Names like `video_id`,
+      # `feed_id`, or `user_id` are ordinary REST parameters, not generic
+      # object-ID enumeration.
+      regex: 'https?://[^"''`\s]{1,160}[?&](object_)?id=(\$\{|\{)[A-Za-z_$][\w$]*'
+    not:
+      - substr: drive.usercontent.google.com
+      - substr: drive.google.com
     unless:
       # GA4 Measurement Protocol (.../mp/collect?measurement_id=${id}).
       - id: ga4-measurement-protocol-id-query
@@ -54,6 +60,8 @@ traits:
       # are ordinary REST parameters, not generic object-ID enumeration.
       type: text
       regex: '[?&]id=["'']?\s*\+\s*[A-Za-z_$]'
+    not:
+      - regex: '[?&]id=["'']?\s*\+\s*encodeURI(Component)?\b'
     unless:
       # Yandex Translate widget session ids (...tr-url-widget&id="+c+"-0-0).
       - id: yandex-translate-widget-id-query
@@ -198,13 +206,13 @@ traits:
       type: string_literal
       regex: '[?&]utm_campaign='
       case_insensitive: true
-  - id: dropper-common-params
-    desc: Common dropper URL parameters (add, uuid)
+  - id: decoded-add-query-param
+    desc: Decoded URL has alphanumeric add parameter
     if:
       type: encoded
       regex: '[?&]add=[a-zA-Z0-9]{10,}'
-  - id: dropper-uuid-param
-    desc: UUID-like query parameter seen in droppers
+  - id: decoded-uuid-query-param
+    desc: Decoded URL has alphanumeric uuid parameter
     if:
       type: encoded
       regex: '[?&]uuid=[a-zA-Z0-9]{10,}'
@@ -223,7 +231,7 @@ traits:
       regex: 'uids\[\]\s*='
   - id: mac-query-param-format
     desc: URL query includes formatted MAC address
-    crit: suspicious
+    crit: notable
     conf: 0.9
     if:
       type: text
@@ -282,7 +290,7 @@ traits:
       - id: well-known/lib/ui/monaco-editor/
     if:
       type: text
-      regex: '(?i)https?://[^/"''<>\s]{1,80}/(chat|assistant|agent|rovo)(/(api|v[0-9]+)|[?#])'
+      regex: '(?i)https?://[^/"''<>\s]{1,80}/(chat|assistant|agent|rovo)/(api|v[0-9]+)'
 
   # Microsoft Copilot Personal deep links use the web app host with a bare
   # `q=` prompt plus undocumented `autorun=` auto-execution (CoSnitch-class).
@@ -314,11 +322,13 @@ traits:
       type: text
       regex: '(?i)[?&](amp;)?q=[^&"''\s>]{8,}'
 
+  # Bare task= is also an ordinary scheduler/CMS selector. AI task queries
+  # require a chat endpoint below; qualified AI keys remain directly usable.
   # Plain message= is intentionally not included: it is a common parameter in
   # ordinary notification and messaging APIs (SMS gateways, status webhooks).
   # Keep each key atom under the regex-size budget; composites below OR them.
   - id: ai-prompt-query-key-basic
-    desc: Prompt, task, or instruction query parameter
+    desc: Prompt or instruction query parameter
     crit: notable
     conf: 0.92
     for: [scripts, source, documents, data, markdown]
@@ -326,13 +336,19 @@ traits:
       type: text
       # Include the value in the match so OAuth's standardized UI prompt
       # values can be filtered from this AI/tasking-oriented observation.
-      regex: '(?i)[?&](amp;)?(prompt|task|instruction)=[^&"''\s]{1,80}'
+      regex: '(?i)[?&](amp;)?(prompt|instruction)=[^&"''\s]{1,80}'
     not:
       - regex: '(?i)[?&](amp;)?prompt=(select_account|login|consent)\b'
       - regex: '(?i)[?&](amp;)?prompt=(none|create)\b'
-      # Joomla's documented download routes use task=download.send or
-      # task=doc_download. The CMS task selector is not AI tasking.
-      - regex: '(?i)[?&](amp;)?task=(download\.send|doc_download)(?:&|$)'
+
+  - id: task-query-parameter
+    desc: URL query selects a task
+    crit: notable
+    conf: 0.95
+    for: [scripts, source, documents, data, markdown]
+    if:
+      type: text
+      regex: '(?i)[?&](amp;)?task=[^&"''\s]{1,80}'
 
   - id: ai-prompt-query-key-qualified
     desc: Qualified AI prompt query key
@@ -381,7 +397,7 @@ traits:
       # followed by end-of-text or a non-path character.
       regex: '(?i)[?&][\w-]{1,32}=https?:[^&"''()<>\s]{1,220}\.(exe|dll|msi|scr|bat|cmd|ps1)([^\w/.-]|$)'
 
-  - id: ai-prompt-query-encoded-url-value
+  - id: query-encoded-remote-url-value
     desc: Query value contains an encoded remote URL
     crit: notable
     conf: 0.95
@@ -391,16 +407,17 @@ traits:
       regex: '[?&][\w-]{1,32}=[^ \t\r\n]{0,600}https?%3a%2f%2f'
       case_insensitive: true
 
-  - id: ai-prompt-query-encoded-image-value
-    desc: Encoded prompt image URL value
+  - id: query-encoded-image-url-value
+    desc: Query value contains an encoded image URL
     crit: notable
     conf: 0.96
     for: [scripts, source, documents, data, markdown]
     if:
       type: text
       # The query value can encode the scheme and path separators while
-      # leaving the image extension literal. The query-key and template
-      # context are supplied by the composites below.
+      # leaving the image extension literal. This atom is prompt-agnostic
+      # (file viewers encode image links the same way); the prompt query-key
+      # and template context are supplied by the composites below.
       regex: '(?i)[?&][\w-]{1,32}=\S{0,800}https?%3a%2f%2f\S{0,180}(%2f|/)\S{0,80}(%2e|\.)jpe?g\b'
 
   - id: ai-prompt-query-double-brace-value
@@ -447,10 +464,20 @@ traits:
       case_insensitive: true
 
   # The remote-image-URL matcher is canonical at
-  # micro-behaviors/communications/http/url/path::image-file-url; the
+  # micro-behaviors/communications/http/url/media::image-file-url; the
   # composites below reference it and supply the prompt context.
 
 composite_rules:
+  - id: ai-chat-task-query-parameter
+    desc: AI chat endpoint carries task query
+    crit: notable
+    conf: 0.95
+    for: [scripts, source, documents, data, markdown]
+    near_bytes: 200
+    all:
+      - id: ai-chat-url-path-marker
+      - id: task-query-parameter
+
   # OR of the two prompt-key atoms. Paired with an all: value leg so this is
   # not a low-value any-only composite filtered from findings.
   - id: ai-prompt-query-http-url
@@ -465,6 +492,7 @@ composite_rules:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
 
   - id: ai-prompt-query-encoded-url
     desc: Prompt query carries an encoded URL
@@ -473,11 +501,12 @@ composite_rules:
     for: [scripts, source, documents, data, markdown]
     near_bytes: 700
     all:
-      - id: ai-prompt-query-encoded-url-value
+      - id: query-encoded-remote-url-value
     any:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
 
   - id: ai-prompt-url-double-brace-data
     desc: Prompt query contains a double-brace value
@@ -493,6 +522,7 @@ composite_rules:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
 
   - id: ai-prompt-url-dollar-data
     desc: Prompt query contains a dollar template value
@@ -506,12 +536,14 @@ composite_rules:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
     not:
       - regex: '(?i)(^|[?&])prompt=(consent|login|none|select_account)(?:[&#"\s]|$)'
 
   - id: ai-prompt-url-angle-data
     desc: Prompt query contains an angle value
-    crit: suspicious
+    # Placeholder syntax is neutral transport, as with dollar/brace templates.
+    crit: notable
     conf: 0.96
     for: [scripts, source, documents, data, -html, -markdown]
     near_bytes: 200
@@ -521,10 +553,11 @@ composite_rules:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
 
   - id: ai-prompt-url-encoded-angle-data
     desc: Prompt query contains encoded angle data
-    crit: suspicious
+    crit: notable
     conf: 0.96
     for: [scripts, source, documents, data, -html, -markdown]
     near_bytes: 200
@@ -534,6 +567,7 @@ composite_rules:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
 
   - id: ai-chat-prompt-query-parameter
     desc: AI chat URL carries a prompt query
@@ -547,6 +581,7 @@ composite_rules:
       - id: ai-prompt-query-key-basic
       - id: ai-prompt-query-key-qualified
       - id: ai-prompt-query-key-camel
+      - id: ai-chat-task-query-parameter
 
   # Copilot Personal deep-link shape (host + q= + autorun=). Escalation to
   # hostile lives in objectives/evasion/security-bypass/llm/prompt/.
@@ -579,7 +614,7 @@ composite_rules:
     all:
       - id: ai-chat-prompt-query-parameter
       - id: ai-prompt-query-remote-url
-      - id: micro-behaviors/communications/http/url/path::image-file-url
+      - id: micro-behaviors/communications/http/url/media::image-file-url
     any:
       - id: ai-prompt-url-double-brace-data
       - id: ai-prompt-url-dollar-data
@@ -595,7 +630,7 @@ composite_rules:
     all:
       - id: ai-chat-prompt-query-parameter
       - id: ai-prompt-query-remote-url
-      - id: micro-behaviors/communications/http/url/path::image-file-url-template
+      - id: micro-behaviors/communications/http/url/media::image-file-url-template
     any:
       - id: ai-prompt-url-angle-data
       - id: ai-prompt-url-dollar-data
@@ -608,7 +643,7 @@ composite_rules:
     near_bytes: 1600
     all:
       - id: ai-chat-prompt-query-parameter
-      - id: ai-prompt-query-encoded-image-value
+      - id: query-encoded-image-url-value
       - id: ai-prompt-query-encoded-angle-value
 
   - id: ai-prompt-image-template-url-markup
@@ -620,7 +655,7 @@ composite_rules:
     all:
       - id: ai-chat-prompt-query-parameter
       - id: ai-prompt-query-remote-url
-      - id: micro-behaviors/communications/http/url/path::image-file-url
+      - id: micro-behaviors/communications/http/url/media::image-file-url
     any:
       - id: micro-behaviors/communications/url/construction/template
 
@@ -647,12 +682,12 @@ composite_rules:
     all:
       - id: utm-source-medium-url
       - id: utm-campaign-query-param
-  - id: dropper-common-params-any
-    desc: Common dropper URL parameters (add, uuid)
+  - id: identifier-query-params
+    desc: Identifier query parameter evidence
     crit: notable
     conf: 0.8
     any:
-      - id: dropper-common-params
-      - id: dropper-uuid-param
+      - id: decoded-add-query-param
+      - id: decoded-uuid-query-param
       - id: dropper-obfuscated-add-param
       - id: mac-query-param-format

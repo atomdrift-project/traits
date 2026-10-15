@@ -5,30 +5,6 @@ defaults:
   mbc: B0029
 
 traits:
-- id: gcloud-config-path-ref
-  desc: References gcloud application credentials path
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    regex: '(?i)\.config[/\\]gcloud'
-
-- id: azure-credentials-path-ref
-  desc: References Azure credentials file
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    regex: '(?i)\.azure[/\\]credentials'
-
-- id: terraform-creds-path-ref
-  desc: References Terraform Cloud credentials file
-  crit: notable
-  conf: 0.92
-  if:
-    type: text
-    regex: '(?i)\.terraform\.d[/\\]credentials\.tfrc\.json'
-
 - id: python-gh-host-file-read
   desc: Python reads GitHub CLI hosts file
   crit: notable
@@ -47,6 +23,15 @@ traits:
     type: text
     regex: '(?i)\bopen\s*\([^(]{0,180}\.git-credentials\b'
 
+- id: python-netrc-file-read
+  desc: Python reads netrc credentials file
+  crit: notable
+  conf: 0.94
+  for: [python]
+  if:
+    type: text
+    regex: '(?i)\bopen\s*\([^(]{0,180}\.netrc\b'
+
 # REMOVED: node-project-secret-file-targets ("Project credential & manifest
 # file targets").  Its matcher was a bare string literal `.env`, `package.json`
 # or `package-lock.json`.  Only `.env` is a credential file, and that literal is
@@ -57,40 +42,9 @@ traits:
 # reported "credential file targets" (T1552.001) on ordinary project-root
 # discovery such as `join(dir, 'package.json')`.  Consumers now reference the
 # dotenv literal directly.
-- id: source-control-token-paths
-  desc: Source control credential paths
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    regex: '(\.git-credentials|\.config/gh/hosts\.yml|\.gitconfig)\b'
-  unless:
-  - id: metadata/build/
-- id: registry-credentials-path
-  desc: NPM or PyPI credential-file path
-  crit: component
-  conf: 0.9
-  if:
-    type: text
-    regex: '(\.npmrc|\.pypirc)'
-- id: credential-path-table--rx-9
-  desc: Git credential-file path literal
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    regex: '(\.git-credentials|\.config/gh/hosts\.yml)'
 # REMOVED: ssh-private-key-path. A bare `.ssh/id_<type>` path literal is a
 # sensitive-path capability that duplicated the canonical
 # micro-behaviors/fs/path/private-key::ssh-private-key; consumers reference it.
-- id: credential-path-table--rx-14
-  desc: /etc/shadow path literal
-  crit: component
-  conf: 0.9
-  count_min: 5
-  if:
-    type: text
-    regex: '(/etc/shadow)'
 - id: clipboard-read-command
   desc: X11 clipboard read command
   crit: notable
@@ -121,46 +75,6 @@ traits:
     regex: <password>[\s\S]{0,200}</server>
 
 composite_rules:
-- id: developer-credential-file-source
-  desc: References a developer credential file
-  crit: component
-  conf: 0.92
-  any:
-  - id: micro-behaviors/fs/path/token::aws-credentials-text-reference
-  - id: micro-behaviors/fs/path/private-key::ssh-private-key
-  - id: micro-behaviors/os/container/image::docker-config-json
-  - id: micro-behaviors/fs/path/secret-config::kube-config
-  - id: gcloud-config-path-ref
-  - id: azure-credentials-path-ref
-  - id: terraform-creds-path-ref
-  - id: micro-behaviors/fs/path/token::aws-credentials
-  - id: micro-behaviors/fs/path/secret-config::package-or-netrc-credential-file
-  - id: source-control-token-paths
-
-- id: developer-credential-file-read
-  desc: Reads a referenced developer credential file
-  crit: notable
-  conf: 0.92
-  # A 2048-byte window let an unrelated `cat` of a diagnostic log 30+ lines
-  # away from a `KUBECONFIG=${KUBECONFIG:-$HOME/.kube/config}` default pair
-  # up as "reads a credential file" -- e.g. a devops script that sets the
-  # standard kubeconfig env default, then later `cat`s its own port-forward
-  # log on a health-check failure. A genuine read-then-use of a credential
-  # path sits within a handful of lines of its own reference, not a whole
-  # script's worth of unrelated statements away.
-  near_bytes: 300
-  all:
-  - id: developer-credential-file-source
-  any:
-  - id: micro-behaviors/fs/read/file/full::file-content-read-operation
-  - id: micro-behaviors/fs/read/file/full::dotnet-readalltext-token
-  - id: micro-behaviors/fs/read/file/target::shell-cat-absolute-path-read
-  - id: micro-behaviors/fs/read/file/full::powershell-get-content-command
-  - id: micro-behaviors/fs/file/open::os-open
-  - id: micro-behaviors/communications/http/upload::curl-data-binary
-  - id: micro-behaviors/communications/http/upload::curl-named-file-body-upload-command
-  - id: micro-behaviors/data/archive/create/tar::tar-create
-
 - id: python-source-control-file-read
   desc: Python reads source-control credential files
   crit: component
@@ -169,6 +83,14 @@ composite_rules:
   - id: python-gh-host-file-read
   - id: python-git-credentials-file-read
 
+- id: python-developer-credential-file-read
+  desc: Python reads developer credential files
+  crit: component
+  for: [python]
+  any:
+  - id: python-source-control-file-read
+  - id: python-netrc-file-read
+
 - id: npm-credential-http-marker
   desc: NPM credential path with HTTP
   crit: notable
@@ -176,41 +98,36 @@ composite_rules:
   for: [javascript, typescript]
   any:
       - id: micro-behaviors/fs/read/file/full::node-package-credential-read-reference
-      - id: objectives/supply-chain/credential-theft/registry::js-env-home-cred
+      - id: micro-behaviors/fs/read/file/target::home-credential-path-near-read
   all:
-      - id: objectives/supply-chain/credential-theft/registry::cred-to-http-js
+      - id: objectives/exfiltration/stealer/credential::credential-file-http-flow-with-client-clues
   unless:
   - id: well-known/lib/cloud/aws-sdk-ruby
   - id: well-known/dual-use/transfer/alist::release-path
   - id: micro-behaviors/process/interpreter/vm/
-  - id: well-known/lib/network/urllib3::urllib3-name
 - id: developer-credential-sweep
   desc: Sweeps developer and cloud credentials
   crit: hostile
   conf: 0.98
   near_bytes: 32768
   all:
-  - id: credential-path-table
+  - id: micro-behaviors/fs/path/credential::developer-credential-path-reference
   # A table of protected paths can also be a defensive denylist. Require code
   # that actually reads file contents before inferring a credential sweep.
-  - id: developer-credential-file-read
+  - id: micro-behaviors/fs/read/file/target::credential-path-near-file-input
   needs: 3
   any:
   - id: micro-behaviors/fs/path/secret-config::package-or-netrc-credential-file
-  - id: source-control-token-paths
-  - id: login-secret-file-paths
+  - id: micro-behaviors/fs/path/vcs::source-control-config-or-token-path-reference
+  - id: micro-behaviors/fs/path/credential::login-auth-or-history-file-reference
   - id: clipboard-read-command
   unless:
   - id: well-known/lib/ai/unsloth::unsloth-package-context
   - id: micro-behaviors/process/interpreter/vm/
-  - id: metadata/package/testing/
+  - id: metadata/file/profile/test-indications/
   - id: well-known/lib/runtime/
-  # Permission runtimes define protected credential paths for a deny gate;
-  # the denylist is policy data, not evidence that the module sweeps files.
   - id: well-known/lib/development/vscode-webview::acquire-vscode-api
   - id: well-known/tool/detection/
-  # js-any-bundle-output subsumes js-large-module-bundle and the minified
-  # webview-bundle forms, collapsing two JS-bundle legs into one umbrella.
   - id: metadata/build/
   - id: well-known/tool/development/aube::aube-lifecycle-scanner-source
   - id: well-known/app/productivity/nxplora/
@@ -223,25 +140,26 @@ composite_rules:
   for: [python]
   near_bytes: 32768
   all:
-  - id: source-control-token-paths
+  - id: micro-behaviors/fs/path/vcs::source-control-config-or-token-path-reference
   - id: python-source-control-file-read
-  - id: micro-behaviors/communications/http/lib/requests::requests-post
-- id: login-secret-file-paths
-  desc: Login secret file paths
-  crit: component
-  conf: 0.9
+  - id: micro-behaviors/communications/http/post::requests-post
+
+- id: python-developer-credential-hex-encode
+  desc: Python reads developer credentials and encodes them to hexadecimal
+  crit: hostile
+  conf: 0.98
+  attack: "T1552.001,T1027"
+  mbc: "E1552,C0026"
+  for: [python]
+  near_bytes: 4096
+  all:
+  - id: micro-behaviors/data/encode/hex::python-bytes-hex-call
   any:
-  - id: micro-behaviors/fs/path/private-key::ssh-private-key
-  - id: micro-behaviors/fs/path/public-key::known-hosts-path-reference
-  - id: micro-behaviors/fs/path/credential::authorized-keys-or-shadow-path
-  - id: micro-behaviors/fs/path/personal::bash-zsh-history-path-text
-- id: credential-path-table
-  desc: Credential path table in source
-  crit: component
-  conf: 0.9
-  any:
-  - id: registry-credentials-path
-  - id: credential-path-table--rx-9
-  - id: micro-behaviors/fs/path/private-key::ssh-private-key
-  - id: terraform-creds-path-ref
-  - id: credential-path-table--rx-14
+  - id: python-netrc-file-read
+  - id: python-gh-host-file-read
+  - id: python-git-credentials-file-read
+  - id: micro-behaviors/fs/read/file/target::credential-path-near-file-input
+  unless:
+  - id: well-known/tool/detection/
+  - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"

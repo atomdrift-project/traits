@@ -7,23 +7,14 @@ traits:
     crit: notable
     conf: 0.98
     attack: T1059.007
+    unless:
+      - id: well-known/app/ai/governance/nexus-agents::nexus-agents-governance-context
+      - id: metadata/file/format/source-map::sourcemap
     if:
       type: text
       # Require eval/exec to begin the command token (or follow a delimiter).
       # This excludes API names such as `.scriptEval(` in ordinary tooling.
       regex: '(?i)(startsWith|includes)\(["'']([\w./-]{0,24}[:/_-])?(eval|exec)\('
-
-  - id: eval-variable
-    desc: eval with variable argument
-    crit: notable
-    conf: 0.9
-    attack: T1059.007
-    if:
-      type: string_literal
-      regex: eval\s*\(\s*[a-zA-Z_$][a-zA-Z0-9_$]*\s*\)
-    unless:
-      - id: metadata/package/testing/harness/runtime/
-      - id: metadata/build/
 
   - id: js-interpreter-constructor-timeout
     desc: JavaScript interpreter constructor timeout
@@ -67,26 +58,6 @@ traits:
       - id: metadata/build/bundler/asset::js-large-module-bundle
       - id: metadata/build/minifier::js-large-minified-bundle
       - id: metadata/build/bundler/runtime::parcel-bundled--parcelrequire
-  - id: eval-call-expression-arg
-    desc: eval() with call expression argument
-    crit: notable
-    conf: 0.9
-    attack: T1059.007
-    if:
-      type: tree-sitter
-      query: |
-        (call_expression
-          function: (identifier) @fn
-          arguments: (arguments
-            (call_expression) @arg)
-          (#eq? @fn "eval"))
-    unless:
-      - id: well-known/lib/media/svga::svga-autoloader-bundle
-      - id: metadata/package/testing/harness/runtime/
-      - id: metadata/build/bundler/asset::js-large-module-bundle
-      - id: metadata/build/recognized-contexts::benign-build-tooling-context
-      - type: basename
-        regex: "\\.scrbl$"
   - id: eval-contents-of-helper
     desc: eval(contentsOf(...)) Node test helper
     crit: notable
@@ -127,6 +98,25 @@ traits:
       # dynamic execution from a member reference alone.
       - id: metadata/package/documentation/page::docusaurus-docs-bundle
 
+  # The fetcher half of a split extension loader: code text assembled at
+  # runtime and forwarded as the `code` field of a runtime message, for a
+  # background service worker to compile and inject. The executor half
+  # (Function-ctor compile, main-world executeScript) is detected separately;
+  # loader composites join the two. The interpolation is the observation: a
+  # code string shipped in the bundle would be static, not interpolated.
+  - id: runtime-message-interpolated-code-field
+    desc: Runtime message code built by interpolation
+    crit: notable
+    conf: 0.88
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'sendMessage\s*\(\s*\{[\s\S]{0,200}\bcode\s*:\s*[`"''"][^`"''"]{0,160}\$\{'
+    unless:
+      # Same documentation surface as the evaluator atom above: rendered
+      # docs may show the message shape without executing anything.
+      - id: metadata/package/documentation/page::docusaurus-docs-bundle
+
   - id: node-temporary-payload-path
     desc: Node temporary JavaScript payload path
     crit: notable
@@ -138,7 +128,7 @@ traits:
 
 composite_rules:
   # The eval sink is the canonical parsed-call atom
-  # (micro-behaviors/process/interpreter/eval/direct::js-eval-variable-text,
+  # (micro-behaviors/process/interpreter/eval/direct::js-eval-variable-argument,
   # notable). A former objectives-local text twin matched `eval(x)` anywhere in
   # extracted text and convicted that generic capability as suspicious on its
   # own -- firing on ordinary eval-based JSON parser fallbacks inside bundled
@@ -151,16 +141,30 @@ composite_rules:
     crit: hostile
     conf: 0.94
     for: [javascript, typescript]
+    near_bytes: 4096
     all:
-      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-variable-text
+      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-variable-argument
     any:
       - id: micro-behaviors/data/encode/xor::js-xor-character-code
       - id: micro-behaviors/data/encode/xor::embedded-js-xor-character-code
     unless:
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/build/bundler/vscode::vscode-extension-generated-asset
+      - id: well-known/lib/development/vscode::vscode-extension-out-output-path
       # The obfuscator tool's own bundles embed its XOR string-array codec
       # templates alongside ordinary eval use; that is the tool's product,
       # not a concealed payload in the package.
       - id: well-known/dual-use/packaging/javascript-obfuscator::tool-option-surface-context
+
+  - id: js-eval-decodeuri-modulo-xor-payload
+    desc: eval decodeURI with modulo-key XOR payload
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1140,T1059.007
+    all:
+      - id: objectives/supply-chain/hidden-payload/encoding::eval-decode-uri
+      - id: micro-behaviors/crypto/symmetric/xor/loop::js-modulo-key-xor-byte-mask
 
   - id: js-embedded-interpreter-evaluate
     desc: Embedded interpreter evaluates JavaScript strings
@@ -184,7 +188,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
       - id: micro-behaviors/data/decode/custom::js-alphabet-coded-decoder-source
       - id: objectives/anti-static/obfuscation/reflection/indirect::js-computed-charcode-call
-      - id: micro-behaviors/data/encode/char-code::fromcharcode-xor-rebuild
+      - id: micro-behaviors/data/decode/xor::fromcharcode-xor-rebuild
     unless:
       - id: well-known/lib/web/mermaid::mermaid-bundle-marker
       - id: well-known/app/publishing/wordpress-plugins/
@@ -203,6 +207,7 @@ composite_rules:
     unless:
       - id: metadata/package/testing/
 
+      - id: "metadata/file/naming::test-directory-component"
   - id: js-alphabet-decoder-aliased-eval-stage
     desc: JavaScript alphabet decoder executes its result through aliased eval
     crit: hostile
@@ -218,6 +223,7 @@ composite_rules:
     unless:
       - id: metadata/package/testing/
 
+      - id: "metadata/file/naming::test-directory-component"
   - id: jsdom-dynamic-execution
     desc: Dynamic code execution within JSDOM sandbox
     crit: suspicious
@@ -244,19 +250,6 @@ composite_rules:
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: metadata/build/
-  - id: eval-transformed-code
-    desc: eval() executing transformed code
-    crit: notable
-    conf: 0.94
-    attack: T1059.007
-    all:
-      - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
-      - id: eval-call-expression-arg
-    unless:
-      - id: metadata/package/testing/harness/runtime/
-      - id: well-known/lib/media/svga::svga-autoloader-bundle
-      - id: metadata/build/bundler/asset::js-large-module-bundle
-      - id: metadata/build/recognized-contexts::benign-build-tooling-context
   - id: encrypted-array-function-stage
     desc: Encrypted byte array decoded and executed as a JavaScript stage
     crit: hostile
@@ -279,16 +272,15 @@ composite_rules:
       - id: micro-behaviors/data/control-flow/loop::js-length-loop-compound-add
       - id: metadata/file/arithmetic::js-extreme-digit-ratio-large-source
     unless:
-      - id: metadata/file/format/structured::sourcemap
-      - id: metadata/file/format/structured::sourcemap-sources-content
-      - id: metadata/package/testing/
+      - id: metadata/file/format/source-map::sourcemap
+      - id: metadata/file/format/source-map::sourcemap-sources-content
+      - id: metadata/file/profile/test-indications/
       - id: metadata/build/bundler/vscode::vscode-extension-generated-asset
       - id: well-known/lib/development/vscode::vscode-extension-out-output-path
       - id: well-known/lib/web/mermaid::mermaid-bundle-marker
       - id: well-known/app/browser/google-web::google-recaptcha-runtime
       - id: well-known/lib/web/google-closure-library::closure-compiled-global-eval
       - id: well-known/lib/web/google-closure-library::closure-library-copyright
-
   - id: javascript-remote-encoded-command-invocation
     desc: JavaScript pairs a fetched PHP endpoint with an encoded command API
     crit: hostile
@@ -301,6 +293,7 @@ composite_rules:
     unless:
       - id: metadata/package/testing/
 
+      - id: "metadata/file/naming::test-directory-component"
   - id: webextension-all-url-remote-eval
     desc: All-URL extension executes WebSocket commands
     crit: hostile
@@ -310,7 +303,7 @@ composite_rules:
     for: [crx, xpi, zip, chrome-manifest, javascript]
     all:
       - id: string-command-eval-marker
-      - id: micro-behaviors/communications/http/websocket::websocket-constructor-call
+      - id: micro-behaviors/communications/websocket/handler::websocket-javascript-constructor
       - id: micro-behaviors/process/interpreter/eval/direct::js-eval-variable-argument
       - id: metadata/permission/manifest::host-permission-all-urls
 
@@ -343,7 +336,14 @@ composite_rules:
       - id: micro-behaviors/process/inject/webextension::chrome-scripting-main-world
       - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-variable-argument
       - id: micro-behaviors/communications/http/request/client::js-fetch-call
+    # The supply leg -- proof the injected code was supplied rather than
+    # shipped in the bundle -- comes in two shapes: an evaluator consuming a
+    # script/code/payload object member directly, or code text interpolated
+    # at runtime into a message's code field for the injector to run.
+    any:
       - id: code-bearing-object-field-reference
+      - id: runtime-message-interpolated-code-field
+    needs: 1
     # Nothing in the legs above establishes where the injected code comes from
     # — `js-fetch-call` is any fetch — so the "remotely supplied" claim does not
     # survive an extension whose script source is a desktop client on the
@@ -380,6 +380,7 @@ composite_rules:
 #
 # Worked example: the reworm package.json, whose codepoint-shaped keys decode
 # to a buffer that eval executes.
+      - id: "metadata/file/naming::test-directory-component"
   - id: manifest-stego-eval-execution
     # manifest-eval-decoded-buffer is deliberately manifest-only (for:
     # [package.json, json, package-lock.json, text]) -- it is the counterpart

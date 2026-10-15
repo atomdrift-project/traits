@@ -20,8 +20,9 @@
 # against.
 #
 # Suspicious, and deliberately silent about the code: like its siblings, this
-# reports a package a human should look at. Upstream's own releases and honest
-# wrappers are excluded by name and by declared dependency.
+# reports a package a human should look at. Upstream's own releases, honest
+# wrappers and disclosed redistributions are excluded by name, by declared
+# dependency and by summary disclosure.
 defaults:
   platforms: [unix, windows]
   for: [whl, python-sdist, egg, zip, tar]
@@ -30,16 +31,49 @@ defaults:
 
 composite_rules:
   - id: rebranded-litellm-redistribution
-    for: [egg, python-sdist, tar, whl, zip, pkginfo]
+    for: [egg, python, python-sdist, tar, whl, zip, pkginfo]
     desc: Distribution republishes LiteLLM under another name
     crit: suspicious
     conf: 0.93
     scope: archive
     all:
-      - id: well-known/lib/ai/litellm::litellm-codebase
+      # The codebase outside its own module path: upstream's own members
+      # live under litellm/ and never reach this leg, so the composite
+      # only fires where the code was relocated under another name. (A
+      # file-scoped `unless:` on the metadata name cannot work here: the
+      # name lives on a different member than the code.)
+      - id: well-known/lib/ai/litellm::litellm-codebase-outside-module-path
     unless:
       # Upstream's own wheels and sdists.
       - id: well-known/lib/ai/litellm::litellm-distribution-name
       # A wrapper that declares LiteLLM as a dependency is using it, not
       # reissuing it.
       - id: well-known/lib/ai/litellm::litellm-declared-dependency
+      # A redistribution whose summary names LiteLLM discloses its lineage.
+      - id: well-known/lib/ai/litellm::litellm-redistribution-disclosure
+    downgrade:
+      # Lineage facts live on the metadata member while codebase evidence
+      # lands on source members; `unless:` only sees the matched file, so the
+      # same three exclusions are mirrored at archive scope.
+      scope: archive
+      any:
+        - id: well-known/lib/ai/litellm::litellm-distribution-name
+        - id: well-known/lib/ai/litellm::litellm-declared-dependency
+        - id: well-known/lib/ai/litellm::litellm-redistribution-disclosure
+
+  - id: pypi-wheel-litellm-namespace-republish
+    for: [whl, pkginfo, python]
+    desc: Foreign wheel hijacks litellm import namespace
+    crit: hostile
+    conf: 0.97
+    attack: T1195.002,T1036.005
+    scope: archive
+    all:
+      - id: metadata/package/name/convention::wheel-dist-name-top-level-mismatch
+      - id: metadata/package/files/wheel-sdist::wheel-top-level-litellm-module
+      - id: well-known/lib/ai/litellm::litellm-codebase
+    unless:
+      - id: well-known/lib/ai/litellm::litellm-distribution-name
+      - id: well-known/lib/ai/litellm::litellm-declared-dependency
+      # A redistribution whose summary names LiteLLM discloses its lineage.
+      - id: well-known/lib/ai/litellm::litellm-redistribution-disclosure

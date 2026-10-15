@@ -25,7 +25,7 @@ traits:
       regex: (?i)avast(svc|ui|setup|\.exe)
     downgrade:
       any:
-        - id: metadata/package/versioning/scheme::pe-version-resource
+        - id: metadata/binary/resource/identity::pe-version-resource
   - id: avast-service-other
     desc: Avast service reference (terms)
     crit: notable
@@ -43,16 +43,6 @@ traits:
     if:
       type: text
       regex: '(?i)\bCylanceSvc\.exe\b'
-    unless:
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-  - id: edr-process-image-defender
-    desc: Defender security process images
-    crit: notable
-    conf: 0.96
-    for: [scripts, binaries, c, cpp, powershell]
-    if:
-      type: text
-      regex: '(?i)\b(MsMpEng|NisSrv|WinDefend)\.exe\b'
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   - id: edr-process-image-crowdstrike
@@ -125,10 +115,10 @@ composite_rules:
     for: [pe, dll]
     any:
       - id: micro-behaviors/os/security/product::bitdefender-service-host
-      - id: objectives/impact/degrade/edr/targeting::qihoo-360-safe
-      - id: objectives/impact/degrade/edr/targeting::windows-defender-target
-      - id: objectives/impact/degrade/edr/targeting::kaspersky-target
-      - id: objectives/impact/degrade/edr/targeting::mcafee-target
+      - id: micro-behaviors/os/security/product::qihoo-360-safe
+      - id: micro-behaviors/process/info/name::defender-target-name-reference
+      - id: micro-behaviors/process/info/name::kaspersky-target-name-reference
+      - id: micro-behaviors/process/info/name::mcafee-target-name-reference
   - id: security-process-debug-inject
     desc: Debug-privilege injection into security processes
     crit: hostile
@@ -142,7 +132,7 @@ composite_rules:
       - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
     any:
       - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
-      - id: micro-behaviors/os/syscall/raw::nt-write-ssn
+      - id: micro-behaviors/process/inject/runtime/call::nt-write-virtual-memory-name
       - id: objectives/evasion/process/injection/toolkit::poolparty-toolkit
       - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex
     needs: 2
@@ -150,6 +140,7 @@ composite_rules:
       - id: metadata/binary/vendor::microsoft-corp-versioninfo
       - id: metadata/binary/vendor::bitdefender-product-marker
       - id: well-known/app/system/iobit::advanced-systemcare-component-context
+      - id: objectives/impact/degrade/edr/teardown::generic-byovd-edr-termination
   - id: termination-verbs
     desc: Process termination indicator
     crit: component
@@ -181,11 +172,11 @@ composite_rules:
       - id: micro-behaviors/os/security/product::mcafee-name
       - id: micro-behaviors/os/security/product::sophos-name
       - id: micro-behaviors/os/security/product::eset-name
-      - id: tencent-security
-      - id: baidu-security
-      - id: kingsoft-security
-      - id: rising-av
-      - id: huorong-security
+      - id: micro-behaviors/os/security/product::tencent-security
+      - id: micro-behaviors/os/security/product::baidu-security
+      - id: micro-behaviors/os/security/product::kingsoft-security
+      - id: micro-behaviors/os/security/product::rising-av
+      - id: micro-behaviors/os/security/product::huorong-security
   - id: kill-comp
     desc: EDR process termination
     crit: suspicious
@@ -204,7 +195,7 @@ composite_rules:
     for: [scripts, binaries, c, cpp, powershell]
     any:
       - id: edr-process-image-cylance
-      - id: edr-process-image-defender
+      - id: micro-behaviors/process/info/name::defender-process-image-reference
       - id: edr-process-image-crowdstrike
       - id: edr-process-image-sentinel
       - id: edr-process-image-antivirus
@@ -220,7 +211,7 @@ composite_rules:
     for: [scripts, binaries, c, cpp, powershell]
     any:
       - id: edr-process-image-cylance
-      - id: edr-process-image-defender
+      - id: micro-behaviors/process/info/name::defender-process-image-reference
       - id: edr-process-image-crowdstrike
       - id: edr-process-image-sentinel
       - id: edr-process-image-antivirus
@@ -229,27 +220,45 @@ composite_rules:
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   - id: multi-vendor-security-process-killer
-    desc: Enumerates and terminates security-vendor processes
+    desc: Security-vendor list with external kill APIs
     crit: hostile
     conf: 0.99
     for: [pe, dll]
     attack: T1562.001,T1057
     all:
+      # CRT TerminateProcess(GetCurrentProcess()) is not an AV kill.
+      - id: micro-behaviors/process/attach/rights::open-process
       - id: multi-vendor-security-process-images
       - id: micro-behaviors/process/enumerate/snapshot::create-toolhelp32-snapshot
     any:
       - id: micro-behaviors/process/terminate/kill::terminate-process
       - id: micro-behaviors/process/terminate/kill::terminate-process-name-text
     needs: 1
+  - id: multi-vendor-security-process-silencer
+    desc: Multi-vendor security process network isolation
+    crit: hostile
+    conf: 0.98
+    for: [scripts, binaries, c, cpp, powershell]
+    attack: T1562.001,T1562.004
+    all:
+      - id: multi-vendor-security-process-images
+      - id: micro-behaviors/os/firewall/wfp::wfp-outbound-process-block-source
   - id: edr-security-process-termination
     desc: Force-kills a security-product process
     crit: suspicious
     conf: 0.97
-    for: [scripts, binaries, c, cpp, powershell]
+    for:
+    - scripts
+    - binaries
+    - c
+    - cpp
+    - powershell
     all:
-      - id: security-product-process-image
+    - id: security-product-process-image
     any:
-      - id: micro-behaviors/process/terminate/command::taskkill-force-image-name
+    - id: micro-behaviors/process/terminate/command::taskkill-force-image-name
+    unless:
+    - id: micro-behaviors/metaprogramming/generation::configured-source-builder
   - id: stopper
     desc: EDR/Antivirus service stopper
     crit: suspicious

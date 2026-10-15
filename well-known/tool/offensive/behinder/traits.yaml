@@ -6,17 +6,16 @@ defaults:
   size_max: 100000000
 
 traits:
-  - id: java-package-path
-    desc: Behinder Java package path component
+  - id: java-class-namespace
+    desc: Behinder declared Java class namespace
     crit: notable
     conf: 0.98
+    for: [class]
     if:
-      type: path
-      regex: '(^|[\\/])behinder[\\/]'
+      type: value
+      path: class.this_class
+      regex: '^net/rebeyond/behinder/'
 
-  # Behinder derives its AES key from md5(password)[0:16]; the default
-  # connection password "rebeyond" bakes e45e329feb5d925b into every default
-  # shell, whatever the carrier (Java, PHP, ASP.NET).
   - id: default-aes-key
     desc: Behinder default AES key
     crit: notable
@@ -52,129 +51,150 @@ traits:
       type: path
       regex: '(^|[\\/])Decrypt\.class$'
 
-  - id: java-payload-path
-    desc: Behinder Java payload package path
+  - id: java-payload-namespace
+    desc: Behinder declared Java payload namespace
     crit: notable
     conf: 0.98
+    for: [class]
     if:
-      type: path
-      regex: '(^|[\\/])payload[\\/]'
+      type: value
+      path: class.this_class
+      regex: '^net/rebeyond/behinder/payload/'
 
-  # Client-side packages shipped inside Behinder.jar (management UI, crypto,
-  # DAO, entities, utils). Distinct from the server-side `payload/` package.
-  # The leading boundary is dropped to stay within the two-separator path
-  # budget; every composite using this atom also requires java-package-path,
-  # which anchors `behinder/` on its own.
-  - id: java-client-package-path
-    desc: Behinder Java client package path
+  - id: java-client-namespace
+    desc: Behinder declared Java client namespace
     crit: notable
-    conf: 0.96
+    conf: 0.98
+    for: [class]
     if:
-      type: path
-      regex: 'behinder[\\/](core|utils|ui|dao|entity)[\\/]'
+      type: value
+      path: class.this_class
+      regex: '^net/rebeyond/behinder/(core|utils|ui|dao|entity)/'
+
+  - id: java-echo-helper-class
+    desc: Behinder Echo class without a RunCMD reference
+    crit: notable
+    conf: 0.99
+    for: [class]
+    if:
+      type: value
+      path: class.this_class
+      exact: net/rebeyond/behinder/payload/java/Echo
+    unless:
+    - type: import
+      exact: RunCMD
 
 composite_rules:
   - id: family-markers
-    desc: Behinder webshell framework family markers
-    crit: suspicious
+    desc: Behinder Java payload or client class identity
+    crit: notable
     conf: 0.99
+    for: [class]
     all:
-      - id: java-package-path
+      - id: java-class-namespace
     any:
-      - id: default-aes-key
-      - id: rebeyond-package-token
-      - id: rebeyond-package-path
-      - id: core-decrypt-class-path
+      - id: java-payload-namespace
+      - id: java-client-namespace
 
   - id: webshell-framework
-    for: [class]
-    desc: Behinder webshell framework capability
+    for:
+    - class
+    desc: Behinder encrypted execution or class-loading payload
     crit: hostile
     conf: 0.99
     all:
-      - id: family-markers
-      - id: micro-behaviors/crypto/library/provider::java-raw-key-cipher-use
+    - id: family-markers
+    - id: micro-behaviors/crypto/cipher::java-raw-key-cipher-use
+    - id: java-payload-namespace
     any:
-      - id: objectives/command-and-control/backdoor/webshell/exec/
-      - id: micro-behaviors/data/source/dynamic/reflect::java-defineclass
-      - id: micro-behaviors/process/create/exec::child-process-execution
-      - id: micro-behaviors/data/source/dynamic/reflect::java-bytecode-reflective-method-invoke
-
-  # The payload package is distinct from Behinder's client/UI and JDBC-style
-  # support code. Its classes are the server-side actions delivered through a
-  # webshell, so the package identity plus the family marker is sufficient to
-  # identify a payload component. The second composite below requires an
-  # active sink before adding another hostile signal.
-  - id: payload-component
-    desc: Behinder server-side webshell payload component
-    crit: hostile
-    conf: 0.99
-    all:
-      - id: family-markers
-      - id: java-payload-path
-
-  # Management JAR classes are not the injected payload, but they are still
-  # Behinder offensive tooling. Pairing the family marker with a client-package
-  # path yields a second independent hostile finding for those members.
+    - id: objectives/command-and-control/backdoor/webshell/exec/
+    - id: micro-behaviors/process/interpreter/runtime/jvm::java-defineclass-name-constant
+    - id: micro-behaviors/process/create/exec::child-process-execution
+    - id: micro-behaviors/process/create/subprocess::java-processbuilder-start-bytecode
+    unless:
+    - id: echo-response-helper-context
+  # Desktop management classes are tooling identity, not injected payload.
   - id: management-client-component
+    for: [class]
     desc: Behinder management client component
-    crit: hostile
+    crit: notable
     conf: 0.99
     all:
       - id: family-markers
-      - id: java-client-package-path
+      - id: java-client-namespace
 
   - id: payload-active-operation
-    desc: Behinder payload exposes an active server-side capability
-    # The package and payload composites establish the malicious identity. An
+    for: [class]
+    desc: Behinder payload contains server-side capability references
+    # The declared namespace establishes payload identity. An
     # operation atom is still valuable triage context, but repeating it as a
     # hostile verdict overcounts the same payload capability.
     crit: notable
     conf: 0.99
     all:
       - id: family-markers
-      - id: java-payload-path
+      - id: java-payload-namespace
     any:
-      - id: micro-behaviors/crypto/library/provider::java-raw-key-cipher-use
+      - id: micro-behaviors/crypto/cipher::java-raw-key-cipher-use
       - id: micro-behaviors/process/create/exec::child-process-execution
-      - id: micro-behaviors/data/source/dynamic/reflect::java-bytecode-reflective-method-invoke
+      - id: micro-behaviors/metaprogramming/reflection::java-bytecode-reflective-method-invoke
       - id: micro-behaviors/communications/socket/create::java-socket-class-import
       - id: micro-behaviors/communications/dns/resolver::jvm-inetaddress-getbyname-bytecode
       - id: micro-behaviors/communications/socket/send::java-raw-socket-client-write
       - id: micro-behaviors/fs/write/file/handle::jvm-fileoutputstream-bytecode
       - id: micro-behaviors/fs/delete/file/library::java-file-delete-bytecode
 
-  # Network-only payloads (SocksProxy, PortMap, Ping, …) lack the AES helpers
-  # that power webshell-framework / payload-file-ops. Path identity composites
-  # share one display span, so without a network-span hostile those classes
-  # under-count. Suppress on the AES leaf — not on webshell-framework, whose
-  # aggregator expansion blows the unless: budget.
+  # Network-only payloads lack the AES helpers used by the other payload
+  # rules. Require the declared payload identity plus a network capability.
   - id: payload-network-channel
+    for: [class]
     desc: Behinder payload opens a network tunnel or probe channel
     crit: hostile
     conf: 0.98
     all:
       - id: family-markers
-      - id: java-payload-path
+      - id: java-payload-namespace
     any:
       - id: micro-behaviors/communications/socket/create::java-socket-class-import
       - id: micro-behaviors/communications/dns/resolver::jvm-inetaddress-getbyname-bytecode
       - id: micro-behaviors/communications/socket/send::java-raw-socket-client-write
     unless:
-      - id: micro-behaviors/crypto/library/provider::java-raw-key-cipher-use
+      - id: micro-behaviors/crypto/cipher::java-raw-key-cipher-use
 
-  # Payload classes (FileOperation, Cmd, …) ship AES helpers plus filesystem
-  # or process sinks. family-markers alone is only suspicious; pairing the
-  # framework identity with a concrete sink is the hostile payload shape.
-  - id: payload-file-ops
-    for: [class]
-    desc: Behinder decrypted payload performs file or reflective operations
+  # AES and reflective Base64 helpers alone also occur in inert echo classes.
+  # Require a file mutation or actual process API reference for this verdict.
+  - id: encrypted-payload-operations
+    for:
+    - class
+    desc: Behinder encrypted payload with file or process operations
     crit: hostile
     conf: 0.98
     all:
-      - id: family-markers
-      - id: micro-behaviors/crypto/library/provider::java-raw-key-cipher-use
+    - id: family-markers
+    - id: micro-behaviors/crypto/cipher::java-raw-key-cipher-use
+    - id: java-payload-namespace
     any:
-      - id: micro-behaviors/fs/write/file/handle::jvm-fileoutputstream-bytecode
-      - id: micro-behaviors/fs/delete/file/library::java-file-delete-bytecode
-      - id: micro-behaviors/data/source/dynamic/reflect::java-bytecode-reflective-method-invoke
+    - id: micro-behaviors/fs/write/file/handle::jvm-fileoutputstream-bytecode
+    - id: micro-behaviors/fs/delete/file/library::java-file-delete-bytecode
+    - id: micro-behaviors/process/create/exec::child-process-execution
+    - id: micro-behaviors/process/create/subprocess::java-processbuilder-start-bytecode
+    unless:
+    - id: echo-response-helper-context
+
+  # The echo entry point returns content, and never calls its copied RunCMD
+  # helper. Preserve that dormant execution capability as a notable finding.
+  # Do not suppress variants that reference RunCMD or add other payload APIs.
+  - id: echo-response-helper-context
+    desc: Behinder echo helper with no command-helper invocation
+    crit: exception
+    for: [class]
+    all:
+    - id: java-echo-helper-class
+    - id: micro-behaviors/crypto/cipher::java-raw-key-cipher-use
+    - id: micro-behaviors/metaprogramming/reflection::java-bytecode-reflective-method-invoke
+    unless:
+    - id: micro-behaviors/fs/write/file/handle::jvm-fileoutputstream-bytecode
+    - id: micro-behaviors/fs/delete/file/library::java-file-delete-bytecode
+    - id: micro-behaviors/communications/socket/create::java-socket-class-import
+    - id: micro-behaviors/process/interpreter/runtime/jvm::java-defineclass-name-constant
+    - id: micro-behaviors/process/create/subprocess::java-processbuilder-start-bytecode

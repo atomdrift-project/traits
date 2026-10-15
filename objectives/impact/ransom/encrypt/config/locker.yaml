@@ -133,7 +133,7 @@ traits:
   conf: 0.95
   if:
     type: text
-    regex: \$\{(EXTENSION|NOTE_FILE_NAME|ACCESS_KEY)\}
+    regex: '(\$\{(NOTE_FILE_NAME|ACCESS_KEY\}\$\{EXTENSION)\}|RECOVER-\$\{EXTENSION\})'
   unless:
   - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 - id: vm-kill-config-1
@@ -189,6 +189,13 @@ traits:
   if:
     type: text
     regex: '(^|[^\w.-])[\w-]+\.[A-Za-z0-9]{1,8}\.(crypt|encrypted|locked)$'
+  not:
+  # Dotted code identifiers are not filenames: Go-qualified field names such
+  # as main.loginPBE.encrypted (Firefox NSS PBE structs in credential
+  # stealers) read as name.ext.suffix to the matcher above. File extensions
+  # in genuine double-extension markers are lowercase, so the veto only fires
+  # when the middle segment carries uppercase.
+  - regex: '(^|[^\w.-])[\w-]+\.[A-Za-z0-9]*[A-Z][A-Za-z0-9]*\.(crypt|encrypted|locked)$'
   unless:
   - type: text
     regex: ^matplotlib$
@@ -201,6 +208,11 @@ traits:
   if:
     type: text
     regex: '(^|[^\w.-])[\w-]+\.[A-Za-z0-9]{1,8}\.(enc|crypted|cry)$'
+  not:
+  # OCaml-qualified function names are not filenames (Tls__Engine.encrypt.enc).
+  - regex: '^[A-Z][A-Za-z0-9_]*__'
+  # Emoji / symbol shortcodes are not filenames (cat.face.cry).
+  - regex: 'cat\.face\.cry'
   unless:
   - type: text
     regex: '^payload\.enc$'
@@ -370,7 +382,7 @@ traits:
   if:
     type: text
     case_insensitive: true
-    word: payment
+    regex: '\b(payment.{0,40}(decrypt|recover|files)|pay.{0,30}ransom)\b'
   unless:
     - id: well-known/lib/crypto/nss/
 - id: locker-command-enable-field
@@ -446,6 +458,10 @@ traits:
     type: encoded
     encoding: base64
     regex: '(?i)(files?.{0,24}encrypt|backups?.{0,24}delet|data.{0,24}leak)'
+  unless:
+  - id: well-known/tool/detection/
+  - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: ransomware-encrypted-extension-status
   desc: Ransomware file-encryption status string
   crit: suspicious
@@ -616,6 +632,14 @@ composite_rules:
   - id: well-known/lib/crypto/nss/
   - id: well-known/app/utility/360-file-guard::360-file-guard-identity
   - id: well-known/app/productivity/thebrain::thebrain-known-app-context
+  - id: well-known/app/security/qnsqy::qnsqy-known-app-context
+  # Parser-library malware-fixture corpora (saferwall/pe test/): the
+  # specimen is inert test data, not a shipped ransom note.
+  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
+  downgrade:
+    scope: archive
+    any:
+    - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 - id: xml-locker-settings-schema
   desc: XML locker configuration with destructive controls
   crit: suspicious
@@ -823,6 +847,7 @@ composite_rules:
     - id: metadata/binary/installer/script/
     - id: well-known/lib/crypto/openssl/
     - id: micro-behaviors/data/db/postgresql/
+    - id: well-known/app/security/qnsqy::qnsqy-known-app-context
 - id: c-file-encryptor
   desc: C/C++ file encryption ransomware with payment verification
   crit: hostile
@@ -838,8 +863,8 @@ composite_rules:
   crit: component
   conf: 0.9
   unless:
-  - id: objectives/impact/ransom/encrypt/threat-text::inline__data-loss-threat__unless_1_a
-  - id: objectives/impact/ransom/encrypt/threat-text::inline__data-loss-threat__unless_1_b
+  - id: micro-behaviors/ui/window/notify::credential-recovery-failure-wording
+  - id: micro-behaviors/os/message/error::token-user-recovery-failure
   any:
   - id: objectives/impact/ransom/encrypt/threat-text
   downgrade:

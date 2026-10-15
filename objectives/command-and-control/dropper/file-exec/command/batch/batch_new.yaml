@@ -18,15 +18,6 @@ traits:
   if:
     type: text
     substr: '慴瑲∠•┢整灭慐桴尥攥數楆敬慎敭∥'
-- id: done-marker
-  desc: Execution marker file
-  crit: suspicious
-  conf: 0.75
-  for:
-  - batch
-  if:
-    type: text
-    regex: (?i)(if\s+exist|echo\.\s*>)[^\r\n]{0,80}\.(done|installed|complete)\b
 - id: temp-jpg-payload-copy--binary
   desc: Copies JPG payload to binary
   crit: suspicious
@@ -45,24 +36,6 @@ traits:
   if:
     type: text
     regex: '(?i)copy.{0,40}%temp%\\.{1,80}\.jpg.{0,120}\.(cmd|msi|ini)'
-- id: user-profile-system-name-launch
-  desc: Starts system-named exe from user profile
-  crit: suspicious
-  conf: 0.88
-  for:
-  - batch
-  if:
-    type: text
-    regex: '(?i)start\s+""\s+"C:\\Users\\[^"\r\n]{1,70}\\(services|system|wmiprvse)\.exe"'
-- id: tasks-system-name-launch
-  desc: Starts system-named exe from Windows Tasks
-  crit: suspicious
-  conf: 0.88
-  for:
-  - batch
-  if:
-    type: text
-    regex: '(?i)start\s+""\s+"C:\\Windows\\Tasks\\(services|system|wmiprvse)\.exe"'
 - id: renamed-regsvr32-temp-exec
   desc: Renamed regsvr32 temp execution
   crit: suspicious
@@ -174,7 +147,9 @@ traits:
   - powershell
   if:
     type: text
-    regex: '(?i)Get-Content.{0,80}\.tmp.{0,40}-Raw'
+    regex: '(?i)Get-Content.{0,80}\.tmp([''"\s]|$).{0,40}-Raw'
+  unless:
+  - id: well-known/tool/offensive/dalfox::dalfox-scanner-context
 - id: ps-regex-repaired-base64
   desc: PowerShell regex repairs Base64
   crit: suspicious
@@ -195,32 +170,6 @@ traits:
   if:
     type: text
     substr: AFIAZQBmAGwAZQBjAHQAaQBvAG4ALgBBAHMAcwBlAG0AYgBsAHkAXQA6ADo
-- id: out-file-ps1-stage
-  # Writing a .ps1 via Out-File is how PowerShell modules scaffold map/config
-  # scripts; dropper intent comes from composites that also rebuild temp stages.
-  desc: Out-File writes ps1 stage
-  crit: notable
-  conf: 0.9
-  for:
-  - batch
-  - powershell
-  if:
-    type: text
-    regex: 'Out-File[^\n]{0,120}\.ps1'
-  unless:
-  - type: path
-    regex: '(^|[\\/])Create-IntuneRemediation\.ps1$'
-  - id: metadata/package/testing/
-- id: batch-echo-base64-stage
-  desc: Batch echoes large base64 stage
-  crit: suspicious
-  conf: 0.9
-  for:
-  - batch
-  count_min: 3
-  if:
-    type: text
-    regex: '(?i)echo\s+[A-Za-z0-9+/=]{80,}\s*>>?\s*"?([%A-Za-z0-9._\\-]+)"?'
 - id: rem-marker-hidden-payload
   desc: Batch hides payload in REM markers
   crit: suspicious
@@ -334,7 +283,7 @@ composite_rules:
   any:
   - id: micro-behaviors/process/create/hidden::start-minimized-self
   - id: micro-behaviors/fs/path/check::batch-multiple-if-exist-gates
-  - id: micro-behaviors/os/console/io::windows-stdout-to-nul
+  - id: micro-behaviors/os/console/io::windows-output-to-nul-text
   - id: micro-behaviors/os/console/io::stderr-redirect
   needs: 2
 - id: batch-obfuscated-self-deleting-loader
@@ -385,6 +334,10 @@ composite_rules:
   - id: well-known/tool/development/cli/batch-scripts::intel-dle-official-installer
   - id: well-known/tool/development/cli/batch-scripts::protobuf-kokoro-wheel-builder
   - id: well-known/tool/development/cli/batch-scripts::appveyor-pypy-ci-installer
+  - id: well-known/tool/development/cli/batch-scripts::appveyor-ci-batch-script
+  # Empty-machine front door fetching its own bootstrap from the vendor repo
+  # plus its companion service helper: the vendor's installer, not a dropper.
+  - id: well-known/tool/development/cli/batch-scripts::mill-official-installer
 - id: batch-disguised-vnc-dropper
   desc: Batch stages disguised VNC payloads
   crit: hostile
@@ -395,36 +348,6 @@ composite_rules:
   all:
   - id: temp-jpg-payload-copy
   - id: objectives/command-and-control/backdoor/control/rmm::ultravnc-payload-staging
-- id: writable-system-name-launch
-  desc: Starts system-named writable exe
-  crit: suspicious
-  conf: 0.9
-  for:
-  - batch
-  any:
-  - id: user-profile-system-name-launch
-  - id: tasks-system-name-launch
-- id: batch-writable-system-name-loader
-  desc: Batch starts masqueraded writable system executable
-  crit: hostile
-  conf: 0.96
-  attack: T1036.005
-  for:
-  - batch
-  all:
-  - id: writable-system-name-launch
-  - id: micro-behaviors/time/sleep/interval::w32tm-local-stripchart-command
-  - id: micro-behaviors/process/create/shell/script-host::batch-temp-script-command
-- id: batch-temp-stage-system-name-loader
-  desc: Batch launches masqueraded executable and removes temp stage
-  crit: hostile
-  conf: 0.95
-  attack: T1036.005
-  for:
-  - batch
-  all:
-  - id: writable-system-name-launch
-  - id: micro-behaviors/process/create/shell/script-host::batch-temp-script-command
 - id: batch-renamed-regsvr32-loader
   desc: Batch copies regsvr32 to temp payload
   crit: suspicious
@@ -465,7 +388,13 @@ composite_rules:
   - batch
   all:
   - id: micro-behaviors/communications/http/lib/invoke-webrequest::embedded-irm-iex-pipeline
-  - id: objectives/command-and-control/dropper/script-eval/response-eval::batch-powershell-long-irm-iex
+  - id: objectives/command-and-control/dropper/script-eval/response-eval/batch::batch-powershell-long-irm-iex
+  unless:
+  - id: well-known/tool/packaging/uv::uv-powershell-piped-installer-command
+  - id: micro-behaviors/os/package-manager/install::bun-powershell-piped-installer-command
+  - id: well-known/tool/sysadmin/scoop::scoop-powershell-piped-installer-command
+  - id: well-known/app/ai/coding-agent/anthropic-claude-code::claude-code-powershell-piped-installer-command
+  - id: well-known/app/media/spotatui::spotatui-powershell-piped-installer-command
 - id: batch-public-python-remote-base64-exec
   desc: Batch runs masqueraded Python remote base64 payload
   crit: hostile
@@ -475,7 +404,7 @@ composite_rules:
   - batch
   all:
   - id: micro-behaviors/process/create/shell/batch::public-exe-script-argument
-  - id: objectives/command-and-control/dropper/script-eval/response-eval::batch-python-remote-base64-exec
+  - id: objectives/command-and-control/dropper/script-eval/response-eval/batch::batch-python-remote-base64-exec
 - id: batch-obfuscated-python-remote-base64-exec
   desc: Obfuscated batch hides Python remote base64 exec
   crit: hostile
@@ -484,7 +413,7 @@ composite_rules:
   for:
   - batch
   all:
-  - id: objectives/command-and-control/dropper/script-eval/response-eval::batch-python-remote-base64-exec
+  - id: objectives/command-and-control/dropper/script-eval/response-eval/batch::batch-python-remote-base64-exec
   - id: objectives/anti-static/obfuscation/string/fragmentation::batch-cjk-long-token-obfuscation
 - id: batch-obfuscated-python-remote-base64-exec-bytes
   desc: Obfuscated batch byte-hides Python remote base64 exec
@@ -494,7 +423,7 @@ composite_rules:
   for:
   - batch
   all:
-  - id: objectives/command-and-control/dropper/script-eval/response-eval::batch-python-remote-base64-exec-bytes
+  - id: objectives/command-and-control/dropper/script-eval/response-eval/batch::batch-python-remote-base64-exec-bytes
   - id: objectives/anti-static/obfuscation/string/fragmentation::batch-cjk-long-token-obfuscation
 # `mislabeled-single-line-source` (objectives/evasion/masquerade/interpreter)
 # is scoped to `for: [shell, javascript]` -- its own `script-content-extension-
@@ -535,8 +464,8 @@ composite_rules:
   any:
   - id: micro-behaviors/fs/path/temp::temp-powershell-script-path
   - id: micro-behaviors/fs/path/temp::temp-tmp-path-reference
-  - id: batch-echo-base64-stage
-  - id: out-file-ps1-stage
+  - id: micro-behaviors/fs/write/file/redirect::batch-repeated-base64-alphabet-writes
+  - id: micro-behaviors/fs/write/content::powershell-out-file-ps1-path
   - id: micro-behaviors/fs/path/temp::batch-data-path-reference
   - id: micro-behaviors/fs/path/temp::batch-script-path-reference
   - id: micro-behaviors/fs/write/file/binary::embedded-powershell-base64-write-all-bytes
@@ -589,7 +518,7 @@ composite_rules:
   - id: micro-behaviors/process/create/shell/batch::run-from-temp
   any:
   - id: micro-behaviors/fs/write/file/redirect::batch-echo-redirect
-  - id: batch-echo-base64-stage
+  - id: micro-behaviors/fs/write/file/redirect::batch-repeated-base64-alphabet-writes
   - id: micro-behaviors/fs/path/temp::temp-tmp-path-reference
   - id: micro-behaviors/fs/path/temp::temp-dat-path-reference
   - id: micro-behaviors/fs/path/temp::batch-temp-file-assignment
@@ -603,7 +532,7 @@ composite_rules:
   for:
   - batch
   all:
-  - id: objectives/anti-static/obfuscation/payload/encoded/carrier::base64-pe-header
+  - id: metadata/file/encoding::base64-pe-script-carrier
   any:
   - id: batch-base64-pe-prefix
   - id: micro-behaviors/fs/write/file/redirect::batch-echo-redirect
@@ -762,8 +691,8 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/string/concat::batch-fragmented-env-loader
   - id: micro-behaviors/process/create/shell/lang::powershell-invocation
-  - id: micro-behaviors/process/daemonize/spawn::powershell-hidden
-  - id: micro-behaviors/process/interpreter/eval/direct::embedded-powershell-iex
+  - id: micro-behaviors/process/create/hidden::powershell-hidden-command-text
+  - id: micro-behaviors/process/interpreter/eval/direct::powershell-expression-command-text
   - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
   - id: ps-regex-repaired-base64
   - id: wide-b64-reflection-assembly
@@ -809,7 +738,7 @@ composite_rules:
   any:
   - id: temp-powershell-stage-rebuild
   - id: temp-raw-base64-rebuild
-  - id: batch-echo-base64-stage
+  - id: micro-behaviors/fs/write/file/redirect::batch-repeated-base64-alphabet-writes
 - id: keyed-temp-payload-launch
   desc: Launches keyed TEMP payload file
   crit: suspicious
@@ -832,9 +761,9 @@ composite_rules:
   attack: "T1027.009"
   for: [batch]
   all:
-  - id: micro-behaviors/data/encoded::raw-base64-pe-header
+  - id: metadata/file/encoding::base64-pe-header-text
   any:
-  - id: objectives/anti-static/obfuscation/string/concat::batch-fragmented-command-undefined-vars
+  - id: objectives/anti-static/obfuscation/string/concat::batch-interleaved-env-fragments
   - id: objectives/anti-static/obfuscation/string/fragmentation::batch-long-token-saturation
   - id: objectives/anti-static/obfuscation/string/fragmentation::batch-long-line-saturation
   needs: 2
@@ -849,7 +778,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/download/cli::iwr-outfile-download
   - id: micro-behaviors/os/privilege/elevation::runas-verb
   - id: micro-behaviors/os/com/automation::shell-namespace-copyhere
-  - id: micro-behaviors/process/create/shell/script-host::rundll32-exec-with-args
+  - id: micro-behaviors/process/create/exec::rundll32-command-syntax-reference
   - id: objectives/discovery/network/scan/port/printer::batch-printer-port-sweep
   unless:
   - id: well-known/tool/sysadmin/

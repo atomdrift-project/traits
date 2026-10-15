@@ -45,34 +45,6 @@ composite_rules:
     all:
       - id: jpartifacts-runtime-dependency
       - id: metadata/package/dependencies/direct-url::devdep-plaintext-http
-  - id: unpinned-github-phantom-runtime-dependency
-    for: [package.json, npm]
-    desc: Unused mutable GitHub runtime dependency
-    crit: hostile
-    conf: 0.99
-    mbc: B0024
-    scope: archive
-    all:
-      - id: metadata/package/dependencies/direct-url::dep-github-mutable-branch-archive
-      - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
-  - id: remote-phantom-runtime-dependency
-    for: [package.json, npm]
-    desc: Unused direct-URL runtime dependency
-    crit: suspicious
-    conf: 0.9
-    mbc: B0024
-    scope: archive
-    all:
-      # Correlate the unresolved count to the URL dependency. With several
-      # dependencies the metric cannot say which name was missed (GitHub PURLs
-      # in particular differ from their import key), so calling the URL unused
-      # is unsupported. When it is the sole dependency, the correlation is
-      # unambiguous.
-      - id: metadata/package/dependencies/manifest/source::npm-single-https-runtime-dependency
-      - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
-    unless:
-      - id: metadata/package/publishing::is-private
-      - id: well-known/app/security/securityctrl::repository-host
   - id: public-package-remote-dependency-side-effect-import
     for: [package.json, javascript, npm]
     desc: Public package loads a direct-URL runtime dependency for side effects
@@ -88,14 +60,17 @@ composite_rules:
       - id: well-known/tool/development/aube::aube-package-test-fixture
       - id: well-known/tool/development/aube::aube-lifecycle-scanner-source
       - id: metadata/package/publishing::is-private
-      - id: metadata/package/testing/
+      # Shipped TypeScript declaration files match test-or-declaration-file
+      # under metadata/package/testing/; a broad testing/ unless suppressed this
+      # composite on ordinary published packages that include index.d.ts.
+      - id: metadata/package/testing/presence/manifest::package-test-or-template-path
   - id: dynamic-dns-plaintext-tarball-dependency
     desc: Dynamic-DNS plaintext tarball dependency
     crit: hostile
     conf: 0.995
     all:
       - id: metadata/package/dependencies/direct-url::dep-custom-port-tarball-kv
-      - id: micro-behaviors/communications/url/host::dynamic-dns-hostname
+      - id: micro-behaviors/communications/url/host/name::dynamic-dns-hostname
   # `multiple-url-dependencies` moved to
   # metadata/package/dependencies/direct-url/: pinning several deps to URLs is a
   # neutral manifest property common in legitimate apps (React Native SDK
@@ -113,7 +88,7 @@ composite_rules:
       - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
       - id: metadata/package/dependencies/direct-url::runtime-direct-url-dependency
       - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
-      - id: objectives/command-and-control/dropper/file-exec/detached::node-windows-wsh-persistence-remote-dropper
+      - id: objectives/execution/payload/file-exec::node-windows-wsh-persistence-remote-dropper
   - id: mutable-url-dependency-install-activation
     desc: Postinstall activates mutable URL dependency
     crit: hostile
@@ -135,9 +110,10 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::install-hooks
     unless:
       - id: metadata/package/dependencies/direct-url::package-dependencies-field
-      - id: metadata/package/repository/
+      - id: metadata/package/repository::has-repository-evidence
       - id: metadata/package/testing/presence/manifest::package-test-or-template-path
       - id: well-known/app/publishing/wordpress-plugins/marketing::wordpress-plugin-path-thirstyaffiliates
+      - id: well-known/app/security/bitwarden::bitwarden-browser-manifest
       # Private workspace packages are not published to the registry. Their
       # pinned VCS dependencies plus prepare/build hook are source-tree build
       # plumbing, not a hostile package-install delivery path.
@@ -173,15 +149,7 @@ composite_rules:
     scope: archive
     all:
       - id: metadata/package/dependencies/direct-url::direct-url-dependency
-      # The sibling composites in this file (unpinned-github-phantom-runtime-
-      # dependency, remote-phantom-runtime-dependency) already require the
-      # dependency to be unused before calling it staged for install-hook
-      # abuse; this rule skipped that check and convicted on manifest size
-      # alone. webpack's exports-loader (author Tobias Koppers) pins its
-      # source-map dependency to a GitHub tarball and its ~400-byte
-      # package.json easily reads as "minimal" by the size proxy below, but
-      # index.js genuinely `require("source-map")`s it -- a real, exercised
-      # dependency, not a phantom one planted only to be fetched at install.
+      # Import reconciliation is supporting context, not proof of disuse.
       - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
     # "Minimal metadata" was pinned to a <=15-character description, one narrow
     # proxy for it. A tiny manifest overall is the same claim and the canonical
@@ -199,7 +167,7 @@ composite_rules:
       # packages. A commit-pinned VCS dev dependency in one is ordinary build
       # plumbing, even when the manifest is intentionally tiny.
       - id: metadata/package/publishing::is-private
-      - id: metadata/package/repository/
+      - id: metadata/package/repository::has-repository-evidence
       - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
       - id: well-known/lib/runtime/scripted/electron::electron-webpack-main-entrypoint
       - id: well-known/app/infrastructure/argo-cd::argo-cd-source-tree
@@ -214,8 +182,13 @@ composite_rules:
   # objectives/supply-chain/impersonation/depconf/inflated-url-stub.yaml: it
   # describes a confusion squat's versioning move, and this directory is
   # install-time execution, which that package does not do.
+  # The staging marker is a renameable path token: it corroborates, but a
+  # conviction cannot rest on it alone. Require squat context alongside it --
+  # an inflated major winning resolution, no source repository to hold
+  # accountable, or an install hook executing at install time -- so a renamed
+  # staging path still needs structural abuse evidence to convict.
   - id: dependency-confusion-staging-url
-    desc: Package uses dependency-confusion staging URL
+    desc: Staging URL dependency with confusion-squat context
     crit: hostile
     conf: 0.995
     scope: archive
@@ -223,6 +196,10 @@ composite_rules:
     all:
       - id: dep-url-depconf-staging-marker
       - id: metadata/package/dependencies/direct-url::runtime-url-dependency
+    any:
+      - id: metadata/package/versioning/sentinel::npm-version-major-40-plus
+      - id: metadata/package/repository::manifest-lacks-repository-metadata
+      - id: metadata/package/scripts/lifecycle::install-hooks
 
   - id: npm-single-depconf-staging-dependency
     desc: npm manifest pins one depconf staging tarball

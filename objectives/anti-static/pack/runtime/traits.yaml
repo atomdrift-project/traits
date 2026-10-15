@@ -49,7 +49,7 @@ composite_rules:
   attack: T1027.002,T1140
   all:
   - id: metadata/binary/section/label::scpack-section-name
-  - id: micro-behaviors/mem/protect/modify::virtual-alloc-string
+  - id: micro-behaviors/mem/alloc/virtual::virtual-alloc-string
   - id: micro-behaviors/mem/protect/modify::virtual-protect-text-pe
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   unless:
@@ -63,7 +63,7 @@ composite_rules:
   all:
   - id: x86-dword-xor-add-decoder-loop
   - id: metadata/binary/layout/entropy::high-entropy-writable-executable-layout
-  - id: objectives/anti-static/obfuscation/payload/section/layout::ep-in-rwx-section
+  - id: metadata/binary/section/header::writable-entry-with-wx-section
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   unless:
   - id: metadata/signed/platform/
@@ -127,30 +127,6 @@ composite_rules:
   - id: metadata/binary/installer/family/
   - id: metadata/binary/framework/
 
-- id: embedded-pe-executable-memory-loader
-  desc: PE image validator with executable-memory loading
-  # The MZ/PE comparisons prove that code validates an image-shaped buffer,
-  # but not where that buffer came from. Reflective loaders, application
-  # sandboxes, and offensive tooling can all receive it at runtime, so this is
-  # strong packing/loading evidence without independently proving a hostile
-  # embedded payload.
-  crit: suspicious
-  conf: 0.98
-  attack: "T1027.009,T1620"
-  all:
-  - id: micro-behaviors/data/format/pe-parser::inline-mz-magic-check
-  - id: micro-behaviors/data/embedded/payload/header::inline-pe-signature-check
-  - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
-  - id: micro-behaviors/mem/protect/modify::virtual-protect
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/framework::dotnet-assembly
-  - id: metadata/binary/installer/family/
-  # Stock WinRAR SFX code validates embedded PE modules and changes their
-  # page protection. A separately detected RWX copy-and-jump stage still
-  # identifies a patched or trojanized SFX carrier.
-  - id: metadata/binary/installer/sfx::winrar-sfx
-
 - id: importless-single-section-high-entropy-body
   desc: Importless PE with opaque single-section code body
   crit: hostile
@@ -176,21 +152,6 @@ composite_rules:
 # names no import directory cannot have been produced by a linker, so it
 # carries the conclusion on its own and the composite can reach the small
 # crypter stubs the size floor was excluding.
-- id: headerless-importless-packed-pe
-  desc: PE with no data directories and packed body
-  crit: hostile
-  conf: 0.97
-  attack: T1027.002
-  mbc: B0032
-  for: [pe]
-  all:
-  - id: metadata/binary/header/malformed::pe-no-data-directories
-  - id: metadata/binary/section/ratio::single-section-pe
-  - id: metadata/binary/code/entropy::high-code-entropy
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
-  - id: metadata/binary/framework/
 - id: unsigned-microsoft-packed-tls-loader
   desc: Unsigned Microsoft-claim PE combines TLS callbacks with packed data
   crit: hostile
@@ -201,7 +162,7 @@ composite_rules:
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   # Entropy >= 6.0 is common in ordinary MSVC C++ system DLLs; require the
   # packing-grade threshold (>= 7.0) so "packed data" matches the description.
-  - id: metadata/binary/layout/entropy::high-overall-entropy-70
+  - id: metadata/file/entropy::high-overall-entropy-70
   unless:
   - id: metadata/signed/platform/
   - id: metadata/signed/certificate/identity/
@@ -248,7 +209,7 @@ composite_rules:
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   - id: metadata/binary/symbols/count::minimal-exports
   any:
-  - id: metadata/binary/layout/entropy::high-overall-entropy-binary
+  - id: metadata/file/entropy::high-overall-entropy-binary
   - id: metadata/binary/code/entropy::high-code-entropy
   unless:
   - id: metadata/signed/platform/
@@ -306,26 +267,6 @@ composite_rules:
   - id: metadata/signed/platform/
   - id: metadata/binary/framework/
   - id: metadata/binary/installer/family/
-- id: unpacking-api-pattern
-  desc: Unpacking API pattern (Alloc + Protect)
-  crit: notable
-  conf: 0.9
-  all:
-  - id: micro-behaviors/mem/protect/modify::virtual-alloc
-  - id: micro-behaviors/mem/protect/modify::virtual-protect
-  any:
-  - id: metadata/binary/section/ratio::largest-section-at-least-90-percent
-  - id: metadata/binary/layout/entropy::high-overall-entropy-70
-  unless:
-  - id: metadata/binary/section/label::upx-section
-  - id: objectives/anti-static/pack/detect::upx-marker
-  - id: metadata/binary/symbols/exports::no-exports
-  - id: metadata/binary/layout/ratio::svk-packed-section
-  downgrade:
-    any:
-    - id: metadata/binary/vendor::microsoft-corp-marker-rsrc
-    - id: metadata/signed/platform/
-    - id: metadata/binary/installer/script/
 - id: unsigned-tls-memory-loader
   desc: Unsigned PE with TLS callbacks and executable-memory unpacking APIs
   crit: hostile
@@ -341,29 +282,6 @@ composite_rules:
   unless:
   - id: metadata/binary/installer/family/
   - id: metadata/binary/framework/
-# No overlay leg belongs here: a writable entry point in an image with no
-# executable sections is the runtime-unpacking shape on its own (VirLock
-# generations omit IMAGE_SCN_MEM_EXECUTE and carry no overlay), so this
-# lives with the runtime packers rather than under pack/overlay/.
-- id: importless-writable-entry-loader
-  # Some VirLock generations deliberately omit IMAGE_SCN_MEM_EXECUTE and rely
-  # on legacy/non-opt-in DEP behavior, so this describes the writable packed
-  # entry rather than claiming the section is RWX.
-  desc: Importless PE with encrypted writable text and a writable entry point
-  crit: hostile
-  conf: 0.97
-  attack: T1027,T1620
-  all:
-  - id: objectives/anti-static/obfuscation/payload/section/layout::giant-writable-text-section
-  - id: metadata/binary/symbols/count::no-imports
-  - id: metadata/binary/section/header::pe-entry-in-writable-section
-  any:
-  - id: metadata/binary/section/header::large-pe-two-sections
-  - id: metadata/binary/section/ratio::single-section-pe
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/framework/
-  - id: metadata/binary/installer/family/
 - id: importless-encrypted-reloc-loader
   desc: Importless PE loader with encrypted relocation payload and writable entry code
   crit: hostile
@@ -403,7 +321,7 @@ composite_rules:
   all:
   - id: metadata/binary/section/permission::random-uppercase-rwx-section
   - id: metadata/binary/section/header::pe-nonstandard-entry
-  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   unless:
   - id: metadata/signed/platform/
@@ -415,7 +333,7 @@ composite_rules:
   attack: T1027.002
   all:
   - id: metadata/binary/section/permission::random-uppercase-rwx-section
-  - id: micro-behaviors/mem/protect/modify::virtual-alloc
+  - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   - id: micro-behaviors/dylib/lookup::get-proc-address-import
   unless:
   - id: metadata/signed/platform/
@@ -428,13 +346,13 @@ composite_rules:
   attack: T1027.002
   all:
   - id: metadata/binary/section/permission::random-mixed-case-rwx-section
-  - id: objectives/anti-static/obfuscation/payload/import::minimal-pe-dynamic-load
+  - id: micro-behaviors/dylib/lookup::sparse-pe-dynamic-linking
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   unless:
   - id: metadata/signed/platform/
   - id: metadata/binary/installer/family/
   - id: metadata/binary/section/label::upx-section
-  - id: micro-behaviors/data/encode/pecompact::pecompact-signature
+  - id: well-known/dual-use/packaging/pecompact::pecompact-signature
 
 - id: rwx-mixed-case-section-anchor-imports
   desc: RWX mixed-case-name section with minimal anchor-import surface
@@ -456,7 +374,7 @@ composite_rules:
   conf: 0.99
   attack: T1027,T1055,T1620
   all:
-  - id: objectives/anti-static/obfuscation/binary-metrics/shape::parser-hostile-pe-section-overhang
+  - id: metadata/binary/section/ratio::high-entropy-pe-section-overhang
   - id: metadata/binary/symbols/count::no-imports
   - id: micro-behaviors/mem/alloc/executable::executable-allocation-indicator
   - id: micro-behaviors/data/embedded/payload/header::inline-pe-header-walk
@@ -485,6 +403,7 @@ composite_rules:
   - id: metadata/binary/installer/family/
   - id: metadata/binary/framework/
   - id: well-known/tool/reverse-engineering/exe2aut::exe2aut-decompiler
+  - id: metadata/binary/section/label::upx-section-pair
   downgrade:
     any:
     - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
@@ -496,7 +415,7 @@ composite_rules:
   attack: T1027.002,T1027.009,T1059.001,T1497
   for: [pe]
   all:
-  - id: objectives/anti-analysis/tool-detect/process::analysis-tool-enumeration
+  - id: "metadata/file/profile/operation-cooccurrence::process-enumeration-beside-analysis-tool-catalogs"
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   - id: metadata/binary/layout/overlay::high-entropy-overlay
   - id: metadata/binary/layout/ratio::overlay-over-90pct
@@ -514,7 +433,7 @@ composite_rules:
   mbc: B0032
   all:
   - id: metadata/binary/section/ratio::single-section-pe
-  - id: metadata/binary/code/entropy::native-code-entropy-78
+  - id: metadata/binary/code/entropy::code-region-entropy-78
   - id: metadata/binary/section/entropy::large-high-entropy-writable-section
   - id: metadata/binary/section/header::pe-nonstandard-entry
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
@@ -545,26 +464,6 @@ composite_rules:
 # Do not exclude on metadata/binary/framework/ directory — MSVC CRT
 # delay-load stubs reference mscoree.dll and trip mscoree-name without
 # being managed code.
-- id: unsigned-writable-entry-multi-rwx-stub
-  desc: Unsigned PE writable entry with multiple RWX sections
-  crit: hostile
-  conf: 0.97
-  attack: T1027.002
-  mbc: B0032
-  all:
-  - id: metadata/binary/section/header::pe-entry-in-writable-section
-  - id: metadata/binary/section/permission::pe-multiple-executable-writable-sections
-  - id: metadata/binary/section/permission::writable-text-section
-  - id: metadata/binary/code/entropy::high-code-entropy
-  - id: metadata/signed/trust-level::unsigned-missing-signature-record
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
-  - id: metadata/binary/framework::dotnet-metadata
-
-# Networked packer stub: resolves APIs at runtime, touches VirtualProtect,
-# and links Winsock — the Bifrose-family loader shape when socket APIs are
-# not in the static import table.
 - id: dynamic-api-winsock-memory-stub
   desc: Dynamic API resolve with Winsock and memory protect
   crit: hostile

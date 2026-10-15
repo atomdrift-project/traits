@@ -1,27 +1,9 @@
 # Hidden social controls positioned over the visitor's pointer trick them into
-# creating engagement without an informed click. The component signals below
-# are neutral on their own; the composite requires a concealed social action,
-# pointer tracking, and a success callback.
+# creating engagement without an informed click. Neutral controls live under
+# ui/controls/widget. These composites add concealment and pointer tracking.
 defaults:
   platforms: [windows, unix]
   for: [html, javascript, typescript]
-
-traits:
-  - id: facebook-like-control-injected
-    desc: Injects a Facebook Like control into pages
-    crit: notable
-    conf: 0.96
-    if:
-      type: text
-      regex: '(?is)<fb:like\b|FB\.XFBML\.parse\s*\('
-
-  - id: facebook-like-success-callback
-    desc: Handles successful Facebook Like actions
-    crit: notable
-    conf: 0.96
-    if:
-      type: text
-      regex: '(?is)FB\.Event\.subscribe\s*\(\s*["'']edge\.create["'']'
 
 composite_rules:
   - id: pointer-following-hidden-facebook-like
@@ -30,7 +12,133 @@ composite_rules:
     conf: 0.98
     all:
       - id: micro-behaviors/ui/window/style::transparent-small-or-hidden-style
+      - id: micro-behaviors/ui/controls/widget::facebook-like-control-markup
+      - id: micro-behaviors/ui/controls/widget::facebook-like-success-callback
+    any:
       - id: micro-behaviors/ui/window/style::dom-element-position-tracks-pointer
-      - id: facebook-like-control-injected
-      - id: facebook-like-success-callback
+      - id: micro-behaviors/ui/window/style::jquery-css-pointer-position
+    needs: 1
     near_bytes: 12000
+
+  - id: pointer-following-facebook-like-iframe
+    desc: Concealed Like iframe follows the visitor's pointer
+    crit: hostile
+    conf: 0.98
+    near_bytes: 7000
+    all:
+      - id: objectives/impact/ui/manipulation/overlay::low-opacity-pointer-following-iframe
+      - id: micro-behaviors/ui/controls/widget::facebook-like-iframe-source
+      - id: micro-behaviors/ui/window/insert-html::browser-document-write
+  # The off-brand twin of the rule above: the Like control wears plugin
+  # parameters but reports to a third-party host, ships as static markup
+  # instead of document.write, and confirms the hijacked click by polling
+  # which frame holds focus. Any one leg is neutral; together with a
+  # pointer-tracking handler they name the trap and its success signal.
+  - id: pointer-following-offbrand-like-trap
+    desc: Pointer trap around an off-brand Like control
+    crit: hostile
+    conf: 0.97
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/ui/controls/widget::offbrand-like-action-iframe
+      - id: micro-behaviors/ui/window/style::css-opacity-zero
+      - id: micro-behaviors/hardware/input/event::user-activity-event-listener
+      - id: micro-behaviors/ui/window/event::activeelement-frame-focus-check
+  # Genuine-endpoint twin: the Like iframe is really Facebook's, but it is
+  # glued to the visitor's pointer and schedules its own teardown, so the
+  # trap leaves no control behind to inspect. The follower plus the timed
+  # removal plus the Like endpoint name the kit; opacity is irrelevant
+  # here because the trap works half-visible too.
+  - id: pointer-following-like-iframe-self-removing
+    desc: Pointer-following Like iframe with timed teardown
+    crit: hostile
+    conf: 0.96
+    for: [html]
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/ui/controls/widget::facebook-like-iframe-source
+      - id: micro-behaviors/ui/window/style::dom-element-position-tracks-pointer
+      - id: micro-behaviors/time/schedule/callback::timed-dom-removal
+  # Vanilla-JS twin of the rule above ("thehairs" kit): the trap builds the
+  # Like iframe in a string, tracks the pointer through a raw mousemove
+  # listener, and removes the node on a timer instead of going through jQuery
+  # css positioning, so the position-tracks-pointer leg never fires. A plain
+  # document.write leg cannot join: representative-match proximity resolves
+  # the write to the page's own feed-rendering writes far away. The Like
+  # endpoint plus the mousemove listener plus the timed teardown name the
+  # same trap in its non-jQuery spelling.
+  - id: mousemove-tracked-like-iframe-self-removing
+    desc: Mousemove-tracked Like iframe with timed teardown
+    crit: hostile
+    conf: 0.96
+    for: [html]
+    near_bytes: 12000
+    all:
+      - id: micro-behaviors/ui/controls/widget::facebook-like-iframe-source
+      - id: micro-behaviors/hardware/input/event::user-activity-event-listener
+      - id: micro-behaviors/time/schedule/callback::timed-dom-removal
+  # Ad-click twin of the Like traps above: the invisible container holds a
+  # remote ad script instead of a Like control, tracks the pointer through
+  # jQuery css, and yields to genuine inputs, links and buttons (hiding on
+  # hover, showing on leave) so victim clicks land on the ad. No social
+  # control is required; the concealment plus the pointer trap plus the
+  # hover evasion name the click fraud.
+  - id: pointer-following-invisible-ad-click-trap
+    desc: Invisible pointer trap hides over genuine controls
+    crit: hostile
+    conf: 0.97
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/ui/window/style::css-opacity-zero
+      - id: micro-behaviors/ui/window/style::jquery-css-pointer-position
+      - id: micro-behaviors/ui/window/event::hover-hide-unhover-show-handlers
+  # jQuery twin of the trap above for kits without hover evasion: the
+  # invisible element still tracks the pointer through a mousemove binding
+  # repositioning it under the cursor, so clicks meant for the page land on
+  # whatever the hidden layer carries. The mousemove registration plus the
+  # cursor-locked positioning name the interception; no ad leg is required
+  # because the trap works the same with any hidden payload.
+  - id: jquery-mousemove-invisible-pointer-tracker
+    desc: Invisible element tracks pointer through mousemove
+    crit: hostile
+    conf: 0.95
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/ui/window/style::css-opacity-zero
+      - id: micro-behaviors/ui/window/style::jquery-css-pointer-position
+      - id: micro-behaviors/hardware/input/event::jquery-mousemove-handler
+  # Vanilla-JS twin of pointer-following-hidden-facebook-like: the trap
+  # uses a static Like iframe instead of the XFBML control, hides it with
+  # a zero-opacity container, and trails the pointer through a legacy
+  # document.onmousemove assignment rather than jQuery positioning or the
+  # FB success callback (it verifies the stolen click by polling which
+  # frame holds focus instead). The concealment leg is the IE alpha
+  # filter rather than the generic opacity atom on purpose: the generic
+  # one also matches slider-plugin code far from the trap, which breaks
+  # the proximity window, while the filter spelling occurs only at the
+  # concealing container. The genuine Like endpoint plus the concealment
+  # plus the pointer follower name the trap in this spelling.
+  - id: onmousemove-tracked-hidden-facebook-like
+    desc: Hidden Like iframe tracks pointer via onmousemove
+    crit: hostile
+    conf: 0.97
+    for: [html]
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/ui/controls/widget::facebook-like-iframe-source
+      - id: micro-behaviors/ui/window/style::ie-filter-zero-opacity
+      - id: micro-behaviors/hardware/input/event::onmousemove-property-assignment
+  # Companion success signal for the structural trap in
+  # overlay::mousemove-tracked-invisible-ad-iframe: a tight timer polls which
+  # frame holds focus and stops repositioning once the hidden ad iframe
+  # receives it, confirming the hijacked click landed. Polling focus on a
+  # timer to verify an ad frame is the trap checking its own success.
+  - id: ad-click-focus-verification-loop
+    desc: Timer polls frame focus to confirm ad click
+    crit: hostile
+    conf: 0.93
+    for: [html]
+    near_bytes: 600
+    all:
+      - id: micro-behaviors/ui/window/event::activeelement-frame-focus-check
+      - id: micro-behaviors/time/schedule/callback::markup-timer-call-text

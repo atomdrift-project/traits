@@ -35,6 +35,22 @@ traits:
     kind: string
     exact: PostToolUse
 
+# Member-access spelling (`config.hooks.PreToolUse`) carries the same hook
+# evidence as the string literal but is invisible to the literal extractor.
+# Kept disjoint from the string atoms by requiring the receiver dot, so one
+# spelling never double-counts across both.
+- id: agent-pretooluse-hook-member
+  desc: AI agent PreToolUse hook member access
+  if:
+    type: text
+    regex: '\.PreToolUse\b'
+
+- id: agent-posttooluse-hook-member
+  desc: AI agent PostToolUse hook member access
+  if:
+    type: text
+    regex: '\.PostToolUse\b'
+
 # Unlike its siblings (PreToolUse / UserPromptSubmit / PostToolUse ...), this hook
 # event is spelled with a plain English word, so the bare literal is not evidence of
 # an agent hook at all — "Stop" is a button caption, a state enum and a keybinding
@@ -67,25 +83,25 @@ traits:
     # by the settings path and writer in agent-hook-config-write.
     regex: '(?m)[{,]\s*["'']?hooks["'']?\s*:'
 
+# Hook envelopes are object keys, and bundlers emit them unquoted
+# (`permissionDecision:"deny"`), which the string-literal extractor never
+# records. Match the protocol tokens as text so bundled hooks are seen too.
 - id: agent-hook-updated-input
   desc: "AI agent hook rewrites tool input"
   if:
-    type: literal
-    kind: string
+    type: text
     substr: updatedInput
 
 - id: agent-hook-output-block
   desc: "Emits AI agent hook output"
   if:
-    type: literal
-    kind: string
+    type: text
     word: hookSpecificOutput
 
 - id: agent-hook-permission-decision
   desc: 'AI agent hook gates tool execution'
   if:
-    type: literal
-    kind: string
+    type: text
     substr: permissionDecision
 
 - id: agent-session-hook--sessionstart
@@ -161,15 +177,6 @@ traits:
     type: text
     regex: '(?i)\bcommand\s*:\s*["''](bash|sh)\s+[^"'']{1,240}(\.claude|hooks|statusline)'
 
-- id: agent-hook-runtime-command
-  desc: Agent hook config names Python runtime
-  crit: notable
-  if:
-    type: text
-    # A bare Python word also occurs in ordinary source comments/docstrings;
-    # require the quoted command/runtime key used by a hook configuration.
-    regex: '(?i)["''](command|runtime|interpreter)["'']\s*:\s*["'']python3?\b'
-
 - id: agent-hook-daemon-command-variable
   desc: Agent hook config uses a daemon variable
   crit: notable
@@ -183,13 +190,6 @@ traits:
   if:
     type: text
     word: pre_cmd
-
-- id: agent-hook-settings-path
-  desc: References an agent settings path
-  crit: notable
-  if:
-    type: text
-    word: settings_path
 
 - id: agent-hook-settings-write
   desc: Writes an agent settings path
@@ -275,22 +275,6 @@ traits:
   # A name reached through a string is the reflective spelling; where the
   # direct form is already recorded, this would be the same call twice.
   - id: micro-behaviors/fs/file/read-write::agent-edit-file-tool
-- id: python-agent-skill-tree-marker
-  desc: Python references an AI agent skill tree
-  crit: notable
-  conf: 0.9
-  for: [python]
-  if:
-    type: text
-    regex: '(?i)(\.claude|\.opencode|skills?/)'
-- id: python-agent-skill-file-marker
-  desc: Python references an AI agent skill file
-  crit: notable
-  conf: 0.9
-  for: [python]
-  if:
-    type: text
-    regex: '(?i)SKILL\.md|agent.{0,40}skill'
 - id: packaged-agent-skill-body
   desc: Packaged AI agent skill body
   crit: notable
@@ -352,34 +336,38 @@ traits:
   if:
     type: text
     regex: '(?is)\bstore proactively\b.{0,220}\b(remember|memory-worthy|preference|decision)'
-- id: agent-hook-input-read--hookeventname
-  desc: Reads AI agent hook tool input (hookEventName)
+- id: agent-hook-input-field--hookeventname
+  desc: References agent hook field (hookEventName)
   crit: notable
   if:
     type: literal
     kind: string
-    word: hookEventName
-- id: agent-hook-input-read--hook-event-name
-  desc: Reads AI agent hook tool input (hook_event_name)
+    exact: hookEventName
+- id: agent-hook-input-field--hook-event-name
+  desc: References agent hook field (hook_event_name)
   crit: notable
   if:
     type: literal
     kind: string
-    word: hook_event_name
-- id: agent-hook-input-read--tool-input
-  desc: Reads AI agent hook tool input (tool_input)
+    exact: hook_event_name
+- id: agent-hook-input-field--tool-input
+  desc: References agent hook field (tool_input)
   crit: notable
   if:
     type: literal
     kind: string
-    word: tool_input
-- id: agent-hook-input-read--tool-name
-  desc: Reads AI agent hook tool input (tool_name)
+    exact: tool_input
+  # The bare word also matched `{tool_name}` interpolation placeholders in
+  # log f-strings, which format a local variable rather than read hook input.
+  # The brace guards keep standalone key literals while dropping placeholders
+  # (Rust regex has no lookarounds, hence the anchored alternation).
+- id: agent-hook-input-field--tool-name
+  desc: References agent hook field (tool_name)
   crit: notable
   if:
     type: literal
     kind: string
-    word: tool_name
+    regex: '(^|[^\w{])tool_name($|[^\w}])'
 
 - id: agent-hook-stdin-captured-input
   desc: Captures hook stdin in INPUT
@@ -457,7 +445,13 @@ composite_rules:
   desc: Agent hook names an interpreter command
   crit: component
   any:
-  - id: agent-hook-runtime-command
+  # Relocated (2026-10) from this directory, where it was
+  # agent-hook-runtime-command: the matcher only proves a quoted
+  # command/runtime/interpreter key naming Python — hook context comes from
+  # the lifecycle-event and matcher legs of agent-hook-command-config-entry,
+  # and the bare key/value pair equally selects the interpreter in MCP
+  # stdio server configs and package scripts.
+  - id: micro-behaviors/data/format/json::python-runtime-command-field
   - id: agent-hook-command-wrapper-variable
 
 - id: agent-hook-command-config-entry
@@ -477,12 +471,12 @@ composite_rules:
   conf: 0.96
   all:
   - id: agent-hooks-config-key
-  - id: agent-hook-settings-path
+  - id: micro-behaviors/fs/path/agent-config/file::claude-settings-path-reference
   - id: agent-hook-settings-write
   near_lines: 80
 
 - id: agent-hook-command-input-read
-  desc: Reads hook input before command dispatch
+  desc: Hook input field near standard-input reference
   crit: notable
   conf: 0.92
   all:
@@ -508,7 +502,7 @@ composite_rules:
   conf: 0.94
   all:
   - id: agent-hook-allowlist-key
-  - id: agent-hook-settings-path
+  - id: micro-behaviors/fs/path/agent-config/file::claude-settings-path-reference
   - id: agent-hook-settings-write
   near_lines: 80
 
@@ -522,9 +516,6 @@ composite_rules:
   all:
   - id: agent-stop-hook
   - id: agent-hooks-config-key
-  # Reads the agent's tool input AND emits a rewrite of it = actively intercepting and
-  # modifying what the AI agent reads/runs — the signature of an agent tool-call
-  # interception layer (in-flight Read redirect, Bash command wrapping, …).
 - id: agent-session-hook
   desc: AI agent SessionStart/SessionEnd hook
   crit: notable
@@ -535,20 +526,21 @@ composite_rules:
   any:
   - id: agent-session-hook--sessionstart
   - id: agent-session-hook--sessionend
-- id: agent-hook-input-read
-  desc: Reads AI agent hook tool input
-  crit: component
+- id: agent-hook-input-field-reference
+  desc: References an AI agent hook input field
+  crit: notable
   any:
-  - id: agent-hook-input-read--hookeventname
-  - id: agent-hook-input-read--hook-event-name
-  - id: agent-hook-input-read--tool-input
-  - id: agent-hook-input-read--tool-name
-- id: ai-agent-tool-call-interception
-  desc: Intercepts and rewrites AI agent tool calls
+  - id: agent-hook-input-field--hookeventname
+  - id: agent-hook-input-field--hook-event-name
+  - id: agent-hook-input-field--tool-input
+  - id: agent-hook-input-field--tool-name
+  # Field co-occurrence does not establish a read or rewrite.
+- id: agent-hook-input-update-field-cooccurrence
+  desc: Agent hook input and updated-input references
   crit: notable
   conf: 0.9
   all:
-  - id: agent-hook-input-read
+  - id: agent-hook-input-field-reference
   - id: agent-hook-updated-input
 
 - id: agent-hook-stdin-http-forward

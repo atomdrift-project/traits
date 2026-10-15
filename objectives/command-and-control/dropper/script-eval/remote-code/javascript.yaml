@@ -51,16 +51,6 @@ traits:
   if:
     type: text
     regex: \beval\s*\(\s*(response|resp|res|r)\.data\.content(_[A-Za-z0-9_$]+)?\s*\)
-- id: function-result-invoked-require
-  desc: Generated function invoked with require
-  crit: notable
-  conf: 0.92
-  attack: T1059.007
-  if:
-    type: text
-    regex: \b[A-Za-z_$][\w$]*\(\s*require\s*\)
-  unless:
-  - id: metadata/package/testing/
 - id: function-require-response-data-ast
   desc: Function executes HTTP response data
   crit: suspicious
@@ -151,14 +141,25 @@ traits:
   crit: suspicious
   conf: 0.98
   attack: T1573
+  # Node accepts both https.get(options[, cb]) and https.get(url, options[, cb]);
+  # the first argument may be a URL string or variable before the options object.
   if:
     type: text
-    regex: \.get\s*\(\s*\{[\s\S]{0,240}?rejectUnauthorized\s*:\s*false
+    regex: \.get\s*\(\s*(\{|\S{1,80}\s*,\s*\{)[\s\S]{0,240}?rejectUnauthorized\s*:\s*false
+  # A loopback health check of a local proxy often skips cert verification
+  # because the certificate is self-signed. That is not a remote dropper.
+  # `not:` applies to the matched get() span; a different get() to a public
+  # host in the same file still matches.
+  not:
+  - regex: 'hostname:\s*["'']127\.0\.0\.1["'']'
+  - regex: 'hostname:\s*["'']localhost["'']'
+  - regex: 'hostname:\s*["'']::1["'']'
   unless:
   - type: text
     regex: hostname:\s*["']localhost["']
   - id: well-known/tool/development/toolchain/deno::source-archive-context
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: then-eval-pointfree
   desc: Promise resolution piped into eval
   crit: suspicious
@@ -184,6 +185,8 @@ traits:
   unless:
   - id: metadata/package/testing/
   - id: well-known/lib/data/duckdb::javascript-worker-path
+  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/build/bundler/runtime::js-emscripten-generated-bundle
 - id: userjs-endpoint
   desc: User JavaScript endpoint path
   crit: notable
@@ -202,6 +205,7 @@ traits:
   unless:
   - id: well-known/lib/ui/monaco-editor/
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: fetch-random-query-cachebuster
   desc: Fetch URL carries a random query cachebuster
   crit: notable
@@ -218,6 +222,7 @@ traits:
     regex: \['then'\]\(\s*async\s+\w+\s*=>
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: computed-response-method-field
   desc: Computed response method and field access
   crit: notable
@@ -310,7 +315,7 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
   - id: computed-async-response-callback
-  - id: micro-behaviors/data/control-flow/dispatch::computed-response-method-return
+  - id: micro-behaviors/data/control-flow/return::computed-response-method-return
   - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
 - id: obfuscated-computed-fetch-function-loader
   desc: String-table-obfuscated fetch response executes as a Node module
@@ -331,13 +336,14 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/eval/dynamic::response-data-field-ref
   - id: objectives/anti-static/obfuscation/eval/require::function-constructor-require
-  - id: function-result-invoked-require
+  - id: micro-behaviors/os/module/require::require-function-passed-to-call
   any:
   - id: micro-behaviors/communications/http/get::axios-get-call
   - id: micro-behaviors/communications/http/post::axios-post-call
   unless:
   - id: metadata/package/testing/
   - id: metadata/build/bundler/asset::js-large-module-bundle
+  - id: "metadata/file/naming::test-directory-component"
 - id: temporary-javascript-module-loader
   desc: Remote JavaScript written imported and deleted
   crit: suspicious
@@ -352,6 +358,7 @@ composite_rules:
   unless:
   - id: metadata/package/testing/
   - id: well-known/app/browser-extension/ai-web-extensions::ai-web-extensions-bump-helper-context
+  - id: "metadata/file/naming::test-directory-component"
 - id: remote-node-fetch-write-exec-cleanup
   desc: Remote JavaScript fetched and executed
   crit: suspicious
@@ -371,6 +378,7 @@ composite_rules:
   - id: metadata/package/testing/
   - id: well-known/app/browser-extension/ai-web-extensions::ai-web-extensions-remote-runner-file
   - id: well-known/app/browser-extension/ai-web-extensions::ai-web-extensions-remote-runner-context
+  - id: "metadata/file/naming::test-directory-component"
 - id: remote-json-eval-loader
   desc: HTTP response JSON content executed as JavaScript
   crit: hostile
@@ -379,7 +387,7 @@ composite_rules:
   mbc: B0009.016
   all:
   - id: eval-response-data-content
-  - id: micro-behaviors/communications/http/request/client::https-get
+  - id: micro-behaviors/communications/http/get::node-https-get-reference
 - id: obfuscated-node-remote-code-loader
   desc: Obfuscated Node package exposes a remote-code loader surface
   crit: hostile
@@ -403,6 +411,7 @@ composite_rules:
   near_bytes: 1400
   not:
   - substr: 'fromText eval for '
+  - substr: 'dart2wasm'
   all:
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
@@ -414,6 +423,8 @@ composite_rules:
   - id: fetch-content-field-eval-loader
   - id: well-known/app/development/csa-admin::code-editor-preview-eval-context
   - id: well-known/tool/reverse-engineering/exiftool::webperl-emscripten-engine
+  - id: well-known/lib/development/launch-editor::open-in-editor-client-request
+  - id: metadata/file/extension/identity::dart-source-basename
   downgrade:
     any:
     - id: metadata/build/bundler/asset::js-large-module-bundle
@@ -426,7 +437,7 @@ composite_rules:
   mbc: B0009.016
   all:
   - id: function-require-response-data-ast
-  - id: function-result-invoked-require
+  - id: micro-behaviors/os/module/require::require-function-passed-to-call
   unless:
   - id: objectives/supply-chain/trojanized/library/remote-eval::detached-http-response-loader
   downgrade:
@@ -456,7 +467,7 @@ composite_rules:
   all:
   - id: function-require-streamed-data
   any:
-  - id: micro-behaviors/communications/http/request/client::https-get
+  - id: micro-behaviors/communications/http/get::node-https-get-reference
   - id: remote-https-get-tls-bypass
 - id: request-callback-body-function
   desc: Request callback body becomes Function
@@ -476,7 +487,7 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/http/request/client::request-import
   - id: request-callback-body-function
-  - id: function-result-invoked-require
+  - id: micro-behaviors/os/module/require::require-function-passed-to-call
   any:
   - id: micro-behaviors/communications/http/header/custom::bearrtoken-header-map-entry
   - id: objectives/supply-chain/trojanized/library/remote-eval::recursive-request-retry
@@ -502,6 +513,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/post::node-https-request-post
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: json-code-base64-function-loader
   desc: Base64 JSON code executes with Node require
   crit: hostile
@@ -539,6 +551,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: request-json-parse-field-eval
   desc: JSON body field eval
   crit: suspicious
@@ -546,7 +559,7 @@ composite_rules:
   attack: T1059.007
   near_bytes: 260
   all:
-  - id: micro-behaviors/data/serialize/json::json-body-identifier-parse
+  - id: micro-behaviors/data/parse/json::json-body-identifier-parse
   - id: objectives/execution/interpreter/eval/remote::js-eval-parsed-json-field
 - id: request-json-field-eval-loader
   desc: HTTP JSON response field executed with eval
@@ -576,6 +589,7 @@ composite_rules:
   - id: eval-direct-json-content
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: encoded-fetch-json-eval-loader
   desc: Encoded fetch evaluates remote JSON payload
   crit: hostile
@@ -588,6 +602,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/request/json::fetch-external-url
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: axios-atob-json-eval-loader
   desc: Axios decoded URL payload eval loader
   crit: hostile
@@ -600,6 +615,7 @@ composite_rules:
   - id: micro-behaviors/communications/url/encoded::atob-encoded-http-url-literal
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: axios-jsonkeeper-content-eval-loader
   desc: Axios JsonKeeper payload eval loader
   crit: hostile
@@ -615,6 +631,7 @@ composite_rules:
   - id: micro-behaviors/os/module/dynamic-load::node-computed-require-call
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: axios-jsonkeeper-profiled-eval-loader
   desc: JsonKeeper eval loader captures victim profile
   crit: hostile
@@ -623,10 +640,11 @@ composite_rules:
   mbc: B0009.016
   all:
   - id: axios-jsonkeeper-content-eval-loader
-  - id: objectives/discovery/system/fingerprint/user::node-host-user-query
+  - id: micro-behaviors/os/sysinfo/profile::node-host-user-query
   - id: micro-behaviors/os/env/enumeration::js-process-env-spread
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: fetch-to-function-constructor
   desc: Remote fetch feeding Function constructor
   crit: hostile
@@ -651,7 +669,7 @@ composite_rules:
   - id: fetch-text-function-code
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
   any:
-  - id: objectives/anti-analysis/sandbox-detect/tool-references::js-cloaker-browser-bot-fingerprint
+  - id: micro-behaviors/os/sysinfo/platform/browser::browser-environment-fingerprint-indicators
   - id: micro-behaviors/communications/http/request/verb::post-method-text
 - id: fetch-json-function-constructor-require
   desc: Remote JSON executed via require-enabled Function
@@ -661,12 +679,13 @@ composite_rules:
   mbc: B0009.016
   all:
   - id: objectives/anti-static/obfuscation/eval/require::function-constructor-require
-  - id: function-result-invoked-require
+  - id: micro-behaviors/os/module/require::require-function-passed-to-call
   - id: object-values-to-validation-handler
   any:
   - id: micro-behaviors/communications/http/request/client::fetch-then-json
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: jsonkeeper-remote-eval-loader
   desc: Jsonkeeper payload executed via Function
   crit: hostile
@@ -692,6 +711,7 @@ composite_rules:
   - id: objectives/command-and-control/infrastructure/paste::jsonkeeper-b64-endpoint-literal
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: axios-decoded-url-module-compile-loader
   desc: Decoded Axios response fed to Node module compiler
   crit: hostile
@@ -705,6 +725,7 @@ composite_rules:
   - id: micro-behaviors/data/decode/base64::atob-decode
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: axios-atob-detached-node-stdin
   desc: Axios atob payload to Node stdin
   crit: hostile
@@ -739,7 +760,7 @@ composite_rules:
   all:
   - id: await-fetch-text-eval
   - id: micro-behaviors/process/create/spawn::detached-true
-  - id: micro-behaviors/process/daemonize/detach::node-handle-unref-text
+  - id: micro-behaviors/process/control/wait::node-unref-handle
   any:
   - id: micro-behaviors/os/module/require::child-process-require
   - id: micro-behaviors/process/create/shell/bridge::child-process-exec
@@ -754,7 +775,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/url/domain::workers-dev-url
   any:
   - id: micro-behaviors/process/create/spawn::detached-true
-  - id: micro-behaviors/process/daemonize/detach::node-handle-unref-text
+  - id: micro-behaviors/process/control/wait::node-unref-handle
 - id: dynamic-fetch-constructor-eval
   desc: Function constructor executes a dynamically-built fetch call
   crit: hostile
@@ -772,6 +793,7 @@ composite_rules:
   - id: well-known/tool/detection/llm-scanner/
   - id: well-known/tool/development/editor/vscode/
   - id: well-known/tool/development/vscode-extension/dscodegpt::extension-context
+  - id: "metadata/file/naming::test-directory-component"
 - id: dynamic-post-fetch-constructor-eval
   desc: Function constructor builds POST fetch
   crit: hostile
@@ -794,6 +816,7 @@ composite_rules:
   unless:
   - id: metadata/package/testing/
   - id: well-known/tool/detection/security-scanner/
+  - id: "metadata/file/naming::test-directory-component"
 - id: encoded-async-fetch-eval-loader
   desc: Encoded async loader fetch-evals remote code
   crit: hostile
@@ -805,6 +828,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/url/encoded::base64-decoded-http-url
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: encoded-vercel-fetch-eval-stager
   desc: Encoded fetch-eval via Vercel-hosted app
   crit: hostile
@@ -816,6 +840,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/services/cloud::vercel-app
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: encoded-fetch-eval-remote-code
   desc: Encoded eval with fetch and HTTP URL staging
   crit: hostile
@@ -831,6 +856,7 @@ composite_rules:
   - id: encoded-vercel-fetch-eval-stager
   - id: metadata/package/testing/
   - id: metadata/build/
+  - id: "metadata/file/naming::test-directory-component"
 - id: fetch-content-field-eval-loader
   desc: Fetched .content field executed via eval
   crit: hostile
@@ -843,6 +869,7 @@ composite_rules:
   - id: eval-json-content-field
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
   downgrade:
     any:
     - id: metadata/build/bundler/asset::js-large-module-bundle
@@ -889,7 +916,7 @@ composite_rules:
   scope: leaf
   near_bytes: 1400
   unless:
-  - id: metadata/lang/source::native-binary-embedded-javascript
+  - id: "metadata/lang/source/syntax::native-binary-embedded-javascript"
   - id: well-known/lib/web/syntaxhighlighter::shjs-syntax-highlighter
   - id: same-origin-xhr-eval-array-data
   - id: micro-behaviors/communications/http/header/custom::js-csrf-token-header-from-meta
@@ -898,7 +925,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/request/client::xmlhttprequest-new
   - id: micro-behaviors/communications/http/client/xmlhttp::js-xmlhttp-open
   - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
-  - id: objectives/execution/interpreter/eval/remote::js-eval-response-text
+  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-response-text
 - id: browser-inline-script-xhr-eval-loader
   desc: Base64 data-URL script executes a remote XMLHttpRequest response
   crit: hostile
@@ -919,9 +946,11 @@ composite_rules:
   mbc: B0009.016
   scope: leaf
   all:
-  - id: micro-behaviors/communications/http/request/client::js-fetch-call
-  - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-variable-argument
+  - id: micro-behaviors/communications/http/request/reference::js-fetch-invocation-surface
   - id: objectives/anti-static/obfuscation/eval/loader::obfuscated-function-constructor-payload
+  any:
+  - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-variable-argument
+  - id: micro-behaviors/process/interpreter/eval/compile::new-function-iife
 - id: obfuscated-helper-fetch-function-iife-loader
   desc: Obfuscated helper fetch executes code through Function
   crit: hostile
@@ -967,10 +996,11 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/http/get::axios-get-call
   - id: objectives/anti-static/obfuscation/eval/dynamic::optional-response-record-value-ref
-  - id: objectives/anti-static/obfuscation/eval/require::function-constructor-require-arg
-  - id: function-result-invoked-require
+  - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor-require-parameter
+  - id: micro-behaviors/os/module/require::require-function-passed-to-call
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: lower-first-base64-http-function-loader
   desc: Obfuscated HTTP response executes as JavaScript
   crit: hostile
@@ -995,6 +1025,7 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/eval/compile::new-function-iife
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: fetch-text-commonjs-module-smuggle
   desc: Fetched response text executed as CommonJS module
   crit: hostile
@@ -1009,3 +1040,21 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/eval/compile::js-commonjs-synthetic-module-run
   unless:
   - id: metadata/package/testing/harness/runtime/
+  # The eval-driven half of a concealed exfil chain: the client itself is a
+  # computed require over hex-decoded strings and the endpoint arrives
+  # encoded, so no literal fetch or URL survives — but the response object
+  # property still reaches eval(). Required eval-of-property is what separates
+  # this from a concealed fetch whose response is merely logged.
+- id: concealed-client-eval-response-data
+  desc: Concealed client response data is evaluated
+  crit: hostile
+  conf: 0.97
+  attack: T1059.007,T1105
+  mbc: B0009.016
+  all:
+  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-object-property
+  - id: micro-behaviors/os/module/dynamic-load::node-computed-require-call
+  - id: micro-behaviors/communications/url/encoded::encoded-https-url
+  unless:
+  - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"

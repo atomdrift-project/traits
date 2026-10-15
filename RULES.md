@@ -90,14 +90,27 @@ See [Matcher Defines Identity](TAXONOMY.md#matcher-defines-identity) in TAXONOMY
   `metadata/file/string` and `metadata/file/literal` are closed to new rules;
   place capability, intent and identity evidence in their respective homes.
   If a fragment supports only a consumer's context, record a placement hold
-  until its supported representation is resolved. The current validator
-  rejects new `file/string` IDs; equivalent `file/literal` enforcement remains
-  an engine dependency.
-- **The directory cap is 100 rules across all its YAML files.** A large leaf
-  prompts semantic review, not a split by language, backend or rule form.
-  Define each child's boundary and a home for the broadest observation before
-  splitting; do not add an `other` bucket. Follow the official
-  [placement procedure](TAXONOMY.md#placement-procedure).
+  until its supported representation is resolved. Current Cleave source and
+  its source-matched release-profile build reject new IDs in both namespaces;
+  exact existing IDs remain temporarily grandfathered. By default,
+  `make validate` selects `../cleave/target/release/cleave` whenever that file
+  exists, even if stale. Rebuild it from current source or pass a source-matched
+  binary explicitly with `make validate CLEAVE=<path-to-source-matched-cleave>`;
+  the tested command and binary hashes are in the
+  [validator enforcement record](taxonomy-migration/research/document-authority/literal-validator-enforcement.md).
+- **A file profile is not a co-occurrence bucket.** A retained
+  `metadata/file/profile` rule must make one stated, non-behavioral artifact
+  claim, define the relation and scope of its evidence, and have benign controls
+  and near misses. Put each fact in its specific subject home; same-file
+  co-occurrence alone does not justify a profile. See the
+  [directory placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
+- **100 rules is the directory review trigger across all its YAML files, not an
+  automatic split point.** First check that every rule is accurate, at the
+  right level, and nonduplicative. A larger leaf needs an exact-path reviewed
+  budget enforced by Cleave; do not raise a global limit or split by language,
+  backend, or rule form. Define each child's boundary and a home for the
+  broadest observation before splitting; do not add an `other` bucket. Follow
+  the official [placement procedure](TAXONOMY.md#placement-procedure).
 - IDs auto-prefixed by directory path (e.g., `traits/micro-behaviors/process/create/shell/` → prefix `micro-behaviors/process/create/shell`)
 - **Filenames are NEVER part of trait IDs** - only the directory path is used for prefixing
   - A trait `foo` in `traits/micro-behaviors/process/create/shell/python.yaml` has ID `micro-behaviors/process/create/shell::foo`
@@ -146,7 +159,7 @@ Some findings are emitted by cleave itself rather than loaded from YAML, for exa
 | `component` | Incomplete evidence that cannot express a clear standalone observation (string fragments like `&cc=`); composite membership alone never justifies this level |
 | `baseline` | Common functionality that nearly every program has (`mmap`, `stdio`, `read`) |
 | `notable` | A clear behavior, purpose, or identity that could interest a security engineer in differential analysis (`socket`, HTTP requests/imports, `exec`, `eval`, `sysctl`, program name, signing information); in general, every program—benign or not—should have at least one notable behavior |
-| `suspicious` | Hides intent/crosses boundaries (VM detection, obfuscation) |
+| `suspicious` | Evasion, intent concealment, or security-boundary crossing where legitimate use remains plausible (e.g. VM detection or obfuscation) |
 | `hostile` | Attack patterns, no legitimate use (reverse shell, ransomware) |
 
 Both `component` and `baseline` are allowed in any tier. `hostile` is allowed only in `objectives/` and `well-known/`; `micro-behaviors/` and `metadata/` max out at `suspicious`.
@@ -642,9 +655,9 @@ specified fields. `kind: number, value: 511, radix: 8` matches `chmod(_,
 deliberate octal mode bits from incidentally-computed integers.
 
 For value relationships beyond a literal call argument, `arg.from` selects an
-originating call and explicit library transfers. See [SOURCE_ANALYSIS.md](SOURCE_ANALYSIS.md)
-for the shared flow contract and YAML examples. Use direct argument
-matching when sufficient; provenance is for actual relationships, not proximity.
+originating call and explicit library transfers. The sections below define the
+supported provenance forms and their limits. Use direct argument matching when
+sufficient; provenance is for actual relationships, not proximity.
 
 **Named-field presence.** `arg.from.field_exists: true` requires `from.field`
 and matches an explicitly present named field, including one with an unknown
@@ -652,6 +665,12 @@ or dynamic value. It does not assert a nonempty value or runtime success.
 It is mutually exclusive with `call`, `value`, `whole_value`, and `member`,
 and does not accept transfer models. Use it when the attribute itself is the
 observation, such as a command execution call specifying an output file.
+
+**Named-field absence.** `arg.from.field_absent: true` with a `field` selects
+structural absence in a concrete keyword/attribute map. Opaque objects and
+missing projections do not prove absence. When inferring a CFML default action,
+also require absence of `attributecollection`; dynamic attribute collections
+may provide that action. Presence and absence are mutually exclusive.
 
 **Complete literal values.** `arg.from.whole_value` matches a regex against a
 proven complete string value, optionally selected with `from.field`. Use it for
@@ -703,6 +722,28 @@ Lexical call observations are retained when RHS value analysis remains opaque.
 
 Unsupported CFML syntax and unresolved scope lookup remain explicit flow
 limitations. A possible value origin does not establish runtime reachability.
+
+**Receiver provenance and load-time calls.** Two more `kind: call` filters
+read the same flow graph. `receiver.from` traces the value a method is called
+on — the `cp` in `cp.execSync()` — and accepts everything `arg.from` does.
+`module_level: true` requires the call to sit in module-level code, outside
+every function body, so it runs when the file loads (Node `require`, Python
+`import`); a call inside a block (`if (x) { … }`) still counts, one inside a
+function does not. Only the tree-sitter flow producer records module level, so
+the filter can confirm load-time execution but never prove its absence.
+
+```yaml
+type: symbol
+kind: call
+module_level: true
+receiver:
+  from:
+    call: '^require$'
+```
+
+Flow is not built for source over 2 MB (`source-byte-budget`), so on larger
+files every provenance filter declines and the scan records an analysis gap.
+Run `cleave facts flow <file>` to see the graph these filters read.
 
 **Picking between `type: symbol` and `type: tree-sitter`:** `type: symbol`
 covers nearly every call-matching need. It runs against the precomputed symbol
@@ -1606,9 +1647,12 @@ with its decoded named-bit subtree in values (e.g. `pe.dll_characteristics.*`,
 
 ### Directory limits
 
-`make validate` allows at most **100 atomic traits and composite rules combined**
-per directory, summed across its YAML files, at every criticality. Exactly 100
-passes; 101 fails. There is no separate atomic cap or directory exemption.
+`make validate` uses **100 atomic traits and composite rules combined** per
+directory as a review trigger, summed across its YAML files and criticalities.
+A leaf may exceed 100 only when its exact path has a reviewed budget in Cleave
+and the evidence shows accurate, correctly leveled, nonduplicative rules. The
+validator fails above that leaf's recorded budget; there is no global increase
+or filename-based budget. See [Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
 Depth above five directory levels below the tier produces a soft validation
 warning, not a hard limit; count neither the tier nor the filename. Sibling
 groups below 35 combined rules also produce soft warnings under the criteria in

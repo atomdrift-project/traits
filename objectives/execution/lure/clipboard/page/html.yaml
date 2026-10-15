@@ -74,14 +74,6 @@ traits:
   if:
     type: text
     regex: '(?i)\bmacos\b'
-- id: macos-terminal-name
-  desc: Terminal application marker
-  crit: notable
-  conf: 0.9
-  platforms: [macos]
-  if:
-    type: text
-    word: Terminal
 - id: macos-update-action
   desc: Software update action marker
   crit: notable
@@ -100,15 +92,32 @@ traits:
     regex: '(?i)\b(required|ready|available|install)\b'
 # "Press Return" in a paste-into-Terminal lure; a bare word would match
 # every "Return to …" link and button.
-- id: macos-terminal-return-word
-  desc: Tells the reader to press Return
-  crit: notable
-  conf: 0.86
-  platforms: [macos]
+# The reassurance stage speaks for the service it fronted: "Service online",
+# "operating normally", "all systems operational". Real status pages say this
+# too, so the claims only convict under an mshta-delivery gate (composites
+# below).
+- id: service-online-claim
+  desc: Claims a service is online
+  crit: component
+  conf: 0.9
   if:
     type: text
-    regex: '(?i)\b(press|hit|tap|then)\b[^\n.]{0,40}\bReturn\b'
+    regex: '(?i)\bservice[s]?\b[^\n<]{0,32}\bonline\b'
+- id: operating-normally-claim
+  desc: Claims systems operating normally
+  crit: component
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?i)\b(operating normally|systems? (are )?operational|systems? healthy)\b'
 composite_rules:
+- id: operational-status-claims
+  desc: Claims service or system operational status
+  crit: component
+  conf: 0.9
+  any:
+  - id: service-online-claim
+  - id: operating-normally-claim
 - id: decoded-browser-command-copy
   desc: Browser copies Base64-decoded content to the clipboard
   crit: suspicious
@@ -132,7 +141,7 @@ composite_rules:
   - id: objectives/execution/lure/clipboard/instruction::run-dialog-instruction-generic-verb
   - id: objectives/execution/lure/clipboard/instruction::run-dialog-instruction-generic-marker
   - id: objectives/execution/lure/clipboard/instruction::paste-enter-instruction-generic
-  - id: micro-behaviors/process/create/shell/command-mode::windows-command-shell-invocation
+  - id: micro-behaviors/process/argument/option::windows-interpreter-command-syntax
   near_bytes: 900
 - id: fake-captcha-encoded-powershell-stage
   desc: Fake CAPTCHA stages encoded PowerShell through the clipboard
@@ -143,7 +152,7 @@ composite_rules:
   all:
   - id: objectives/execution/lure/clipboard/fake-verification::fake-human-verification-cue
   - id: decoded-browser-command-copy
-  - id: objectives/execution/interpreter/eval/invoke::encoded-iex
+  - id: micro-behaviors/process/interpreter/eval/direct::base64-powershell-eval-command
   near_bytes: 900
 - id: command-response-clipboard-copy
   desc: Returned command is copied to the clipboard
@@ -184,7 +193,7 @@ composite_rules:
   - id: clipboard-execution-sequence
   - id: objectives/execution/lure/clipboard/instruction::hidden-instruction-panel
   any:
-  - id: micro-behaviors/process/create/load/script::local-script-element-load
+  - id: micro-behaviors/process/deploy::local-script-element-load
   - id: micro-behaviors/ui/window/theme::theme-adaptation
 - id: fake-captcha-clipboard-execution
   desc: Fake CAPTCHA clipboard execution lure
@@ -192,7 +201,7 @@ composite_rules:
   conf: 0.99
   all:
   - id: staged-clipboard-execution-lure
-  - id: objectives/credential-access/phishing/captcha::cloudflare-turnstile
+  - id: micro-behaviors/ui/controls/captcha::turnstile-dynamic-navigation
   any:
   - id: micro-behaviors/communications/http/url/cdn::multiple-frontend-cdn-assets
 - id: macos-terminal-clipboard-sequence
@@ -211,12 +220,13 @@ composite_rules:
   desc: Cloudflare themed Terminal verification lure
   crit: suspicious
   conf: 0.99
-  platforms: [macos]
+  platforms:
+  - macos
   all:
   - id: macos-terminal-clipboard-sequence
   - id: objectives/execution/lure/clipboard/fake-verification::staged-verification-ui-lure
   any:
-  - id: objectives/credential-access/phishing/captcha::cloudflare-turnstile-camouflaged
+  - id: micro-behaviors/ui/controls/captcha::cloudflare-branded-turnstile-navigation
   - id: objectives/credential-access/phishing/captcha::cloudflare-style-verification-page
   - id: objectives/execution/lure/clipboard/fake-verification::storage-dev-cloudflare-verify-domain
   - id: objectives/credential-access/phishing/captcha::cloudflare-ray-id
@@ -225,14 +235,15 @@ composite_rules:
   desc: Fake Cloudflare macOS clipboard execution lure
   crit: hostile
   conf: 0.995
-  platforms: [macos]
+  platforms:
+  - macos
   all:
   - id: cloudflare-themed-terminal-lure
   - id: objectives/execution/lure/clipboard/fake-verification::fake-verification-id-message
-  - id: micro-behaviors/process/create/load/script::local-script-element-load
+  - id: micro-behaviors/process/deploy::local-script-element-load
   any:
   - id: objectives/execution/lure/clipboard/fake-verification::storage-dev-cloudflare-verify-domain
-  - id: objectives/credential-access/phishing/captcha::cloudflare-turnstile
+  - id: micro-behaviors/ui/controls/captcha::turnstile-dynamic-navigation
   - id: objectives/credential-access/phishing/captcha::cloudflare-style-verification-page
 - id: clipboard-copy-command-lure
   desc: Verification panel that copies a hidden command
@@ -299,8 +310,29 @@ composite_rules:
   all:
   - id: objectives/execution/lure/clipboard/instruction::html-winr-shortcut-instruction
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
-  - id: micro-behaviors/process/create/shell/command-mode::windows-command-shell-invocation
+  - id: micro-behaviors/process/argument/option::windows-interpreter-command-syntax
   - id: objectives/execution/lure/clipboard/instruction::paste-enter-instruction-generic
+# The Start-menu variant of the ClickFix clipboard command. Instead of Win+R
+# the lure walks the victim through right-clicking Start and running
+# PowerShell/Terminal, then pasting a reversed, Base64-wrapped command the
+# page decodes and copies with the legacy execCommand API — the shape that
+# evades every Win+R- and Clipboard-API-gated composite above. No proximity
+# bound: the instruction panel, the staged decoder and the copy handler sit
+# kilobytes apart (like clickfix-run-clipboard-execution, which is also
+# unbounded), and the five legs together are specific enough.
+- id: clickfix-startmenu-terminal-paste
+  desc: ClickFix page copies an obfuscated terminal command
+  crit: hostile
+  conf: 0.98
+  attack: T1204.001,T1059.001,T1027
+  platforms: [windows]
+  scope: leaf
+  all:
+  - id: objectives/execution/lure/clipboard/instruction::right-click-start-instruction
+  - id: micro-behaviors/process/info/name::windows-terminal-name-reference
+  - id: micro-behaviors/os/clipboard/write::browser-execcommand-copy
+  - id: micro-behaviors/data/decode/base64::base64-decode-call-text
+  - id: micro-behaviors/data/string/reverse::html-split-reverse-join-string
 - id: clickfix-clipboard-download-command
   desc: ClickFix page copies a Windows curl download command
   crit: hostile
@@ -312,7 +344,7 @@ composite_rules:
   all:
   - id: objectives/execution/lure/clipboard/instruction::html-winr-shortcut-instruction
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
-  - id: micro-behaviors/process/create/shell/command-mode::windows-command-shell-invocation
+  - id: micro-behaviors/process/argument/option::windows-interpreter-command-syntax
   any:
   - id: micro-behaviors/communications/http/download/curl::source-curl-output-option
   - id: objectives/anti-static/obfuscation/string/delimiter::cmd-delayed-curl-fragment-pair
@@ -346,7 +378,7 @@ composite_rules:
   scope: leaf
   all:
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
-  - id: micro-behaviors/process/create/shell/command-mode::windows-command-shell-invocation
+  - id: micro-behaviors/process/argument/option::windows-interpreter-command-syntax
   - id: objectives/execution/lure/clipboard/instruction::paste-enter-instruction-generic
   any:
   - id: software-update-browser-message
@@ -375,17 +407,25 @@ composite_rules:
   - id: macos-update-message
   - id: objectives/execution/lure/clipboard/instruction::macos-terminal-command-paste
   - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
+# The copied command advertises a cleartext URL but hides the fetched URL.
+# The decoder and shell pipe must be on that same clipboard-writing line.
 - id: browser-clipboard-encoded-shell-loader
-  desc: Browser page copies an encoded shell loader
+  desc: Claude URL decoy copies encoded shell loader
   crit: hostile
   conf: 0.99
-  attack: T1204.001,T1059.004,T1027
+  attack: T1204.004,T1059.004,T1027
   platforms: [macos]
   scope: leaf
+  near_lines: 0
   all:
-  - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
-  - id: micro-behaviors/ui/window/click::browser-click-listener
-  - id: objectives/command-and-control/dropper/delivery/clickfix/clipboard::clickfix-base64-terminal-exec
+  - id: micro-behaviors/os/console/banner::echo-claude-installer-url
+  - id: micro-behaviors/os/clipboard/write::clipboard-echo-url-substituted-curl
+  - id: micro-behaviors/communications/http/url/encoded::base64-decoded-http-url
+  - id: micro-behaviors/process/create/shell/pipeline::curl-decoded-url-shell-pipeline
+  # Encoding the advertised official endpoint is an honest near miss.
+  # Require a decoded destination outside the announced vendor's host.
+  unless:
+  - id: micro-behaviors/communications/http/services/anthropic::base64-claude-ai-url
 - id: clickfix-clipboard-mshta-run
   desc: OS-gated page copies a remote MSHTA command for Win+R execution
   crit: hostile
@@ -413,3 +453,29 @@ composite_rules:
   - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
   - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
   - id: objectives/execution/interpreter/script/mshta::mshta-remote-url
+# The decoy/reassurance stage of HTML-application lures: a page that only
+# pretends to be a live service check. Its whole function is what the victim
+# sees after running the operator's command, so the mshta format plus the
+# operational claim is the deception. Payload-bearing lures keep their own
+# hostile rules.
+- id: hta-fake-service-status-decoy
+  desc: HTA-delivered fake service status decoy
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: metadata/file/extension/identity::hta-html-application-extension
+  - id: operational-status-claims
+# The same stage without status wording: an application window whose markup is
+# presentation only. With no script element loading, the document's sole
+# function is what it shows the victim.
+- id: hta-display-only-decoy-window
+  desc: Display-only HTA decoy window
+  crit: suspicious
+  conf: 0.78
+  all:
+  - id: metadata/file/extension/identity::hta-html-application-extension
+  - id: micro-behaviors/data/format/html::aria-hidden
+  unless:
+  - id: micro-behaviors/process/deploy::external-script-element-load
+  - id: micro-behaviors/process/deploy::local-script-element-load
+  - id: micro-behaviors/process/deploy::dynamic-script-element-load

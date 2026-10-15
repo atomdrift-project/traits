@@ -8,18 +8,10 @@ traits:
     desc: HTTP POST request line
     crit: notable
     conf: 0.78
-    for: [binaries, scripts]
+    for: [binaries, scripts, rust, c, cpp, go]
     if:
       type: text
       regex: \bPOST\s+\S+\s+HTTP/1\.[01]\b
-  - id: native-post-request-line
-    desc: Native HTTP POST request line
-    crit: notable
-    conf: 0.82
-    for: [pe, dll, c, cpp, rust, go]
-    if:
-      type: text
-      regex: 'POST .{0,120} HTTP/1\.[01]'
   - id: native-post-method-token
     desc: Native HTTP POST method token
     crit: component
@@ -29,6 +21,7 @@ traits:
       type: text
       exact: POST
   - id: post
+    for: [python, javascript, powershell, php, html, shell, asp]
     desc: HTTP POST method string literal
     crit: notable
     conf: 0.7
@@ -42,25 +35,46 @@ traits:
     if:
       type: symbol
       kind: call
-      regex: '(^|\.)_?https?\.(post|post_json)$'
+      regex: '(^|\.)_?https?\.(post|post_json)$|^postJsonToApi$'
   - id: powershell-post-method
-    desc: PowerShell HTTP request uses the POST method
+    desc: PowerShell HTTP call with POST method argument
     crit: notable
     conf: 0.86
     for: [powershell]
     if:
-      type: text
-      regex: '(?i)-Method\s+["'']?POST\b'
+      type: tree-sitter
+      query: |
+        ((command
+            command_name: [(command_name) (command_name_expr)] @client
+            command_elements: (command_elements
+              (command_parameter) @parameter
+              . (command_argument_sep)
+              . [(generic_token) @method
+                 (array_literal_expression
+                   . (unary_expression
+                     . (string_literal
+                       [(verbatim_string_characters) (expandable_string_literal)] @method)))])) @call
+          (#match? @client "(?i)^(Invoke-WebRequest|Invoke-RestMethod|iwr|irm|'Invoke-WebRequest'|'Invoke-RestMethod'|'iwr'|'irm'|\"Invoke-WebRequest\"|\"Invoke-RestMethod\"|\"iwr\"|\"irm\")$")
+          (#match? @parameter "(?i)^-Method:?$")
+          (#match? @method "(?i)^(POST|'POST'|\"POST\")$"))
   - id: fetch-post-call
-    desc: Sends an HTTP POST request with fetch()
+    desc: Calls fetch with a POST method option
     crit: notable
-    conf: 0.72
+    conf: 0.95
     for: [javascript, typescript]
     if:
-      type: text
-      regex: 'fetch\s*\([\s\S]{0,180}method:\s*["'']POST'
-    unless:
-      - id: metadata/package/testing/harness/runtime/
+      type: tree-sitter
+      query: |
+        ((call_expression
+          function: (identifier) @fetch
+          arguments: (arguments
+            . (_)
+            . (object (pair
+              key: [(property_identifier) (string)] @key
+              value: [(string) (template_string)] @method)))) @call
+          (#eq? @fetch "fetch")
+          (#match? @key "^['\"]?method['\"]?$")
+          (#match? @method "^.POST.$"))
   - id: http-request-post
     desc: http.request with POST
     crit: notable
@@ -78,13 +92,13 @@ traits:
       type: text
       regex: https\.request\(.{0,180}method:\s*["'']POST
   - id: request-options-post-method
-    desc: Sets POST as an HTTP request method
+    desc: Script request option specifies POST
     crit: notable
     conf: 0.86
-    for: [javascript, typescript, php]
+    for: [javascript, typescript, php, html]
     if:
       type: text
-      regex: '\bmethod\s*:\s*["'']POST["'']'
+      regex: '\b(method|type)\s*:\s*["'']POST["'']'
   # The same declaration in its plural form: an options object enumerating the
   # methods a client or registry supports (`methods: ["GET", "POST", ...]`)
   # rather than configuring one request. Requires the `methods:` key so a bare
@@ -97,15 +111,6 @@ traits:
     if:
       type: text
       regex: '\bmethods\s*:\s*\[[^\]]{0,220}["'']POST["'']'
-  - id: enctype-attr
-    desc: HTML form encoding attribute
-    crit: notable
-    conf: 0.6
-    if:
-      type: text
-      regex: \benctype\s*=
-    unless:
-      - id: metadata/document/html/
   - id: post-ast
     desc: HTTP POST request via client call
     crit: notable
@@ -139,22 +144,6 @@ traits:
     if:
       type: text
       regex: '\bnew\s+(http\.)?HttpRequest\s*\(\s*["'']POST["'']'
-  - id: lua-http-request
-    desc: Lua HTTP request call
-    crit: notable
-    conf: 0.82
-    for: [lua]
-    if:
-      type: symbol
-      exact: http.request
-  - id: lua-post-method
-    desc: Lua POST method literal
-    crit: component
-    conf: 0.78
-    for: [lua]
-    if:
-      type: string_literal
-      exact: POST
   - id: lua-lcurl-post-option
     desc: Lua libcurl POST option
     crit: notable
@@ -191,7 +180,7 @@ traits:
     desc: HTML form declares the POST method
     crit: notable
     conf: 0.96
-    for: [html, javascript, typescript, php, batch]
+    for: [html, javascript, typescript, php, batch, makefile, text]
     if:
       type: text
       regex: '<form\b[^>]{0,180}method\s*=\s*["'']?post\b'
@@ -199,6 +188,26 @@ traits:
   # The form's *destination* (an absolute action URL) is a request-target fact
   # and lives at micro-behaviors/communications/http/request/html; this file
   # keeps the method declaration.
+  # Bind the serialized value to the POST body of the same fetch call.
+  # File-wide serialization plus a POST token does not establish a JSON body.
+  - id: fetch-flow-json-post-body
+    desc: fetch POST sends a JSON.stringify body
+    crit: notable
+    conf: 0.98
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      kind: call
+      exact: fetch
+      args:
+        - index: 1
+          from:
+            field: method
+            value: '^POST$'
+        - index: 1
+          from:
+            field: body
+            call: '^JSON\.stringify$'
 composite_rules:
   - id: browser-http-post-call
     desc: Browser code sends an HTTP POST request
@@ -218,46 +227,15 @@ composite_rules:
       - id: http-post-call
       - id: lua-http-post-request
       - id: powershell-post-method
-      - id: micro-behaviors/communications/http/lib/requests::requests-post
-  - id: post-form
-    desc: HTTP form submission encoding
-    crit: notable
-    conf: 0.75
-    any:
-      - id: micro-behaviors/communications/http/form::multipart-form
-      - id: micro-behaviors/communications/http/form::formdata-class
-      - id: enctype-attr
-      - id: micro-behaviors/communications/http/header/content-type::url-encoded-content-type
-    unless:
-      # Declaration comments describe accepted wire formats but cannot submit.
-      - id: metadata/lang/scripted::dts-declaration-file
-      # Ace mode bundles contain syntax tables, not an HTTP client.
-      - id: well-known/lib/ui/ace-editor::ace-mode-module
+      - id: micro-behaviors/communications/http/post::requests-post
   - id: lua-http-post-request
     for: [lua]
     desc: Lua HTTP POST request
     crit: notable
     conf: 0.86
     all:
-      - id: lua-http-request
-      - id: lua-post-method
-  # A serialized JSON body handed to a POST sender. Intent comes from the
-  # composite that references this (e.g. an install-hook exfil hostile that
-  # adds preinstall execution, an OAST host and host fingerprinting); on its
-  # own this is ordinary client behavior, including analytics capture POSTs.
-  - id: json-body-post
-    desc: POSTs a JSON body
-    crit: notable
-    conf: 0.94
-    for: [javascript, typescript]
-    scope: file
-    all:
-      - id: micro-behaviors/data/serialize/json::json-stringify-call
-    any:
-      - id: micro-behaviors/communications/http/post::post
-      - id: micro-behaviors/communications/http/request/verb::post-method-text
-      - id: micro-behaviors/communications/http/request/body::request-write-call
-    needs: 1
+      - id: micro-behaviors/communications/http/request/client::lua-http-request
+      - id: script-post-method-literal
   # The same fact -- a fetch() call configured as an HTTP POST -- reached
   # either through the parsed call shape (`fetch-post-pattern`, which needs the
   # first argument to look like a URL) or through the textual option form,

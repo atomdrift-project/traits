@@ -22,14 +22,6 @@ traits:
     kind: call
     exact: "popen"
 
-- id: proc-open
-  desc: Process execution via proc_open()
-  conf: 0.9
-  if:
-    type: symbol
-    kind: call
-    exact: "proc_open"
-
 - id: pcntl-exec
   desc: Direct process execution via pcntl_exec()
   conf: 0.95
@@ -57,6 +49,9 @@ traits:
   - id: objectives/anti-static/obfuscation/multi-layer::php-compiler-halt-loader
   - type: text
     regex: '`\(doom/[A-Za-z0-9_-]+\)`'
+  # A Markdown file sniffed as PHP parses its inline code spans as shell
+  # command expressions; they are formatting, not PHP execution.
+  - id: metadata/file/extension/identity::markdown-file-basename
 
 - id: exec-variable-argument-exec
   desc: exec() receives variable argument
@@ -114,16 +109,6 @@ traits:
 # launder request input through a local (e.g. `$command = $_POST['command']`)
 # before reaching the sink, so the direct-superglobal atoms below never see
 # them; the variable form keeps that indirection detectable.
-- id: exec-variable-argument-proc-open
-  desc: proc_open() receives variable argument
-  conf: 0.9
-  if:
-    type: symbol
-    kind: call
-    exact: proc_open
-    arg:
-      index: 0
-      kind: identifier
 # An exec-family call whose arguments reference a request superglobal. PHP
 # subscripts/interpolations don't fold to arg facts, so these match the call
 # form plus the superglobal as source text — the function list and the `(`
@@ -138,9 +123,9 @@ traits:
   if:
     type: tree-sitter
     kind: call
-    # Stay inside the command call. Crossing a semicolon invents taint flow
-    # between an unrelated shell_exec($cmd) and a later validated POST read.
-    regex: '\b(exec|system|shell_exec)\s*\([^;]{0,200}\$_POST'
+    regex: \b(exec|system|shell_exec)\s*\([^;]{0,200}\$_POST
+  unless:
+  - id: well-known/tool/offensive/exploitdb::published-script-wrapper
 - id: exec-user-input-post--g2
   desc: $_POST reaches passthru/popen/proc_open
   crit: suspicious
@@ -156,9 +141,12 @@ traits:
   if:
     type: tree-sitter
     kind: call
-    regex: '\b(exec|system|shell_exec)\s*\([^;]{0,200}\$_REQUEST'
+    regex: \b(exec|system|shell_exec)\s*\([^;]{0,200}\$_REQUEST
   unless:
   - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
+  - id: well-known/tool/offensive/industrialxpl/
+  - id: micro-behaviors/metaprogramming/generation::configured-assessment-plugin
+  - id: micro-behaviors/metaprogramming/generation::parameterized-shell-command-builder
 - id: exec-user-input-request--g2
   desc: $_REQUEST reaches passthru/popen/proc_open
   crit: suspicious
@@ -174,13 +162,20 @@ traits:
   if:
     type: tree-sitter
     kind: call
-    regex: '\b(exec|system)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]'
+    regex: \b(exec|system)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]
   unless:
+  - id: micro-behaviors/ui/help::escaped-local-command-reference
   - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
-  # A webshell fixture embedded in a test corpus is data its detector asserts
-  # on, not a shipped execution path.
-  - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: metadata/file/naming::test-directory-component
   - id: metadata/file/extension/identity::markdown-file-basename
+  - id: well-known/tool/offensive/exploitdb::published-script-wrapper
+  - id: metadata/package/testing/
+  - id: metadata/package/testing/corpus::php-taint-engine-fixture-context
+  - id: well-known/tool/detection/websec-validator::websec-validator-probe-context
+  downgrade:
+    scope: parent
+    any:
+    - id: micro-behaviors/ui/help::escaped-local-command-reference
 - id: exec-user-input-get-text--rx-2
   desc: $_GET reaches shell_exec/passthru
   crit: suspicious
@@ -196,6 +191,7 @@ traits:
     # scanner must flag; the fixture path (not an archive-wide context) carries
     # the exclusion so it resolves on the member file itself.
     - id: well-known/tool/detection/react-doctor::react-doctor-tree-path
+    - id: well-known/app/system/anthropic-cybersecurity-skills::cybersecurity-skill-template-guide
 - id: exec-user-input-get-text--rx-3
   desc: $_GET reaches popen/proc_open
   crit: suspicious
@@ -216,25 +212,8 @@ traits:
   if:
     type: text
     regex: '"pipe"\s*,\s*"r".{0,80}"pipe"\s*,\s*"w"'
-- id: php-fread-indexed-pipe
-  desc: Reads an indexed process pipe
-  conf: 0.86
-  if:
-    type: text
-    regex: 'fread\s*\(\s*\$[A-Za-z_][A-Za-z0-9_]*\s*\['
 
 composite_rules:
-- id: exec-variable-argument
-  desc: Command function receives variable argument
-  conf: 0.9
-  any:
-  - id: exec-variable-argument-exec
-  - id: exec-variable-argument-system
-  - id: exec-variable-argument-shell
-  - id: exec-variable-argument-passthru
-  - id: exec-variable-argument-popen
-  - id: exec-variable-argument-proc-open
-
 - id: exec-user-input
   desc: Command execution with user input
   crit: suspicious
@@ -246,16 +225,20 @@ composite_rules:
   - id: exec-user-input-request--g2
   - id: exec-user-input-get-text
   unless:
-  - id: well-known/tool/offensive/projectdiscovery::nuclei-cves-index-shape
-  - id: well-known/tool/offensive/nmap::nmap-source-tree
-  - id: metadata/lang/source::yara-rule-source
+  - id: well-known/tool/offensive/payload-corpus::scanner-request-payload-context
+  - id: "metadata/lang/source/syntax::yara-rule-source"
   - id: well-known/tool/detection/security-scanner::anteumbra-package-tree-member
   - id: well-known/tool/offensive/bingo/
   - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
+  - id: well-known/tool/offensive/industrialxpl/
   # A webshell fixture embedded in a test corpus is data its detector asserts
   # on, not a shipped execution path.
-  - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: "metadata/file/naming::test-directory-component"
   - id: metadata/file/extension/identity::markdown-file-basename
+  downgrade:
+    scope: parent
+    any:
+      - id: micro-behaviors/ui/help::escaped-local-command-reference
 - id: exec-user-input-get-text
   desc: GET input reaches command execution
   crit: suspicious
@@ -265,20 +248,27 @@ composite_rules:
   - id: exec-user-input-get-text--rx-2
   - id: exec-user-input-get-text--rx-3
   unless:
+  - id: micro-behaviors/ui/help::escaped-local-command-reference
   - id: metadata/build/generated::php-empty-function-declarations
   - id: metadata/build/generated::php-manual-empty-function-stubs
   - id: well-known/tool/offensive/bingo/
-  - id: metadata/package/testing/presence/harness::test-directory-path
+  - id: metadata/file/naming::test-directory-component
   - id: metadata/file/extension/identity::markdown-file-basename
   - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
+  - id: well-known/tool/offensive/exploitdb::published-script-wrapper
+  downgrade:
+    scope: parent
+    any:
+    - id: micro-behaviors/ui/help::escaped-local-command-reference
 - id: php-piped-proc-open-runner
   desc: proc_open pipes input and output
   crit: suspicious
   conf: 0.93
   near_lines: 25
   all:
-  - id: proc-open
+  - id: micro-behaviors/process/create/subprocess::proc-open
   - id: php-stdio-pipe-pair
-  - id: php-fread-indexed-pipe
+  - id: micro-behaviors/fs/read/stream::php-fread-indexed-resource
   unless:
   - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"

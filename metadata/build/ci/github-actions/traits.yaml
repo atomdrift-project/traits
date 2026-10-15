@@ -18,7 +18,7 @@ traits:
     # typed by the shell it declares (powershell/batch/shell), so those types
     # have to be listed or the context never reaches the node the rules
     # actually match on. The node keeps the workflow in its !!-joined path.
-    for: [github-actions, powershell, batch, shell]
+    for: [github-actions, yaml, powershell, shell]
     if:
       type: path
       substr: .github/workflows/
@@ -26,7 +26,7 @@ traits:
     desc: GitHub Actions action path
     crit: notable
     conf: 0.99
-    for: [github-actions, javascript, typescript, shell, python]
+    for: [github-actions, yaml, javascript, shell]
     if:
       type: path
       substr: .github/actions/
@@ -37,6 +37,7 @@ traits:
     if:
       type: text
       regex: 'process\.env\.GITHUB_OUTPUT([^A-Za-z0-9_]|$)'
+
 
   - id: actions-sdk
     desc: GitHub Actions SDK import
@@ -75,42 +76,46 @@ traits:
     if:
       type: path
       substr: '@octokit/openapi-types'
-  - id: types-dts-basename
-    desc: TypeScript declaration basename
-    crit: baseline
-    conf: 0.94
-    if:
-      type: basename
-      exact: types.d.ts
-  # A composite action that lives under `.github/actions/` is a repository's
-  # own helper, usable only as `uses: ./.github/actions/<name>` from inside
-  # that repo. A *published* action -- the thing a supply-chain rule cares
-  # about, referenced as `uses: owner/repo@ref` -- must carry its manifest at
-  # the repository root instead.
-  #
-  # The distinction matters because `scope: archive` rules pool their legs
-  # across unrelated members: k3s's source tarball has a composite action in
-  # `.github/actions/setup-go/` and the famous `curl -sfL https://get.k3s.io |
-  # sh -` in `install.sh`, two files with nothing to do with each other, and
-  # that pair scored hostile for "action pipes a downloaded stage into a
-  # shell". cargo-binstall's tarball has the same shape. Bounding the carrier
-  # by size did not help: both archives are well under a megabyte.
-  - id: repo-internal-composite-action-path
-    desc: Composite action is a repo-internal helper
+  # Nested action manifests record helper layout, not invocation authority.
+  - id: nested-action-manifest-path
+    desc: Action manifest in repository helper directory
     crit: notable
     conf: 0.95
     for: [tar, zip]
     if:
       type: value
       path: "archive.members[*].path"
-      # Any `actions/<name>/action.yml`, not just `.github/actions/`. A
-      # PUBLISHED action puts its action.yml at the repository root, so an
-      # action.yml nested under an `actions/` collection or within `.github/`
-      # is repo-internal tooling by construction. Azure SDK repos keep theirs in
-      # `eng/common/actions/`, and NumPy keeps theirs in `.github/meson_actions/`.
+      # Covers nested helper layouts, including eng/common/actions and
+      # .github/meson_actions. It asserts layout alone, not accessibility.
       regex: '(^|/)(\.github/.*|[a-zA-Z0-9_-]*actions/[^/]+)/action\.ya?ml$'
 
+  - id: repository-github-script-path
+    desc: Shell path under .github or actions
+    crit: notable
+    conf: 0.95
+    for: [shell, powershell, batch]
+    if:
+      type: path
+      regex: '(?i)(^|[\\/])(\.github|actions)[\\/]'
+  - id: embedded-workflow-uses-step
+    desc: Embedded GitHub Actions uses step
+    crit: notable
+    conf: 0.95
+    # Workflow generator templates (e.g. a Go template emitting
+    # .github/workflows files) and other embedded fragments carry
+    # `uses: actions/...` step lines without living under
+    # .github/workflows/, so the workflow-definition path fact never
+    # reaches them. Scoped to non-workflow node types on purpose:
+    # inside a real workflow file the path fact already states the
+    # context. A `uses:` line start is YAML-step syntax, not shell, so
+    # combined with the GitHub-owned actions/ namespace this is precise.
+    for: [shell, text]
+    if:
+      type: text
+      regex: '(?m)^\s*uses:\s+actions/'
+
 composite_rules:
+
   - id: action-bundle-context
     desc: GitHub Action bundled JavaScript context
     crit: baseline
@@ -125,4 +130,4 @@ composite_rules:
     conf: 0.94
     all:
       - id: octokit-openapi-types-path
-      - id: types-dts-basename
+      - id: metadata/lang/scripted::types-dts-basename

@@ -14,38 +14,6 @@ traits:
     if:
       type: text
       regex: 'in\s+os\.environ[\s\S]{0,100}["''](SECRET|TOKEN|KEY)'
-  - id: python-environ-items-secret-marker
-    desc: Credential marker string literal
-    crit: component
-    conf: 0.92
-    for: [python]
-    if:
-      type: string_literal
-      kind: string
-      # The consuming composite supplies the os.environ.items() context.
-      # Keep this atom limited to actual string literals, not identifiers
-      # such as _safe_keys or prose mentioning a credential term.
-      # A literal ending in KEY_/SECRET_/TOKEN_ is a namespace prefix for a
-      # startswith() selection (e.g. an app's own FERAL_KEY_ variables), not
-      # a credential name: real credential variables never end in "_".
-      regex: '(^|[_-])(TOKEN|SECRET|KEY)([_-]|$)'
-      case_insensitive: true
-    not:
-      - regex: '(?i)(TOKEN|SECRET|KEY)_["'']?$'
-  - id: python-environ-items-password-marker
-    desc: Password marker string literal
-    crit: notable
-    conf: 0.92
-    for: [python]
-    if:
-      type: string_literal
-      kind: string
-      # As above: a trailing-underscore literal (APP_PASSWORD_) selects an
-      # application namespace; it does not name a credential.
-      regex: '^[A-Za-z0-9_]*(PASSWORD|CREDENTIAL)[A-Za-z0-9_]*$'
-      case_insensitive: true
-    not:
-      - regex: '(?i)(PASSWORD|CREDENTIAL)_["'']?$'
   - id: python-environ-alias-items-secret-marker
     desc: Aliased env iteration uses secret markers
     crit: notable
@@ -122,13 +90,16 @@ traits:
     desc: Reads JWT_SECRET from the process environment
     for: [javascript, typescript]
     if:
-      type: text
-      regex: 'process\.env(\.JWT_SECRET|\[\s*["'']JWT_SECRET["'']\s*\])'
+      type: symbol
+      kind: member
+      exact: process.env.JWT_SECRET
   - id: session-secret
-    desc: SESSION_SECRET environment variable
+    desc: Accesses the SESSION_SECRET environment member
+    for: [javascript, typescript]
     if:
-      type: text
-      word: SESSION_SECRET
+      type: symbol
+      kind: member
+      exact: process.env.SESSION_SECRET
   - id: cookie-secret
     desc: COOKIE_SECRET environment variable
     if:
@@ -168,18 +139,23 @@ traits:
     for: [javascript, typescript]
     ref: sha256:f9b935ef1d644960445911670b391fed77ba2cc0a5024fc114eaa19c7b5c0aab
     if:
-      type: text
-      regex: 'process\.env\.[A-Z][A-Z0-9_]{0,40}_(PASSWORD|CLIENT_SECRET|API_KEY|AUTH_TOKEN)\b'
-      not:
-        - substr: CURLOPT_
-        - substr: CURLINFO_
-        # Public build-time variables are intentionally exposed to browser
-        # bundles; they are not service-secret accesses.
-        - regex: 'process\.env\.(NEXT_PUBLIC_|PUBLIC_|VITE_|EXPO_PUBLIC_|REACT_APP_)'
+      # Member-symbol exclusions are not evaluated by the engine. Match the
+      # executable member node and exclude public names within the query.
+      type: tree-sitter
+      query: |
+        ((member_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env)
+          property: (property_identifier) @name) @access
+          (#eq? @process "process")
+          (#eq? @env "env")
+          (#match? @name "^[A-Z][A-Z0-9_]{0,40}_(PASSWORD|CLIENT_SECRET|API_KEY|AUTH_TOKEN)$")
+          (#not-match? @name "^(NEXT_PUBLIC_|PUBLIC_|VITE_|EXPO_PUBLIC_|REACT_APP_)"))
     unless:
       - id: metadata/lang/generated::codegen-source-path
       - id: well-known/app/browser/google-web::official-google-web-asset
-      - id: metadata/file/format/structured::sourcemap-sources-content
+      - id: metadata/file/format/source-map::sourcemap-sources-content
   - id: posix-env-token-name
     desc: Reads a TOKEN-named environment variable
     crit: notable
@@ -259,8 +235,8 @@ composite_rules:
     all:
       - id: micro-behaviors/os/env/enumeration::python-environ-items-loop
     any:
-      - id: python-environ-items-secret-marker
-      - id: python-environ-items-password-marker
+      - id: micro-behaviors/data/parse/vocabulary::python-secret-key-token-literal
+      - id: micro-behaviors/data/parse/vocabulary::python-password-credential-literal
     unless:
       # A `not in` test drops the named variables and keeps the rest, so the
       # credential word is what is being removed, not what is being selected.
@@ -290,8 +266,8 @@ composite_rules:
     all:
       - id: micro-behaviors/os/env/enumeration::python-environ-iteration
     any:
-      - id: python-environ-items-secret-marker
-      - id: python-environ-items-password-marker
+      - id: micro-behaviors/data/parse/vocabulary::python-secret-key-token-literal
+      - id: micro-behaviors/data/parse/vocabulary::python-password-credential-literal
     unless:
       - id: micro-behaviors/os/env/enumeration::python-environ-items-exclusion-filter
       - id: micro-behaviors/data/manipulation::sensitive-value-masking
@@ -338,11 +314,24 @@ composite_rules:
     crit: notable
     conf: 0.9
     any:
-      - id: micro-behaviors/os/env/cloud
-      - id: micro-behaviors/os/env/vcs
+      - id: micro-behaviors/os/env/cloud/
+      - id: micro-behaviors/os/env/secret-name::aws-env-secret-vars
+      - id: micro-behaviors/os/env/secret-name::aws-secret-access-key-var
+      - id: micro-behaviors/os/env/secret-name::aws-access-key-pair-names-binary
+      - id: micro-behaviors/os/env/vcs/
+      - id: micro-behaviors/os/env/secret-name::github-token-name-reference
       - id: micro-behaviors/os/env/database
       - id: micro-behaviors/os/env/ai-provider
-      - id: micro-behaviors/os/env/service-api
+      - id: micro-behaviors/os/env/secret-name::python-api-key-env-read
+      # The service API leaf also holds declarations and literal names.
+      # Only named environment-access matchers establish a read here.
+      - id: micro-behaviors/os/env/service-api::env-discord-token
+      - id: micro-behaviors/os/env/service-api::env-discord-bot-token
+      - id: micro-behaviors/os/env/service-api::env-discord-client-secret
+      - id: micro-behaviors/os/env/service-api::env-slack-bot-token
+      - id: micro-behaviors/os/env/service-api::env-slack-api-key
+      - id: micro-behaviors/os/env/service-api::env-slack-webhook
+      - id: micro-behaviors/os/env/service-api::python-discord-token-getenv
       # package-manager/ and ssh/ are topic directories, not credential ones:
       # they also hold npm_lifecycle_event, npm user-agent, SSH_TTY/SSH_CLIENT
       # and npmrc benign-context markers. A bare directory reference made this

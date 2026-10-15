@@ -4,15 +4,6 @@ defaults:
   platforms: [windows, unix]
   for: [javascript, typescript]
 traits:
-  - id: node-spawnsync-import
-    desc: Imports Node.js spawnSync process execution API
-    crit: notable
-    conf: 0.95
-    if:
-      type: symbol
-      kind: import
-      exact: spawnSync
-
   # === Detached spawn execution indicators ===
   - id: detached-true
     desc: Detached process spawn option
@@ -36,7 +27,7 @@ traits:
       type: text
       regex: 'detached\s*:\s*process\.'
   - id: windowshide-option
-    desc: Node.js windowsHide spawn option
+    desc: Node.js windowsHide process-launch option
     crit: notable
     conf: 0.85
     if:
@@ -72,16 +63,20 @@ traits:
     crit: baseline
     conf: 0.85
     if:
-      type: text
-      regex: 'shell\s*:\s*false'
+      type: tree-sitter
+      query: '((pair key: (property_identifier) @key value: (false)) @option (#eq? @key "shell"))'
   - id: shell-true
     desc: "shell: true option"
     crit: notable
     conf: 0.9
     attack: "T1059"
+    # Tree-sitter like the shell-false sibling: a text regex also matches
+    # comments describing the option (a virgil-cli comment documents
+    # shell:true while the call passes shell:false), and a comment never
+    # spawns a shell.
     if:
-      type: text
-      regex: 'shell\s*:\s*true'
+      type: tree-sitter
+      query: '((pair key: (property_identifier) @key value: (true)) @option (#eq? @key "shell"))'
   - id: shell-obfuscated-dynamic
     desc: "shell option via obfuscated alias"
     crit: notable
@@ -91,14 +86,6 @@ traits:
       type: text
       regex: '\bshell\s*:\s*_0x[a-fA-F0-9]{4,}\['
   # === Silent I/O patterns ===
-  - id: stdio-ignore
-    desc: Spawns a child with standard I/O ignored
-    crit: notable
-    conf: 0.85
-    mbc: "F0005"
-    if:
-      type: text
-      regex: "stdio\\s*:\\s*(\\[[^\\]]{0,220}['\"]ignore['\"]|['\"]ignore['\"])"
   # === Shell spawn patterns ===
   - id: spawn-bash
     desc: Spawns bash shell process
@@ -109,6 +96,16 @@ traits:
     if:
       type: text
       regex: "spawn\\(['\"]bash['\"]"
+  - id: node-spawn-powershell-process
+    desc: Spawns powershell.exe child process
+    crit: notable
+    conf: 0.92
+    mbc: "C0017"
+    attack: "T1059.001"
+    for: [javascript, typescript, pe]
+    if:
+      type: raw
+      regex: '(?i)(spawn|execFile|execSync|exec)\s*\(\s*["'']powershell(\.exe)?["'']'
   - id: child-process-member-spawn
     desc: Node.js child_process spawns an external process
     crit: notable
@@ -127,7 +124,7 @@ traits:
       kind: call
       regex: '(?i)(^|\.)(child[_-]?process|childproc|cp)\.spawn$'
   - id: bare-spawn-call
-    desc: Bare spawn function call
+    desc: Calls a function named spawn
     crit: notable
     conf: 0.75
     # `spawn()` is not uniquely a process API. Keep the bare call as a weak
@@ -149,20 +146,6 @@ traits:
       type: text
       regex: '\b(child_process\.|childProcess\.|cp\.)?spawn\s*\(\s*["'']node["'']'
   # === Node.js self-execution ===
-  - id: process-execpath-spawn
-    desc: Spawn using process.execPath
-    crit: notable
-    conf: 0.9
-    mbc: "B0024"
-    attack: "T1059.007"
-    unless:
-      - id: metadata/package/testing/harness/runtime::test-basename-spec
-    if:
-      type: text
-      # A process.execPath lookup alone is commonly used to identify the
-      # current VS Code/Node executable.  Require the self-spawn call that
-      # gives this atom its stated meaning.
-      regex: '\b(spawn|spawnSync|fork)\s*\(\s*process\.execPath\b'
   - id: node-self-eval-argument
     desc: Node self-spawn runs inline eval
     crit: notable
@@ -178,6 +161,7 @@ traits:
       - id: metadata/package/files/dependency::node-modules-path
       - id: micro-behaviors/process/interpreter/vm/
       - id: micro-behaviors/process/create/spawn::auto-retry-helper
+      - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
       regex: 'spawn\s*\(\s*process\.execPath[\s\S]{0,260}[''"]-e[''"]'
@@ -223,6 +207,7 @@ traits:
     crit: notable
     conf: 0.88
     attack: "T1059.007"
+    for: [javascript, typescript, pe]
     if:
       type: text
       regex: '[''"]-jar[''"]|[^\w]-jar\s+[^''"\s]{1,160}\.jar'
@@ -232,7 +217,7 @@ traits:
     conf: 0.86
     if:
       type: text
-      regex: 'resolveDefaultBrokerEntry|brokerEntry\s*\?\?'
+      regex: 'resolveDefaultBrokerEntry|brokerEntry\s*\?\?|fileURLToPath\s*\(\s*new\s+URL'
   - id: node-bearer-health-probe
     desc: Node bearer-authenticated health probe
     crit: notable
@@ -268,7 +253,7 @@ composite_rules:
       - id: micro-behaviors/process/create/indirect::indirect-spawn-dispatch
       - id: micro-behaviors/process/daemonize/detach::node-handle-indirect-unref
   - id: detached-ignored-unref-spawn
-    desc: Spawns detached child and calls unref()
+    desc: Detached and ignored-stdio options accompany unref()
     crit: notable
     conf: 0.9
     # Bind unref() to the detached spawn configuration. Without proximity,
@@ -277,9 +262,9 @@ composite_rules:
     near_bytes: 2048
     all:
       - id: detached-true
-      - id: stdio-ignore
+      - id: micro-behaviors/process/fd/stdio::child-stdio-ignore-option
     any:
-      - id: micro-behaviors/process/daemonize/detach::node-handle-unref-text
+      - id: micro-behaviors/process/control/wait::node-unref-handle
       - id: micro-behaviors/process/daemonize/detach::node-handle-indirect-unref
   # A detached fork survives the parent and runs an independent script — unlike
   # a normal worker/fork pool, which stays attached. `silent`/`stdio:'ignore'`
@@ -300,7 +285,7 @@ composite_rules:
       - id: detached-ignored-unref-spawn
       - id: node-lazy-daemon-entry-resolution
     any:
-      - id: process-execpath-spawn
+      - id: micro-behaviors/process/create/exec::node-spawn-current-executable
       - id: node-bearer-health-probe
   - id: child-process-alias-spawn
     desc: Node.js child_process alias spawn
@@ -334,7 +319,7 @@ composite_rules:
   # and carry no intent of their own. Objective composites supply the context;
   # see npm-encoded-loader-with-cleanup, which corroborates with it.
   - id: detached-hidden-spawn
-    desc: Detached Node.js child process with its Windows console hidden
+    desc: Detached and windowsHide true options co-occur
     crit: notable
     conf: 0.85
     attack: "T1564"
@@ -346,5 +331,6 @@ composite_rules:
       any:
         - id: metadata/package/testing/
         - id: metadata/signed/platform/
+        - id: "metadata/file/naming::test-directory-component"
     unless:
       - id: well-known/app/ai/coding-agent/qwen-code::qwen-code-bundle-text

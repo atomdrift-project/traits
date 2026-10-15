@@ -46,15 +46,14 @@ traits:
       type: text
       regex: 'ANTHROPIC_BASE_URL\W{1,8}https?://(127\.0\.0\.1|localhost|0\.0\.0\.0)'
 
-  - id: local-llm-generate-path
-    desc: Local LLM generate or chat API path
+  - id: anthropic-branded-off-vendor-origin-literal
+    desc: Anthropic-branded non-vendor API origin
     crit: notable
-    conf: 0.92
+    conf: 0.95
+    for: [javascript, typescript, json]
     if:
-      type: text
-      # Root /api/{generate,chat} or after a host:port — not nested app routes
-      # like /__dev/api/chat.
-      regex: '(?i)(^|[^\w/]|:\d{2,5})/api/(generate|chat)\b'
+      type: string_literal
+      regex: '(?i)https://[\w.-]*anthropic\.(help|app|ai|net|io|dev|xyz)'
 
   - id: ollama-api-create-path
     desc: Ollama model create API path
@@ -135,9 +134,14 @@ traits:
       type: text
       regex: '\{\{\s*\.System\s*\}\}'
 
-  - id: page-host-ollama-port
+  # URL construction alone is the standard self-hosted-frontend pattern: a
+  # config module resolving its own backend from the origin it is served
+  # from (Open-WebUI-style) never fires the composite. The suspicious claim
+  # needs the request that uses the endpoint -- the rebinding/drive-by class
+  # reaches the daemon through a fetch of its own.
+  - id: page-host-ollama-url-builder
     desc: Builds Ollama URL from page hostname
-    crit: suspicious
+    crit: notable
     conf: 0.95
     for: [javascript, typescript, html]
     if:
@@ -152,6 +156,22 @@ traits:
   # The composite below now reaches for the canonical atoms instead.
 
 composite_rules:
+  # Keeps the identifier the objective consumers already reference; the
+  # request leg is what separates a page driving the endpoint from a config
+  # module that only resolves it.
+  - id: page-host-ollama-port
+    desc: Sends requests to page-host Ollama endpoint
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript, html]
+    all:
+      - id: page-host-ollama-url-builder
+    any:
+      - id: micro-behaviors/communications/http/post::fetch-post-call
+      - id: micro-behaviors/communications/http/request/html::html-fetch-post-call
+    needs: 1
+    near_lines: 40
+
   # Any chat-format variant of the poisoned-template shape: the user's rendered
   # System field immediately followed by a second, attacker-supplied system
   # turn. Suspicious on its own; objectives pair it with the /api/create write.
@@ -180,7 +200,7 @@ composite_rules:
     all:
       - id: loopback-llm-api-host
     any:
-      - id: local-llm-generate-path
+      - id: micro-behaviors/communications/url/path::api-chat-or-generate-path-reference
       - id: micro-behaviors/communications/http/llm-proxy::llm-chat-completions-path
       - id: micro-behaviors/communications/http/llm-proxy::go-llm-chat-completions-path
       - id: micro-behaviors/communications/http/llm-proxy::llm-responses-path

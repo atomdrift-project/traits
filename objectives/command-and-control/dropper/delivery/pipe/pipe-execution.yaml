@@ -33,6 +33,7 @@ traits:
       - regex: curl\s+.{0,200}install\.fuel\.network.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}golangci-lint\.run/install\.sh.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}raw\.githubusercontent\.com/golangci/golangci-lint/.{0,80}/install\.sh.{0,200}\|\s*sh\b
+      - regex: curl\s+.{0,200}raw\.githubusercontent\.com/securego/gosec/.{0,80}/install\.sh.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}raw\.githubusercontent\.com/anchore/syft/.{0,80}/install\.sh.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}aka\.ms/apm-unix.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}astral\.sh.{0,200}\|\s*sh\b
@@ -51,6 +52,8 @@ traits:
       - regex: curl\s+.{0,200}tailscale\.com/install\.sh.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}install\.julialang\.org.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}nixos\.org/nix/install.{0,200}\|\s*sh\b
+      - regex: curl\s+.{0,200}mise\.(run|jdx\.dev).{0,200}\|\s*sh\b
+      - regex: curl\s+.{0,200}create-awesome-vlang-app\.vercel\.app.{0,200}\|\s*sh\b
       # The Studio UI renders this installer command for the user; it does
       # not execute the command in the browser process.
       - regex: 'window\.location\.origin[^\n]{0,80}install\.sh\s*\|\s*sh\b'
@@ -66,29 +69,21 @@ traits:
     if:
       type: text
       regex: curl\s+.{0,200}\|\s*shell\b
-  - id: curl-pipe-zsh
-    desc: curl piped to zsh
-    crit: suspicious
-    conf: 0.7
-    attack: T1059.004
-    for: [html, javascript, markdown, shell, python, ruby, perl, applescript]
-    unless:
-      - id: metadata/package/testing/harness/runtime/
-      - id: well-known/tool/detection/security-scanner/
-      - id: objectives/command-and-control/channel/deaddrop/url::security-rule-runtime-script-floating-url
-      - id: metadata/build/
-      - id: well-known/app/ai/knowledge/brainsync::brainsync-vscode-extension
-    if:
-      type: text
-      regex: curl\s+.{0,200}\|\s*zsh\b
-    not:
-      - regex: 'pattern:/\\bcurl\\s'
-      - substr: 'description:"Piping remote script to shell'
   - id: curl-pipe-ksh
     desc: curl piped to ksh
     crit: suspicious
     conf: 0.7
     attack: T1059.004
+    unless:
+      - id: well-known/tool/detection/
+      - id: objectives/command-and-control/channel/deaddrop/url::security-rule-runtime-script-floating-url
+      - type: basename
+        regex: (?i)(^|[\\/!])(METADATA|PKG-INFO|README(\..*)?)$
+      - id: metadata/package/freeform::pkg-description-content-type-markdown
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/build/docker::dockerfile-basename
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
       regex: curl\s+.{0,200}\|\s*ksh\b
@@ -97,6 +92,17 @@ traits:
     crit: suspicious
     conf: 0.7
     attack: T1059.004
+    unless:
+      - id: metadata/file/format/source-map::sourcemap-sources-content
+      - id: well-known/tool/detection/
+      - id: objectives/command-and-control/channel/deaddrop/url::security-rule-runtime-script-floating-url
+      - type: basename
+        regex: (?i)(^|[\\/!])(METADATA|PKG-INFO|README(\..*)?)$
+      - id: metadata/package/freeform::pkg-description-content-type-markdown
+      - id: metadata/package/files/dependency::vsix-bundled-output-path
+      - id: metadata/build/docker::dockerfile-basename
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
       regex: curl\s+.{0,200}\|\s*dash\b
@@ -115,39 +121,26 @@ traits:
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: well-known/tool/sysadmin/alpine-packages/binary::alpine-docker-machine-binary
       - id: metadata/build/docker/
-      - id: metadata/package/testing/
+      - id: metadata/file/profile/test-indications/
       - id: well-known/tool/packaging/uv::uv-install-sh-bootstrap-url
     if:
       type: tree-sitter
-      query: '((pipeline (command name: (command_name (word) @fetch)) (command name: (command_name (word) @shell))) @pipe (#eq? @fetch "wget") (#eq? @shell "sh"))'
-    not:
-      - substr: apt.u.doover.com/install.sh
-      # Go tooling's own published bootstraps, served from the tool's own
-      # repository: the line every Go project's CI copies out of the
-      # installation docs -- gotest.tools' .circleci/config.yml installs dep,
-      # NebulousLabs' .gitlab-ci.yml installs golangci-lint. The Dockerfile
-      # form of the same command is carved out below.
-      - regex: 'githubusercontent\.com/(golangci/golangci-lint|golang/dep)/master/install\.sh'
-      # Official NVM bootstrap installer (nvm-sh/nvm, formerly creationix/nvm).
-      - regex: 'githubusercontent\.com/(creationix|nvm-sh)/nvm/.{0,80}/install\.sh'
-      # Official Anchore Syft bootstrap installer.
-      - regex: 'githubusercontent\.com/anchore/syft/.{0,80}/install\.sh'
-      - regex: 'yarnpkg\.com/install\.sh'
-      # A Dockerfile `RUN` step is a build recipe, not something the scanned
-      # file executes. MegaLinter keys each linter's install commands under
-      # `install: -> dockerfile:` and quotes the upstream one-liner verbatim --
-      # `RUN wget -O- -nv .../install.sh | sh -s "v${GO_GOLANGCI_LINT_VERSION}"`
-      # is golangci-lint's own documented installer. (A carve-out trait cannot
-      # reach these: cleave detects the descriptors as Yaml but maps that to
-      # Unknown for `for:` purposes, so no file-type-scoped rule applies.)
-      - regex: '(?m)^[-|\s]{0,12}RUN\s+wget\b'
-      # An elided URL means the line is documentation, not a command: nothing
-      # is downloaded by `wget ... | sh`. Zencoder's CLI embeds its own agent
-      # guardrail text listing the shapes it refuses -- "`curl ... | bash`,
-      # `wget ... | sh`, `iex (irm ...)`, `bash <(curl ...)`". The curl trait
-      # above already carves out the same placeholder form.
-      - regex: 'wget\s+\.\.\.\s*\|\s*sh\b'
-      - regex: 'wget\s+.{0,200}rustup\.rs.{0,200}\|\s*sh\b'
+      # One capture, the pipeline, so evidence is the whole command.
+      # `not:` does not filter tree-sitter captures (a bare "sh" capture
+      # also used to survive the rustup `not:` regex), so the official
+      # installer bootstraps below are carved out as #not-match? predicates
+      # on the capture itself:
+      # - rustup's documented bootstrap (subsumes the old sh.rustup.rs-only
+      #   predicate), Go tooling's own published bootstraps served from the
+      #   tool's own repository (the line every Go project's CI copies out
+      #   of the installation docs: golangci-lint, golang/dep and gosec),
+      #   the official NVM and Anchore Syft bootstraps, the yarn installer,
+      #   and an elided URL (documentation,
+      #   not a command: nothing is downloaded by `wget ... | sh`).
+      # A Dockerfile `RUN` step needs no carve-out: cleave maps those
+      # descriptors to Unknown for `for:` purposes, so this shell-scoped
+      # rule never fires on them.
+      query: '((pipeline) @pipe (#match? @pipe "^wget\\s[^|\\n]*\\|\\s*sh\\b") (#not-match? @pipe "rustup\\.rs|apt\\.u\\.doover\\.com/install\\.sh|githubusercontent\\.com/(golangci/golangci-lint|golang/dep|securego/gosec)/master/install\\.sh|githubusercontent\\.com/((creationix|nvm-sh)/nvm|anchore/syft)/[^|\\n]{0,80}/install\\.sh|yarnpkg\\.com/install\\.sh|wget\\s+\\.\\.\\.\\s*\\|\\s*sh"))'
   - id: wget-pipe-shell-word
     desc: wget piped to shell
     crit: suspicious
@@ -162,6 +155,7 @@ traits:
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: metadata/build/docker::dockerfile-basename
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
       regex: '(?m)^[[:space:]]*(wget\b|[^#[:space:]][^\n]{0,220}\bwget\s+)[^|\n]{1,200}\|\s*shell\b'
@@ -183,6 +177,7 @@ traits:
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: metadata/build/docker::dockerfile-basename
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
       regex: '(?m)^[[:space:]]*(wget\b|[^#[:space:]][^\n]{0,220}\bwget\s+)[^|\n]{1,200}\|\s*zsh\b'
@@ -200,6 +195,7 @@ traits:
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: metadata/build/docker::dockerfile-basename
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
       regex: '(?m)^[[:space:]]*(wget\b|[^#[:space:]][^\n]{0,220}\bwget\s+)[^|\n]{1,200}\|\s*ksh\b'
@@ -209,6 +205,7 @@ traits:
       - id: well-known/tool/sysadmin/alpine-packages/binary::alpine-docker-machine-binary
       - id: metadata/build/docker::dockerfile-basename
       - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
     desc: wget piped to dash
     crit: suspicious
     conf: 0.7
@@ -234,6 +231,8 @@ traits:
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-vsix
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-member-path
       - id: well-known/lib/data/apache-beam::beam-package-context
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
   - id: python-c-wget-command-substitution
     desc: python -c executes wget command substitution
     crit: suspicious
@@ -270,17 +269,8 @@ traits:
         regex: App/cpanminus/script\.pm
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-vsix
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-member-path
-  - id: curl-pipe-node
-    desc: curl URL piped to Node
-    crit: suspicious
-    conf: 0.75
-    attack: T1059.007
-    if:
-      type: text
-      # A variable-backed local API response is data processing, not a
-      # download-and-execute dropper.  Require a concrete HTTP(S) URL on the
-      # command line so this remains an external payload signal.
-      regex: '(?m)^[[:space:]]*curl\s+.{0,200}https?://[^[:space:]"''`|]{1,200}.{0,100}\|\s*node\b'
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
   - id: wget-pipe-node
     desc: wget piped to node
     crit: suspicious
@@ -292,6 +282,8 @@ traits:
     unless:
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-vsix
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-member-path
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
   - id: curl-pipe-ruby
     desc: curl piped to ruby
     crit: suspicious
@@ -320,6 +312,8 @@ traits:
     unless:
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-vsix
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-member-path
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
   - id: curl-pipe-shell-exception-ollama
     desc: Ollama install script reference
     crit: notable
@@ -328,6 +322,7 @@ traits:
       - type: path
         regex: '(?i)(^|[/\\])scripts/ollama\.py$'
       - id: well-known/lib/development/vscode::vscode-extension-marker
+      - id: well-known/tool/detection/cert-x-gen::scanner-source-member-context
     if:
       type: text
       substr: ollama.com/install.sh
@@ -399,9 +394,11 @@ composite_rules:
   # internal mirror at 10.x piping an install script is not a match.
   - id: ip-sourced-pipe-to-shell
     desc: Pipes a raw-IP download into a shell
-    crit: suspicious
+    crit: hostile
     conf: 0.93
-    attack: T1105
+    attack: "T1105,T1059.004"
+    for: [shell, python, javascript, typescript, ruby, perl, applescript, go, rust]
+    near_lines: 0
     all:
       - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
     any:
@@ -478,7 +475,7 @@ composite_rules:
       - id: curl-pipe-sh
       - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-bash-execution
       - id: curl-pipe-shell-word
-      - id: curl-pipe-zsh
+      - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-zsh
       - id: curl-pipe-ksh
       - id: curl-pipe-dash
       - id: micro-behaviors/communications/http/download/curl::curl-pipe-shell-in-js-exec
@@ -507,7 +504,7 @@ composite_rules:
       - id: curl-pipe-sh
       - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-bash-execution
       - id: curl-pipe-shell-word
-      - id: curl-pipe-zsh
+      - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-zsh
       - id: curl-pipe-ksh
     unless:
       - id: curl-pipe-dash
@@ -536,17 +533,17 @@ composite_rules:
     all:
       - id: micro-behaviors/data/string/replace::shell-echo-tr-transform
       - id: micro-behaviors/communications/tls/verify/disable::curl-insecure
-      - id: micro-behaviors/communications/http/download/curl::curl-silent
+      - id: micro-behaviors/communications/http/curl::curl-silent
       - id: micro-behaviors/process/create/shell/command-string::sh-c-exec
     any:
       - { id: curl-pipe-sh }
       - { id: curl-pipe-shell-word }
-      - { id: curl-pipe-zsh }
+      - { id: micro-behaviors/process/create/shell/pipeline::curl-pipe-zsh }
       - { id: curl-pipe-ksh }
       - { id: curl-pipe-dash }
       - { id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec-python-shell }
       - { id: curl-pipe-perl }
-      - { id: curl-pipe-node }
+      - { id: micro-behaviors/process/deploy::curl-pipe-node-stdin }
       - { id: curl-pipe-ruby }
       - { id: wget-pipe-sh }
       - { id: wget-pipe-shell-word }
@@ -568,19 +565,19 @@ composite_rules:
     all:
       - id: micro-behaviors/process/daemonize/detach::nohup-shell-launch
       - id: micro-behaviors/process/create/shell/pipeline::curl-response-shell-stdin
-      - id: micro-behaviors/communications/http/download/curl::curl-silent-fail-flags-text
+      - id: micro-behaviors/communications/http/curl::curl-silent-fail-flags-text
       - id: opaque-dropper-url
 
   - id: embedded-iot-password-dropper
-    desc: IoT password injection downloads and executes shell stage
+    desc: IoT password injection pipes downloaded shell stage
     crit: hostile
     conf: 0.99
     attack: T1059.004,T1105,T1210
     near_bytes: 260
     for: [shell]
     all:
-      - id: objectives/lateral-movement/exploit/network-device/http::iot-password-command-injection
-      - id: micro-behaviors/fs/chmod/executable/dangerous::shell-777
+      - id: objectives/lateral-movement/exploit/network-device/http::iot-password-wget-command
+      - id: wget-pipe-shell
 
   # The pipeline's own URL is a link shortener: the shell runs whatever the
   # short link points at today, and the operator can retarget it after

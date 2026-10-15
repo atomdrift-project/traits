@@ -23,6 +23,7 @@ traits:
     unless:
       - id: metadata/package/testing/presence/harness/
       - id: metadata/package/testing/harness/runtime/
+      - id: "metadata/file/naming::test-directory-component"
   - id: native-relative-executable-string
     desc: Relative executable path string
     crit: component
@@ -42,6 +43,7 @@ traits:
     downgrade:
       any:
         - id: metadata/package/testing/presence/harness/
+        - id: "metadata/file/naming::test-directory-component"
     unless:
       - id: metadata/build/kernel::linux-kernel-drm-ci-build-script
       - id: metadata/build/autotools::autoconf-generated-script
@@ -142,8 +144,9 @@ traits:
     # This matcher describes shell grammar.  Applying it to every script type
     # would mistake quoted dollar-prefixed JavaScript strings for commands.
     if:
-      type: text
-      regex: '(^|[;&|]\s*)["'']\$\{?[A-Za-z_]\w*\}?["''](\s|/dev/null|>|<|;|&|$)'
+      type: tree-sitter
+      kind: call
+      regex: '^(["''])\$\{?[A-Za-z_]\w*\}?["''](\s|$)'
     unless:
       - id: metadata/package/testing/harness/runtime/
   - id: execute-dot-slash-literal
@@ -159,18 +162,17 @@ traits:
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
       - id: metadata/build/kernel::linux-kernel-drm-ci-build-script
   - id: text-local-relative-executable
-    desc: Text invokes a local relative executable
+    desc: Relative command with arguments or separators
     crit: notable
     conf: 0.92
     attack: T1059.004
     for: [text]
-    # A `find .` stdout capture is hundreds of bare `./` path lines that
-    # invoke nothing. Cap the count so bulk path listings do not read as
-    # invocations; genuine loaders name only a handful of payloads.
+    # A bare ./name is also a directory-listing entry. Require an argument
+    # or shell operator after the complete basename, without crossing lines.
     count_max: 25
     if:
       type: text
-      regex: '(?m)(^|[;&|])\s*\./[A-Za-z0-9._$-]{2,80}\b'
+      regex: '(?m)(^|[;&|])[ \t]*\./[A-Za-z0-9._$-]{2,80}([ \t]+[^ \t\r\n]|[;&|])'
   # `./` must be terminated by a statement separator or end of line. A trailing
   # `|` is not a pipeline here but the alternation separator inside a `case`
   # pattern list, which is how autoconf's PATH walk (`case $as_dir in ./ |
@@ -205,7 +207,7 @@ traits:
       - id: metadata/package/files/system-package::zsh-function-script
     if:
       type: text
-      regex: '(?m)(^|[\n;&|])\s*/(tmp|var/tmp|dev/shm)/["''\.\w$][^\s;&|]{0,80}'
+      regex: '(?m)(^|[\n;&|])\s*(nohup\s+)?/(tmp|var/tmp|dev/shm)/["''\.\w$][^\s;&|]{0,80}'
     not:
       - regex: '/(tmp|var/tmp|dev/shm)/[^\s;&|]*[<*?\[\](){}]'
       # A `\`-continued redirect puts its target at start-of-line, where `^`
@@ -221,7 +223,7 @@ traits:
     attack: T1059.004
     if:
       type: text
-      regex: '(?m)(^|[;&|]\s*)/(tmp|var/tmp|dev/shm)/["''\.\w$][^\n;&|]{0,80}\s+&\s*$'
+      regex: '(?m)(^|[;&|]\s*)(nohup\s+)?/(tmp|var/tmp|dev/shm)/["''\.\w$][^\n;|\r]{0,80}\s+&\s*$'
     unless:
       - id: metadata/package/testing/harness/runtime/
   - id: background-local-exec
@@ -235,6 +237,7 @@ traits:
     downgrade:
       any:
         - id: metadata/package/testing/presence/harness/
+        - id: "metadata/file/naming::test-directory-component"
     unless:
       - id: metadata/package/testing/harness/runtime/
       - id: micro-behaviors/process/create/shell/git::git-operations-1
@@ -266,16 +269,6 @@ traits:
       - regex: '(?i)\b(installation|installer|script|usage|example|help|version|manual|guide)\b'
     unless:
       - id: metadata/package/testing/harness/runtime/
-  - id: pyproject-hidden-tmp-background-exec
-    desc: PyProject backgrounds hidden temp executable
-    crit: notable
-    conf: 0.95
-    for: [pyproject.toml]
-    platforms: [linux, macos, windows]
-    if:
-      type: value
-      path: tool.setuptools.cmdclass.build_py
-      regex: '/tmp/\.[A-Za-z0-9_][A-Za-z0-9._-]*\s*&'
   - id: composer-hidden-tmp-background-exec
     desc: Composer hook backgrounds hidden temp executable
     crit: notable
@@ -331,7 +324,6 @@ traits:
     if:
       type: text
       regex: '(?i)\b(nohup|setsid|systemd-run)\s+/(var/)?(tmp|dev/shm)/[^\s;|&]{1,120}'
-
 composite_rules:
   - id: local-executable-host-user-arguments
     desc: Local executable receives host and user

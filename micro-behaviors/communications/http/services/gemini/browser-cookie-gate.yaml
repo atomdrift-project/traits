@@ -1,0 +1,127 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  crit: notable
+  conf: 0.98
+
+traits:
+  - id: browser-cookie-gated-web-search
+    desc: Gemini Web search under cookie opt-in
+    if:
+      # Call facts do not preserve the enclosing conditional. Require the
+      # positive setting check and the call in its consequence, not merely
+      # a setting name elsewhere in the archive or in documentation.
+      type: tree-sitter
+      query: |
+        ((if_statement
+          condition: (parenthesized_expression
+            (member_expression property: (property_identifier) @setting))
+          consequence: (statement_block
+            (expression_statement
+              (assignment_expression
+                right: (await_expression
+                  (call_expression function: (identifier) @call)))))) @gate
+          (#eq? @setting "browserCookieAccess")
+          (#eq? @call "geminiWebSearch"))
+
+  - id: browser-cookie-gated-read
+    desc: Browser cookie read inside cookie opt-in branch
+    if:
+      # The opt-in claim is about the cookie-store read itself, not about
+      # one gated consumer: a reader called outside the branch harvests
+      # cookies regardless of who gated their own call site. Require the
+      # positive setting check to enclose an awaited read/get-cookies call,
+      # so a renamed reader that truly gates the read matches while the
+      # same package's ungated reader call sites elsewhere do not.
+      type: tree-sitter
+      query: |
+        ((if_statement
+          condition: (parenthesized_expression
+            (member_expression property: (property_identifier) @setting))
+          consequence: (statement_block) @optin)
+          (#eq? @setting "browserCookieAccess")
+          (#match? @optin "(?i)await[ ]+[A-Za-z0-9_.$]*(read|get)[A-Za-z0-9_.$]*cookies"))
+
+  - id: browser-cookie-gated-provider
+    desc: Gemini Web provider under cookie opt-in
+    if:
+      # Provider dispatch, not one consumer call site: the cookie-backed
+      # Gemini Web provider is offered only while the browser-cookie opt-in
+      # setting holds, so every dispatch-mediated reader call site is gated
+      # even when the reader implementation is renamed or wrapped behind a
+      # provider function. A bare setting name or one gated consumer call
+      # proves no such dispatch gate. A symbol or text matcher cannot bind
+      # the provider key to the setting value, so this needs the tree query.
+      type: tree-sitter
+      query: |
+        ((pair
+          key: (property_identifier) @provider
+          value: (member_expression property: (property_identifier) @setting))
+          (#eq? @provider "geminiWeb")
+          (#eq? @setting "browserCookieAccess"))
+
+  - id: browser-cookie-gate-call-guarded-read
+    desc: Cookie read guarded by cookie-gate call
+    if:
+      # Guard-clause spelling of the same opt-in: the reader entry point
+      # calls the isBrowserCookieAccessAllowed() gate and returns early when
+      # it denies, so the awaited getGoogleCookies call below only runs with
+      # consent. Rebranded forks keep this shape while renaming the setting
+      # property the positive-branch atoms above require, so those miss it.
+      # An ungated reader call site elsewhere in the archive does not match:
+      # the guard and the read must sit in the same function body in order.
+      type: tree-sitter
+      query: |
+        ((function_declaration
+          (statement_block
+            (if_statement
+              condition: (parenthesized_expression
+                (unary_expression
+                  (call_expression
+                    function: (identifier) @gate))))
+            (lexical_declaration
+              (variable_declarator
+                value: (await_expression
+                  (call_expression
+                    function: (identifier) @read))))))
+          (#eq? @gate "isBrowserCookieAccessAllowed")
+          (#eq? @read "getGoogleCookies"))
+
+  - id: browser-cookie-read-gemini-client
+    desc: Browser cookie read feeds Gemini Web client
+    if:
+      # One function awaits a read/get-cookies call and builds a Gemini Web
+      # client in the same body: the decrypted browser session is handed to
+      # the cookie-backed client at this call site. The matcher records the
+      # handoff only; whether an opt-in encloses it is a separate question.
+      type: tree-sitter
+      query: |
+        ((statement_block
+          (lexical_declaration
+            (variable_declarator
+              value: (await_expression
+                (call_expression function: (identifier) @read))))
+          (lexical_declaration
+            (variable_declarator
+              value: (new_expression constructor: (identifier) @client))))
+          (#match? @read "(?i)^(read|get)[A-Za-z0-9_$]*cookies$")
+          (#match? @client "^Gemini[A-Za-z0-9_$]*Client$"))
+
+  - id: browser-cookie-opt-in-reference
+    desc: Browser cookie opt-in setting or gate reference
+    if:
+      type: text
+      regex: '\b(browserCookieAccess|isBrowserCookieAccessAllowed)\b'
+
+composite_rules:
+  # A cookie-backed Gemini Web client fed from a browser cookie read in a
+  # module that never consults the opt-in setting or gate. Callers can
+  # still gate the module, so this is a capability observation rather than
+  # a theft claim: a second reader path (for example a video extractor)
+  # that bypasses provider dispatch is a consent gap, not session hijacking.
+  - id: browser-cookie-read-gemini-client-without-opt-in
+    desc: Gemini Web cookie client lacks opt-in check
+    all:
+      - id: browser-cookie-read-gemini-client
+    unless:
+      - id: browser-cookie-opt-in-reference

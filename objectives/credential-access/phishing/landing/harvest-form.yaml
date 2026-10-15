@@ -1,62 +1,92 @@
-# Credential-harvest landing pages: a login form that smuggles the victim's
-# own address in a *hidden* input beside a password field and POSTs both to
-# a collector. Legitimate logins show the address visibly (or prefill
-# nothing); a hidden pre-addressed identity exists so the stolen password
-# arrives already keyed to its victim. The `makefile` scope is deliberate:
-# extensionless kit pages mistype as makefile in the file sniffer, so
-# html-only scoping would leave them invisible.
+# Hidden identity fields are normal in multi-step authentication. The hostile
+# claim additionally requires a mailbox upgrade/shutdown credential lure.
 defaults:
   platforms: [windows, unix]
   for: [html, makefile, text]
   attack: T1566.002
   mbc: B0030
 
-traits:
-  - id: hidden-form-input
-    desc: Form carries a hidden input field
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      regex: '(?i)<input.{0,80}type\s*=\s*["'']?hidden'
-  - id: email-valued-input
-    desc: Form input value carries an email address
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      regex: 'value\s*=\s*["''].{0,80}@'
-  - id: harvest-password-input
-    desc: Harvest-form password input field
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      regex: '(?i)<input.{0,80}type\s*=\s*["'']?password'
-  - id: harvest-form-post
-    desc: Harvest form declares the POST method
-    crit: notable
-    conf: 0.88
-    unless:
-      - id: well-known/app/publishing/indiekit::indiekit-frontend-library
-    if:
-      type: text
-      regex: '(?i)<form.{0,80}method\s*=\s*["'']?post'
-
 composite_rules:
-  - id: concealed-victim-email-field
-    desc: Hidden form input carries an email address
-    crit: suspicious
-    conf: 0.92
-    all:
-      - id: hidden-form-input
-      - id: email-valued-input
-    near_bytes: 160
   - id: preaddressed-credential-harvest-form
-    desc: Hidden victim identity with password harvest POST
+    desc: Mailbox lure with preset email and password POST
     crit: hostile
     conf: 0.97
     all:
-      - id: concealed-victim-email-field
-      - id: harvest-password-input
-      - id: harvest-form-post
+      - id: micro-behaviors/ui/controls/input::hidden-email-valued-input
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+      - id: micro-behaviors/communications/http/post::html-form-post-method
+      - id: objectives/credential-access/phishing/lure::mailbox-verification-pretext
+
+  - id: preaddressed-shared-file-wordpress-harvest
+    desc: Preset mailbox and password POST with shared-file WordPress bait
+    crit: hostile
+    conf: 0.98
+    for: [html]
+    all:
+      - id: micro-behaviors/ui/controls/input::hidden-email-valued-input
+      - id: micro-behaviors/ui/controls/credential::shared-file-signin-copy
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+      - id: micro-behaviors/communications/http/post::html-form-post-method
+      - id: micro-behaviors/communications/http/form::wordpress-admin-php-form-action
+  # Reconfirmation twin of the mailbox rules above: the victim address
+  # arrives visibly prefilled (not hidden) and the pretext asks to reconfirm
+  # the login. Preset identity plus password POST plus reconfirm wording is
+  # the targeted re-auth harvest.
+  - id: reconfirm-prefilled-credential-harvest
+    desc: Reconfirm lure with preset email and password POST
+    crit: hostile
+    conf: 0.97
+    for: [html]
+    all:
+      - id: micro-behaviors/ui/controls/input::email-valued-input
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+      - id: micro-behaviors/communications/http/post::html-form-post-method
+      - id: objectives/credential-access/phishing/lure::reconfirm-login-pretext
+  # Same-origin ajax twin of the form-POST rules above: standalone phishing
+  # pages exfiltrate with `$.ajax({url: "connect.php", type: "POST", ...})`
+  # instead of a form action, so neither the form-POST leg nor an absolute
+  # URL is present. The static prefilled victim address is what separates
+  # this from a legitimate ajax sign-in form: remember-me fills the
+  # visitor's own address at runtime, while a kit ships its target's.
+  - id: ajax-prefilled-credential-harvest
+    desc: Prefilled credentials exfiltrated by same-origin ajax POST
+    crit: hostile
+    conf: 0.96
+    for: [html]
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/ui/controls/input::email-valued-input
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+      - id: micro-behaviors/communications/http/request/html::html-jquery-ajax-relative-php-url
+      - id: micro-behaviors/communications/http/post::request-options-post-method
+  # URL-fragment targeting twin: the victim address is read out of the
+  # location hash (`page#victim@domain`), keeping the target out of server
+  # logs and referrer headers while the link stays shareable per victim.
+  # Hash-prefilled login forms have no legitimate counterpart: reset flows
+  # carry tokens, not usernames, and never pair them with a password field
+  # on the same page load.
+  - id: hash-targeted-credential-prefill
+    desc: Login form prefilled from URL fragment target
+    crit: hostile
+    conf: 0.94
+    for: [html]
+    near_bytes: 6000
+    all:
+      - id: micro-behaviors/communications/http/url/fragment::location-hash-read
+      - id: micro-behaviors/ui/controls/input::email-valued-input
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+  # Device-profiler harvest twin: the page instantiates the ClientJS profiler
+  # and pours browser, OS, screen, plugin and font readings into hidden
+  # fields that POST beside the password. Fraud-scoring scripts profile the
+  # device in place; capturing the profile into submittable form state is
+  # the harvest, pairing device impersonation material with the credential.
+  - id: clientjs-fingerprint-harvest-form
+    desc: Device profile harvested beside password POST
+    crit: hostile
+    conf: 0.95
+    for: [html]
+    all:
+      - id: micro-behaviors/os/sysinfo/platform/browser::clientjs-instantiation
+      - id: micro-behaviors/os/sysinfo/platform/browser::clientjs-filled-form-field
+      - id: micro-behaviors/ui/controls/credential::html-password-input-tag
+      - id: micro-behaviors/communications/http/post::html-form-post-method

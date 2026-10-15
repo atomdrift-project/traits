@@ -40,6 +40,10 @@ traits:
       # the trailing padding of the second element, not just the first.
       regex: '\[\s*["''][A-Za-z0-9+/]{16,}={0,2}["'']\s*,\s*["''][A-Za-z0-9+/]{16,}={0,2}["'']'
     not:
+      # Versioned API route tables (v1/positionSide/dual, etc.) use the
+      # Base64 alphabet but are literal HTTP paths. Require that structure
+      # in both complete elements; do not suppress other lists in the file.
+      - regex: '["'']v\d+/[A-Za-z/]+["'']\s*,\s*["'']v\d+/[A-Za-z/]+["'']'
       - regex: '["''][a-z0-9+/]{16,}={0,2}["'']\s*,'
       - regex: '["''][A-Z0-9+/]{16,}={0,2}["'']\s*,'
       # Chassis/slot/port identifiers use the Base64 alphabet but the slash-
@@ -59,6 +63,19 @@ traits:
       # often than a fixture table is, because padding mid-stream is exactly
       # what a splitter has to avoid.
       - regex: '={1,2}["'']\s*,\s*["''][A-Za-z0-9+/]{16,}={1,2}["'']'
+      # A table of complete values, not shards of one stream. Every non-final
+      # shard of a directly-concatenated Base64 stream must end on a
+      # 4-character boundary or the join will not decode, so an unpadded
+      # leading element whose length is not a multiple of four is a complete
+      # value missing its padding — the same shape the padded-table filter
+      # above concedes when the padding is present. Generated API providers
+      # document example identifier tables this way (27-character entity
+      # GUIDs decoding to pipe-delimited records). Each residue needs its own
+      # line: a longer token cannot match a shorter length head, because the
+      # character after a short prefix of a longer token is never a quote.
+      - regex: '\[\s*["''][A-Za-z0-9+/]{17}([A-Za-z0-9+/]{4})*["'']\s*,'
+      - regex: '\[\s*["''][A-Za-z0-9+/]{18}([A-Za-z0-9+/]{4})*["'']\s*,'
+      - regex: '\[\s*["''][A-Za-z0-9+/]{19}([A-Za-z0-9+/]{4})*["'']\s*,'
       # An export or method list, not a payload. A 16-character base64 run
       # encodes 12 bytes and averages ~2.5 digits (16 x 10/64), so a pair of
       # tokens carrying at most one digit each and no `+`/`/` is word-like
@@ -128,6 +145,9 @@ traits:
       # capitalised words either side of a slash is word structure; a random
       # Base64 run has no reason to produce it.
       - regex: '[A-Z][a-z]{2,}/[A-Z][a-z]{2,}'
+      # Two-segment slash-separated paths or namespace identifiers
+      # (e.g., repository/dataset, package/component) with an English prefix.
+      - regex: '[a-z]{4,}/[A-Za-z]{2,}'
       # Absolute-path / JSON-Patch tokens, the same confusion from the other
       # direction: `["/accessLogSettings/destinationArn", "/accessLogSettings/
       # format"]` in localstack's API Gateway provider is a patch-path list.
@@ -153,8 +173,23 @@ traits:
       # shape: a 46-49 character pure-Base58 token — no `0OIl+/=`, which a
       # Base64 run of that length almost always contains.
       - regex: '["''][1-9A-HJ-NP-Za-km-z]{46,49}["'']\s*,'
+      # Fixed-width hexadecimal identifiers. EVM addresses (`0x` + exactly
+      # 40 hex characters) appear in pairs as wallet, contract and chain
+      # parameter examples in tool schemas and config; bare all-hex tokens
+      # of 32+ characters are the same shape without the prefix (git SHAs,
+      # digests, key fields). A genuine Base64 run draws each character
+      # from the 16-of-64 hex alphabet independently, so a 32-character
+      # all-hex token costs about 2^-64, and no Base64 payload begins with
+      # a literal `0x`.
+      - regex: '0[xX][0-9a-fA-F]{40}'
+      - regex: '["''][0-9a-fA-F]{32,}["'']'
+      # Shared library names using the standard `lib` prefix. A Base64 fragment
+      # list splits a single byte stream across chunks; two adjacent chunks
+      # both starting with `lib` has a (1/64)^6 chance (~1.5e-11).
+      - regex: '["'']lib[A-Za-z0-9+/]{13,}["'']\s*,\s*["'']lib'
     unless:
-      - id: metadata/package/testing/presence/harness::test-directory-path
+      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/package/testing/presence/harness::example-directory
       - id: well-known/app/finance/bitcoin-core::bitcoin-core-test-context
       - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
       # A Prowler check module is written in the shape of the control it audits.

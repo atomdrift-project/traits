@@ -10,20 +10,6 @@ traits:
   if:
     type: text
     substr: /api/config?pkg=
-- id: standard-telemetry-optout-env
-  desc: Standard telemetry opt-out env
-  crit: notable
-  conf: 0.82
-  if:
-    type: text
-    regex: 'process\.env\.(DISABLE_TELEMETRY|DO_NOT_TRACK|NO_TELEMETRY)'
-- id: namespaced-telemetry-optout-env
-  desc: Namespaced telemetry opt-out env
-  crit: notable
-  conf: 0.82
-  if:
-    type: text
-    regex: 'process\.env\.[A-Z0-9_]*TELEMETRY'
 - id: hbase-addkey-endpoint
   desc: HBase addKey telemetry endpoint
   crit: suspicious
@@ -55,12 +41,6 @@ traits:
     type: text
     substr: buildSessionTransportPresence
 composite_rules:
-# Like objectives/exfiltration/messaging/webhook::slack-exfiltration, these ask
-# what kind of data is leaving: a hardcoded webhook carrying business log
-# records is honest telemetry, not exfiltration. The shared
-# feishu-sensitive-record-content gate requires the record-building module to
-# also handle credentials, collected material, or host identity before either
-# convicts.
 - id: npm-default-feishu-record-webhook-exfil
   desc: Defaults sensitive app logs to an embedded Feishu webhook
   crit: hostile
@@ -105,8 +85,8 @@ composite_rules:
   crit: component
   conf: 0.82
   any:
-  - id: standard-telemetry-optout-env
-  - id: namespaced-telemetry-optout-env
+  - id: micro-behaviors/os/env/read::node-telemetry-optout-variable-reference
+  - id: micro-behaviors/os/env/read::namespaced-telemetry-member
 - id: npm-install-git-check
   desc: Checks for .git during npm install script
   crit: suspicious
@@ -123,7 +103,7 @@ composite_rules:
   all:
   - id: micro-behaviors/os/env/package-manager::npm-package-info
   - id: micro-behaviors/communications/http/post/
-  - id: micro-behaviors/data/serialize/json::package-object-json-stringify
+  - id: micro-behaviors/data/serialize/json::json-stringify-package-named-argument
   unless:
   - id: agent-session-presence-marker
   - id: well-known/tool/development/vscode-extension/tencent-codebuddy::tencent-codebuddy
@@ -136,7 +116,7 @@ composite_rules:
   all:
   - id: micro-behaviors/fs/read/file/target::require-local-package-json
   - id: micro-behaviors/communications/http/request/verb::post-method-text
-  - id: micro-behaviors/data/serialize/json::package-object-json-stringify
+  - id: micro-behaviors/data/serialize/json::json-stringify-package-named-argument
 - id: npm-invocation-project-name-post
   desc: Posts npm invocation project name at module load
   crit: suspicious
@@ -150,17 +130,6 @@ composite_rules:
   - id: micro-behaviors/communications/http/request/body::request-write-call
   - id: micro-behaviors/data/control-flow/module-exec::direct-zero-arg-call
 
-- id: npm-host-package-metadata-exfil
-  desc: NPM host package metadata exfiltration
-  crit: hostile
-  conf: 0.98
-  attack: T1041
-  size_max: 20000
-  all:
-  - id: npm-package-json-telemetry-post
-  - id: objectives/discovery/system/fingerprint/user::node-host-user-query
-  - id: objectives/supply-chain/recon-exfil/host-profile/install-context::npm-install-tracking-object
-  - id: micro-behaviors/communications/http/request/body::node-http-request-stream-body
 - id: npm-import-time-system-telemetry-post
   desc: Import-time npm system telemetry POST
   crit: hostile
@@ -174,7 +143,7 @@ composite_rules:
   - id: objectives/discovery/system/fingerprint/hardware::node-short-os-alias-host-user
   - id: objectives/discovery/system/fingerprint/hardware::node-short-os-alias-profile
   - id: micro-behaviors/communications/http/request/client::node-https-request-h-alias
-  - id: micro-behaviors/os/sysinfo/platform/runtime::process-cwd-call
+  - id: micro-behaviors/fs/directory/cwd::process-cwd-call
   - id: objectives/anti-static/obfuscation/eval/dynamic::loader-iife-tail
   - id: micro-behaviors/data/control-flow/error-handling::from-str-empty-catch
 - id: npm-optout-gated-telemetry-post
@@ -204,7 +173,7 @@ composite_rules:
   size_max: 12000
   all:
   - id: micro-behaviors/process/create/shell/git::git-rev-parse-head
-  - id: micro-behaviors/os/sysinfo/platform/runtime::process-cwd-call
+  - id: micro-behaviors/fs/directory/cwd::process-cwd-call
   - id: micro-behaviors/fs/read/file/target::require-cwd-package-json
   - id: micro-behaviors/communications/http/request/verb::post-method-text
 - id: repo-package-metadata-post-alt-http
@@ -249,6 +218,11 @@ composite_rules:
   all:
   - id: metadata/package/scripts/build::npm-publish-hooks
   - id: micro-behaviors/process/create/shell/git::git-tag-and-push
+  unless:
+  # Command-gate tables: an agent-workflow harness classifies which git/npm
+  # commands need user review, and its rows quote the commands ("git tag -a
+  # v2.15.0", "git push origin"). Quoting is classification, not publishing.
+  - id: micro-behaviors/data/llm/agent::command-gate-classification-context
 - id: npm-disguised-analytics-host-beacon
   desc: npm archive pairs a concealed sidecar with host telemetry code
   crit: suspicious
@@ -263,8 +237,9 @@ composite_rules:
   - id: micro-behaviors/os/sysinfo/hostname::os-bracket-split-hostname-access
   - id: micro-behaviors/communications/http/request/verb::post-method-text
   any:
-  - id: micro-behaviors/process/create/load/local::caught-local-require-swallowed-catch
-  - id: micro-behaviors/process/create/load/local::cjs-caught-local-require
+  - id: micro-behaviors/os/module/require::caught-local-require-swallowed-catch
+  - id: micro-behaviors/os/module/require::cjs-caught-local-require
   unless:
   - id: metadata/package/testing/
   - id: well-known/tool/development/vscode-extension/tencent-codebuddy::tencent-codebuddy
+  - id: "metadata/file/naming::test-directory-component"

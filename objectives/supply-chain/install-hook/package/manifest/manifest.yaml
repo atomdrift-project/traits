@@ -25,6 +25,7 @@ traits:
       - id: metadata/package/completeness::npm-main-bindings-node
       - id: metadata/package/completeness::tree-sitter-language-bindings-main
       - id: well-known/lib/development/tree-sitter-grammar-npm::tree-sitter-grammar-npm-package
+      - id: metadata/package/testing/presence/manifest::package-test-or-template-path
       - type: path
         regex: '(^|/)package/(?:[^/]+/)+package\.json$'
       - id: metadata/package/tooling::jupyterlab-package-path
@@ -49,6 +50,9 @@ traits:
       - id: metadata/package/runtime::vscode-extension
       - id: well-known/lib/development/extension::vscode-workspace-install-extension
       - id: metadata/package/scripts/lifecycle::postinstall-local-prefix-install
+      # A source-repo toolchain adding a host runtime (electron, esbuild) the
+      # manifest deliberately does not record: the embedding host provides it.
+      - id: metadata/package/scripts/lifecycle::postinstall-host-runtime-bootstrap
   - id: postinstall-runs-yarn-add
     desc: postinstall hook runs yarn add
     crit: suspicious
@@ -78,6 +82,9 @@ traits:
       # A preinstall that does nothing but bootstrap the native-addon build
       # tool pulls no undeclared payload; anything chained onto it still fires.
       - id: metadata/package/scripts/lifecycle::preinstall-addon-builder-bootstrap
+      - type: value
+        path: "scripts.preinstall"
+        regex: "npm_config_user_agent"
   # An install hook that redirects a command's stdout over a source file
   # generates code on the consumer's machine: whatever the hook prints becomes
   # a module require() can load. void-elements@0.1.1 regenerates its own `main`
@@ -122,6 +129,9 @@ traits:
       regex: "\\byarn\\s+(add|global add)\\s"
     unless:
       - id: metadata/package/testing/presence/harness::example-directory
+      - type: value
+        path: "scripts.preinstall"
+        regex: "npm_config_user_agent"
   - id: preinstall-runs-pnpm-add
     desc: preinstall hook runs pnpm add
     crit: suspicious
@@ -132,14 +142,9 @@ traits:
       regex: "\\bpnpm\\s+(add|install)\\s"
     unless:
       - id: metadata/package/testing/presence/harness::example-directory
-  - id: build-runs-shell-sidecar
-    desc: Build script launches shell sidecar
-    crit: notable
-    conf: 0.88
-    if:
-      type: value
-      path: "scripts.build"
-      regex: "\\b(bash|sh)\\s+(\\./)?[A-Za-z0-9_./-]{1,120}\\.sh\\b"
+      - type: value
+        path: "scripts.preinstall"
+        regex: "npm_config_user_agent"
   - id: healthcheck-runs-shell-sidecar
     desc: Health check launches shell sidecar
     crit: suspicious
@@ -177,15 +182,6 @@ traits:
         exact: "npm/security-holder"
       # Package name is a hyphenated multi-word name
       # === Description Patterns ===
-  - id: desc-modern-web-apps
-    desc: Description mentions modern web apps
-    crit: notable
-    conf: 0.5
-    if:
-      type: value
-      path: "description"
-      regex: "modern.{0,100}(web|app)"
-      case_insensitive: true
   - id: desc-universal-headless-ui
     desc: Description universal headless UI wording
     crit: baseline
@@ -264,18 +260,6 @@ traits:
       type: value
       path: name
       substr: "@tamagui/"
-  - id: desc-universal
-    desc: Description mentions universal
-    crit: notable
-    conf: 0.5
-    if:
-      type: value
-      path: "description"
-      substr: "universal"
-      case_insensitive: true
-    unless:
-      - id: desc-universal-legitimate-ui-copy
-      - id: desc-universal-known-ui-scope-name
   - id: desc-powerful-library
     desc: Description mentions powerful library
     crit: notable
@@ -424,19 +408,6 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
       - id: desc-hijack-secrets
   # Install hook group
-  - id: install-hooks-comp
-    desc: Package has install hook
-    crit: notable
-    conf: 0.6
-    unless:
-      - id: metadata/package/scripts/lifecycle::npm-inert-pre-postinstall-pair
-    any:
-      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
-      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
-      - id: metadata/package/scripts/lifecycle::has-install-script
-        # Install hook that installs packages (highly suspicious)
-        # Legitimate packages declare dependencies in package.json - running install commands
-        # in hooks is a supply chain attack indicator
   - id: install-hook-runs-pkg-install
     desc: Install hook runs npm/yarn/pnpm install command
     crit: suspicious
@@ -456,7 +427,21 @@ composite_rules:
     attack: "T1195.002,T1059.007"
     all:
       - id: preinstall-runs-npm-install
-      - id: objectives/supply-chain/install-hook/scripts/local-script::preinstall-runs-node-local-script
+      - id: metadata/package/scripts/lifecycle::preinstall-runs-node-local-script
+  # Install-time PII telemetry: the hook above auto-runs local code that
+  # ships the installer's public IP to a third-party telemetry endpoint.
+  # Either half alone is suspicious; the combination is installer spyware
+  # with no legitimate distribution use, so it convicts on its own.
+  - id: preinstall-install-time-pii-telemetry
+    desc: preinstall hook exfiltrates installer IP to telemetry endpoint
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002,T1119"
+    for: [npm, tar, package.json, javascript, typescript]
+    scope: archive
+    all:
+      - id: preinstall-installs-and-runs-local-node
+      - id: objectives/exfiltration/stealer/system-info/network::sentry-hardcoded-ip-pii-telemetry
   - id: broad-floating-deps-with-hooks
     desc: Install-hook package has broad floating dependencies
     crit: suspicious
@@ -479,9 +464,11 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::install-hooks
     unless:
       - id: objectives/supply-chain/install-hook/scripts/prepare/
+      - id: metadata/package/scripts/lifecycle::prepare-package-manager-build
       - id: metadata/package/completeness::npm-source-native-addon-wrapper
       - id: metadata/package/testing/presence/harness::example-directory
       - id: metadata/package/publishing::is-private
+      - id: well-known/tool/development/agent/respecpow::archive-context
     downgrade:
       any:
         - id: metadata/package/freeform::pkg-skeleton-small
@@ -504,42 +491,14 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::postinstall-protobuf-codegen-download
       - id: metadata/package/scripts/lifecycle::postinstall-local-ts-subpackage-build
         # Missing repository with install hooks
-  - id: no-repo-with-hooks
-    desc: Package has install hooks but no repo
-    crit: suspicious
-    conf: 0.85
-    for: [npm, package.json]
-    scope: archive
-    all:
-      - id: metadata/package/scripts/lifecycle::install-hooks
-      - id: metadata/package/repository::manifest-lacks-repository-metadata
-    unless:
-      - id: metadata/package/homepage::homepage-git-host
-      - id: metadata/package/testing/presence/harness/
-      - id: metadata/package/testing/presence/fixture/
-      - id: metadata/package/freeform/
-      - id: objectives/supply-chain/impersonation/package/manifest/
-      - id: tabby-builtin-plugin-keyword
-      # A hook whose entire body invokes a second dependency manager is local
-      # project bootstrap plumbing; absent provenance does not make it an npm
-      # supply-chain payload when the hook delivers no code of its own.
-      - id: metadata/package/scripts/lifecycle::package-manager-bootstrap-hook
-    downgrade:
-      any:
-        - id: metadata/package/freeform::pkg-skeleton-small
-  # An anonymous, no-provenance package (no repository) whose install hook is a
-  # char-code-encoded program is an unambiguous malicious supply-chain package:
-  # the only code it ships runs hidden at install time and there is no source to
-  # audit it against. Distinct from the loader/obfuscation findings — this keys
-  # on the provenance anomaly that accompanies the encoded hook.
   - id: obfuscated-hook-no-provenance-package
-    desc: Anonymous package hides a char-code-encoded install hook
+    desc: Anonymous package hides an encoded install hook
     crit: hostile
     conf: 0.97
     attack: "T1027, T1195.002"
     all:
-      - id: objectives/supply-chain/install-hook/scripts/encoded-body::lifecycle-node-eval-charcode-program
-      - id: no-repo-with-hooks
+      - id: objectives/supply-chain/install-hook/scripts/encoded-body::lifecycle-node-eval-encoded-program
+      - id: metadata/package/repository::no-repo-with-hooks
   - id: desc-simple-easy
     desc: Description mentions simple/easy
     crit: component
@@ -555,12 +514,14 @@ composite_rules:
     needs: 2
     any:
       - id: metadata/package/description/function::desc-lightweight
-      - id: desc-modern-web-apps
-      - id: desc-universal
+      - id: metadata/package/description/function::desc-modern-web-apps
+      - id: metadata/package/description/function::npm-description-universal
       - id: desc-powerful-library
       - id: desc-simple-easy
     unless:
       - id: metadata/package/files/dependency::node-modules-path
+      - id: desc-universal-legitimate-ui-copy
+      - id: desc-universal-known-ui-scope-name
         # Generic description with hooks
   - id: generic-desc-with-hooks
     desc: Generic description with install hooks
@@ -571,6 +532,7 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::install-hooks
     unless:
       - id: objectives/supply-chain/install-hook/scripts/prepare/
+      - id: metadata/package/scripts/lifecycle::prepare-package-manager-build
       - id: metadata/package/publishing::open-collective-postinstall-context
         # === Cloned/Copied Package Identity ===
   - id: cloned-package-identity
@@ -595,7 +557,7 @@ composite_rules:
     attack: "T1195.002"
     mbc: "F0004"
     all:
-      - id: metadata/package/versioning/scheme::mature-version
+      - id: "metadata/package/versioning/scheme::npm-nonzero-major-version-prefix"
       - id: repo-shorthand-format
       - id: metadata/package/name/vocabulary::npm-hyphenated-multiword-name
     unless:
@@ -628,12 +590,14 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
       - id: objectives/supply-chain/recon-exfil/oast
-      - id: micro-behaviors/communications/url/host::oob-endpoint-any
+      - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
   - id: placeholder-manifest-denies-install-scripts-runs-hook
     desc: Placeholder denies install scripts but declares a hook
     crit: hostile
     conf: 0.96
     attack: "T1195.002"
+    for: [npm, tar, zip, package.json]
+    scope: archive
     all:
       - id: metadata/package/description/disclosure::desc-denies-install-scripts
       - id: metadata/package/scripts/lifecycle::install-hooks
@@ -662,34 +626,6 @@ composite_rules:
       - id: metadata/package/scripts/lifecycle::postinstall-local-ts-subpackage-build
       - id: metadata/package/scripts/lifecycle::postinstall-protobuf-codegen-download
       - id: tabby-builtin-plugin-keyword
-  # The two original legs -- "major version >= 1" and "has an install hook" --
-  # describe most published packages and say nothing about provenance, which is
-  # what the finding claims. The missing leg is now required: a package that
-  # names its repository, or that is marked private and therefore never
-  # published, has provenance. The id says only what the legs test -- an
-  # install-hook package with no declared source -- rather than asserting the
-  # dependency-confusion intent nothing here checks for. VSCodium's app manifest
-  # is both (`"private": true`, `repository.url` = github.com/microsoft/vscode)
-  # and its install hooks are the editor's own build scripts.
-  - id: versioned-install-hook-without-source-repository
-    desc: Versioned install-hook package lacks a declared source repository
-    crit: notable
-    conf: 0.9
-    attack: "T1195.002"
-    all:
-      - id: metadata/package/versioning/scheme::mature-version
-      - id: metadata/package/scripts/lifecycle::install-hooks
-    unless:
-      - id: metadata/package/repository::has-repository-url
-      - id: metadata/package/repository::has-repository-field
-      - id: metadata/package/homepage::homepage-git-host
-      - id: metadata/package/publishing::is-private
-      - id: metadata/package/testing/presence/harness::test-directory-path
-      # AgentAuditKit ships intentional vulnerable configs as scanner
-      # fixtures (examples/vulnerable-configs/10-supply-chain-risks ships a
-      # postinstall curl|bash plus an expected-findings.json); the scanner
-      # context marks the tool that hunts this pattern.
-      - id: well-known/tool/detection/agent-audit-kit::scanner-context
   - id: junk-package-postinstall-webhook
     desc: Junk npm package sends install callback to webhook.site
     crit: hostile
@@ -722,7 +658,7 @@ composite_rules:
       - id: metadata/package/empty::npm-no-keywords
     needs: 2
     unless:
-      - id: metadata/package/repository/
+      - id: metadata/package/repository::has-repository-evidence
       - id: metadata/package/files/package-json::has-files-field
       - id: metadata/package/runtime::has-engines
       - id: metadata/package/entrypoint::has-bin-field
@@ -752,48 +688,6 @@ composite_rules:
       - id: metadata/package/entrypoint::has-bin-field
       - id: metadata/package/publishing::is-private
       - id: objectives/supply-chain/impersonation/package/manifest/
-  # This rule was unsatisfiable as originally written. It required
-  # pkg-skeleton-small together with npm-no-deps-at-all and no-build-script --
-  # but BOTH of those stand down on a skeleton manifest
-  # (npm-no-deps-at-all carries `unless: pkg-skeleton-small`, no-build-script
-  # carries `unless: metadata/package/freeform/`), because a tiny
-  # manifest should not also be counted as "omits dependencies". The
-  # requirement and the suppressor were the same fact, so the tinier the stub
-  # the more certainly the rule was silenced, and it could never fire on the
-  # shape it names. Ask the underlying atoms for "no dependencies" instead,
-  # and express "no build pipeline" as a suppressor rather than a positive
-  # leg. Same meaning, now evaluable.
-  - id: tiny-postinstall-node-loader
-    for: [npm, tar, package.json, javascript]
-    desc: Tiny dependency-free package ships Node postinstall
-    crit: suspicious
-    conf: 0.97
-    attack: "T1195.002"
-    scope: archive
-    all:
-      - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
-      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
-      - id: metadata/package/files/included::postinstall-js-basename
-      - id: metadata/package/freeform::pkg-skeleton-small
-      - id: metadata/package/dependencies/manifest/presence::npm-no-runtime-dependencies
-      - id: metadata/package/dependencies/manifest/presence::npm-no-deps-devdependencies
-    unless:
-      # The rule already requires an exact local `node file.js` postinstall;
-      # paired OS/CPU restrictions distinguish native platform sidecars.
-      - id: metadata/package/runtime::has-os-cpu-restrictions
-      - id: metadata/package/scripts/build::declares-build-stage-script
-      - id: metadata/package/repository/
-      # bin-field-declared, not entrypoint::has-bin-field: the latter carries
-      # `unless: metadata/package/freeform/`, which contains the
-      # pkg-skeleton-small fact this rule REQUIRES -- so the suppressor was
-      # switched off by the very tininess that arms the rule, and a small CLI
-      # package could never stand down. Same self-defeating shape the comment
-      # above describes for the dependency legs.
-      - id: metadata/package/entrypoint::bin-field-declared
-      - id: metadata/package/publishing::is-private
-      - id: metadata/package/testing/presence/manifest::test-fixtures
-      - id: metadata/package/testing/presence/harness/
-      - id: metadata/package/testing/presence/fixture/
   - id: inflated-major-tiny-postinstall-loader
     desc: Inflated-major package runs postinstall loader
     crit: hostile
@@ -803,9 +697,9 @@ composite_rules:
     scope: archive
     all:
       - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
-      - id: metadata/package/versioning/sentinel::npm-version-inflated-major
+      - id: "metadata/package/versioning/scheme::npm-multidigit-major-starting-nine"
     unless:
-      - id: metadata/package/repository/
+      - id: metadata/package/repository::has-repository-evidence
       - id: metadata/package/publishing::is-private
   - id: npm-postinstall-package-identity-beacon
     desc: npm postinstall encodes data for a public-IP callback

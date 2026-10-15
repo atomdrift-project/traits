@@ -6,95 +6,6 @@ defaults:
   size_max: 8192
 
 traits:
-  - id: dos-boot-sector-jmp-instruction
-    desc: DOS boot sector JMP instruction
-    conf: 1.0
-    if:
-      type: hex
-      pattern: "EB ?? 90"
-      offset: 0
-
-  - id: dos-boot-sector-short-jmp
-    desc: DOS boot sector short JMP instruction
-    conf: 0.95
-    if:
-      type: hex
-      pattern: "EB ??"
-      offset: 0
-
-  - id: dos-boot-sector-near-jmp
-    desc: DOS boot sector near JMP instruction
-    conf: 0.95
-    if:
-      type: hex
-      pattern: "E9 ?? ??"
-      offset: 0
-
-  - id: dos-boot-sector-far-jmp
-    desc: DOS boot sector far JMP instruction
-    conf: 0.95
-    if:
-      type: hex
-      pattern: "EA ?? ?? ?? ??"
-      offset: 0
-
-  - id: dos-boot-sector-ending-signature
-    desc: DOS boot sector ending signature
-    conf: 1.0
-    if:
-      type: hex
-      pattern: "55 AA"
-      offset: 510
-
-  - id: int13h-disk-access
-    desc: INT 13h BIOS disk interrupt
-    conf: 1.0
-    if:
-      type: hex
-      pattern: "CD 13"
-      offset_range: [0, 512]
-
-  - id: dos-boot-write-one-sector
-    desc: Boot code writes one disk sector
-    crit: suspicious
-    conf: 0.92
-    if:
-      type: hex
-      pattern: "B8 01 03"
-      offset_range: [0, 512]
-
-  - id: dos-boot-ah-write-call
-    desc: Calls after setting disk-write AH
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: hex
-      pattern: "B4 03 E8"
-      offset_range: [0, 512]
-
-  - id: dos-one-sector-via-int
-    desc: DOS writes one sector via interrupt
-    crit: notable
-    conf: 0.9
-    for: [dos_com, static-lib, data]
-    if:
-      type: hex
-      pattern: "B8 01 03 [0-4] CD"
-      offset_range: [0, 1600]
-
-  - id: dos-boot-sig-in-image
-    desc: DOS boot signature in the image
-    crit: notable
-    conf: 0.85
-    for: [dos_com, static-lib, data]
-    if:
-      type: hex
-      pattern: "55 AA"
-      offset_range: [0, 1600]
-
-  # A COM body that moves the boot sector from 7C00h to 0600h carries a boot
-  # infector's relocation stub: no legitimate COM program relocates the boot
-  # record, so this stays scoped to COM even though boot images do it too.
   - id: dos-boot-relocate-7c00
     desc: DOS boot code relocates from 7C00
     crit: suspicious
@@ -153,6 +64,34 @@ traits:
       pattern: "B8 09 02 B9 0B 00 BA 80 00 CD 13 07 06 26 C6 06 F0 00 5A 26 C7 06 F1 00 08 00 26 C7 06 F3 00 7F 02 68 7A 0D CB"
       offset_range: [32, 128]
 
+  # Resident boot infectors of the ABS3 shape install themselves the way
+  # DOS TSRs do: decrement the BIOS memory-size word at 40:13h, convert the
+  # shrunken top of memory into a segment, and swap the INT 13h vector at
+  # 0:4Ch/0:4Eh to a handler copied into the stolen segment. Legitimate boot
+  # code neither shrinks the BIOS memory map nor redirects the disk vector.
+  - id: boot-bios-steal-int13-vector-install
+    desc: Steals BIOS memory to hook INT 13h
+    crit: suspicious
+    conf: 0.97
+    for: [dos_com, static-lib, data]
+    if:
+      type: hex
+      pattern: "FF 0E 13 04 A1 13 04 B1 06 D3 E0 [0-16] 8B 1E 4E 00 A3 4E 00 A1 4C 00"
+
+  # From inside the INT 13h hook: patch a short JMP stub at offset 0 of the
+  # sector just read, copy the virus body over the original boot code with a
+  # REP move that preserves the BPB, then issue the write-back service (AH=3).
+  # No legitimate disk or boot-manager code rewrites a sector it just read
+  # into a jump to freshly copied body code.
+  - id: boot-buffer-jmp-patch-body-copy-write
+    desc: Buffer JMP patch, body copy, sector write
+    crit: suspicious
+    conf: 0.95
+    for: [dos_com, static-lib, data]
+    if:
+      type: hex
+      pattern: "C7 07 EB ?? [0-64] F3 A4 [0-64] B4 03"
+
   # INT 13h reads the hard-disk MBR, gates on partition-table bytes, saves
   # the old sector at CHS 0/0/10, writes a replacement MBR at 0/0/1, then
   # writes nine payload sectors starting at 0/0/11.
@@ -166,26 +105,11 @@ traits:
       type: hex
       pattern: "BB CA 11 BA 80 00 B9 01 00 B8 01 02 CD 13 26 81 BF BF 01 01 01 75 ?? 26 80 BF C1 01 00 75 ?? B8 01 03 B1 0A CD 13 0E 1F BE 18 0D 8B FB B9 FC 01 F3 A4 B1 01 B8 01 03 CD 13 BB 00 01 B8 09 03 B1 0B CD 13"
 
-  - id: dos-bios-read-one-sector
-    desc: BIOS reads a single disk sector
-    crit: notable
-    conf: 0.9
-    platforms: [windows, unix]
-    for: [dos_com, static-lib, data]
-    if:
-      type: hex
-      pattern: "B8 01 02 [0-8] CD 13"
-
-  # Some collectors preserve malware labels as extensions, so a raw boot
-  # record can be classified as an unrelated structured file. These patterns
-  # require the actual resident-virus mechanics rather than trusting the name:
-  # save and replace INT 13h after reserving conventional memory, then read a
-  # hard-disk sector, test an infection marker, and write a sector on mismatch.
   - id: boot-code-int13-resident-hook
     desc: Boot code hooks BIOS disk interrupt
     crit: suspicious
     conf: 0.99
-    for: [systemd-service]
+    for: [dos_com, static-lib, data]
     if:
       type: hex
       pattern: "A1 4C 00 A3 ?? ?? A1 4E 00 A3 ?? ?? FF 0E 13 04 A1 13 04 B1 06 D3 E0 8E C0 A3 ?? ?? A3 4E 00 B8 ?? ?? A3 4C 00"
@@ -195,41 +119,46 @@ traits:
     desc: Boot code conditionally writes disk sector
     crit: suspicious
     conf: 0.99
-    for: [systemd-service]
+    for: [dos_com, static-lib, data]
     if:
       type: hex
       pattern: "BB ?? ?? B8 01 02 88 C1 BA 80 00 CD 13 72 ?? 26 80 3E ?? ?? ?? 74 ?? B8 01 03 B1 ?? CD 13"
       offset_range: [64, 192]
 
-composite_rules:
-  - id: dos-boot-sector-infector
-    desc: Boot image writes a disk sector
-    crit: hostile
+  # Plants EB 3C (jump to offset 3Eh, past the BIOS parameter block) at
+  # [BX] and copies this body's own bytes from that offset into the sector
+  # buffer. Boot loaders relocate with MOVSW; they do not rebuild a sector
+  # out of the code that is running.
+  - id: dos-boot-body-splice
+    desc: Boot body copied past BPB jump
+    crit: suspicious
     conf: 0.96
-    all:
-      - id: dos-boot-sector-ending-signature
-    any:
-      - id: dos-boot-write-one-sector
-      - id: dos-boot-ah-write-call
-    needs: 1
+    if:
+      type: hex
+      pattern: "C7 07 EB 3C BE 3E 00 BF ?? ?? B9 ?? ?? F3 A4 [0-16] 9C FF 1E"
+      offset_range: [0, 512]
 
-  - id: dos-boot-image-sector-write
-    desc: DOS boot image writes one sector
-    crit: hostile
-    conf: 0.94
-    for: [dos_com, static-lib, data]
-    all:
-      - id: dos-one-sector-via-int
-      - id: dos-boot-sig-in-image
-
+composite_rules:
   - id: resident-boot-sector-infector
     desc: Resident boot-sector infection code
     crit: hostile
     conf: 0.99
-    for: [systemd-service]
+    for: [dos_com, static-lib, data]
     all:
       - id: boot-code-int13-resident-hook
       - id: boot-code-marker-gated-sector-write
+
+  # A boot image or dropper that both installs a resident INT 13h hook in
+  # stolen BIOS memory and rewrites sectors it reads -- JMP stub at offset 0,
+  # body copied over the original -- is a complete resident boot infector.
+  - id: dos-resident-int13-boot-infector
+    desc: Resident INT 13h boot-sector infector
+    crit: hostile
+    conf: 0.96
+    for: [dos_com, static-lib, data]
+    all:
+      - id: boot-bios-steal-int13-vector-install
+      - id: boot-buffer-jmp-patch-body-copy-write
 
   # A COM body that reads disk sectors, relocates the boot record from 7C00h
   # to 0600h, and writes sectors back in an absolute-write loop carries the
@@ -243,7 +172,7 @@ composite_rules:
     for: [dos_com]
     all:
       - id: dos-boot-relocate-7c00
-      - id: dos-bios-read-one-sector
+      - id: micro-behaviors/hardware/block/device::dos-bios-read-one-sector
       - id: objectives/impact/wipe/disk/mbr::dos-int26-write-loop
 
   - id: dos-tchechen-multipartite-boot-engine
@@ -256,7 +185,7 @@ composite_rules:
       - id: dos-boot-relocate-7c00-repne
       - id: dos-rtc-day16-boot-gate
       - id: dos-bios-17-sector-write-loop
-      - id: objectives/impact/infect/binary/dos/exec-open-hook::dos-ivt-int21-set-direct
+      - id: micro-behaviors/os/msdos/interrupt::dos-ivt-int21-set-direct
 
   - id: dos-hidden-sector-mbr-infector
     desc: DOS installs and loads a hidden-sector boot virus
@@ -267,3 +196,28 @@ composite_rules:
     all:
       - id: dos-hidden-sector-stage-loader
       - id: dos-partition-gated-hidden-sector-install
+
+  # The splice and the one-sector BIOS write sit in the same routine: the
+  # write function is loaded, the body is copied over the sector, then the
+  # saved disk vector is called. Either piece alone is not the infection.
+  - id: dos-boot-body-splice-write
+    desc: Boot virus writes spliced sector
+    crit: hostile
+    conf: 0.97
+    attack: T1542.003
+    near_bytes: 80
+    all:
+      - id: dos-boot-body-splice
+      - id: micro-behaviors/hardware/block/device::dos-boot-write-one-sector
+
+  # A COM program carrying an embedded DOS boot signature that issues direct
+  # BIOS INT 13h sector writes is a boot-sector dropper/installer.
+  - id: dos-boot-image-sector-write
+    desc: DOS boot image writes one sector
+    crit: hostile
+    conf: 0.94
+    for: [dos_com]
+    all:
+      - id: micro-behaviors/hardware/block/device::dos-one-sector-via-int
+      - id: metadata/file/format/native-executable::dos-boot-sig-in-image
+
