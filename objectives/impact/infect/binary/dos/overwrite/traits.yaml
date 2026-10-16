@@ -18,16 +18,185 @@ traits:
     unless:
       - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
 
+  # Search-and-overwrite layouts, in alternative order after the first four:
+  #  5. Get DTA (AH=2Fh) pointer: MOV SI,BX / LEA DX,[SI+1Eh] opens the match
+  #     for update, then AH=40h writes the image from 0100h.
+  #  6. Mask pointer loaded into DX before AH=4Eh; handle kept with MOV BX,AX.
+  #  7. JC skips a failed find-first and DX=009Eh is loaded before the open.
+  #  8. The opened file is rewound (CWD, AH=42h) before CL bytes are written
+  #     from DX=0100h (DH=1).
+  #  9. DX=009Eh is loaded before the open, then DX=0100h before the write,
+  #     and the handle is closed (AH=3Eh) right after.
+  # 10. Write-only open (3D01h) with DX=009Eh set first; the byte count comes
+  #     from DEC CX before the write from DX=0100h.
+  # 11. Write-only open with a CX byte count, then close (AH=3Eh), find-next
+  #     (AH=4Fh) and a JNC loop back to the next match.
+  # 12. Find-first with a failed-search JNC/RET, the mask stored in line, a
+  #     read-write open (3D02h), close and a JMP-back find-next loop.
+  # 13. XCHG CX,AX / MOV AH,4Eh start; the open handle is exchanged and the
+  #     image address taken from SI (XCHG DX,SI) before the CL-count write.
+  # 14. CX cleared and the mask loaded with LEA DX before find-first; the
+  #     image is written from LEA DX,[0100h], then the file is closed and the
+  #     program ends with INT 20h (no find-next).
+  # 15. Like the second layout but the byte count comes from DEC CX placed
+  #     between DX=0100h and the write interrupt.
+  # 16. DX=009Eh before the 3D02h open and no byte-count load before the
+  #     write from DX=0100h (CX left over); the program returns with RET.
+  # 17. Like layout 11 but a JC skips a failed find-first and a JMP (not JNC)
+  #     closes the find-next loop.
+  # 18. CX cleared before find-first with a JC skip; write-only open, CL byte
+  #     count, close, find-next and a JMP back to the search.
+  # 19. Read-write open, DX=0100h then AH=40h with a CL count, close, and INT 20h
+  #     (no find-next loop).
+  # 20. MOV CX,CX filler after AH=4Eh; read-write open, DX=0100h and a CX
+  #     count before the write, close, INT 20h.
+  # 21. Read-write open with DX=009Eh first, handle moved with MOV BX,AX, a CX
+  #     count and DX=0100h before AH=40h, close, find-next and a JMP back.
+  # 22. Write-only open (3D01h) after AX=3D01h with DX=009Eh second; DEC CX
+  #     gives the count and the program returns with RET.
+  # 23. Entry mask followed by MOV DH,1 and a write-only open; XCHG DX,CX
+  #     supplies the buffer and count before the AH=40h write.
+  # 24. Mask pointer and write buffer both come from CX (MOV DX,CX): find-first,
+  #     read-write open at DX=009Eh, handle exchange, write, RET.
+  # 25. XCHG CX,AX start; the mask address is rebased to the DTA name with
+  #     ADD DX before a read-write open, the handle low byte is copied to DL,
+  #     the handle is seeked (AH=42h) and CL/DH give the write count, RET.
+  # 26. Mask pointer loaded into DX before find-first (CX untouched); a write-only
+  #     open at DX=009Eh, a CX byte count, write from 0100h, close and RET.
+  # 27. CX raised by 0100h and saved with PUSH CX; find-first with CX cleared,
+  #     read-write open, handle copied with PUSH AX / POP BX, the file rewound
+  #     (AH=42h, offset 0), then CX restored as the write count and RET.
+  # 28. AH=4Eh with CX loaded as zero and the mask address in DX; AH=3Dh with
+  #     AL=02h as a separate load, a CX byte count, write from 0100h, close,
+  #     and a program end with INT 20h.
+  # 29. Like layout 5 with the DTA pointer copied by MOV SI,BX (8B F3 encoding)
+  #     before the LEA DX,[SI+1Eh] open.
+  # 30. DX=009Eh before the 3D02h open; after the handle exchange XCHG DX,AX /
+  #     INC DH builds the 0100h buffer, then write (CX set at the search),
+  #     close and INT 20h.
+  # 31. Like layout 5 but LEA DX,[SI+1Eh] comes before MOV AX,3D02h, and the
+  #     count (CX) and buffer (DX=0100h) are loaded before AH=40h.
   - id: objectives/impact/infect/binary/dos/overwrite::dos-com-trivial-search-overwriter
     desc: DOS searches and overwrites DTA match
     crit: notable
     conf: 0.98
     if:
       type: hex
-      pattern: "(B4 4E [0-6] CD 21 B8 02 3D BA 9E 00 CD 21 [0-8] BA 00 01 B4 40 CD 21|91 B4 4E [0-6] CD 21 B8 01 3D BA 9E 00 CD 21 [0-8] B4 40 [0-8] CD 21)"
+      pattern: "(B4 4E [0-6] CD 21 B8 02 3D BA 9E 00 CD 21 [0-8] BA 00 01 B4 40 CD 21|B4 4E [0-6] CD 21 B8 02 3D BA 9E 00 CD 21 [0-8] B4 40 [0-4] BA 00 01 CD 21|B4 4E [0-6] CD 21 B8 01 3D BA 9E 00 CD 21 [0-8] B4 40 [0-8] CD 21|91 B4 4E [0-6] CD 21 B8 01 3D BA 9E 00 CD 21 [0-8] B4 40 [0-8] CD 21|B4 4E [0-6] CD 21 72 ?? B4 2F CD 21 89 DE B8 02 3D 8D 54 1E CD 21 93 B4 40 [0-4] BA 00 01 CD 21|BA ?? ?? B4 4E CD 21 BA 9E 00 B8 01 3D CD 21 8B D8 B4 40 [0-4] BA 00 01 CD 21|B4 4E [0-6] CD 21 72 ?? BA 9E 00 B8 02 3D CD 21 93 B4 40 [0-6] BA 00 01 CD 21|B4 4E [0-4] CD 21 [0-2] B2 9E B8 02 3D CD 21 93 99 B4 42 CD 21 B4 40 B1 ?? B6 01 CD 21|B4 4E [0-6] CD 21 BA 9E 00 B8 02 3D CD 21 93 BA 00 01 B4 40 CD 21 B4 3E CD 21|B4 4E [0-6] CD 21 BA 9E 00 B8 01 3D CD 21 93 B4 40 49 BA 00 01 CD 21|B4 4E [0-6] CD 21 BA 9E 00 B8 01 3D CD 21 93 B4 40 B9 ?? ?? BA 00 01 CD 21 B4 3E CD 21 B4 4F CD 21 73 ?? C3|B4 4E BA ?? ?? B1 ?? CD 21 73 ?? C3 [4-8] B8 02 3D BA 9E 00 CD 21 93 BA 00 01 B1 ?? B4 40 CD 21 B4 3E CD 21 B4 4F EB ??|91 B4 4E BA ?? ?? CD 21 B8 02 3D BA 9E 00 CD 21 93 87 F2 B4 40 B1 ?? CD 21 C3|B4 4E 33 C9 8D 16 ?? ?? CD 21 B8 02 3D BA 9E 00 CD 21 93 B4 40 B9 ?? ?? 8D 16 00 01 CD 21 B4 3E CD 21 CD 20|B4 4E [0-6] CD 21 B8 02 3D BA 9E 00 CD 21 93 B4 40 BA 00 01 49 CD 21|B4 4E [0-6] CD 21 BA 9E 00 B8 02 3D CD 21 93 B4 40 BA 00 01 CD 21 C3|B4 4E [0-6] CD 21 72 ?? BA 9E 00 B8 01 3D CD 21 93 B4 40 B9 ?? ?? BA 00 01 CD 21 B4 3E CD 21 B4 4F CD 21 EB ??|B4 4E 33 C9 CD 21 72 ?? BA 9E 00 B8 01 3D CD 21 93 B4 40 B1 ?? BA 00 01 CD 21 B4 3E CD 21 B4 4F EB ?? C3|B4 4E [0-6] CD 21 B8 02 3D BA 9E 00 CD 21 93 BA 00 01 B4 40 B1 ?? CD 21 B4 3E CD 21 CD 20|B4 4E [0-6] CD 21 BA 9E 00 B8 02 3D CD 21 8B D8 B9 ?? ?? BA 00 01 B4 40 CD 21 B4 3E CD 21 B4 4F EB ??|B4 4E [0-6] CD 21 B8 01 3D BA 9E 00 CD 21 93 B4 40 49 BA 00 01 CD 21 C3|B4 4E B6 01 CD 21 B8 01 3D BA 9E 00 CD 21 93 B4 40 87 D1 CD 21 C3|B4 4E 8B D1 CD 21 BA 9E 00 B8 02 3D CD 21 93 B4 40 8B D1 CD 21 C3|B4 4E 89 C9 BA ?? ?? CD 21 B8 02 3D BA 9E 00 CD 21 93 B4 40 BA 00 01 B9 ?? ?? CD 21 B4 3E CD 21 CD 20|91 BA ?? ?? B4 4E CD 21 81 C2 ?? ?? B8 02 3D CD 21 93 8A D0 B4 42 CD 21 B4 40 B1 ?? B6 01 CD 21 C3|BA ?? ?? B4 4E CD 21 BA 9E 00 B8 01 3D CD 21 93 B4 40 B9 ?? ?? BA 00 01 CD 21 B4 3E CD 21 C3|B4 4E [0-6] CD 21 72 ?? B4 2F CD 21 8B F3 B8 02 3D 8D 54 1E CD 21 93 B4 40 [0-4] BA 00 01 CD 21|B4 4E [0-6] CD 21 BA 9E 00 B8 02 3D CD 21 93 92 FE C6 B4 40 CD 21 B4 3E CD 21 CD 20|B4 4E [0-6] CD 21 72 ?? B4 2F CD 21 89 DE 8D 54 1E B8 02 3D CD 21 93 B9 ?? ?? BA 00 01 B4 40 CD 21|81 C1 00 01 51 BA ?? ?? 33 C9 B4 4E CD 21 B8 02 3D BA 9E 00 CD 21 50 5B B8 00 42 2B D2 CD 21 B4 40 59 BA 00 01 CD 21 C3|B4 4E B9 00 00 BA ?? ?? CD 21 B4 3D B0 02 BA 9E 00 CD 21 93 B4 40 B9 ?? ?? BA 00 01 CD 21 B4 3E CD 21 CD 20)"
       offset_range: [0, 8]
     unless:
       - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
+
+  # Mask-first form: MOV DX,mask / AH=4Eh find-first, open the DTA name
+  # (AH=3Dh, DX=009Eh), XCHG AX,BX for the handle, then the "*.*" mask sits
+  # in the instruction stream before AH=40h and a short JMP back to INT 21h.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-mask-first-search-overwriter
+    desc: DOS mask-first search, open and write loop
+    crit: notable
+    conf: 0.98
+    if:
+      type: hex
+      pattern: "BA ?? ?? B4 4E CD 21 BA 9E 00 B4 3D CD 21 93 [0-6] 2A 2E 2A 00 [0-4] B4 40 EB"
+      offset: 0
+    unless:
+      - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
+
+  # Entry-mask form: the "*.*" mask is the first image bytes (harmless when
+  # run as code), CX carries the buffer pointer through find-first and the
+  # DTA-name open (POP DX restores it), and a few bytes of filler sit between
+  # the open and XCHG AX,BX / AH=40h / INT 21h / RET. A second form sets
+  # DX from SI (PUSH SI / POP DX, optionally after XCHG CX,AX) and swaps SI
+  # into DX after the open, with an optional CL byte count before the write.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-search-overwriter
+    desc: DOS entry-mask search, open and write
+    crit: notable
+    conf: 0.98
+    if:
+      type: hex
+      pattern: "2A 2E 2A 00 (51 8B D1|41 56 5A|91 56 5A) B4 4E CD 21 (BA 9E 00 B8 02 3D|B8 02 3D BA 9E 00) CD 21 (5A [0-12] 93|93 87 D6) B4 40 [0-2] CD 21 C3"
+      offset: 0
+    unless:
+      - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
+
+  # Entry-mask loop form: the "*.*" mask opens the image, find-first sets
+  # AH=4Eh, the DTA name is opened for write or update (3D01h or 3D02h, DX=009Eh), and the
+  # handle is exchanged into BX before AH=40h with a short JMP back to the
+  # interrupt, so the same write repeats for each match. Written as YARA so
+  # the sequence is evaluated on images under the engine's size floor.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-loop-overwriter
+    desc: DOS entry mask, open and write loop
+    crit: notable
+    conf: 0.98
+    if:
+      type: yara
+      source: |
+        rule dos_com_entry_mask_loop_overwriter {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $loop = { 2A 2E 2A 00 B4 4E [0-4] CD 21 B8 ( 01 | 02 ) 3D BA 9E 00 CD 21 93 B4 40 EB }
+            $call_ret = { 2A 2E ( 45 | 65 ) 2A B4 4E E8 00 00 8B D6 CD 21 B8 01 3D BA 9E 00 CD 21 93 B4 40 C3 }
+          condition:
+            $loop at 0 or $call_ret at 0
+        }
+
+  # Trailing-mask form: find-first with a mask stored after the code, open
+  # the DTA name for update (3D02h, DX=009Eh), load the write service into BH
+  # and XCHG AX,BX so AH=40h and the handle are set together, then write the
+  # image from 0100h with a byte count in CL. Written as YARA so the
+  # sequence is evaluated on images under the engine's size floor.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-trailing-mask-image-overwriter
+    desc: DOS trailing mask, open and image write
+    crit: notable
+    conf: 0.98
+    if:
+      type: yara
+      source: |
+        rule dos_com_trailing_mask_image_overwriter {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $seq = { B4 4E BA ?? ?? CD 21 B8 02 3D BA 9E 00 CD 21 B7 40 93 BA 00 01 B1 ?? CD 21 C3 2A 2E 2A 00 }
+          condition:
+            $seq at 0
+        }
+
+  # Fixed-name form: no search at all. The program opens a file whose name is
+  # embedded in the image for update (3D02h), writes its own image from
+  # DX=0100h with a CX count, closes it and terminates (4C00h). Pinned to the
+  # first bytes of a tiny COM image.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-fixed-name-self-image-write
+    desc: DOS opens fixed name, writes own image
+    crit: suspicious
+    conf: 0.93
+    size_max: 512
+    if:
+      type: hex
+      pattern: "B8 02 3D BA ?? ?? CD 21 8B D8 B4 40 B9 ?? ?? BA 00 01 CD 21 B4 3E CD 21 B8 00 4C CD 21"
+      offset: 0
+    unless:
+      - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
+
+  # Entry-mask form that saves CX on the stack: the "*.*" mask opens the
+  # image, PUSH CX / MOV AH,4Eh / XCHG CX,DX run find-first, the DTA name is
+  # opened for update, the handle is exchanged into BX, and DEC CX / POP DX
+  # set the count and buffer before the AH=40h write and RET. Written as YARA
+  # so the sequence is evaluated on images under the engine's size floor.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-stack-cx-overwriter
+    desc: DOS entry mask with stacked CX overwrite
+    crit: notable
+    conf: 0.97
+    if:
+      type: yara
+      source: |
+        rule dos_com_entry_mask_stack_cx_overwriter {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $seq = { 2A 2E 2A 00 51 B4 4E 87 D1 CD 21 B8 02 3D BA 9E 00 CD 21 93 B4 40 49 5A CD 21 C3 }
+          condition:
+            $seq at 0
+        }
 
   - id: objectives/impact/infect/binary/dos/overwrite::dos-com-argument-overwriter-code
     desc: DOS COM argument file overwrite sequence
@@ -35,7 +204,24 @@ traits:
     conf: 0.98
     if:
       type: hex
-      pattern: "8A 1E 80 00 C6 87 81 00 00 B8 02 3D BA 82 00 CD 21 93 87 D6 B4 40 CD 21"
+      # XCHG DX,SI has two encodings (D6/F2); the copy length may be loaded
+      # into CL before the write.
+      pattern: "8A 1E 80 00 C6 87 81 00 00 (B8 02 3D BA 82 00|BA 82 00 B8 02 3D) CD 21 93 87 (D6|F2) B4 40 [0-2] CD 21"
+      offset: 0
+    unless:
+      - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
+
+  # Mask-first search that opens the first match: MOV DX,mask / AH=4Eh, then
+  # the DTA name (DX=009Eh) is opened with AH=3Dh and the handle exchanged
+  # into BX. Tiny COM infectors start this way; the write may follow or may
+  # be missing from a damaged copy, so the atom alone claims only the open.
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-mask-first-search-open-match
+    desc: DOS mask-first search then opens DTA match
+    crit: notable
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "BA ?? ?? B4 4E CD 21 BA 9E 00 B4 3D CD 21 93"
       offset: 0
     unless:
       - id: well-known/tool/reverse-engineering/pedump::pedump-packer-marker
@@ -52,6 +238,55 @@ composite_rules:
       - id: objectives/impact/infect/binary/dos/overwrite::dos-com-tiny-search-overwriter
       - id: objectives/impact/infect/binary/dos/overwrite::dos-com-trivial-search-overwriter
 
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-mask-first-overwriter
+    desc: DOS COM searches by mask and overwrites match
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-mask-first-search-overwriter
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
+
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-overwriter
+    desc: DOS COM entry mask searches and overwrites match
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-search-overwriter
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
+
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-loop-overwriter-virus
+    desc: DOS COM entry mask loops open and overwrite
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-loop-overwriter
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
+
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-trailing-mask-image-overwriter-virus
+    desc: DOS COM searches by mask and writes its image
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-trailing-mask-image-overwriter
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
+
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-fixed-name-image-overwriter
+    desc: Tiny DOS COM overwrites a named file with itself
+    crit: hostile
+    conf: 0.9
+    size_max: 512
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-fixed-name-self-image-write
+      - id: micro-behaviors/fs/write/file/handle::dos-int21-write-call
+
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-stack-cx-overwriter-virus
+    desc: DOS COM entry mask searches, writes stacked buffer
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-entry-mask-stack-cx-overwriter
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
+
   - id: objectives/impact/infect/binary/dos/overwrite::dos-com-argument-overwriter
     desc: DOS COM overwrites argument file with itself
     crit: hostile
@@ -59,4 +294,12 @@ composite_rules:
     all:
       - id: objectives/impact/infect/binary/dos/overwrite::dos-com-argument-overwriter-code
       - id: micro-behaviors/fs/write/file/handle::dos-int21-write
+
+  - id: objectives/impact/infect/binary/dos/overwrite::dos-com-mask-first-opens-match
+    desc: DOS COM searches by mask and opens first match
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-com-mask-first-search-open-match
+      - id: micro-behaviors/fs/search::dos-int21-find-first-call
 

@@ -9,8 +9,8 @@
 **Tier hierarchy:**
 - `micro-behaviors/*` - Observable capabilities (what code can do)
 - `objectives/*` - Attacker objectives (intent signals)
-- `well-known/*` - Specific malware/tool signatures (family-unique only)
-- `metadata/*` - Informational file properties
+- `well-known/*` - Recognized malware, tool, app, library, dual-use, and game identities
+- `metadata/*` - Artifact structure, formats, declarations, provenance, and measurements
 
 [TAXONOMY.md](./TAXONOMY.md) is the authoritative placement contract. This
 guide defines rule syntax and authoring checks; a documented destination does
@@ -150,6 +150,12 @@ JavaScript imports use the `npm` ecosystem. Static YAML namespaces such as
 `metadata/import/package::…` retain their existing IDs.
 
 Some findings are emitted by cleave itself rather than loaded from YAML, for example package facts such as `supply-chain/install-hook/postinstall`. Treat these as built-in facts when triaging: they may appear in output like traits, but they cannot be suppressed with a YAML `unless:` on a local trait id unless the engine exposes a corresponding rule hook. Do not create duplicate YAML traits solely to shadow them. Instead, document the benign context in `metadata/` or adjust the consuming YAML composites that reference YAML install-hook traits; engine-level severity changes belong in cleave, not this taxonomy.
+
+A Base64-decoded ZIP emits the notable format observation
+`metadata/file/encoding::base64-decoded-zip`. Encoding and ZIP magic alone
+do not establish evasion; the decoded archive and its members still receive
+their normal analysis. Do not add a YAML shadow or a filename exclusion for
+an ordinary document or application asset carrying this format.
 
 ## Criticality Levels
 
@@ -1658,6 +1664,8 @@ warning, not a hard limit; count neither the tier nor the filename. Sibling
 groups below 35 combined rules also produce soft warnings under the criteria in
 [Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts)
 alongside the required sibling audit and the separate ML feature visibility limit.
+A directory with more than 150 immediate subdirectories is a hard validation
+error; split broad catalogs by a stable function with a clear tiebreaker.
 
 ### Forward compatibility (newer fields, older binaries)
 

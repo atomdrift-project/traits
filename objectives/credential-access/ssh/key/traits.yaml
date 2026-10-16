@@ -138,12 +138,27 @@ traits:
   attack: T1083,T1552.004
   if:
     type: text
-    regex: 'Path\.home\(\)[\s\S]{0,180}["'']\.ssh["''][\s\S]{0,100}(glob|iterdir)\s*\('
+    regex: 'Path\.home\(\)[\s\S]{0,180}["'']\.ssh["''][\s\S]{0,100}(glob|iterdir)\s*\([^)]{0,12}'
+    # Globbing only `*.pub` lists public keys (see python-ssh-pubkey-inventory).
+  not:
+  - regex: glob\s*\(\s*["'']\*\.pub["'']
   unless:
   - id: well-known/app/ai/coding-agent/
     # e2e harnesses inside a recognized product source tree stage test SSH
     # keys; the walk is test setup, not collection.
   - id: well-known/app/infrastructure/datadog-agent::source-context
+
+- id: python-ssh-pubkey-inventory
+  desc: Python lists home .ssh public keys
+  # Listing `*.pub` names is how a CLI offers identities to pass to ssh; it
+  # reads no private key and sends nothing. Mirrors node-ssh-pubkey-inventory.
+  crit: notable
+  conf: 0.95
+  for: [python]
+  attack: T1083
+  if:
+    type: text
+    regex: 'Path\.home\(\)[\s\S]{0,180}["'']\.ssh["''][\s\S]{0,100}glob\s*\(\s*["'']\*\.pub["'']'
 
 - id: python-expanduser-ssh-walk
   desc: Python walks an expanded .ssh path
@@ -227,7 +242,10 @@ composite_rules:
   - id: well-known/tool/sysadmin/multissh::multissh-context
 - id: node-ssh-pubkey-inventory
   desc: Node inventories home .ssh public keys
-  crit: suspicious
+  # Listing `*.pub` names is how an ssh front-end picks identities to pass to
+  # `ssh -i`; alone it neither reads a key nor sends anything. The hostile
+  # reading below pairs it with a hardcoded endpoint and a request.
+  crit: notable
   conf: 0.94
   for: [javascript, typescript]
   attack: T1552.004
@@ -311,6 +329,11 @@ composite_rules:
   conf: 0.97
   for: [python]
   attack: T1552.004,T1041
+  # The key walk and the POST are one routine. In a large module the SSH
+  # enumerator and an unrelated HTTP login probe (a POST with deliberately wrong
+  # credentials, a request builder) sit thousands of lines apart and describe
+  # no exfiltration.
+  near_lines: 60
   all:
   - id: python-ssh-directory-enumeration
   any:

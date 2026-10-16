@@ -36,6 +36,11 @@ traits:
       # Restrictive firewall initialization scripts flush before enforcing a default DROP policy.
       - type: text
         regex: \biptables\s+(-P|--policy)\s+(INPUT|OUTPUT|FORWARD)\s+DROP\b
+      # Gateway and traffic-inspection setup flushes, then rebuilds a datapath
+      # that steers packets to a userspace queue or NATs them (ntopng's
+      # wifi_bridge.sh / wifi_router.sh); the firewall is reconfigured, not off.
+      - type: text
+        regex: '\biptables\b[^\n]{0,120}-j\s+(NFQUEUE|MASQUERADE|NFLOG)\b'
     if:
       type: text
       # Bare `-F` (all chains) is the degrade signal. Chain-scoped forms like
@@ -55,8 +60,12 @@ traits:
       regex: \biptables\s+(-X|-Z)(\s*$|\s+-|\s*;)
     unless:
       - id: well-known/app/utility/cmdchamp/
-  - id: iptables-policy-accept-dup
-    desc: iptables default policy ACCEPT
+  # FORWARD is deliberately absent: `iptables -P FORWARD ACCEPT` is how a
+  # router, NAT gateway, VPN exit node or container host enables packet
+  # forwarding, and it leaves the host's own INPUT/OUTPUT filtering alone.
+  # Matches micro-behaviors/os/firewall/iptables::iptables-policy-accept.
+  - id: iptables-input-output-policy-accept
+    desc: iptables INPUT/OUTPUT default policy ACCEPT
     crit: suspicious
     conf: 0.85
     for:
@@ -72,7 +81,7 @@ traits:
       - id: metadata/build/recognized-contexts::containerd-service-provisioning-marker
     if:
       type: string_literal
-      regex: \biptables\s+-P\s+(INPUT|OUTPUT|FORWARD)\s+ACCEPT\b
+      regex: \biptables\s+-P\s+(INPUT|OUTPUT)\s+ACCEPT\b
   - id: ip6tables-flush
     desc: Flushes ip6tables rules
     crit: suspicious
@@ -126,7 +135,8 @@ composite_rules:
       - id: objectives/impact/degrade/firewall::netsh-firewall-off
       - id: objectives/impact/degrade/firewall::windows-firewall-profile-disable
     unless:
-      - id: well-known/app/infrastructure/replicated-kurl/
+      - id: opt-in-firewall-disable-flag
+      - id: recognized-network-management
       # A defensive scanner naming these commands in its pattern catalog, not running them.
       - id: well-known/tool/detection/pattern-catalog::source-pattern-catalog
       - id: well-known/app/utility/cmdchamp/
@@ -134,14 +144,12 @@ composite_rules:
       - id: micro-behaviors/os/firewall/firewalld::vagrant-test-firewalld-stop
       - id: well-known/tool/detection/security-remediation::openscap-cis-remediation-script
       - id: well-known/lib/crypto/gokrb5::testenv-bootstrap-script
-      - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-node-provisioning-context
-      - id: well-known/app/infrastructure/pritunl-cloud/
   - id: opened
     desc: Firewall rules cleared and opened
     crit: suspicious
     conf: 0.9
     all:
-      - id: objectives/impact/degrade/firewall::iptables-policy-accept-dup
+      - id: objectives/impact/degrade/firewall::iptables-input-output-policy-accept
     any:
       - id: iptables-flush
       - id: iptables-delete-all

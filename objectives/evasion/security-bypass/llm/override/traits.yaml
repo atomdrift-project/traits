@@ -272,7 +272,9 @@ traits:
     type: text
     # Allow a short adverb/quantifier between the verb and the policy noun
     # ("bypass every safety filter", "override all content guardrails").
-    regex: '\b(bypass|override) (your |every |all |the )?(safety|content) (filter|guardrail)s?\b'
+    # The leading window lets the `not:` clauses see CVE-style prose
+    # ("allows remote attackers to bypass content filters").
+    regex: '.{0,40}\b(bypass|override) (your |every |all |the )?(safety|content) (filter|guardrail)s?'
     case_insensitive: true
   not:
   - regex: (?i)\b(will not|cannot|can't|won't|do not|don't|not|never)\b.{0,48}\b(bypass|override)\b
@@ -312,16 +314,16 @@ traits:
     type: text
     regex: '\b(disable) (your )?(safety|content|ethical) (policy)\b'
     case_insensitive: true
-- id: llm-update-skill-instruction--rx-42
-  desc: 'Matches ''overwrite)(skill tool)(file'''
+- id: llm-skill-file-update-phrase
+  desc: Prompt updates a skill or tool file
   crit: notable
   conf: 0.86
   if:
     type: text
     regex: '(?i)\b(update|modify|overwrite)\s+(this\s+)?(skill|tool)\s+(file|content)\b'
     case_insensitive: true
-- id: llm-update-skill-instruction--rx-43
-  desc: 'Matches ''overwrite)(plugin instruction)(file'''
+- id: llm-plugin-instruction-update-phrase
+  desc: Prompt updates a plugin or instruction file
   crit: notable
   conf: 0.86
   if:
@@ -462,6 +464,13 @@ composite_rules:
   desc: System prompt extraction behavior
   crit: suspicious
   conf: 0.93
+  # The AEGIS package's own red-team corpora and agent test scenarios quote
+  # the phrases its shield exists to block; archive scope reaches members that
+  # carry no test-framework markers of their own.
+  downgrade:
+    scope: archive
+    any:
+    - id: well-known/tool/detection/aegis::package-context
   any:
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-system-prompt-query
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-initial-instructions-query
@@ -491,7 +500,9 @@ composite_rules:
   unless:
   - id: well-known/tool/detection/llm-scanner/
   - id: well-known/tool/detection/security-scanner/
+  - id: well-known/tool/detection/pipelock-rules/
   - id: metadata/package/documentation/agent-safety::security-example-documentation
+  - id: metadata/package/testing/corpus::rule-test-case-detection-verdicts
 - id: llm-output-artifact-directive-binary
   desc: Embedded agent output directive
   crit: suspicious
@@ -501,23 +512,38 @@ composite_rules:
   - id: objectives/evasion/security-bypass/llm/output-steering::llm-summary-directive-binary
   - id: llm-save-output-files-binary
   near_bytes: 500
+- id: prompt-injection-reference-documentation-contexts
+  desc: Prompt-injection reference documentation contexts
+  crit: exception
+  conf: 0.9
+  any:
+  - id: metadata/package/documentation/agent-safety::extracted-reference-documentation
+  - id: objectives/evasion/security-bypass/llm/override::prompt-injection-documentation-known-benign-context
 - id: llm-prior-instruction-override
   desc: LLM prior instruction override prompt
   crit: suspicious
   conf: 0.88
+  # The AEGIS package's own red-team corpora and agent test scenarios quote
+  # the phrases its shield exists to block; archive scope reaches members that
+  # carry no test-framework markers of their own. The sofagent audit package
+  # likewise lists the phrases as rules for its diff scanner.
+  downgrade:
+    scope: archive
+    any:
+    - id: well-known/tool/detection/defensive-scanner-context::agent-governance-package-context
+    - id: metadata/package/testing/corpus::rule-test-case-detection-verdicts
   any:
   - id: llm-ignore-prior-instructions
   - id: llm-disregard-prior-instructions
   - id: llm-do-not-follow-prior-instructions
   unless:
-  - id: metadata/file/format/classified-prompt-record::labeled-prompt-security-classification-examples
+  - id: metadata/package/testing/corpus/
   - id: well-known/app/
   - id: well-known/tool/offensive/
   - id: metadata/file/profile/test-indications/
   - id: well-known/tool/detection/
   - id: well-known/lib/ai/astrbot::repair-prompt-context
-  - id: metadata/package/documentation/agent-safety::extracted-reference-documentation
-  - id: objectives/evasion/security-bypass/llm/override::prompt-injection-documentation-known-benign-context
+  - id: prompt-injection-reference-documentation-contexts
 - id: llm-uncensoring-output-limit-jailbreak
   desc: Ignore-prior jailbreak that strips all output limits
   crit: hostile
@@ -544,6 +570,13 @@ composite_rules:
   desc: LLM safety bypass prompt
   crit: suspicious
   conf: 0.9
+  # The AEGIS package's own red-team corpora and agent test scenarios quote
+  # the phrases its shield exists to block; archive scope reaches members that
+  # carry no test-framework markers of their own.
+  downgrade:
+    scope: archive
+    any:
+    - id: well-known/tool/detection/aegis::package-context
   any:
   - id: llm-safety-bypass--rx-33
   - id: llm-safety-bypass--rx-34
@@ -552,13 +585,12 @@ composite_rules:
   - id: llm-safety-bypass--rx-37
   unless:
   - id: metadata/package/documentation/agent-safety::ctf-technique-reference-documentation
+  - id: metadata/package/documentation/agent-safety::scoped-security-test-documentation
   - id: metadata/file/profile/test-indications/
   - id: well-known/lib/ai/openai::llm-provider-safety-setting-api
-  - id: well-known/tool/detection/llm-scanner/
+  - id: well-known/tool/detection/
   - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
   - id: metadata/package/documentation/agent-safety::untrusted-input-data-guardrail
-  - id: well-known/tool/detection/agent-monitor/
-  - id: metadata/package/documentation/agent-safety::scoped-security-test-documentation
   - id: metadata/file/profile/markup::assessment-playbook-examples
 - id: llm-jailbreak-payload
   desc: LLM unrestricted persona jailbreak
@@ -625,8 +657,8 @@ composite_rules:
   all:
   - id: micro-behaviors/data/llm/wire-marker::prompt-marker
   any:
-  - id: llm-update-skill-instruction--rx-42
-  - id: llm-update-skill-instruction--rx-43
+  - id: llm-skill-file-update-phrase
+  - id: llm-plugin-instruction-update-phrase
   unless:
   - id: well-known/tool/development/vscode-extension/tencent-codebuddy::codebuddy-marker
   - id: well-known/app/ai/knowledge/entroly::local-runtime-context
