@@ -9,17 +9,6 @@ defaults:
   size_max: 20000000
 
 traits:
-  - id: ioc-blocklist-check-function
-    desc: IOC blocklist content-check function
-    if:
-      type: function
-      exact: checkIOCBlocklist
-  - id: ioc-domain-table-member
-    desc: Exported known-C2 domain table
-    if:
-      type: symbol
-      kind: member
-      exact: exports.KNOWN_C2_DOMAINS
   - id: threat-feed-update-function
     desc: Threat-feed update function
     if:
@@ -47,6 +36,13 @@ traits:
     if:
       type: text
       substr: 'export declare const ALL_PATTERN_RULES:'
+  # A scanner module exports `const fooRules = [{ severity, pattern: /.../ }]`.
+  # The attack strings inside those fields are the patterns being detected.
+  - id: exported-security-rule-array
+    desc: Exported array of named security rules
+    if:
+      type: text
+      regex: 'export const \w+Rules\s*=\s*\['
   - id: pattern-matcher-api-declaration
     desc: Type declaration for pattern matching API
     if:
@@ -121,24 +117,30 @@ traits:
     if:
       type: text
       regex: '(?i)disguised as monitoring.{0,120}pgmon'
-  - id: incident-cve-references
-    desc: Cited CVE identifiers in threat prose
-    crit: notable
-    conf: 0.95
-    # Incident briefings cite several advisories; two identifiers distinguish
-    # a curated briefing from a single incidental mention.
-    count_min: 2
+  # A detector's own regex literal (`/base64\s+...sh/`) names the pipeline
+  # it searches for. The quoted reason beside it is the same signature.
+  - id: js-base64-decode-pipe-regex-literal
+    desc: Regex literal names a decode-to-shell pipe
     if:
       type: text
-      regex: '\bCVE-[0-9]{4}-[0-9]{4,}\b'
+      regex: '/base64[^/\n]{0,80}(sh|bash)'
+  # A precision corpus stores the pipeline as a labelled specimen
+  # (`'base64 -d … | bash', 'gate'`), not as a command it runs.
+  - id: js-verdict-labeled-decode-pipe
+    desc: Verdict labels a decode-to-shell specimen
+    if:
+      type: text
+      regex: 'base64 --?d[^''\n]{0,40}\| (ba)?sh[''"],\s*[''"](gate|allow|block)'
 
 composite_rules:
   - id: js-ioc-blocklist-catalog
     desc: Defensive IOC blocklist and content matcher
     crit: exception
     all:
-      - id: ioc-blocklist-check-function
-      - id: ioc-domain-table-member
+      - id: metadata/file/function::ioc-blocklist-check-function
+    any:
+      - id: metadata/lang/source/syntax/member::ioc-domain-export-member
+      - id: metadata/file/catalog/identity::c2-blocklist-declaration
   - id: js-scored-threat-feed-catalog
     desc: Defensive scored threat feed and updater
     crit: exception
@@ -157,6 +159,13 @@ composite_rules:
     all:
       - id: pattern-rule-table-declaration
       - id: pattern-matcher-api-declaration
+  - id: js-exported-severity-rule-module
+    desc: Exported severity-tagged detection rule module
+    crit: exception
+    all:
+      - id: exported-security-rule-array
+      - id: metadata/lang/source/syntax/key-value::repeated-quoted-severity-fields
+      - id: metadata/lang/source/syntax/key-value::regex-pattern-rule-field
   - id: js-agent-skill-detection-module
     desc: Defensive agent skill scanner and matcher table
     crit: exception
@@ -191,7 +200,7 @@ composite_rules:
     crit: exception
     all:
       - id: defensive-incident-threat-reference-doc
-      - id: incident-cve-references
+      - id: metadata/package/documentation/security-advisory::multiple-cve-identifiers-text
   - id: js-threat-data-catalog
     desc: Defensive JavaScript IOC or detection-pattern catalog
     crit: exception
@@ -204,3 +213,11 @@ composite_rules:
       - id: js-agent-script-detection-module
       - id: js-security-blacklist-catalog
       - id: defensive-incident-threat-briefing
+
+  - id: js-rule-catalog-with-test-cases
+    desc: Severity-tagged rule catalog with detector test cases
+    crit: exception
+    all:
+      - id: metadata/lang/source/syntax/key-value::repeated-quoted-severity-fields
+      - id: metadata/file/catalog/pattern-rules::js-rule-positive-test-tables
+      - id: metadata/file/catalog/pattern-rules::js-negative-rule-verdicts

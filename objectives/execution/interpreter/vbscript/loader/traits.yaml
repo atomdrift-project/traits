@@ -36,42 +36,38 @@ traits:
   if:
     type: text
     regex: '(?i)\[-1\.\.-\$[A-Za-z_][A-Za-z0-9_]*\.Length\]\s*-\s*join\s*["'']{2}'
-  # The matcher sees `Execute` invoking any function call -- CStr, a
-  # builder, or a real decoder. The decoding interpretation comes from the
-  # composites that pair this sink with a decode technique.
-- id: execute-function-call
-  desc: Execute statement calls a function
+- id: powershell-join-index-range-reversal
+  desc: PowerShell -join on descending index range
   crit: suspicious
   conf: 0.9
-  # Not static-lib: C++ archives embed SQL test text such as
-  # `EXECUTE v1(1)` (DuckDB prepared statements), which is not VBScript.
-  for: [vbs, text]
+  attack: T1027
   if:
     type: text
-    regex: '(?i)^[ \t]*execute\s+[A-Za-z_]\w*\s*\('
-  not:
-  - substr: format(
-  - substr: replace(
-      # SQL's dynamic statement, `EXECUTE IMMEDIATE (SELECT ...)`, in
-      # MariaDB's mysql-test corpus (this atom also reads `text`).
-  - regex: '(?i)execute\s+immediate\b'
-      # Firebird PSQL's `EXECUTE BLOCK (...)` / `EXECUTE STATEMENT (...)`
-      # in its sql.extensions documentation (this atom also reads `text`).
-  - regex: '(?i)execute\s+(block|statement)\b'
-      # English prose determiners in documentation ("Execute the (...)").
-  - regex: '(?i)execute\s+(the|a|an|this|that|each|every|all|any|some|following)\b'
-  unless:
-  - id: metadata/package/documentation/manpage::unix-manpage
-  - id: metadata/file/extension/identity::markdown-file-basename
-  - id: metadata/package/testing/presence/fixture::snapshot-file
-  - type: path
-    basename: true
-    regex: '(?i)\.(sql|snap)$'
-      # Vim script's own `execute printf(...)`: a .vim file is not VBScript
-      # content-sniffed as text, whatever the detection order says.
-  - type: path
-    basename: true
-    regex: '(?i)\.vim$'
+    regex: '(?i)-join\s+\$[A-Za-z_][A-Za-z0-9_]*\[\(\$[A-Za-z_][A-Za-z0-9_]*\.Length-1\)\.\.0\]'
+- id: powershell-spaced-char-concat-loop
+  desc: PowerShell loop appends one-character substrings
+  crit: suspicious
+  conf: 0.9
+  attack: T1027
+  if:
+    type: text
+    regex: '(?i)\.Substring\(\$[A-Za-z]+,\s*1\);\$[A-Za-z]+=\$[A-Za-z]+\+\$[A-Za-z]+'
+- id: powershell-adipiscing-helper-name
+  desc: PowerShell Adipiscing spaced-string helper name
+  crit: suspicious
+  conf: 0.9
+  attack: T1027
+  if:
+    type: text
+    regex: (?i)piscing\s*\(\[String\]\$
+- id: powershell-split-join-reversal-fragment
+  desc: PowerShell -join on split index-range fragment
+  crit: suspicious
+  conf: 0.88
+  attack: T1027
+  if:
+    type: text
+    regex: (?i)\{-join\s+\$[A-Za-z]+\[\(\$[A-Za-z]+\.Le
 - id: execute-function-result
   desc: Execute of a function result
   crit: notable
@@ -101,6 +97,18 @@ traits:
     type: text
     regex: '(?i)for [A-Za-z_]+=1 to len\('
 composite_rules:
+- id: spaced-powershell-shellexecute-loader
+  desc: VBScript executes spaced-string PowerShell loader via ShellExecute
+  crit: hostile
+  conf: 0.98
+  attack: T1059.001,T1059.005
+  all:
+  - id: micro-behaviors/process/create/shellexec::shell-application-execute-context
+  - id: powershell-spaced-char-concat-loop
+  any:
+  - id: powershell-adipiscing-helper-name
+  - id: powershell-split-join-reversal-fragment
+  - id: powershell-join-index-range-reversal
 - id: padded-wsh-hidden-command-loader
   desc: Padded WSH launches a fragmented command hidden
   crit: hostile
@@ -109,7 +117,7 @@ composite_rules:
   for: [vbs, html]
   all:
   - id: objectives/anti-static/obfuscation/string/delimiter::vbs-padded-wscript-shell-progid-chunks
-  - id: objectives/anti-static/obfuscation/string/junking::dense-variable-string-appends
+  - id: micro-behaviors/data/string/concat::vbs-many-long-literal-concatenations
   - id: micro-behaviors/data/control-flow/dispatch::run-zero-style-argument
 - id: execute-mod-char-decoder
   desc: Executes a modulo character decoder
@@ -124,7 +132,7 @@ composite_rules:
   crit: hostile
   conf: 0.94
   all:
-  - id: execute-function-call
+  - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-function-call
   - id: objectives/anti-static/obfuscation/string/encoding::rotating-character-shift-cipher
 - id: obfuscated-msxml-vbs-payload-loader
   desc: Obfuscated VBScript decodes a staged payload through MSXML
@@ -146,30 +154,6 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/eval/direct::executeglobal-variable
   - id: micro-behaviors/data/property/access::msxml-node-typed-value
   - id: micro-behaviors/os/com/automation::vbs-computed-createobject
-
-- id: stride-decoded-registry-wsh-loader
-  desc: Registry-aware WSH executes a stride-decoded stage
-  crit: hostile
-  conf: 0.99
-  attack: T1027,T1059.005
-  all:
-  - id: micro-behaviors/data/decode/custom::fixed-stride-character-decoder
-  - id: micro-behaviors/process/interpreter/eval/direct::validated-vbs-execute-statement
-  - id: micro-behaviors/os/com/automation::wscript-shell-literal
-  - id: micro-behaviors/os/registry/read::wscript-regread
-
-  # GuLoader-class VBS rebuilds a stage by walking a padded string at a
-  # fixed stride, then Execute()s it through WScript.Shell. Unlike the
-  # registry sibling, this shape never touches RegRead.
-- id: stride-decoded-wsh-execute-loader
-  desc: WSH executes a stride-decoded stage
-  crit: hostile
-  conf: 0.97
-  attack: T1027,T1059.005
-  all:
-  - id: micro-behaviors/data/decode/custom::fixed-stride-character-decoder
-  - id: micro-behaviors/process/interpreter/eval/direct::validated-vbs-execute-statement
-  - id: micro-behaviors/os/com/automation::wscript-shell-literal
 
 - id: array-reconstructed-vbs-stage-loader
   desc: Array-reconstructed VBScript stage loader
@@ -257,7 +241,7 @@ composite_rules:
   conf: 0.9
   all:
   - id: micro-behaviors/process/interpreter/eval/direct::executeglobal-variable
-  - id: metadata/lang/source/syntax::vbs-many-array-call-syntax
+  - id: metadata/lang/source/syntax/call::vbs-many-array-call-syntax
 - id: xor-decoded-vbs-executeglobal-loader
   desc: XOR-modulo decoded VBScript ExecuteGlobal loader
   crit: hostile
@@ -275,7 +259,7 @@ composite_rules:
   crit: hostile
   conf: 0.94
   all:
-  - id: execute-function-call
+  - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-function-call
   - id: micro-behaviors/data/encode/char-code::chr-division-decoder
   - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-statement
   # Multi-round XOR-subtraction cipher (`(N - (A Xor B)) Mod 256`): the
@@ -312,7 +296,7 @@ composite_rules:
   - id: split-frombase64string-builder
   - id: split-unicode-decoder-builder
   - id: powershell-reverses-decoded-command
-  - id: micro-behaviors/process/create/hidden::wscript-shell-hidden-run
+  - id: micro-behaviors/process/create/flags::wscript-shell-hidden-run
   any:
   - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-statement
   - id: micro-behaviors/process/interpreter/eval/direct::validated-vbs-execute-statement
@@ -378,21 +362,10 @@ composite_rules:
   conf: 0.98
   attack: T1027,T1059.005,T1564.003
   all:
-  - id: objectives/anti-static/obfuscation/string/junking::dense-variable-string-appends
+  - id: micro-behaviors/data/string/concat::vbs-many-long-literal-concatenations
   - id: micro-behaviors/os/env/read::wsh-environment-object
   - id: micro-behaviors/os/com/automation::wscript-shell-literal
   - id: micro-behaviors/data/control-flow/dispatch::run-zero-style-argument
-
-- id: junk-appended-vbs-execute-loader
-  desc: Junk-appended VBScript Execute loader
-  crit: hostile
-  conf: 0.96
-  attack: T1027,T1059.005
-  for: [vbs, rar, zip, tar]
-  scope: outer
-  all:
-  - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-statement
-  - id: objectives/anti-static/obfuscation/string/junking::dense-variable-string-appends
 
 - id: generated-vbs-variable-run-loader
   desc: Generated-name WSH runs a variable
@@ -446,3 +419,22 @@ composite_rules:
   any:
   - id: micro-behaviors/fs/write/file/stream::savetofile-method-token
   - id: micro-behaviors/fs/write/stream::wsh-savetofile
+- id: vbs-msxml-stream-executeglobal
+  desc: MSXML Base64 stream feeds ExecuteGlobal
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1059.005,T1140
+  all:
+  - id: micro-behaviors/data/codec::msxml-base64-type-and-value
+  - id: micro-behaviors/fs/write/stream::adodb-stream-progid
+  - id: micro-behaviors/process/interpreter/eval/direct::executeglobal-variable
+- id: numeric-array-chr-execute-loader
+  desc: VBScript executes code rebuilt from a numeric array
+  crit: hostile
+  conf: 0.96
+  attack: T1027,T1059.005
+  all:
+  - id: micro-behaviors/data/decode/charset::vbs-numeric-array-literal
+  - id: micro-behaviors/data/decode/charset::vbs-chr-array-element-minus-key
+  - id: micro-behaviors/data/string/conversion::vb-chr-function-reference
+  - id: micro-behaviors/process/interpreter/eval/direct::vbs-execute-statement

@@ -6,15 +6,6 @@ defaults:
   mbc: B0032
   attack: T1027
 traits:
-  - id: python-octal
-    desc: Detects octal-encoded string patterns (\NNN
-    crit: component
-    conf: 0.7
-    for:
-      - python
-    if:
-      type: string_literal
-      regex: (\\[0-7]{3}){4,}
   - id: python-chr
     desc: Character code manipulation (chr/ord)
     crit: suspicious
@@ -23,20 +14,23 @@ traits:
       type: text
       regex: \\b(chr|ord)\(
   - id: concatenated-execution--g1
-    desc: String-concat arg to exec/eval/compile
+    desc: Literal-only source concat for exec/eval/compile
     crit: suspicious
     conf: 0.85
     for: [python]
     if:
       type: tree-sitter
-      kind: call
-      # Building an import statement for a dynamically selected module is normal
-      # runtime loading, not obfuscation. Exclude the canonical
-      # exec("from module import ...") construction pattern directly from the
-      # call matcher so other concatenated source execution remains visible.
-      regex: '(^|[^.\w])(exec|eval|compile)\s*\(\s*[''"][^''"]{0,80}[''"]\s*\+\s*[''"]'
-    not:
-      - regex: '\bexec\s*\(\s*[''"]from\s+[\w.]+\s+import\b'
+      # Inspect the complete first argument. A quoted method receiver, as in
+      # compile("def policy():\n" + "\n".join(body), ...), is not a second
+      # literal operand. Readable prefixes joined to generated source do not
+      # establish concealment. Keep chains of two or more literal fragments.
+      query: |
+        ((call
+          function: (identifier)
+          arguments: (argument_list . (binary_operator) @source)) @call
+          (#match? @call "^(exec|eval|compile)\\s*\\(")
+          (#match? @source "^(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')(\\s*\\+\\s*(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'))+$")
+          (#not-match? @call "^exec\\s*\\(\\s*['\"]from\\s+[\\w.]+\\s+import\\b"))
     unless:
       # Build DSLs construct a lambda from declared argument names and a
       # readable expression body. That is dynamic evaluation, but the explicit
@@ -50,6 +44,7 @@ traits:
       - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
       - id: well-known/lib/stdlib/python-stdlib::python-stdlib-test-file
       - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/package/testing/presence/harness::python-test-file
   - id: concatenated-execution--g2
     desc: String-concat arg to b64decode
     crit: suspicious
@@ -82,12 +77,17 @@ traits:
       # numpy's byte-order doctest builds chr(0) + chr(1) + chr(3) + chr(2).
       - regex: '^chr\s*\(\s*\d\s*\)(\s*\+\s*chr\s*\(\s*\d\s*\)){3,}$'
     unless:
+    - id: metadata/package/documentation/security-testing::fenced-security-methodology-skill
     - type: basename
       regex: (?i)^(test_.*|.*_test(?:_.*)?)\.(py|go)$
     - id: metadata/file/naming::test-directory-component
     - id: well-known/tool/sysadmin/mercurial::mercurial-package-path
     - id: well-known/tool/offensive/xalgorix::repository-member-path
     - id: well-known/tool/offensive/exploitdb::published-script-wrapper
+    # chr() chains inside a stored agent transcript or benchmark record are
+    # recorded exercise code, not this file's string concealment.
+    - id: micro-behaviors/data/llm/agent::agent-trajectory-record-context
+    - id: metadata/package/testing/harness/runtime::benchmark-task-agent-record
   - id: dense-octal-escapes
     desc: Dense octal escape sequences
     crit: suspicious
@@ -96,8 +96,7 @@ traits:
       - pyc
     per_kb_min: 2.0
     if:
-      type: text
-      regex: (\\[0-7]{3}){4,}
+      id: metadata/lang/encoding::python-octal-escape-literal
     unless:
       - type: basename
         regex: (?i)^(test_.*|.*_test)\.py$
@@ -114,6 +113,11 @@ traits:
       # Shifts are ordinary byte-order parsing (struct/sound/protocol readers),
       # not string concealment. Keep transformations used to decode characters.
       regex: '\bord\s*\([^\)\n]{0,120}\)\s*(\^|[+\-*/%])'
+    not:
+      # Alphabet anchoring decodes nothing: chr(ord('a')+col) names a
+      # coordinate base, while decode arithmetic transforms variable input.
+      # Filter only this match; other ord() uses in the file must still fire.
+      - regex: '^ord\s*\(\s*[\x27"][^\x27"\n][\x27"]\s*\)'
     unless:
       - type: basename
         regex: (?i)^(test_.*|.*_test)\.py$
@@ -205,8 +209,8 @@ composite_rules:
     desc: Detects encoded string patterns (hex
     crit: component
     any:
-      - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
-      - id: python-octal
+      - id: metadata/lang/encoding::js-dense-hex-escapes
+      - id: metadata/lang/encoding::python-octal-escape-literal
   - id: obfuscated-execution
     for: [python]
     desc: Direct execution of encoded string

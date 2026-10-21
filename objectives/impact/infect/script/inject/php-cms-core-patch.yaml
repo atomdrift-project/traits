@@ -5,24 +5,8 @@ defaults:
   mbc: B0030
 
 traits:
-  # `str_replace('function wp_is_mobile()', $payload . 'function wp_is_mobile()', $src)`
-  # -- the victim file's own source is rewritten so that attacker code lands
-  # immediately beside an existing declaration. Editing another program's
-  # source around its declarations is what a patcher does, so these atoms stay
-  # suspicious; the composites below supply the "and the target is a CMS core
-  # file it located through the live web root" context.
-  - id: str-replace-function-declaration
-    desc: Rewrites source around a function declaration
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: text
-      regex: 'str_i?replace\s*\(\s*[''"]\s*function\s+[^''"]{1,80}[''"]\s*,\s*[^,\r\n]{1,200}'
-    not:
-      - regex: ',\s*[''"]\s*[''"]'
-    unless:
-      - id: metadata/package/testing/harness/unit/
-      - id: metadata/build/
+  # Literal function-text replacement is a neutral metaprogramming operation.
+  # The composite below adds the CMS target and read/write context.
   - id: preg-replace-declaration
     desc: Regex-rewrites a source declaration
     crit: suspicious
@@ -78,39 +62,9 @@ composite_rules:
       - id: micro-behaviors/fs/read/file/full::file-get-contents
       - id: micro-behaviors/fs/write/file/full::php-file-put-contents
     any:
-      - id: str-replace-function-declaration
+      - id: micro-behaviors/metaprogramming/generation::php-function-text-replace
       - id: preg-replace-declaration
       - id: metadata/lang/encoded/base64::base64-script-function-definition
     unless:
       - id: metadata/package/testing/harness/unit/
       - id: well-known/lib/runtime/scripted/php-runtime::source-tree
-
-  # Anti-forensics: capture the victim's mode and mtime, rewrite it, then put
-  # both back so neither `ls -l` nor a file-integrity scan shows a change.
-  # Legitimate mtime-preserving code copies between *different* files; this
-  # shape restores the metadata of the file it just overwrote.
-  - id: php-stealth-file-rewrite
-    desc: PHP hides an in-place file rewrite
-    crit: hostile
-    conf: 0.95
-    attack: T1070.006
-    near_bytes: 512
-    all:
-      - id: micro-behaviors/fs/file/timestamp::php-filemtime-call
-      - id: micro-behaviors/fs/file/timestamp::php-touch-restores-captured-mtime
-      - id: micro-behaviors/fs/write/file/full::php-file-put-contents
-    any:
-      - id: micro-behaviors/fs/file/stat::fileperms-call
-      - id: micro-behaviors/fs/chmod/modify::chmod-call
-    unless:
-      - id: metadata/package/testing/harness/unit/
-      - id: well-known/lib/runtime/scripted/php-runtime::source-tree
-      # Symfony's own Filesystem component wraps copy/touch/write/chmod as
-      # its public API across separate methods: the legs co-occur without
-      # any in-place rewrite being hidden. The package-doc marker only
-      # appears in Symfony's own component files, never in app code.
-      - id: well-known/lib/web/symfony::symfony-framework
-      # Snapshot/restore integrity monitors touch the snapshot file, not the
-      # rewritten live file, and report the restore: declared recovery, not
-      # a hidden rewrite.
-      - id: well-known/app/publishing/wordpress-plugins/security::snapshot-restore-context

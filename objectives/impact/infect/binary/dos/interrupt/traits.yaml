@@ -60,6 +60,21 @@ traits:
     if:
       type: hex
       pattern: "B4 3F [0-16] CD ~21"
+    unless:
+      - id: micro-behaviors/fs/write/file/handle::dos-com-self-image-handle-write
+
+  # An EXEC handler can overwrite the launched COM image from its own code
+  # segment: MOV AH,40h / PUSH CS; POP DS / set a short transfer length /
+  # invoke the private DOS dispatcher. The paired open, read, and seek traits
+  # below establish that this write targets the launched file at offset zero.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-write-own-image-start-private-int
+    for: [dos_com, static-lib, data]
+    desc: DOS writes code via a private interrupt
+    crit: notable
+    conf: 0.94
+    if:
+      type: hex
+      pattern: "B4 40 0E 1F B1 ?? CD ~21"
   - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-indirect-ah-call
     for: [dos_com, static-lib, data]
     desc: DOS table-loaded INT 21h call
@@ -163,6 +178,18 @@ traits:
     if:
       type: hex
       pattern: "80 FC 4E 72 ?? 80 FC 4F 77"
+  # CMP AH,02h filters disk reads; a 16-bit ES-buffer compare against a
+  # fixed marker gates a REP MOVSB overwrite of the just-read sector
+  # (IntLock checks two such markers). Chained calls and moves between the
+  # filter, the compare and the copy vary, so those spans are bounded.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-int13-read-gated-block-copy
+    for: [dos_com, static-lib, data]
+    desc: Disk-read check gates block copy
+    crit: notable
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "80 FC 02 (74|75) ?? [0-32] 26 81 ?? ?? ?? ?? ?? (74|75) ?? [0-32] F3 A4"
   - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-xor-find-first
     for: [dos_com, static-lib, data]
     desc: DOS find-first with XOR service number
@@ -224,6 +251,17 @@ traits:
     if:
       type: hex
       pattern: "B8 ?? ?? [0-6] 35 ?? ?? [0-8] CD 21"
+  # Flag-register form (SillyOE.100): no MOV AH,imm at all. LAHF materializes
+  # the service number from the flags, ADD AH,imm fixes it up, and the call
+  # follows within the normal setup span. Straight-line code loads AH first.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-lahf-add-masked-ah
+    for: [dos_com, static-lib, data]
+    desc: DOS service masked by LAHF/ADD
+    crit: notable
+    conf: 0.85
+    if:
+      type: hex
+      pattern: "9F [0-4] 80 C4 ?? [0-8] CD 21"
 
   # The handle an open/create returns in AX moves to BX, a length goes to
   # CX, and a second INT 21h follows: a sized read or write on the file just
@@ -309,6 +347,34 @@ traits:
       type: hex
       pattern: "3C CD 74 ?? [0-24] 3C 21 75 ?? 2E 88"
 
+  # CMP AH,3Eh (close), rewind, write the image, all through a private INT.
+  - id: dos-close-private-image-write
+    for: [dos_com, static-lib, data]
+    desc: Close hook rewinds then overwrites
+    crit: notable
+    conf: 0.96
+    if:
+      type: hex
+      pattern: "80 FC 3E 75 ?? [0-16] B8 00 42 [0-8] CD ~21 [0-12] B4 40 CD ~21"
+  # CMP AH,41h (unlink), open for update, write image, all through a private INT.
+  - id: dos-unlink-private-image-write
+    for: [dos_com, static-lib, data]
+    desc: Delete hook overwrites via private INT
+    crit: notable
+    conf: 0.96
+    if:
+      type: hex
+      pattern: "80 FC 41 75 ?? [0-16] B8 02 3D [0-8] CD ~21 [0-16] B4 40 [0-8] CD ~21"
+  # AX=25FFh publishes the private gate, then AL=21h / INT FF sets INT 21h,
+  # or AX=2521h sets INT 21h and AL=FFh sets the private gate.
+  - id: dos-set-intff-alias-int21
+    for: [dos_com, static-lib, data]
+    desc: Installs INT 21h through INT FFh
+    crit: notable
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "F3 A4 [0-16] (B8 FF 25 CD 21 [0-8] B0 21 CD ~21|B8 21 25 CD 21 [0-8] B0 FF CD 21)"
 
 composite_rules:
   - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-masked-service-calls
@@ -321,6 +387,8 @@ composite_rules:
       - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-sub-masked-ah
       - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-add-masked-ah
       - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-xor-masked-ax
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-lahf-add-masked-ah
+      - id: micro-behaviors/fs/search::dos-int21-find-first-inc-ah
     needs: 2
 
   # Trivial.23's carry loop: find-first, create-truncate, write-handle setup,
@@ -390,6 +458,18 @@ composite_rules:
     unless:
     - id: micro-behaviors/fs/write/file/handle::dos-encrypted-body-append-header-redirect
 
+  # Low-memory vector installation co-occurs with an E9 write-filter body.
+  # The matcher does not bind the installed address to the filter. Damaged
+  # bodies can retain both profiles while installing an invalid target.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-e9-write-hook-infector
+    desc: DOS vector-install and E9 infection-filter code
+    crit: hostile
+    conf: 0.96
+    for: [dos_com, data]
+    all:
+      - id: micro-behaviors/os/msdos/interrupt::dos-low-copy-vector-store
+      - id: micro-behaviors/os/msdos/interrupt::dos-int21-e9-write-trigger
+
   - id: objectives/impact/infect/binary/dos/interrupt::dos-create-hook-com-infector
     for: [dos_com, static-lib, data]
     desc: DOS resident create hook writes its image to COM files
@@ -451,6 +531,21 @@ composite_rules:
       - id: objectives/impact/infect/binary/dos/interrupt::dos-read-private-int
       - id: micro-behaviors/os/msdos/interrupt::dos-ah40-private-interrupt
 
+  # Tiny COM infectors may rewrite the launched file from offset zero instead
+  # of appending a body and installing an entry jump. The write sequence
+  # switches DS to CS and supplies its own transfer length before dispatch.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-private-int-exec-own-image-overwriter
+    for: [dos_com, static-lib, data]
+    desc: DOS EXEC hook overwrites launched files with its image
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: micro-behaviors/os/msdos/interrupt::dos-int21-exec-intercept
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-open-update-private-int
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-read-private-int
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-seek-start-private-int
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-write-own-image-start-private-int
+
   # COM appender patch pass on an already-open handle: read the host's
   # first bytes, append the body at EOF, rewind, write the entry jump, and
   # restore the timestamp. Encrypted infectors often hide only the open.
@@ -494,6 +589,29 @@ composite_rules:
     all:
       - id: objectives/impact/infect/binary/dos/interrupt::dos-int13-vector-swap
       - id: micro-behaviors/fs/write/file/handle::dos-write-dispatch
+  # IntLock installs its own INT 13h handler, filters disk reads for fixed
+  # markers, and overwrites the just-read sector when one matches. Ordinary
+  # disk caches compare request tags, never ES-buffer content for magic.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-int13-read-tamper-hook
+    desc: Disk hook tampers read buffers
+    crit: hostile
+    conf: 0.95
+    for: [dos_com, data]
+    all:
+      - id: micro-behaviors/os/msdos/interrupt::dos-int13-vector-get-then-set
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-int13-read-gated-block-copy
+  # The same hook made resident: the vector install plus the read tamper
+  # plus staying memory-resident via INT 27h. Resident disk caches never
+  # rewrite read buffers on fixed content markers.
+  - id: objectives/impact/infect/binary/dos/interrupt::dos-int13-resident-read-tamperer
+    desc: Resident disk hook rewrites read data
+    crit: hostile
+    conf: 0.96
+    for: [dos_com, data]
+    all:
+      - id: micro-behaviors/os/msdos/interrupt::dos-int13-vector-get-then-set
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-int13-read-gated-block-copy
+      - id: micro-behaviors/os/msdos/interrupt::dos-tsr-keep-int27
 
   - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-search-hook-hides-appended-body
     for: [dos_com, static-lib, data]
@@ -575,12 +693,14 @@ composite_rules:
     - data
     size_max: 1048576
     all:
-    - id: micro-behaviors/fs/write/file/handle::dos-image-or-extension-patched-file-write
     - id: micro-behaviors/fs/search::dos-int21-find-first-call
     - id: micro-behaviors/fs/file/open::dos-int21-open-or-create-call
     - id: micro-behaviors/fs/write/file/handle::dos-int21-write-call
     - id: objectives/impact/infect/binary/dos/file::dos-host-altering-write-admission
     any:
+    - id: micro-behaviors/fs/write/file/handle::dos-image-or-extension-patched-file-write
+    - id: objectives/impact/infect/binary/dos/file::dos-relocated-append-infector
+    - id: objectives/impact/infect/binary/dos/interrupt::dos-com-ret-checked-body-append
     - id: micro-behaviors/fs/search::dos-executable-compatible-wildcard
     - id: micro-behaviors/fs/search::dos-int21-find-next-jump
     - id: micro-behaviors/fs/search::dos-int21-find-next
@@ -614,5 +734,40 @@ composite_rules:
     all:
       - id: objectives/impact/infect/binary/dos/interrupt::dos-int21-find-handle-range
       - id: objectives/impact/infect/binary/dos/file::dos-dta-size-hide-es-bx
+
+  - id: dos-close-alias-overwriter
+    for: [dos_com, static-lib, data]
+    desc: Close hook overwrites via private INT
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: dos-close-private-image-write
+      - id: micro-behaviors/fs/write/file/handle::dos-aliased-int-write
+      - id: dos-seek-start-private-int
+  - id: dos-resident-close-alias-overwriter
+    for: [dos_com, static-lib, data]
+    desc: Resident close hook overwrites files
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: dos-close-private-image-write
+      - id: dos-set-intff-alias-int21
+  - id: dos-unlink-alias-overwriter
+    for: [dos_com, static-lib, data]
+    desc: Delete hook overwrites via private INT
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: dos-unlink-private-image-write
+      - id: micro-behaviors/fs/write/file/handle::dos-aliased-int-write
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-open-update-private-int
+  - id: dos-resident-unlink-alias-overwriter
+    for: [dos_com, static-lib, data]
+    desc: Resident delete hook overwrites files
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: dos-unlink-private-image-write
+      - id: dos-set-intff-alias-int21
 
 

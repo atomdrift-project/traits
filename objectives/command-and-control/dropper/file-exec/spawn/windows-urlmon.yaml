@@ -40,57 +40,6 @@ composite_rules:
   downgrade:
     any:
     - id: metadata/signed/platform/
-- id: ini-configured-urlmon-winexec-dropper
-  desc: INI-configured URLMon downloader executes payload
-  crit: hostile
-  conf: 0.97
-  attack: T1105,T1106
-  size_max: 131072
-  all:
-  - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
-  - id: micro-behaviors/process/create/exec::winexec
-  - id: micro-behaviors/fs/config/system::read-private-profile-ansi
-  - id: metadata/signed/trust-level::unsigned-missing-signature-record
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
-  - id: well-known/tool/
-- id: direct-ip-urlmon-wininet-exec-dropper
-  desc: Direct-IP URLMon WinInet execute dropper
-  crit: hostile
-  conf: 0.97
-  size_max: 524288
-  all:
-  - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
-  - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
-  any:
-  - id: micro-behaviors/process/create/spawn::create-process-w
-  - id: micro-behaviors/process/create/exec::create-process-a
-  - id: micro-behaviors/process/create/shell/spawn::win-shellexecute
-  - id: micro-behaviors/process/create/shellexec::shell-execute
-  needs: 1
-  unless:
-  - id: metadata/binary/installer/family/
-  - id: metadata/binary/installer/script/
-  - id: metadata/binary/resource/identity::pe-version-resource
-- id: browser-ua-direct-ip-payload-dropper
-  desc: Browser-impersonating direct-IP payload dropper
-  crit: hostile
-  conf: 0.97
-  size_max: 524288
-  all:
-  - id: direct-ip-urlmon-wininet-exec-dropper
-  - id: objectives/command-and-control/channel/http-beacon::chrome-spoof-user-agent-pe
-  any:
-  - id: objectives/anti-analysis/debugger-detect/check::debugger-api
-  - id: objectives/anti-analysis/timing/evasion::timing-delta-check
-  - id: micro-behaviors/fs/delete/file/library::deletefile-w
-  needs: 1
-  unless:
-  - id: metadata/binary/installer/family/
-  - id: metadata/binary/installer/script/
-  - id: metadata/binary/resource/identity::pe-version-resource
-  # URLDownloadToFile + memory execution (urlmon-based dropper)
 - id: urlmon-embedded-pe-exec-dropper
   desc: URLMon embedded payload execution dropper
   crit: hostile
@@ -117,11 +66,11 @@ composite_rules:
   size_max: 524288
   all:
   - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
-  - id: micro-behaviors/process/create/system::shell-execute-ex-a
+  - id: micro-behaviors/process/create/shellexec::win-shellexecute
   - id: metadata/binary/symbols/imports::pe-imports-max-80
   any:
   - id: micro-behaviors/communications/http/client/wininet::internet-open
-  - id: micro-behaviors/communications/http/client/wininet::wininet-dll-name-reference
+  - id: micro-behaviors/fs/path/library::wininet-dll-name-reference
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   needs: 2
   unless:
@@ -138,7 +87,7 @@ composite_rules:
   - id: micro-behaviors/os/privilege/manifest::require-administrator
   - id: metadata/signed/trust-level::unsigned
   any:
-  - id: metadata/hardening/memory::wx-section
+  - id: metadata/binary/section/permission::wx-section
   - id: micro-behaviors/time/sleep/interval::sleep-dup
   unless:
   - id: metadata/binary/resource/identity::pe-version-resource
@@ -151,8 +100,11 @@ composite_rules:
   size_max: 524288
   all:
   - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
-  - id: micro-behaviors/process/create/system::shell-execute-ex-a
-  - id: metadata/binary/section/label::upx-section-pair
+  - id: micro-behaviors/process/create/shellexec::win-shellexecute
+  # Require an actual decompressor stub. UPX labels in a reconstructed image
+  # do not establish a live packer, renamed sections, or payload execution.
+  - id: metadata/binary/section/header::pe-entry-in-writable-section
+  - id: well-known/dual-use/packaging/upx::upx-x86-pe-entry-stub
   any:
   - id: micro-behaviors/communications/http/client/wininet::internet-open
   - id: micro-behaviors/mem/protect/modify::virtual-protect
@@ -164,21 +116,23 @@ composite_rules:
   unless:
   - id: metadata/binary/resource/identity::pe-version-resource
   - id: metadata/binary/installer/family/
-- id: multi-pe-urlmon-download-carrier
-  desc: Multi-embedded PE carrier with URLMon download API
+  # A loader config block that names URLDownloadToFileA beside a bare WinExec
+  # string with neither imported: both APIs resolve dynamically, so every
+  # import-gated downloader rule goes dark while the binary still fetches
+  # cleartext executables (here five numbered payloads with svchost-mimic
+  # drop names). No size bound: the block rides in large bundles too.
+- id: dynamic-urlmon-winexec-exe-dropper
+  desc: Dynamically-resolved URLMon download and WinExec dropper
   crit: hostile
-  conf: 0.96
-  attack: T1105,T1027.009
-  size_max: 524288
+  conf: 0.95
+  # The download API, the unimported WinExec name, the cleartext
+  # executable URL, and the address are one loader config. File-wide
+  # co-occurrence treats an address in a later payload as this loader's.
+  near_bytes: 32768
   all:
-  - id: metadata/binary/layout/embedded::embedded-pe-three-plus
-  - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file-str
-  - id: metadata/signed/trust-level::unsigned-missing-signature-record
-  any:
-  - id: micro-behaviors/process/create/launch::create-process-api-name
-  - id: micro-behaviors/dylib/lookup::get-proc-address-import
-  - id: micro-behaviors/communications/http/client/urlmon::urlmon-dll-reference
-  needs: 1
+  - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
+  - id: micro-behaviors/os/api-resolution/dynamic::winexec-resolved-name
+  - id: micro-behaviors/communications/http/download/url::cleartext-executable-url-reference-pe
+  - id: micro-behaviors/communications/ip/literal::external-ipv4-shaped-text-binary
   unless:
   - id: metadata/binary/installer/family/
-  - id: metadata/binary/framework::dotnet-metadata

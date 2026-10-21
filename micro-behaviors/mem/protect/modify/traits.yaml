@@ -21,14 +21,6 @@ traits:
     unless:
       - id: well-known/lib/development/sanitizer-runtime::sanitizer-runtime-source-path
 
-  - id: page-execute-constant
-    desc: PAGE_EXECUTE protection constant
-    crit: notable
-    conf: 0.8
-    for: [pe, dll]
-    if:
-      type: text
-      substr: PAGE_EXECUTE
   - id: getprocaddress-virtualprotect-source
     desc: Resolves VirtualProtect via GetProcAddress
     crit: notable
@@ -58,7 +50,7 @@ traits:
       kind: call
       regex: '(^|\.)NtProtectVirtualMemory$'
   - id: virtual-protect
-    desc: Modify memory page protection
+    desc: VirtualProtect import for memory page protection
     crit: notable
     conf: 0.95
     mbc: C0021
@@ -99,6 +91,7 @@ traits:
       word: VirtualProtect
     unless:
       - id: virtual-protect
+      - id: metadata/binary/header/malformed::malformed-pe-structure
       - type: export
         exact: VirtualProtect
   - id: vr-virtual-protect-string
@@ -114,7 +107,10 @@ traits:
     desc: VirtualProtect API string reference
     crit: notable
     conf: 0.9
-    for: [javascript]
+    for:
+    - javascript
+    - lua
+    - html
     if:
       type: text
       word: VirtualProtect
@@ -140,20 +136,6 @@ traits:
       type: symbol
       kind: call
       regex: '(^|\.)VirtualAllocEx$'
-  - id: virtualprotect-rwx-stack-arg-x86
-    desc: VirtualProtect RWX stack argument
-    crit: notable
-    conf: 0.9
-    attack: T1620
-    arch: [x86]
-    for: [pe, dll]
-    size_max: 5242880
-    if:
-      type: hex
-      section: .text
-      # x86 callers commonly materialize the old-protection out parameter
-      # between PAGE_EXECUTE_READWRITE and the imported thunk.
-      pattern: 'C7 44 24 08 40 00 00 00 [0-32] FF 15 ?? ?? ?? ??'
   - id: virtualprotect-rwx-direct-call-x86
     desc: RWX protection followed by direct call
     crit: suspicious
@@ -233,6 +215,16 @@ traits:
       pattern: '66 C7 01 FF 25 ?? ?? ?? ?? 48 89 51'
 
 composite_rules:
+  - id: virtualprotect-rwx-stack-arg-x86
+    desc: VirtualProtect import and 0x40 call argument
+    crit: notable
+    conf: 0.9
+    arch: [x86]
+    for: [pe, dll]
+    size_max: 5242880
+    all:
+      - id: virtual-protect
+      - id: metadata/binary/instruction/operand::x86-call-third-arg-0x40
   - id: virtual-protect-ex-noaccess-source
     desc: Makes remote memory inaccessible
     crit: notable
@@ -264,13 +256,13 @@ composite_rules:
   # PAGE_EXECUTE_* constant in the clear, or a call site whose protection
   # argument is the executable constant. A bare VirtualAlloc/VirtualProtect
   # import pair is deliberately NOT a member -- every JIT and loader has one.
-  - id: executable-memory-staging
-    desc: Stages memory with executable page protection
+  - id: executable-page-protection-evidence
+    desc: Executable-page constant or protection argument
     crit: notable
     conf: 0.9
     for: [pe, dll]
     any:
-      - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite
+      - id: micro-behaviors/mem/protect/constant::page-execute-readwrite
       - id: virtualprotect-rwx-stack-arg-x86
       - id: virtualprotect-rwx-direct-call-x86
       - id: rwx-current-process-arg-call-x86
@@ -291,15 +283,15 @@ composite_rules:
       - id: virtualprotect-executable-read-register-x64
   # These independent observations do not establish a memory transition,
   # data flow into a thread, or remote process injection.
-  - id: rw-rx-constants-protection-thread-apis
-    desc: x64 RW/RX constants coexist with protection and thread-start APIs
+  - id: integer-loads-protection-thread-apis
+    desc: x64 integer loads with protection and thread APIs
     crit: notable
     conf: 0.9
     for: [pe, dll]
     arch: [x86-64]
     all:
-      - id: micro-behaviors/mem/alloc/executable::page-readwrite-arg-x64
-      - id: micro-behaviors/mem/alloc/executable::page-execute-read-arg-x64
+      - id: metadata/binary/instruction/operand::x64-load-r8-r9-04
+      - id: metadata/binary/instruction/operand::x64-load-r8-r9-20
       - id: page-protection-api-x64
       - id: micro-behaviors/process/create/thread::thread-start-api-x64
     unless:

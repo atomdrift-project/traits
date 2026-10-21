@@ -58,37 +58,34 @@ composite_rules:
       - id: micro-behaviors/os/package-manager/sideload::android-package-installer-session-mode
       - id: micro-behaviors/os/package-manager/sideload::android-packageinstaller-open-write
 
-  # Some privileged droppers skip the VPN and go straight at the store: they
-  # disable the Play Store package, drive a full PackageInstaller session for
-  # a payload the store never saw, forge the installer identity so the
-  # sideload reads as store-installed, and re-enable the store afterwards.
-  # No legitimate updater disables the store to install something, and the
-  # forged attribution is only useful to mislead provenance checks, so the
-  # full combination is a hostile install-hiding technique rather than four
-  # ordinary PackageManager calls.
-  - id: android-store-disable-silent-install-dropper
-    desc: Dropper disables the store to silently install a forged payload
-    attack: T1631,T1562.001
-    all:
-      - id: micro-behaviors/os/package-manager/management::android-store-app-disable-call
-      - id: micro-behaviors/os/application/target::android-play-store-package-literal
-      - id: micro-behaviors/os/package-manager/sideload::android-programmatic-apk-install
-      - id: micro-behaviors/os/package-manager/management::android-installer-identity-spoof-call
-  # A shell disable/enable bracket around an APK session write. These legs
-  # cannot tell the system-wide `pm disable` Play Protect blinding used by
-  # preinstalled droppers from the per-user `disable-user --user N` form that
-  # managed provisioning uses to suppress the store for one user around a
-  # staged install, so the bracket alone stays suspicious; the hostile claim
-  # for the system-wide form is carried by the file-exec composite that also
-  # requires the non-user-scoped disable literal.
+  # Disabling Play Store around a staged PackageInstaller session suppresses
+  # store-side install scanning. Installer attribution is not required: the
+  # disable/install/restore sequence is the behavior, whether or not the
+  # installer also forges Play Store as the installer identity.
   - id: android-store-disable-install-restore
-    desc: APK write near Play Store disable/enable commands
-    crit: suspicious
+    for: [java]
+    desc: Disables Google Play around a staged APK install
+    crit: hostile
     all:
-    - id: micro-behaviors/os/package-manager/management::android-play-store-disable-command
-    - id: micro-behaviors/os/package-manager/management::android-play-store-enable-command
-    - id: micro-behaviors/process/create/shell/interpreter::jvm-processbuilder-sh-command-start
-    - id: micro-behaviors/os/package-manager/sideload::android-apk-session-commit
-    - id: micro-behaviors/os/package-manager/sideload::android-store-disable-before-apk-write
+      - id: micro-behaviors/os/package-manager/management::android-play-store-disable-command
+      - id: micro-behaviors/os/package-manager/management::android-play-store-enable-command
+      - id: micro-behaviors/os/package-manager/sideload::android-apk-session-commit
+      - id: micro-behaviors/os/package-manager/sideload::android-store-disable-before-apk-write
+      - id: micro-behaviors/os/package-manager/sideload::android-store-enable-after-apk-commit
+    near_bytes: 1800
+    attack: T1629.003
+
+  # Disabling the Play Store while a staged APK is written and committed
+  # prevents its install-time verification from running. Requiring the later
+  # re-enable ties the package-state change to the install window, without
+  # depending on a forged installer attribution claim.
+  - id: android-store-disabled-during-apk-install
+    desc: Disables Google Play during a staged APK install to evade verification
+    crit: hostile
+    all:
+      - id: micro-behaviors/os/package-manager/management::android-play-store-disable-command
+      - id: micro-behaviors/os/package-manager/sideload::android-store-disable-before-apk-write
+      - id: micro-behaviors/os/package-manager/sideload::android-apk-session-commit
+      - id: micro-behaviors/os/package-manager/sideload::android-store-enable-after-apk-commit
     near_bytes: 1800
     attack: T1629.003

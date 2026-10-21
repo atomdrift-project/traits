@@ -22,6 +22,7 @@ traits:
       - id: metadata/file/format/
       - id: metadata/lang/locale::js-locale-registration-module
       - id: metadata/lang/locale::moment-legacy-locale-fallback
+      - id: metadata/file/catalog/pattern-rules::secret-pattern-catalog-known-benign-context
   - id: international-script-obfuscation
     desc: Dense international-script letter payload
     crit: component
@@ -38,6 +39,7 @@ traits:
       - id: metadata/file/format/
       - id: metadata/lang/locale::js-locale-registration-module
       - id: metadata/lang/locale::moment-legacy-locale-fallback
+      - id: metadata/file/catalog/pattern-rules::secret-pattern-catalog-known-benign-context
   - id: mixed-unicode-blocks
     desc: Mixed Unicode block obfuscation
     crit: suspicious
@@ -74,6 +76,37 @@ traits:
       regex: '\.split\(\s*["''][^\x00-\x7F]{4,}["'']\s*\)\s*\.join\(\s*["'']["'']\s*\)'
     unless:
       - id: metadata/build/
+  - id: js-nonascii-replace-cleanup
+    desc: Non-ASCII marker replace cleanup
+    crit: suspicious
+    conf: 0.9
+    attack: T1027.002
+    for: [javascript, html]
+    if:
+      type: text
+      # The gap before the marker may not open a character class: a run of
+      # non-ASCII punctuation or numerals inside [...] (fullwidth ，。；
+      # ：, CJK 一二三 enumeration marks) is an i18n character class in a
+      # text-cleaning regex, not an inserted marker sequence. Count code
+      # points, not bytes: SSE/JSON parsers strip a BOM written as the
+      # escape `\xEF\xBB\xBF`, which decodes to three Latin-1 characters.
+      # Letters after the non-ASCII run are a labeled pattern (a Chinese
+      # config header), not a marker being stripped. The run has to end
+      # the regex body, or only punctuation may follow it. ASCII-only
+      # exclusion still matches Cyrillic letters, so word alternations are
+      # dropped below instead of widening this class (that blows the NFA).
+      regex: '\.replace\(/[^/\n\[]{0,40}\P{ASCII}{4,}[^/\nA-Za-z]{0,8}/[a-z]*\s*,\s*["'']{2}\)'
+    unless:
+      # The dedicated conceal trait owns pure non-ASCII delimiter matches;
+      # retain this broader matcher for mixed marker expressions.
+      - id: objectives/anti-static/obfuscation/string/conceal::js-nonascii-delimiter-regex-strip
+    # CJK, kana, hangul, and Cyrillic runs are words being stripped from
+    # UI or locale text, not an inserted marker sequence. Cyrillic stays
+    # in the filter rather than the matcher: \p{L} in the counted class
+    # exceeds the NFA budget.
+    not:
+      - regex: '[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]{2}'
+      - regex: '[а-яА-ЯёЁіїєґІЇЄҐ]{2}'
   - id: js-unicode-delimited-appdomain-fragment
     desc: Unicode-delimited AppDomain token fragment
     crit: component
@@ -81,7 +114,10 @@ traits:
     for: [javascript, html, vbs]
     if:
       type: text
-      regex: 'A\P{ASCII}[\P{ASCII}A-Za-z]{7,23}p\P{ASCII}[\P{ASCII}A-Za-z]{7,23}p'
+      # Some loaders insert the same multi-codepoint non-ASCII marker between
+      # every character. Match the start of AppDomain across that marker rather
+      # than requiring a single separator and an arbitrary intervening token.
+      regex: 'A\P{ASCII}{4,32}p\P{ASCII}{4,32}p\P{ASCII}{4,32}D'
   - id: js-unicode-delimited-base64-fragment
     desc: Unicode-delimited Base64 decoder fragment
     crit: component
@@ -89,7 +125,9 @@ traits:
     for: [javascript, html, vbs]
     if:
       type: text
-      regex: 'F\P{ASCII}[\P{ASCII}A-Za-z]{7,23}r\P{ASCII}[\P{ASCII}A-Za-z]{7,23}o'
+      # Match `From` when each character is separated by a repeated Unicode
+      # marker, including multi-codepoint markers.
+      regex: 'F\P{ASCII}{4,32}r\P{ASCII}{4,32}o'
   - id: mixed-ascii-unicode
     desc: Mixed ASCII and Unicode-letter obfuscation
     crit: component
@@ -118,13 +156,6 @@ traits:
     if:
       type: text
       substr: moment.locale
-  - id: i18n-basename
-    desc: Internationalization file
-    crit: baseline
-    if:
-      type: path
-      basename: true
-      substr: i18n
   - id: l10n-basename
     desc: Localization file
     crit: baseline
@@ -132,13 +163,6 @@ traits:
       type: path
       basename: true
       substr: l10n
-  - id: locale-basename
-    desc: Locale file
-    crit: baseline
-    if:
-      type: path
-      basename: true
-      substr: locale
   - id: locales-directory
     desc: Locales directory path
     crit: baseline
@@ -180,6 +204,7 @@ composite_rules:
       - id: mjsunit-basename
       - id: unicode-test-basename
       - id: metadata/package/testing/harness/runtime/
+      - id: metadata/file/catalog/pattern-rules::secret-pattern-catalog-known-benign-context
     all:
       - id: unicode-string-concatenation
       - id: mixed-unicode-blocks
@@ -196,7 +221,9 @@ composite_rules:
       - id: metadata/file/format/
       - id: metadata/lang/locale::cjk-ui-prose-source
       - id: metadata/lang/locale::japanese-prose-source
+      - id: metadata/lang/locale::js-quoted-string-dictionary
       - id: metadata/build/
+      - id: metadata/file/catalog/pattern-rules::secret-pattern-catalog-known-benign-context
     all:
       - id: dense-non-ascii
       - id: mixed-ascii-unicode
@@ -212,6 +239,7 @@ composite_rules:
       - id: metadata/file/format/
       - id: metadata/lang/locale::cjk-ui-prose-source
       - id: metadata/lang/locale::japanese-prose-source
+      - id: metadata/file/catalog/pattern-rules::secret-pattern-catalog-known-benign-context
     all:
       - id: international-script-obfuscation
       - id: unicode-string-concatenation
@@ -225,9 +253,9 @@ composite_rules:
       - id: moment-locale-lib
       - id: moment-locale-ref
       - id: micro-behaviors/data/format/locale::js-locale-formatting-call
-      - id: i18n-basename
+      - id: metadata/file/naming::i18n-basename
       - id: l10n-basename
-      - id: locale-basename
+      - id: metadata/file/naming::locale-basename
       - id: locales-directory
       - id: languages-basename
   - id: unicode-delimited-managed-loader-tokens
@@ -239,7 +267,7 @@ composite_rules:
     all:
       - id: js-unicode-delimited-appdomain-fragment
       - id: js-unicode-delimited-base64-fragment
-      - id: metadata/file/data-blob::high-byte-script-text
+      - id: metadata/lang/encoding::non-ascii-script-text
 
   - id: vbs-unicode-delimited-hidden-managed-loader
     desc: Unicode marker conceals a hidden WMI managed payload loader

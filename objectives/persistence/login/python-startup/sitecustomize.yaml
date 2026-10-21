@@ -18,35 +18,6 @@ traits:
     type: text
     regex: '(?i)(\\|/)Lib(\\|/)sitecustomize\.py\b'
 
-- id: is-sitecustomize-file
-  desc: File is named sitecustomize.py
-  # A filename identifies a startup hook but does not establish persistence;
-  # hostile composites require execution or loading behavior.
-  crit: notable
-  conf: 0.95
-  downgrade:
-    any:
-    - id: well-known/tool/development/debug/debugpy
-  if:
-    type: path
-    basename: true
-    exact: sitecustomize.py
-
-- id: usercustomize-path
-  desc: Python usercustomize startup path
-  crit: suspicious
-  conf: 0.94
-  unless:
-    # Tirith startup-hook detectors name the paths they inventory.
-    - id: well-known/tool/detection/tirith::tirith-defensive-scanner-context
-  if:
-    # A string literal, not raw text: docstrings that list
-    # `sitecustomize.py/usercustomize.py` as files a cleanup step removes only
-    # look like a path, they do not name one the program uses.
-    type: literal
-    exclude_docstrings: true
-    regex: '(?i)(\\|/)usercustomize\.py\b'
-
   # --- .pth file abuse ---
 - id: python-pth-file-write
   desc: Python opens a .pth file for writing
@@ -55,15 +26,6 @@ traits:
   if:
     type: text
     regex: 'open[^n\n]{0,120}\.pth[^h\n]{0,30}["'']w["'']'
-
-- id: telemetry-initializer-import
-  desc: Telemetry, analytics, or metrics module import
-  crit: notable
-  conf: 0.86
-  for: [python, shell]
-  if:
-    type: text
-    regex: '(?mi)^\s*import\s+_?(telemetry|analytics|metrics)[A-Za-z0-9_]*\b'
 
 - id: pth-exec-open-read-line
   desc: .pth executes Python file content
@@ -113,23 +75,6 @@ traits:
     regex: '\w{4,}\.dll\b'
 
   # --- PYTHONSTARTUP env var ---
-- id: pythonstartup-env
-  desc: PYTHONSTARTUP environment variable reference
-  crit: notable
-  conf: 0.92
-  unless:
-  - id: metadata/package/testing/presence/harness/
-  - type: basename
-    exact: site.py
-  - id: objectives/anti-static/obfuscation/eval/scripting/decode::cpython-run-startup
-  - id: well-known/lib/web/pallets-flask::flask-cli-module-path
-  - id: well-known/lib/runtime/scripted/pallets-click::pallets-click-library
-  - id: well-known/lib/web/django::django-web-framework-package
-  - id: "metadata/file/naming::test-directory-component"
-  if:
-    type: text
-    regex: '(os\.getenv|os\.environ(\.get|\[))[^\n]{0,80}PYTHONSTARTUP'
-
 - id: python-pth-write-text
   desc: Writes a .pth file with write_text
   crit: notable
@@ -179,30 +124,12 @@ composite_rules:
   - id: micro-behaviors/process/interpreter/python::pth-filename-string-literal
   - id: python-import-subprocess-popen-string
 
-- id: pth-import-exec
-  desc: Python .pth executes startup import
-  crit: notable
-  conf: 0.95
-  for: [python, shell]
-  # A .pth only becomes an executable startup hook when it carries an
-  # import; path-only entries merely extend sys.path.
-  all:
-  - id: micro-behaviors/process/interpreter/python::pth-path-config-file
-  - id: micro-behaviors/process/interpreter/python::module-import-statement
-  unless:
-  - id: metadata/build/bazel::site-init-pth-import
-  # Vendor DLL-registration .pth (e.g. ibm_db) only extends the loader search
-  # path; not a persistence startup hook.
-  - id: well-known/lib/data/ibm-db::dll-register-pth
-  - id: micro-behaviors/dylib/load/runtime::python-add-dll-directory
-  - id: well-known/lib/runtime/scripted/setuptools::setuptools-official-wheel-context
-
 - id: pth-substantial-b64-literal
   desc: Substantial base64 literal in .pth startup
   crit: notable
   conf: 0.9
   all:
-  - id: pth-import-exec
+  - id: micro-behaviors/process/interpreter/python::pth-startup-import
   - id: substantial-b64-payload-literal
 
 - id: pth-startup-child-process
@@ -218,7 +145,7 @@ composite_rules:
   any:
   - id: micro-behaviors/process/create/subprocess::popen-ast
   - id: micro-behaviors/process/create/subprocess::run-ast
-  - id: micro-behaviors/process/create/popen::os-popen-ast
+  - id: micro-behaviors/process/create/shell/command-mode::python-os-popen-call
   - id: micro-behaviors/process/create/shell/command-mode::python-os-system
 
 - id: python-pth-startup-file-write
@@ -237,7 +164,7 @@ composite_rules:
   attack: T1059.006,T1546
   all:
   - id: pth-substantial-b64-literal
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
+  - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
   - id: micro-behaviors/process/create/subprocess::popen-ast
   - id: micro-behaviors/process/daemonize/detach::python-subprocess-new-session-option
 
@@ -250,9 +177,9 @@ composite_rules:
   conf: 0.97
   attack: T1546.004,T1059.006,T1027
   all:
-  - id: pth-import-exec
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
-  - id: micro-behaviors/process/create/subprocess::sys-executable-c-popen
+  - id: micro-behaviors/process/interpreter/python::pth-startup-import
+  - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
+  - id: micro-behaviors/process/create/eval::sys-executable-c-popen
   - id: micro-behaviors/process/daemonize/detach::python-subprocess-new-session-option
 
 # Import-time Popen in a .pth that also embeds exec(b64decode) is a dropper
@@ -263,8 +190,8 @@ composite_rules:
   conf: 0.96
   attack: T1546.004,T1059.006,T1027
   all:
-  - id: pth-import-exec
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
+  - id: micro-behaviors/process/interpreter/python::pth-startup-import
+  - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
   - id: micro-behaviors/process/create/subprocess::python-module-level-popen
 
 - id: pth-base64-exec-startup
@@ -275,7 +202,7 @@ composite_rules:
   all:
   - id: pth-substantial-b64-literal
   any:
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
+  - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
   - id: objectives/anti-static/obfuscation/control-flow/logic::imported-base64-exec
 
 - id: pth-xor-base64-exec-startup
@@ -284,7 +211,7 @@ composite_rules:
   conf: 0.99
   attack: T1027,T1059.006,T1546.004
   all:
-  - id: pth-import-exec
+  - id: micro-behaviors/process/interpreter/python::pth-startup-import
   - id: objectives/anti-static/obfuscation/encoding/xor::bytewise-xor-base64-exec-loader
 
 - id: pth-telemetry-initializer-import
@@ -293,8 +220,8 @@ composite_rules:
   conf: 0.96
   for: [python, shell]
   all:
-  - id: pth-import-exec
-  - id: telemetry-initializer-import
+  - id: micro-behaviors/process/interpreter/python::pth-startup-import
+  - id: metadata/import/package::python-telemetry-import-text
 - id: sitecustomize-startup-hijack
   desc: Python sitecustomize startup hijack
   crit: hostile
@@ -304,7 +231,7 @@ composite_rules:
   - id: micro-behaviors/process/info/commandline::py-getargcargv
   - id: micro-behaviors/process/interpreter/python::runpy-run-path
   any:
-  - id: micro-behaviors/fs/path/application/executable::pythonw-executable-reference
+  - id: micro-behaviors/fs/path/basename::pythonw-executable-reference
   - id: objectives/anti-static/obfuscation/eval/scripting/host::pythonw-exe-replace-trick
 - id: sitecustomize-argv-loader
   desc: sitecustomize.py with argv-gated loader
@@ -314,26 +241,16 @@ composite_rules:
   - id: micro-behaviors/process/info/commandline::py-getargcargv
   - id: micro-behaviors/process/interpreter/python::runpy-run-path
   any:
-  - id: is-sitecustomize-file
+  - id: micro-behaviors/process/interpreter/python::sitecustomize-startup-hook
   - id: dll-extension-string
   - id: sitecustomize-path
-
-- id: startup-hook-file
-  desc: Python startup hook file with exec
-  crit: suspicious
-  conf: 0.93
-  all:
-  - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
-  any:
-  - id: is-sitecustomize-file
-  - id: micro-behaviors/process/interpreter/python::usercustomize-startup-hook
 
 - id: pth-open-read-startup-exec
   desc: .pth startup executes file content
   crit: hostile
   conf: 0.98
   all:
-  - id: pth-import-exec
+  - id: micro-behaviors/process/interpreter/python::pth-startup-import
   - id: pth-exec-open-read-line
 
 - id: encoded-sitecustomize-loader
@@ -341,9 +258,9 @@ composite_rules:
   crit: hostile
   conf: 0.96
   all:
-  - id: is-sitecustomize-file
+  - id: micro-behaviors/process/interpreter/python::sitecustomize-startup-hook
   - id: objectives/anti-static/obfuscation/encoding/content::encoded-python-import-dunder
-  - id: micro-behaviors/data/encode/payload::large-base64-string-literals
+  - id: metadata/file/encoding::multiple-long-base64-literals
   any:
   - id: micro-behaviors/data/decode/base64::b64decode-string
   - id: metadata/import/package::python-dunder-base64-import
@@ -356,7 +273,7 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/payload/encoded/exec::exec-long-base64-dunder-import
   any:
-  - id: is-sitecustomize-file
+  - id: micro-behaviors/process/interpreter/python::sitecustomize-startup-hook
   - id: micro-behaviors/process/interpreter/python::usercustomize-startup-hook
 
 - id: usercustomize-loader

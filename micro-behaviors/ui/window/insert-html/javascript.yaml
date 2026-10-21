@@ -25,6 +25,15 @@ traits:
   if:
     type: text
     regex: '\.write\(\s*["'']<\s*["'']\s*\+\s*["'']\w'
+# `\167rit\145%28%27%3C%27%2B` is write('<')+ with w and e in octal and the
+# bracket, quotes, and plus in percent escapes.
+- id: mixed-escape-tag-write
+  desc: Writes a tag through mixed escapes
+  crit: notable
+  conf: 0.93
+  if:
+    type: text
+    regex: '(?i)(\\167|%77|w).{0,16}%28%27%3C%27%2[Bb]'
 - id: browser-empty-document-write
   desc: Empty document.write call
   conf: 0.82
@@ -45,14 +54,14 @@ traits:
   if:
     type: text
     regex: 'document\.write\s*\([^;]{0,160}unescape\s*\('
-- id: nested-document-write-unescape
-  desc: Unescape writer outputs a nested unescape writer
+- id: document-write-unescape-writer-argument
+  desc: Unescape writer argument names document.write
   crit: notable
   conf: 0.95
   for: [javascript, typescript, html]
   if:
     type: text
-    regex: '(?i)document\.write\s*\(unescape\([\s\S]{0,120}document\.write(%28|\()\s*unescape'
+    regex: '(?i)document\.write\(unescape\(["''][^"''\r\n]{0,120}document\.write'
 - id: browser-document-open-alias
   desc: Aliased document open reference
   crit: suspicious
@@ -95,7 +104,7 @@ traits:
       exact: script
   unless:
   - id: metadata/document/html/
-  - id: well-known/lib/web/jquery/
+  - id: well-known/lib/web/client-side/jquery/
 - id: browser-create-iframe-element
   desc: Creates iframe DOM element
   conf: 0.94
@@ -159,34 +168,59 @@ traits:
     type: symbol
     kind: bind
     exact: document.documentElement.innerHTML
-- id: jquery-interpolated-link-markup
-  desc: Parses interpolated link markup with jQuery
+- id: interpolated-shortcut-link-markup
+  desc: Interpolated href in shortcut-link markup
   crit: notable
   conf: 0.94
   for: [javascript, typescript]
-  # `$()` treats a string beginning with markup as HTML, not as a selector.
-  # An interpolated href therefore becomes an HTML-parsing sink; the source of
-  # the interpolated value is supplied by objective/family composites.
+  # A template observation, not proof that jQuery parses it or that its
+  # interpolated value came from a particular source.
   if:
-    type: symbol
-    kind: call
-    regex: '^(\$|jQuery)$'
-    arg:
-      kind: string
-      substr: 'href="${'
-- id: jquery-appended-link-markup
-  desc: Appends interpolated link markup
+    type: text
+    regex: '<a\s+href="\$\{.{1,80}\}".{0,240}\bclass="shortcutLink'
+- id: object-field-in-html-body-markup
+  desc: Object field in HTML body template
   crit: notable
   conf: 0.94
   for: [javascript, typescript]
+  # This is distinct from an interpolated href: a response value placed in
+  # element body text can break out into new markup and event handlers when
+  # the template is parsed as HTML.
   if:
-    type: symbol
-    kind: call
-    regex: '\.append$'
-    arg:
-      from:
-        value: 'href="\$\{'
+    type: text
+    regex: '>\$\{[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\}</[a-z]+>'
+- id: object-name-in-paragraph-markup
+  desc: Interpolates object name into paragraph markup
+  crit: notable
+  conf: 0.96
+  for: [javascript, typescript]
+  # An exact template context, not evidence of the property's source or of
+  # whether its runtime value has already been escaped.
+  if:
+    type: text
+    regex: '<p>\$\{[A-Za-z_$][\w$]*\.name\}</p>'
 composite_rules:
+- id: shortcut-link-markup-and-append-call
+  desc: Shortcut-link markup near append call
+  crit: notable
+  conf: 0.94
+  for: [javascript, typescript]
+  all:
+  - id: interpolated-shortcut-link-markup
+  - id: metadata/lang/source/syntax/call::js-append-method-call
+  near_bytes: 1800
+- id: json-response-and-html-body-markup
+  desc: JSON response near HTML body interpolation
+  # Bounded co-occurrence only: the matcher does not bind a response property
+  # to an interpolation, prove parsing, or inspect value sanitization.
+  crit: notable
+  conf: 0.96
+  for: [javascript, typescript]
+  all:
+  - id: micro-behaviors/communications/http/request/json::fetch-json-response
+  - id: object-field-in-html-body-markup
+  - id: shortcut-link-markup-and-append-call
+  near_bytes: 2500
 - id: browser-aliased-document-rewrite-call
   for: [javascript]
   desc: Aliased document rewrite via call

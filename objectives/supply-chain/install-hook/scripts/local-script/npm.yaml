@@ -31,18 +31,6 @@ traits:
   unless:
   - id: metadata/package/files/dependency::node-modules-path
   - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
-- id: postinstall-runs-shell-local-script
-  desc: postinstall runs local shell script
-  crit: suspicious
-  conf: 0.95
-  attack: "T1195.002"
-  if:
-    type: value
-    path: "scripts.postinstall"
-    regex: "^(bash|sh)\\s+(\\./)?[A-Za-z0-9_./-]{1,120}\\.sh$"
-  unless:
-  - id: metadata/package/description/function::description-ai-coding-skills-sync
-  - id: metadata/package/keywords/identity::npm-keyword-pi-package
 - id: postinstall-runs-inject-js
   desc: postinstall runs injector script
   crit: suspicious
@@ -74,27 +62,6 @@ traits:
     regex: "node\\s+[^\"\\n]{0,50}notify\\.js"
   # === Test Script Abuse ===
       # Detect test scripts that perform network exfil instead of testing
-- id: script-hidden-file-1
-  desc: Script hidden file (base)
-  crit: notable
-  conf: 0.75
-  if:
-    type: value
-    path: "scripts"
-    regex: "\"(preinstall|postinstall|install)\":\".{0,220}/\\.[ac-z]"
-  unless:
-  # `.config` is a user configuration parent directory, not a hidden target
-  # file. This command copies its own visible Markdown command into OpenCode's
-  # documented user-level command directory.
-  - type: value
-    path: "scripts[*]"
-    regex: '(?i)commands/\*\.md.{0,180}/opencode/command'
-  # Build pipelines commonly place generated CSS/assets below a dot-prefixed
-  # scratch directory. That is not hidden-payload staging when the same hook
-  # creates the directory and invokes a stylesheet/build tool for the output.
-  - type: value
-    path: "scripts[*]"
-    regex: '(?i)(mkdir|sass)[^\n]{0,160}/\.tmp(?:/|\s|$)'
 - id: script-tmp-dir
   desc: Script uses /tmp directory
   crit: notable
@@ -103,31 +70,46 @@ traits:
     type: value
     path: "scripts.preinstall"
     substr: "/tmp/"
-- id: silent-npm-lifecycle-runtime-command
-  desc: Silent npm lifecycle command execution
-  crit: suspicious
-  conf: 0.95
-  for: [package.json, javascript]
-  if:
-    type: text
-    # The runtime must be a command token, not a path segment such as
-    # `node_modules/node-pty/...` in a chmod.
-    regex: '"(pre|post)install"\s*:\s*"([^"\n]{0,99}[ ;&|(])?(node|bun|npx)\s[^;&|"\n]{0,99}/dev/null'
-  unless:
-  - type: value
-    path: "scripts.preinstall"
-    exact: ":; (node ./preinstall.js > /dev/null 2>&1 || true)"
-  - id: micro-behaviors/process/exit/terminate::js-process-exit-zero
-  - id: objectives/supply-chain/install-hook/hook-only::installation-method-deb
-  - id: metadata/package/freeform::npm-template-manifest-placeholder
-  - id: micro-behaviors/process/interpreter/node::node-eval-require-probe
-      # Canonical native-module rebuilders legitimately silence stderr in a
-      # postinstall (electron-rebuild -f -w … 2>/dev/null; exit 0). Not a dropper.
-  - type: text
-    regex: '(electron-rebuild|node-gyp-build|prebuild-install|node-pre-gyp)'
-  - type: text
-    regex: 'node-gyp\s+(rebuild|configure|build)'
 composite_rules:
+- id: install-sh-hook-missing-payload
+  desc: Install hook references install.sh omitted from package contents
+  crit: suspicious
+  conf: 0.98
+  attack: "T1195.002"
+  scope: outer
+  for: [package.json, npm, tar]
+  all:
+  - id: micro-behaviors/os/package-manager/hook-install::npm-install-local-shell-script-command
+  - id: micro-behaviors/os/package-manager/hook-install::install-hook-omits-companion-from-files-list
+  unless:
+  - id: metadata/package/files/package-json::files-list-install-sh-loader
+- id: tiny-hollow-missing-install-sh-hook
+  desc: Tiny hollow npm package invokes an unpublished install shell script
+  crit: hostile
+  conf: 0.97
+  attack: "T1195.002"
+  for: [package.json, npm, tar, javascript]
+  scope: archive
+  all:
+  - id: install-sh-hook-missing-payload
+  - id: metadata/package/entrypoint::has-index-entry
+  - id: metadata/file/profile/function-population::constant-return-function-ratio-half
+  - id: metadata/package/files/package-json::files-array-present
+# The omission alone can be a broken release, so it stays suspicious.
+# Hostile only when the unpublished ./install.sh also has no declared
+# source and no build step that could have produced it.
+- id: unpublished-install-sh-loader-without-source
+  desc: Unpublished install.sh loader lacks source and build metadata
+  crit: hostile
+  conf: 0.97
+  attack: "T1195.002"
+  for: [npm, package.json]
+  scope: archive
+  all:
+  - id: install-sh-hook-missing-payload
+  - id: metadata/package/repository::no-repo-with-hooks
+  unless:
+  - id: metadata/package/scripts/build::declares-build-stage-script
 - id: script-hidden-file
   desc: Script references hidden file
   crit: notable
@@ -138,7 +120,7 @@ composite_rules:
   - id: objectives/supply-chain/install-hook/scripts/credential::script-credential-dotfile
   - id: well-known/app/infrastructure/dokku::dokku-source-tree
   any:
-  - id: script-hidden-file-1
+  - id: micro-behaviors/fs/path/location::npm-install-hook-dot-path
 - id: postinstall-missing-init-js-payload
   desc: postinstall references missing init.js payload
   crit: suspicious
@@ -152,31 +134,6 @@ composite_rules:
   unless:
   - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
   - id: metadata/package/files/package-json::files-list-init-js
-# Dead-hook staging: a lifecycle hook runs a conventional companion loader
-# (`node install.js`, ...) while the published archive omits that member — the
-# hook names a payload that is not there to run. Covers every hook key and
-# loader name the companion atoms recognize, plus the existing init.js atom.
-# Suspicious only — with the payload absent there is no hostile behavior to
-# detect, and a dangling hook alone can be a packaging bug.
-- id: install-hook-missing-companion-loader
-  desc: Install hook references a missing companion loader
-  crit: suspicious
-  conf: 0.97
-  attack: "T1195.002"
-  scope: outer
-  for: [package.json, npm, tar, javascript]
-  # The hook and the files list must come from the SAME manifest (the
-  # pairing is file-scoped): outer scope pools every vendored package.json
-  # in an application bundle, and a vendor-pruned hook (ssh2 in VSCodium,
-  # whose install.js is stripped at build time) would otherwise borrow an
-  # unrelated package's files list and read as dead-hook staging.
-  all:
-  - id: micro-behaviors/os/package-manager/hook-install::bundled-install-script-hook-with-files-list
-  unless:
-  - id: metadata/package/files/included::npm-archive-root-companion-loader-member
-  - id: metadata/package/files/package-json::files-list-companion-loader
-  - id: objectives/supply-chain/install-hook/scripts/hook-file::init-js-filename
-  - id: metadata/file/archive::npm-package-parse-error
 - id: tiny-postinstall-missing-init-js-loader
   desc: Tiny package ships dead postinstall init.js loader
   crit: hostile
@@ -318,7 +275,7 @@ composite_rules:
   any:
     - id: micro-behaviors/fs/read/file/full::history-reference-with-file-read
     - id: objectives/credential-access/env/dotenv::dotenv-credentials-theft
-    - id: micro-behaviors/fs/path/secret-config::ssh-config-known-hosts-reference
+    - id: micro-behaviors/fs/path/config/app::ssh-config-path-reference
     - id: objectives/credential-access/shell/history::powershell-history-theft
 # The genuine `path` package is a pure library: it has no lifecycle script. A
 # package that describes itself as the Node.js path module, points `main` at
@@ -330,6 +287,15 @@ composite_rules:
   crit: hostile
   conf: 0.97
   attack: T1195.002,T1204.002
+  for: [npm, tar, package.json]
+  scope: outer
   all:
   - id: objectives/supply-chain/impersonation/core-module::npm-path-module-masquerade
   - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
+  # The named script must ship in the archive. A hook whose target is absent
+  # runs nothing (dead-hook staging); the suspicious masquerade covers it.
+  - id: metadata/package/files/included::npm-runtime-code-member
+  unless:
+  - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
+  - id: metadata/package/scripts/lifecycle::npm-postinstall-console-log-only
+  - id: metadata/package/scripts/lifecycle::npm-inert-postinstall-script

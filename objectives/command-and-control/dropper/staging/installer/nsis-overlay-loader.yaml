@@ -46,27 +46,13 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/http/client/wininet::nsis-inetc-temp-process-profile
   - id: metadata/binary/installer/plugin::nsis-system-plugin
-  - id: micro-behaviors/os/module/load::module-export-resolution-imports
+  - id: micro-behaviors/dylib/lookup::module-export-resolution-imports
   any:
   - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   - id: micro-behaviors/dylib/lookup::sparse-pe-dynamic-linking
   unless:
   - id: metadata/signed/platform/
-- id: nsis-suspicious-identity
-  desc: NSIS loader has lure or word-salad identity
-  crit: suspicious
-  conf: 0.96
-  all:
-  - id: metadata/binary/installer/script::nsis
-  any:
-  - id: objectives/evasion/masquerade/file/payment::payment-document-exe-lure
-  - id: objectives/evasion/masquerade/file/lure::pdf-document-exe-name
-  - id: objectives/evasion/masquerade/file/double-ext::basename-is-doc-double-exe
-  - id: objectives/evasion/masquerade/version-resource/claim::oracle-java-runtime-unsigned-version-lure
-  - id: objectives/evasion/masquerade/versioninfo::word-salad-version-copyright
-  - id: objectives/evasion/masquerade/versioninfo::short-word-salad-versioninfo
-
 - id: nsis-opaque-process-loader
   desc: Opaque NSIS overlay stages and launches a process
   crit: hostile
@@ -77,8 +63,8 @@ composite_rules:
   - id: objectives/anti-static/pack/overlay::nsis-dominant-opaque-overlay
   - id: metadata/binary/layout/overlay::high-entropy-overlay
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
-  - id: nsis-suspicious-identity
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+  - id: objectives/evasion/masquerade/file/lure::nsis-document-or-version-lure
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
   - id: micro-behaviors/process/create/spawn::create-process-w
   any:
   - id: micro-behaviors/process/create/shellexec::shell-execute-ex
@@ -89,27 +75,6 @@ composite_rules:
   - id: metadata/signed/platform/
   - id: metadata/binary/installer/family/
 
-- id: nsis-self-issued-opaque-staged-execution
-  desc: Self-issued NSIS opaque overlay with privilege and staged execution APIs
-  crit: hostile
-  conf: 0.97
-  attack: T1027.009
-  all:
-  - id: metadata/binary/installer/script::nsis
-  - id: metadata/binary/layout/overlay::large-overlay-64k
-  # Signed droppers skip high-entropy-overlay (cert-table unless); use the
-  # non-certificate overlay padding signal instead.
-  - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
-  - id: metadata/signed/certificate/chain::pe-cert-leaf-self-issued
-  - id: micro-behaviors/os/privilege/token::adjust-token-privileges
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
-  any:
-  - id: micro-behaviors/process/create/spawn::create-process-w
-  - id: micro-behaviors/process/create/exec::create-process-a
-  needs: 1
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
 - id: nsis-system-overlay-fileops
   desc: NSIS System plugin fileops loader
   crit: notable
@@ -121,7 +86,7 @@ composite_rules:
   needs: 2
   any:
   - id: micro-behaviors/process/create/shell/spawn::shell-execution-comp
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
   - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
   - id: micro-behaviors/fs/file/timestamp::set-file-time-with-walk-and-self-path
   - id: micro-behaviors/os/clipboard/read::get-clipboard-data
@@ -148,7 +113,7 @@ composite_rules:
   # Unsigned builds expose high-entropy-overlay; self-signed GuLoader builds
   # skip it (cert-table unless) but still show non-certificate overlay padding.
   - id: metadata/binary/layout/overlay::high-entropy-overlay
-  - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
+  - id: metadata/binary/layout/overlay::signed-pe-large-noncertificate-overlay
   - id: micro-behaviors/os/event/shutdown::shutdown-privilege-reboot-api
   - id: micro-behaviors/os/clipboard/reference::win32-clipboard-access
   needs: 3
@@ -169,10 +134,10 @@ composite_rules:
   - id: metadata/binary/layout/checksum::cert-table-truncated
   - id: metadata/binary/vendor::recognized-windows-binary
   any:
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
   - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
   - id: micro-behaviors/os/event/shutdown::shutdown-privilege-reboot-api
-  - id: micro-behaviors/process/create/shell/spawn::win-shellexecute
+  - id: micro-behaviors/process/create/shellexec::win-shellexecute
   needs: 2
   unless:
   - id: metadata/signed/platform/
@@ -185,7 +150,7 @@ composite_rules:
   - id: metadata/binary/installer/plugin::nsis-system-plugin
   - id: metadata/binary/layout/overlay::overlay-dominates-third
   - id: micro-behaviors/process/create/shell/spawn::shell-execution-comp
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
   unless:
   - id: metadata/signed/platform/
   - id: metadata/binary/installer/family/
@@ -203,25 +168,46 @@ composite_rules:
   - id: metadata/binary/layout/overlay::high-entropy-overlay
   unless:
   - id: metadata/signed/platform/
+# Self-signed NSIS keeps the Authenticode table, which suppresses the unsigned
+# overlay-loader legs. Business-document basenames (RFQ, invoice, quote) plus
+# a large non-certificate overlay and staging APIs still convict without a
+# vendor-trusted signature.
+- id: nsis-business-document-self-signed-stager
+  desc: Self-signed NSIS business-document lure stager
+  crit: hostile
+  conf: 0.97
+  attack: T1036.007,T1027.009,T1204.002
+  all:
+  - id: metadata/binary/installer/script::nsis
+  - id: metadata/file/naming::business-document-exe-name
+  - id: metadata/signed/certificate/chain::pe-cert-leaf-self-issued
+  - id: metadata/binary/layout/overlay::signed-pe-large-noncertificate-overlay
+  any:
+  - id: micro-behaviors/os/event/shutdown::shutdown-privilege-reboot-api
+  - id: micro-behaviors/os/clipboard/reference::open-clipboard
+  - id: micro-behaviors/process/create/shellexec::shell-execute-ex
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+  - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
+  needs: 2
 - id: nsis-payment-lure-stage-loader
   desc: NSIS payment lure stage loader
   crit: hostile
   conf: 0.98
   all:
-  - id: objectives/evasion/masquerade/file/payment::payment-document-exe-lure
+  - id: metadata/file/naming::document-themed-executable-name
   - id: metadata/binary/installer/script::nsis-manifest-exehead
   - id: metadata/binary/layout/overlay::overlay-dominates-third
   needs: 2
   any:
   - id: metadata/binary/layout/overlay::high-entropy-overlay
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
   - id: micro-behaviors/process/create/exec::create-process-a
   - id: micro-behaviors/process/create/shellexec::shell-execute-a
   - id: objectives/command-and-control/dropper/staging/installer::julaceous-version-comment
   - id: objectives/command-and-control/dropper/staging/installer::thegnhood-version-copyright
   - id: micro-behaviors/fs/file/copy::self-copy-relaunch-api-set
-  - id: objectives/command-and-control/dropper/staging/native/loader::ini-driven-file-stager
-  - id: micro-behaviors/os/module/load::module-export-resolution-imports
+  - id: micro-behaviors/fs/config/system::ini-copy-process-api-set
+  - id: micro-behaviors/dylib/lookup::module-export-resolution-imports
   - id: micro-behaviors/fs/read/file/handle::pe-module-path-file-io-overlay
   unless:
   - id: metadata/signed/platform/
@@ -235,7 +221,7 @@ composite_rules:
   - id: metadata/binary/installer/script::nsis-manifest-identity
   - id: micro-behaviors/os/privilege/manifest::admin-manifest
   - id: objectives/anti-static/pack/section-anomaly::rwx-flood-low-entropy-overlay-loader
-  - id: micro-behaviors/os/module/load::module-export-resolution-imports
+  - id: micro-behaviors/dylib/lookup::module-export-resolution-imports
   any:
   - id: micro-behaviors/os/service/delete::delete-service
   - id: micro-behaviors/os/registry/manipulate::reg-delete-value-a-symbol

@@ -16,6 +16,15 @@ traits:
       type: text
       regex: '\b(openDb|indexedDB\.open)\s*\(\s*["'']wawc_db_enc["'']'
 
+  - id: whatsapp-wawc-db-get-record
+    desc: Reads wawc_db_enc through a database helper
+    crit: suspicious
+    conf: 0.97
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bgetRecord\s*\(\s*["'']wawc_db_enc["'']'
+
   - id: whatsapp-signal-store-target
     desc: Targets WhatsApp Signal session storage
     crit: suspicious
@@ -102,23 +111,26 @@ composite_rules:
       - id: me-jid-field
 
   - id: whatsapp-web-session-material-theft
-    for: [javascript]
+    for: [javascript, typescript, crx, xpi, zip]
     desc: Extracts and decrypts WhatsApp Web session material
     crit: hostile
     conf: 0.99
-    scope: file
+    scope: archive
     all:
       - id: whatsapp-session-key-fields
       - id: whatsapp-session-device-fields
-      - id: micro-behaviors/crypto/library/provider::subtle-encrypt-decrypt
+      - id: micro-behaviors/crypto/cipher::webcrypto-encrypt-decrypt-reference
     any:
       - id: whatsapp-web-store-target
+      - id: whatsapp-wawc-db-get-record
       - id: whatsapp-signal-store-target
     unless:
       - id: well-known/app/system/vendora-connect::disclosed-integration-context
       - id: well-known/app/system/vendora-connect::bridge-script-context
       - id: well-known/app/communication/leona-session-connector::disclosed-integration-context
       - id: well-known/app/communication/leona-session-connector::bridge-script-context
+      - id: well-known/app/communication/letalk-whatsapp-bridge::disclosed-integration-context
+      - id: well-known/app/communication/letalk-whatsapp-bridge::bridge-script-context
 
   # The 8-character pairing code links a new companion device to the
   # account, so it is a credential: upstream Baileys randomizes it on every
@@ -141,3 +153,20 @@ composite_rules:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-hardcoded-pairing-code
       - id: micro-behaviors/communications/messaging/channel::whatsapp-pairing-link-code-registration
     near_bytes: 3000
+
+  # The config-object sibling: pairingCode lives in a grafted customConfig
+  # module and the socket factory's requestPairingCode wrapper defaults to it
+  # when the caller omits a code, while the link-code registration stanza
+  # remains elsewhere in the Baileys tree.
+  # Worked example: @randev404/baileys 1.0.0 lib/custom.js + lib/Socket/index.js.
+  - id: archive-embedded-pairing-code-socket-default
+    desc: Archive pins pairing to embedded pairingCode config
+    crit: hostile
+    conf: 0.96
+    for: [javascript, typescript, npm, tar, zip]
+    scope: archive
+    attack: T1078
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-hardcoded-pairing-code
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-socket-pairing-code-config-fallback
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-pairing-link-code-registration

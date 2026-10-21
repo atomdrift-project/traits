@@ -7,25 +7,6 @@ defaults:
   for: [elf]
   platforms: [unix]
 traits:
-  - id: arm-value
-    desc: ARM architecture from ELF metadata
-    crit: notable
-    conf: 0.9
-    if:
-      type: value
-      path: elf.machine
-      exact: arm
-  # Keep an ELF-header fallback for malformed/truncated samples whose program
-  # headers are readable but whose section table prevents normal metadata
-  # extraction.  The matcher identifies the ELF e_machine field only.
-  - id: arm-raw-header
-    desc: ARM architecture from ELF header bytes
-    crit: notable
-    conf: 1.0
-    if:
-      type: hex
-      offset: 18
-      pattern: "28 00"
   - id: m68k-value
     desc: Motorola 68000 architecture (IoT/embedded)
     crit: notable
@@ -66,14 +47,6 @@ traits:
       type: value
       path: elf.machine
       exact: sparc
-  - id: sparc-raw-header
-    desc: SPARC machine field in ELF header
-    crit: notable
-    conf: 1.0
-    if:
-      type: hex
-      offset: 18
-      pattern: "00 02"
   - id: mips-value
     desc: MIPS architecture (IoT/embedded)
     crit: baseline
@@ -196,6 +169,18 @@ traits:
       type: hex
       offset: 18
       pattern: "DB 00"
+  # cleave reports AVR32 as unknown. e_machine 0x18AD (EM_AVR32) is
+  # authoritative on big-endian ELF32 headers. avr32-gcc links the reset
+  # vector into .reset at the base of one W+X PT_LOAD; that is the UC3
+  # memory map, not an unpacker stub.
+  - id: avr32-raw-header
+    desc: AVR32 machine field in ELF header
+    crit: notable
+    conf: 1.0
+    if:
+      type: hex
+      offset: 18
+      pattern: "18 AD"
   # Espressif publishes each chip's mask ROM as an ELF named
   # `<chip>_rev<N>_rom.elf` (espflash and esp-idf ship them for symbol lookup).
   # A ROM image maps aliased IRAM/DRAM windows at overlapping addresses and
@@ -207,14 +192,17 @@ traits:
     if:
       type: basename
       regex: '^esp32[a-z0-9]{0,4}_rev[0-9]+_rom\.elf$'
-composite_rules:
-  - id: arm
-    desc: ARM architecture detected in ELF
+  # ESP-IDF stores the application descriptor in .flash.appdesc. A data-only
+  # image has no code section, so the linker leaves e_entry on that struct.
+  - id: espressif-appdesc-entry
+    desc: Entry is the ESP app descriptor
     crit: notable
     conf: 0.95
-    any:
-      - id: arm-value
-      - id: arm-raw-header
+    if:
+      type: value
+      path: elf.entry_section
+      exact: .flash.appdesc
+composite_rules:
   - id: mips
     desc: MIPS architecture (IoT/embedded)
     crit: baseline
@@ -248,14 +236,15 @@ composite_rules:
     crit: baseline
     conf: 0.95
     any:
-      - id: arm
+      - id: metadata/arch/arm::arm
+      - id: metadata/arch/arm64::arm64-elf
       - id: mips-value
       - id: mips-raw-header
       - id: m68k
       - id: superh
       - id: riscv
       - id: sparc
-      - id: sparc-raw-header
+      - id: metadata/arch/sparc::sparc-raw-header
       - id: arc-compact
       - id: elf-machine-broadcom-videocore3
       - id: elf-machine-qualcomm-qdsp6
@@ -273,7 +262,7 @@ composite_rules:
       - id: superh
       - id: riscv
       - id: sparc
-      - id: sparc-raw-header
+      - id: metadata/arch/sparc::sparc-raw-header
       - id: arc-compact
       - id: openrisc
       - id: microblaze

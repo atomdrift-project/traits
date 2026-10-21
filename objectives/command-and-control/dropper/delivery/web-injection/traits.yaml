@@ -3,6 +3,37 @@ defaults:
   attack: T1105
 
 traits:
+  # These three markup fragments are only meaningful together: a six-character
+  # comment sentinel brackets a remote PHP script request carrying a numeric
+  # site identifier. Injectors commonly use this wrapper to hide their loader
+  # among otherwise ordinary page markup.
+  - id: comment-sentinel-before-script
+    desc: Pre-script comment sentinel
+    crit: component
+    conf: 0.92
+    for: [html]
+    if:
+      type: text
+      regex: '<!--[a-z0-9]{6}-->\s*<script\b'
+
+  - id: remote-php-script-numeric-id
+    desc: Remote PHP script URL with numeric id
+    crit: component
+    conf: 0.93
+    for: [html]
+    if:
+      type: text
+      regex: '(?i)https?://[^"''\s]{1,180}/[a-z0-9]{8}\.php\?id=\d+'
+
+  - id: comment-sentinel-after-script
+    desc: Post-script comment sentinel
+    crit: component
+    conf: 0.92
+    for: [html]
+    if:
+      type: text
+      regex: '</script>\s*<!--/[a-z0-9]{6}-->'
+
   - id: stat-js-clock-include
     desc: Injected stat.js clock loader
     crit: suspicious
@@ -34,6 +65,50 @@ traits:
       type: text
       regex: '<script[^>]{0,240}\bsrc=["'']https?://[^/"'']{1,253}/t\.js\?site=[0-9a-fA-F]{32}["'']'
 
+  # A remote script as the very first element inside <head>, ahead of the
+  # charset, title, and every enqueued asset, is not how themes or plugins
+  # load code; head-leading tags are placed by template injection.
+
+  # Compromised pages append a protocol-relative script whose path stays
+  # `/lib/crypta.js` while the host changes. The path is the kit marker.
+  - id: crypta-lib-script-src
+    desc: Script src loads lib crypta.js
+    crit: notable
+    conf: 0.96
+    for: [html]
+    if:
+      type: text
+      regex: '(?i)<script[^>]{0,40}\bsrc\s*=\s*["'']?(https?:)?//[^"''>\s]{1,60}/lib/crypta\.js'
+      exclude_html_comments: true
+
+  # Paired hex comments can mark a script block managed by an injector, but
+  # the markup alone does not establish that the page is compromised or that
+  # the loaded script is malicious. Keep this as incomplete evidence.
+  - id: hex-comment-framed-script-block
+    desc: Script block framed by hex comment markers
+    crit: component
+    conf: 0.9
+    attack: T1189,T1105
+    for: [html]
+    if:
+      type: text
+      case_insensitive: true
+      regex: '<!--[0-9a-f]{6,12}-->\s*<script[^>]{0,120}>[^<]{0,80}</script><!--/[0-9a-f]{6,12}-->'
+
+  # A PHP script endpoint with a numeric query id is consistent with a
+  # tracked loader, but can also be used by ordinary site integrations.
+  # Treat the URL shape as context, not a verdict on its own.
+  - id: tracked-php-remote-script-src
+    desc: Remote script loads from tracked PHP endpoint
+    crit: component
+    conf: 0.9
+    attack: T1105,T1189
+    for: [html, javascript]
+    if:
+      type: text
+      case_insensitive: true
+      regex: '<script[^>]{0,120}src\s*=\s*["'']?https?://[^"''<>\s]{1,253}\.php\?[^"''<>\s]{0,40}\bid=\d+'
+
   # The same zero-size iframe written from two or more separate script sites
   # is an injection footprint: an author embeds a widget once, while a
   # compromised page carries the injected block wherever the injector landed
@@ -49,7 +124,61 @@ traits:
       type: text
       regex: 'document\.write\s*\(\s*[''"][^''"]{0,80}<iframe[^>]{0,240}\bwidth=0\b[^>]{0,200}\bheight=0\b'
 
+  # Injected PHP left in an HTML page: base64_decode yields a URL, the
+  # visitor address is appended, and fopen reads that remote body.
+  - id: php-base64-fopen-client-ip
+    desc: Decodes URL then opens client address
+    crit: notable
+    conf: 0.9
+    for: [html, php]
+    if:
+      type: text
+      regex: '(?s)base64_decode.{0,400}REMOTE_ADDR.{0,200}fopen'
+
+  # The same gate waits until a cookie is absent, then stores one after the
+  # fetch and echoes the body (or a decoded fallback).
+  - id: php-cookie-fopen-setcookie-echo
+    desc: Cookie gate opens URL and echoes
+    crit: notable
+    conf: 0.9
+    for: [html, php]
+    if:
+      type: text
+      regex: '(?s)\$_COOKIE.{0,400}fopen.{0,80}setcookie.{0,120}echo'
+
 composite_rules:
+  # A remote script element is common on legitimate sites. The paired
+  # sentinels around an opaque PHP endpoint with a numeric site id identify
+  # the injected loader structure while keeping the individual observations
+  # neutral outside this conjunction.
+  - id: comment-sentinel-remote-php-script-injection
+    desc: Sentinel-wrapped remote PHP loader
+    crit: hostile
+    conf: 0.98
+    for: [html]
+    attack: T1189,T1105
+    near_bytes: 300
+    all:
+      - id: comment-sentinel-before-script
+      - id: remote-php-script-numeric-id
+      - id: comment-sentinel-after-script
+      - id: micro-behaviors/communications/http/client/resource::external-script-element-load
+      - id: micro-behaviors/communications/http/client/resource::remote-script-element-source
+
+  - id: head-leading-plaintext-script-injection
+    desc: Head-leading plaintext-HTTP script injection
+    crit: hostile
+    conf: 0.96
+    for:
+    - html
+    attack: T1189,T1105
+    near_bytes: 512
+    all:
+    - id: micro-behaviors/communications/http/client/resource::head-leading-remote-script
+    - id: micro-behaviors/communications/http/url/cdn::google-lookalike-script-host
+    - id: micro-behaviors/communications/http/client/resource::plaintext-http-script-element-source
+    - id: micro-behaviors/communications/http/client/resource::remote-script-element-source
+
   - id: extension-contextual-remote-script-loader
     desc: Extension assembles and injects a remote script
     crit: hostile
@@ -89,7 +218,7 @@ composite_rules:
     for: [javascript, typescript]
     near_bytes: 2048
     all:
-      - id: objectives/anti-static/pack/detect::dean-edwards
+      - id: well-known/tool/packaging/dean-edwards-packer::dean-edwards
       - id: micro-behaviors/communications/http/client/resource::js-remote-src-assignment
   - id: via-middlebox-redirect
     desc: HTTP 307 redirect through middlebox
@@ -144,6 +273,23 @@ composite_rules:
     all:
       - id: stat-js-clock-include
       - id: travelfornamewalking-loader
+  - id: crypta-lib-remote-script
+    desc: Page loads remote crypta.js script
+    crit: hostile
+    conf: 0.97
+    for: [html]
+    near_bytes: 200
+    all:
+      - id: crypta-lib-script-src
+      - id: micro-behaviors/communications/http/client/resource::external-script-element-load
+  - id: crypta-lib-on-scripted-page
+    desc: Crypta.js script added beside local scripts
+    crit: hostile
+    conf: 0.95
+    for: [html]
+    all:
+      - id: crypta-lib-script-src
+      - id: micro-behaviors/communications/http/client/resource::relative-script-element-source
 
   # Obfuscated browser injectors hide createElement/src/appendChild behind
   # computed properties. The atoms stay neutral; these composites require an
@@ -159,8 +305,8 @@ composite_rules:
       - id: micro-behaviors/ui/window/dom-access::computed-document-member-call
     any:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::cfg-flatten-state-list
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
+      - id: metadata/lang/javascript-features::pipe-delimited-digit-literal
+      - id: metadata/lang/source/declaration::hex-identifier-declarations
     needs: 1
     near_bytes: 1800
 
@@ -170,7 +316,7 @@ composite_rules:
     conf: 0.97
     for: [javascript, typescript]
     all:
-      - id: micro-behaviors/communications/http/url/navigation::browser-location-bracket-member-read
+      - id: micro-behaviors/communications/http/url/navigation::browser-location-bracket-member-reference
     any:
       - id: obfuscated-remote-script-loader
       - id: obfuscated-chained-remote-script-loader
@@ -186,7 +332,7 @@ composite_rules:
     attack: T1105,T1204.001,T1059.001
     for: [html]
     all:
-      - id: micro-behaviors/process/deploy::external-script-element-load
+      - id: micro-behaviors/communications/http/client/resource::external-script-element-load
       - id: micro-behaviors/communications/http/user-agent::navigator-useragent-conditional
       - id: objectives/execution/lure/clipboard/instruction::fake-captcha-winr-paste-instructions
   - id: timestamped-remote-script-injection
@@ -196,7 +342,7 @@ composite_rules:
     attack: T1105,T1059.001
     for: [javascript, typescript]
     all:
-      - id: micro-behaviors/process/deploy::dynamic-script-element-load
+      - id: micro-behaviors/data/collection/dom::script-create-near-src-assignment
       - id: micro-behaviors/communications/http/client/resource::unix-timestamp-src-cache-bust
       - id: micro-behaviors/data/collection/dom::insert-before-call
     near_bytes: 2048
@@ -210,6 +356,30 @@ composite_rules:
       - id: timestamped-remote-script-injection
       - id: micro-behaviors/communications/http/user-agent::navigator-useragent-conditional
     near_bytes: 2048
+
+  # Keitaro / SocGholish / Balada TDS loaders: the rotating domain serves
+  # the redirection stage from an opaque alphanumeric/base64url token path.
+  - id: tds-token-script-injection
+    desc: Injected script loads from opaque TDS token endpoint
+    crit: suspicious
+    conf: 0.96
+    attack: T1105,T1189
+    for: [html]
+    all:
+      - id: micro-behaviors/communications/http/client/resource::opaque-token-script-element-source
+      - id: micro-behaviors/communications/http/client/resource::external-script-element-load
+  # Injected script element concealed in Base64 encoding.
+  - id: base64-encoded-remote-script-injection
+    desc: Injected script element concealed in Base64
+    crit: hostile
+    conf: 0.96
+    attack: T1105,T1189,T1027
+    for: [html, javascript]
+    all:
+      - id: micro-behaviors/communications/http/client/resource::base64-encoded-script-element
+    any:
+      - id: micro-behaviors/ui/controls/input::email-assigned-variable
+      - id: micro-behaviors/data/control-flow/dispatch::js-computed-property-call
   - id: obfuscated-chained-remote-script-loader
     desc: Obfuscated chained-document script injection
     crit: hostile
@@ -220,8 +390,8 @@ composite_rules:
       - id: micro-behaviors/ui/window/dom-access::computed-document-member-call
     any:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::push-shift-bracket-pattern
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::cfg-flatten-state-list
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
+      - id: metadata/lang/javascript-features::pipe-delimited-digit-literal
+      - id: metadata/lang/source/declaration::hex-identifier-declarations
     needs: 1
 
   - id: repeated-concealed-iframe-write-injection
@@ -235,7 +405,7 @@ composite_rules:
       - id: repeated-concealed-iframe-write
       - id: micro-behaviors/communications/http/client/resource::external-iframe-element-load
   # Miner loader behind a blocklist-evasive host: the page pulls its script
-  # from a root-dotted domain while an AuthedMine constructor and throttle
+  # from a root-dotted domain while an CoinIMP-compatible constructor and throttle
   # option name the payload. The dotted host alone is only presentation
   # evasion; the miner API legs convict the use.
   - id: dotted-host-miner-loader-injection
@@ -246,8 +416,8 @@ composite_rules:
     for: [html]
     all:
       - id: micro-behaviors/communications/http/client/resource::dotted-root-script-src
-      - id: objectives/impact/cryptojacking/miner/signatures::authedmine-anonymous-construct
-      - id: objectives/impact/cryptojacking/miner/signatures::miner-throttle-option
+      - id: micro-behaviors/crypto/hash/mining::coinimp-client-construct
+      - id: micro-behaviors/data/property/assign::fractional-throttle-option
   # Stored attribute breakout: a script element smuggled inside an alt/title
   # value breaks out with closers and loads a remote script. The smuggled
   # tag plus the external load name the injection; hand-written markup
@@ -260,28 +430,10 @@ composite_rules:
     for: [html]
     all:
       - id: micro-behaviors/communications/http/client/resource::attribute-value-script-tag
-      - id: micro-behaviors/process/deploy::external-script-element-load
-  # External CoinHive loader delivers started browser miner: the page loads
-  # CoinHive from an external script source beside the Anonymous constructor
-  # and start call. Loading and starting the miner delivers in-browser
-  # cryptojacking via external script injection.
-  - id: coinhive-script-miner-loader-injection
-    desc: External script delivers started CoinHive browser miner
-    crit: hostile
-    conf: 0.97
-    attack: T1496,T1105
-    for: [html]
-    near_bytes: 4096
-    all:
-      - id: micro-behaviors/process/deploy::external-script-element-load
-      - id: objectives/impact/cryptojacking/miner/signatures::coinhive-library-url
-      - id: objectives/impact/cryptojacking/miner/signatures::coinhive-miner-construct
-      - id: objectives/impact/cryptojacking/miner/signatures::miner-start-invocation
-  # Encoded twin of the loader above: the miner bootstrap arrives
-  # percent-encoded inside document.write(unescape(...)) rather than as a
-  # named library URL, so the library leg cannot see it. Decoding markup
-  # that constructs and starts a CoinHive miner is the same delivery act
-  # through concealment (T1027) rather than a remote script element.
+      - id: micro-behaviors/communications/http/client/resource::external-script-element-load
+  # Concealed bootstrap: the miner code arrives percent-encoded inside
+  # document.write(unescape(...)). Plain external-script inclusion has no
+  # injection claim; this rule retains the encoded document-write evidence.
   - id: coinhive-unescape-loader-injection
     desc: Encoded document write injects started CoinHive miner
     crit: hostile
@@ -291,23 +443,47 @@ composite_rules:
     near_bytes: 4096
     all:
       - id: micro-behaviors/ui/window/insert-html::browser-document-write-unescape
-      - id: objectives/impact/cryptojacking/miner/signatures::coinhive-miner-construct
-      - id: objectives/impact/cryptojacking/miner/signatures::miner-start-invocation
-  # Mass-repeated loader tags: the injector splices the same remote script
-  # element hundreds of times into page content, so consecutive script tags
-  # pile up far beyond any authored head block. Either leg alone is
-  # ordinary (sites load remote scripts); the massed repetition beside the
-  # remote loads is the injection footprint.
-  - id: repeated-remote-script-injection
-    desc: Mass-repeated remote script tags injected in page
+      - id: micro-behaviors/crypto/hash/mining::coinhive-miner-construct
+      - id: micro-behaviors/data/control-flow/dispatch::miner-or-client-start-call
+  # Cookie-gated injector: a decoded URL plus the visitor address is fetched
+  # and the response (or a decoded script fallback) is written into the page.
+  - id: cookie-gated-decoded-client-fetch
+    desc: Echoes fetch of decoded client URL
+    crit: hostile
+    conf: 0.97
+    attack: T1189,T1105
+    for: [html, php]
+    near_bytes: 800
+    all:
+      - id: php-base64-fopen-client-ip
+      - id: php-cookie-fopen-setcookie-echo
+
+  # Repeated XOR decode-unescape-write loops replicated across a page:
+  # each block rebuilds the same hidden script stage and writes it into
+  # the document, which is how this injector family stamps its loader
+  # into every compromised page template.
+  - id: repeated-xor-decode-script-injection
+    desc: Repeated XOR decode loops write into document
     crit: hostile
     conf: 0.96
     attack: T1189,T1105
     for: [html]
+    near_bytes: 400
     all:
-      - id: micro-behaviors/process/deploy::massed-remote-script-tags
-      - id: micro-behaviors/process/deploy::external-script-element-load
-      - id: micro-behaviors/communications/http/client/resource::remote-script-element-source
-    unless:
-      - id: well-known/app/media/pinterest::pinterest-web-context
-      - id: well-known/tool/development/vcs/github-web::github-web-context
+      - id: micro-behaviors/data/encode/xor::js-xor-decode-unescape-write-loop
+      - id: micro-behaviors/ui/window/insert-html::source-unescape-then-document-write
+      - id: micro-behaviors/ui/window/insert-html::browser-document-write
+
+  # Scripts served over plaintext HTTP from a CDN-brand lookalike host
+  # using the real CDN's /ajax/libs/ layout: the injection borrows the
+  # CDN's trust while the attacker controls the content.
+  - id: lookalike-cdn-http-script-injection
+    desc: Lookalike CDN host serves page scripts over HTTP
+    crit: hostile
+    conf: 0.95
+    attack: T1189,T1105
+    for: [html]
+    near_bytes: 300
+    all:
+      - id: micro-behaviors/communications/http/url/cdn::cdnjs-path-lookalike-host
+      - id: micro-behaviors/communications/http/client/resource::plaintext-http-script-element-source

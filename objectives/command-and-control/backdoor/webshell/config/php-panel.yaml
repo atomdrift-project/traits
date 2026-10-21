@@ -9,6 +9,28 @@ defaults:
   mbc: B0030
   attack: T1505.003
 traits:
+- id: php-global-config-path
+  desc: References global PHP configuration file path
+  crit: notable
+  conf: 0.9
+  for: [shell, text, php]
+  if:
+    type: text
+    regex: '(?i)(/etc/php(\.ini|/[0-9.]+|.d/)|/opt/plesk/php/[0-9.]+/etc/php\.ini)'
+- id: php-auto-prepend-config-assignment
+  desc: Assigns auto_prepend_file directive
+  crit: suspicious
+  conf: 0.93
+  for: [shell, text, php]
+  if:
+    type: text
+    regex: '(?i)auto_prepend_file\s*=\s*["'']?(\$[A-Za-z_]\w*|[^;\s\r\n]{1,120}\.php)'
+  unless:
+    - type: text
+      regex: '(?im)^[ \t]*(zend_)?extension[ \t]*='
+    - type: text
+      regex: '(?im)^[ \t]*auto_prepend_file[ \t]*=[ \t]*["'']?/(usr/local/)?(bin|etc)/\S+\.php'
+    - id: well-known/app/infrastructure/ddev/
 - id: htaccess-auto-prepend-directive
   desc: Adds a PHP auto-prepend directive
   crit: suspicious
@@ -16,6 +38,8 @@ traits:
   if:
     type: text
     regex: "php_value\\s+auto_prepend_file"
+  unless:
+    - id: well-known/tool/detection/pattern-catalog::php-scanner-signature-rule-table
 - id: userini-auto-prepend-directive
   desc: Sets INI auto-prepend file
   crit: suspicious
@@ -31,7 +55,6 @@ traits:
     # ship both directives with nothing assigned, which sets nothing.
     regex: '(?im)(^|[\r\n])\s*auto_prepend_file[ \t]*=[ \t]*[^;\s]'
   unless:
-    - id: metadata/file/naming::test-directory-component
     # A PHP extension's module ini (`extension=xhprof.so` beside its own
     # `auto_prepend_file`) is installed into the PHP configuration directory by
     # whoever builds the image; a `.user.ini` webshell drop carries no extension.
@@ -79,6 +102,11 @@ traits:
   - id: well-known/tool/detection/security-scanner/
   - id: well-known/app/publishing/prestashop::htaccess-generator-source
   - id: well-known/app/publishing/wordpress-plugins/security::aiowps-security-plugin-path
+  # Stock server configs (Magento's .htaccess.sample) disable POST filtering
+  # with a documented upload-compatibility comment; a webshell states no
+  # such reason. The same stanza ships in deployed copies of the sample.
+  - type: text
+    regex: '(?i)not break.{0,40}upload'
 - id: htaccess-image-handler-exception
   desc: Restores image handler exceptions
   crit: suspicious
@@ -109,3 +137,32 @@ composite_rules:
   any:
   - id: metadata/file/magic/identity::gif-magic-header
   - id: prepend-image-file-target
+# Handler configuration alone can be an administrator's compatibility setting.
+# Require request-driven command execution before claiming webshell intent;
+# output may be broken by a descriptor-variable typo without changing the
+# purpose of the exposed command endpoint.
+# This is local co-occurrence, not a proved write of the handler string.
+- id: htaccess-command-webshell-handler
+  desc: Command webshell with htaccess data handler
+  for: [php]
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: micro-behaviors/communications/http/server/route::apache-data-suffix-php-handler
+  - id: micro-behaviors/fs/write/file/full::php-htaccess-write
+  any:
+  - id: objectives/command-and-control/backdoor/webshell/request/command::php-shell-post
+  - id: objectives/command-and-control/backdoor/webshell/request/command::php-request-proc-open-console
+  - id: objectives/command-and-control/backdoor/webshell/request/command::php-request-shell-execution
+  - id: objectives/command-and-control/backdoor/webshell/request/command::php-request-shell-execution-alt
+  near_bytes: 2048
+- id: php-global-prepend-persistence
+  desc: Global PHP configuration auto_prepend_file persistence
+  crit: hostile
+  conf: 0.98
+  attack: T1505.003,T1546
+  for: [shell, text, php]
+  all:
+  - id: php-global-config-path
+  - id: php-auto-prepend-config-assignment
+

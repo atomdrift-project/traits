@@ -65,35 +65,16 @@ traits:
       regex: '==[^;\n]{0,60}&&[^;\n]{0,20}(->|\.)(e|s|fs)?[ug]id\s*=\s*0'
 
 
-  - id: constant-defined-from-request-value
-    desc: Defines a constant from request input
-    crit: suspicious
-    conf: 0.92
-    for: [php, text]
-    # `define('SM_PATH', $_SERVER['HTTP_BASE_PATH'])`. Any `HTTP_*` key in
-    # $_SERVER is a request header, so the caller names it and fills it.
-    if:
-      type: text
-      # The subscript is inside the match so the `not:` can read it: a span
-      # ending at `[` cannot tell HTTP_BASE_PATH from TEMP.
-      regex: 'define\s*\(\s*[''"]\w{1,32}[''"]\s*,\s*\$_(SERVER|GET|POST)\s*\[.{0,14}'
-    not:
-      # `$_SERVER` holds server-set environment as well as request data.
-      # jpgraph's config.inc.php -- vendored by LibreNMS and much else -- does
-      # `\define('CACHE_DIR', $_SERVER['TEMP'] . '/')` beside a literal
-      # fallback, which is the define-with-default idiom, not the SquirrelMail
-      # shadowing described above. `HTTP_BASE_PATH` is unaffected: the
-      # alternation anchors at the key's first character.
-      - regex: '(?i)\$_SERVER\W{1,3}(TEMP|TMP|DOCUMENT_ROOT|PATH|SystemRoot)\b'
-
   - id: indexed-byte-hex-compare
     desc: Buffer byte compared to hex value
     crit: component
     conf: 0.85
     for: [c, cpp, text]
+    # The index has to be a name. `buf[n+1]==0xNN` contains the text `[1]==0xNN`,
+    # which is the following byte, not a second independent test.
     if:
       type: text
-      regex: '\[\s*\w{1,6}\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
+      regex: '\[\s*[A-Za-z_]\w{0,5}\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
 
   - id: next-byte-hex-compare
     desc: Next byte compared to hex value
@@ -144,7 +125,7 @@ composite_rules:
     # sat in a core WordPress file for weeks.
     all:
       - id: objectives/command-and-control/backdoor/webshell/wrapper::function-body-is-execution-sink
-      - id: "metadata/lang/source/naming::php-sanitizer-named-function"
+      - id: "metadata/lang/source/declaration::php-sanitizer-named-function"
     unless:
       - id: metadata/package/testing/
 
@@ -221,7 +202,7 @@ composite_rules:
     # constant. Within four lines that costs little -- defining any constant
     # from a request value is already the unusual part.
     all:
-      - id: constant-defined-from-request-value
+      - id: micro-behaviors/data/property/define::php-define-from-superglobal
       - id: micro-behaviors/data/property/define::php-define-string-literal
     unless:
       - id: metadata/package/testing/
@@ -232,6 +213,11 @@ composite_rules:
     crit: hostile
     conf: 0.95
     for: [c, cpp, text]
+    # The check is a few lines smuggled into a helper. A multi-megabyte
+    # amalgamation has ctype wrappers and byte tests in unrelated functions;
+    # proximity already separates those when it is applied, and the size cap
+    # covers scanners that score the member as one bag of strings.
+    size_max: 1048576
     near_lines: 8
     # vsftpd 2.3.4. The command-and-control rules state that a magic byte
     # sequence dispatches a bind shell. This states where the attacker put
@@ -305,7 +291,7 @@ composite_rules:
       - id: metadata/file/encoded::large-base64-like-literal
     any:
       - id: micro-behaviors/crypto/symmetric/aes/runtime-library::create-decipher-hex-hidden
-      - id: micro-behaviors/process/interpreter/eval/compile::module-compile-hex-hidden
+      - id: micro-behaviors/os/module/load::module-compile-hex-hidden
 
   - id: logging-named-macro-runs-commands
     desc: Debug-named macro expands to system

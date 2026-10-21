@@ -41,6 +41,15 @@ traits:
       # unrelated string.
       type: raw
       regex: '\r\nRunProgram\s*=\s*"\\"'
+  - id: sfx-several-escaped-runprograms
+    desc: SFX config runs several escaped programs
+    crit: notable
+    conf: 0.94
+    attack: T1204.002
+    count_min: 3
+    if:
+      type: raw
+      regex: '\r\nRunProgram\s*=\s*"\\"'
   - id: sfx-hidden-cmd-stdin
     desc: SFX hidden cmd stdin execution
     crit: suspicious
@@ -117,7 +126,9 @@ traits:
     attack: T1204.002,T1059.005
     if:
       type: text
-      regex: '(?i)\bSetup=[^\r\n]{1,120}\.(vbe|vbs)\b'
+      # .vbe is the encoded form. A plain .vbs setup script is an ordinary
+      # installer entry, so it does not belong on this matcher.
+      regex: '(?i)\bSetup=[^\r\n]{1,120}\.vbe\b'
   - id: sfx-xeno-injector-payload
     desc: SFX contains Xeno injector payload
     crit: suspicious
@@ -143,31 +154,13 @@ traits:
       type: text
       regex: '(?i)\bPresetup\s*=\s*[^\r\n]{0,80}\.exe\b'
 
-  - id: sfx-overwrite-enabled
-    desc: SFX overwrites existing files
-    crit: suspicious
-    conf: 0.9
-    for: [pe, static-lib, text]
-    unless:
-      # Genuine WinRAR SFX stubs carry these directives by design; the vendor
-      # identity proves the carrier, so the directive alone is not suspicious.
-      - id: well-known/tool/sysadmin/winrar::winrar-component
-    if:
-      # Anchor the directive to its own CRLF-terminated line. SFX config
-      # blocks are line-based (`...=\r\nOverwrite=1\r\n...`); a bare
-      # "Overwrite=1" token inside unrelated text is not an SFX directive --
-      # a protobuf field declaration such as `bool overwrite = 1;` matches
-      # the unanchored spelling. Same anchoring as sfx-silent-install.
-      type: raw
-      regex: '(?i)\r\nOverwrite[ \t]*=[ \t]*"?1"?\r?(\n|$)'
-
   - id: sfx-silent-install
     desc: SFX installs without prompts
     crit: suspicious
     conf: 0.9
     for: [pe, static-lib, text]
     unless:
-      # Same WinRAR SFX carve-out as sfx-overwrite-enabled above.
+      # Stock WinRAR supports silent-install directives.
       - id: well-known/tool/sysadmin/winrar::winrar-component
     if:
       # Anchor the directive to its own CRLF-terminated line. SFX config
@@ -258,7 +251,7 @@ composite_rules:
     all:
       - id: sfx-presetup-executable
       - id: sfx-silent-install
-      - id: sfx-overwrite-enabled
+      - id: micro-behaviors/data/archive/extract/destination::sfx-overwrite-enabled
 
   - id: sfx-silent-presetup-overwrite-utf16
     desc: UTF-16 SFX presetup runs silently
@@ -296,7 +289,7 @@ composite_rules:
     all:
       - id: sfx-runprogram-directive
       - id: micro-behaviors/process/create/hidden::sfx-hidcon-prefix
-      - id: micro-behaviors/process/create/exec::cmd-shell-via-createprocess
+      - id: micro-behaviors/process/create/exec::cmd-command-and-createprocess-references
       - id: sfx-hidden-cmd-stdin
       - id: sfx-video-extension-stdin
       - id: sfx-media-named-entry
@@ -375,13 +368,26 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
 
+  - id: silent-multistage-self-delete-sfx
+    desc: Silent SFX runs several payloads then deletes
+    crit: hostile
+    conf: 0.97
+    attack: T1204.002,T1070.004
+    all:
+      - id: sfx-self-delete-directive
+      - id: sfx-several-escaped-runprograms
+      - id: micro-behaviors/ui/controls/progress::sfx-progress-disabled
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+
   # The SFX and the AutoIt payload are separate leaves in the extraction tree.
   # Correlate them only at the outer-input scope so an ordinary AutoIt program
   # or an ordinary SFX does not match by itself.
-  # Stock WinRAR SFX installers exist, but a stub whose overlay is most of the
-  # file and whose body is packing-grade entropy is a dropper carrier, not a
-  # product installer: the UI module is a few hundred KB and the rest is the
-  # packed stage.
+  # A dominant overlay is how a WinRAR SFX stores its archive. That layout is
+  # a dropper only when the image is not a verified or truncated signed
+  # installer; those two cases are excluded below.
   - id: winrar-sfx-dominant-overlay-dropper
     desc: WinRAR SFX stub carries a dominant high-entropy overlay
     crit: hostile
@@ -395,6 +401,11 @@ composite_rules:
       - id: metadata/file/entropy::very-high-overall-entropy-75
     unless:
       - id: metadata/signed/platform/
+      # A verified Authenticode digest means the overlay is the signed
+      # product archive. A security directory past EOF is that same image
+      # cut short, not a separate planted stage.
+      - id: metadata/signed/certificate/signature::pe-authenticode-digest-matches
+      - id: metadata/binary/layout/checksum::security-dir-out-of-bounds
 
   - id: winrar-sfx-temp-overlay-dropper
     desc: WinRAR SFX temp extract with overlay
@@ -407,6 +418,8 @@ composite_rules:
       - id: metadata/binary/layout/overlay::overlay-at-least-half
     unless:
       - id: metadata/signed/platform/
+      - id: metadata/signed/certificate/signature::pe-authenticode-digest-matches
+      - id: metadata/binary/layout/checksum::security-dir-out-of-bounds
 
   - id: winrar-sfx-wscript-temp-dropper
     desc: WinRAR SFX temp extract launches WScript

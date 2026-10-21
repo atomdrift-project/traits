@@ -51,7 +51,7 @@ traits:
     - dll
     if:
       type: text
-      regex: (?i)\bwmic(\.exe)?\s+shadowcopy\s+delete\b
+      regex: (?i)\bwmic(\.exe)?[\s"',]{1,6}shadowcopy[\s"',]{1,6}delete\b
     unless:
     - id: metadata/file/extension/identity::markdown-file-basename
     - id: well-known/app/system/anthropic-cybersecurity-skills/
@@ -107,43 +107,6 @@ traits:
       # helpers), not inhibition of the victim's existing recovery points.
       # Ransomware idioms delete queried/enumerated snapshots untouched.
       - substr: ".Create("
-  - id: bcdedit-recovery
-    desc: Disables Windows boot recovery with bcdedit
-    crit: suspicious
-    conf: 0.7
-    attack: T1490
-    platforms:
-    - windows
-    for:
-    - scripts
-    - source
-    - binaries
-    if:
-      type: text
-      regex: (?i)\bbcdedit(\.exe)?.{0,40}/set.{0,40}\brecoveryenabled.{0,20}\bno\b
-    unless:
-    - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-    - id: well-known/app/utility/rufus::rufus-official-context
-    - id: metadata/build/generated::generated-attack-map-context
-    - id: micro-behaviors/metaprogramming/generation::configured-source-builder
-    - id: well-known/tool/detection/ai-guardrail::command-rule-corpus
-    - id: micro-behaviors/process/create/shell/guard/
-  - id: bcdedit-ignore-failures
-    desc: Disables Windows boot failure recovery
-    crit: suspicious
-    conf: 0.92
-    attack: T1490
-    platforms:
-    - windows
-    for:
-    - scripts
-    - source
-    - binaries
-    if:
-      type: text
-      regex: (?i)\bbcdedit(\.exe)?.{0,40}/set.{0,40}\bbootstatuspolicy.{0,20}\bignoreallfailures\b
-    unless:
-    - id: micro-behaviors/metaprogramming/generation::configured-source-builder
   - id: wbadmin-delete-systemstate
     desc: wbadmin deletes system backups
     crit: suspicious
@@ -171,6 +134,7 @@ traits:
       type: text
       regex: (?i)\bwbadmin(\.exe)?\s+delete\s+catalog\b
     unless:
+    - id: metadata/file/format/log::windows-event-csv-records
     - id: metadata/package/testing/harness/runtime::bun-assertion-suite
     - id: metadata/build/generated::generated-attack-map-context
     - id: micro-behaviors/metaprogramming/generation::configured-source-builder
@@ -333,7 +297,7 @@ composite_rules:
     for: [pe, dll]
     all:
       - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/fs/path/application/executable::vssadmin-executable-name
+      - id: micro-behaviors/fs/path/basename::vssadmin-executable-name
       - id: dotnet-vssadmin-delete-arguments
     unless:
       - id: well-known/lib/runtime/scripted/sandbox-runtime::dangerous-command-registry
@@ -348,7 +312,7 @@ composite_rules:
     for: [pe, dll]
     all:
       - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/fs/path/application/executable::wmic-executable-reference
+      - id: micro-behaviors/fs/path/basename::wmic-executable-reference
       - id: dotnet-wmic-shadowcopy-delete-arguments
     unless:
       - id: well-known/lib/runtime/scripted/sandbox-runtime::dangerous-command-registry
@@ -380,12 +344,13 @@ composite_rules:
     near_lines: 1
   # Bun and Rust test suites quote destructive commands as assertion inputs.
   - id: test-assertion-harness-contexts
-    desc: Bun or Rust test assertion harness
+    desc: Test assertion harness quoting attack inputs
     crit: exception
     conf: 0.95
     any:
     - id: metadata/package/testing/harness/runtime::bun-assertion-suite
     - id: metadata/package/testing/harness/unit::rust-test
+    - id: metadata/package/testing/harness/unit::selftest-verdict-vector-table
   - id: shadow-delete
     desc: Windows backup or recovery inhibition
     crit: suspicious
@@ -397,12 +362,13 @@ composite_rules:
     - source
     any:
     - id: shadow-copy-delete
-    - id: bcdedit-recovery
-    - id: bcdedit-ignore-failures
+    - id: objectives/impact/degrade/system/recovery::bcdedit-recovery
+    - id: objectives/impact/degrade/system/recovery::bcdedit-ignore-failures
     - id: wbadmin-delete-systemstate
     - id: wbadmin-delete-catalog
     - id: wbadmin-delete-all-backups
     unless:
+    - id: metadata/file/format/log::windows-event-csv-records
     - id: micro-behaviors/metaprogramming/generation::configured-source-builder
     downgrade:
       scope: archive
@@ -445,7 +411,7 @@ composite_rules:
     - binaries
     all:
     - id: shadow-copy-delete
-    - id: bcdedit-recovery
+    - id: objectives/impact/degrade/system/recovery::bcdedit-recovery
     near_lines: 5
     unless:
     - id: objectives/impact/ransom/recovery-inhibition::comprehensive-recovery-inhibition
@@ -464,8 +430,8 @@ composite_rules:
     - binaries
     all:
     - id: shadow-copy-delete
-    - id: bcdedit-recovery
-    - id: bcdedit-ignore-failures
+    - id: objectives/impact/degrade/system/recovery::bcdedit-recovery
+    - id: objectives/impact/degrade/system/recovery::bcdedit-ignore-failures
     near_lines: 6
     unless:
     - id: micro-behaviors/metaprogramming/generation::configured-source-builder
@@ -478,8 +444,10 @@ composite_rules:
     for: [scripts, source, binaries]
     all:
       - id: vssadmin-delete
-      - id: bcdedit-recovery
+      - id: objectives/impact/degrade/system/recovery::bcdedit-recovery
+    any:
       - id: objectives/impact/degrade/services::defender-service-stop-target
+      - id: objectives/impact/degrade/services::defender-service-stop-target-native
     near_lines: 4
   - id: raccine-and-shadow-prep
     desc: Disables Raccine then deletes shadow copies
@@ -491,6 +459,28 @@ composite_rules:
     all:
       - id: objectives/evasion/anti-av/raccine::raccine-defense-impairment
       - id: shadow-delete
+  - id: reflective-loader-shadow-copy-crypter
+    desc: Reflective PE loader deletes volume shadow copies
+    crit: hostile
+    conf: 0.98
+    attack: T1490,T1027.003,T1620
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/dylib/load/runtime::reflective-loader-name-string
+      - id: shadow-copy-delete
+
+  - id: reflective-loader-vssadmin-recovery-inhibition
+    desc: Reflective PE loader embeds vssadmin shadow deletion
+    crit: hostile
+    conf: 0.98
+    attack: T1490,T1027.003,T1620
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/dylib/load/runtime::reflective-loader-name-string
+      - id: vssadmin-delete
+
   - id: wipe-delete-after-shadow-prep
     desc: Wipes payload after shadow-copy deletion
     crit: hostile
@@ -553,11 +543,12 @@ composite_rules:
     all:
     - id: shadow-delete
     any:
-    - id: objectives/impact/services/stop::sc-stop
-    - id: objectives/impact/services/stop::net-stop
+    - id: micro-behaviors/os/service/stop::sc-stop
+    - id: micro-behaviors/os/service/stop::net-stop-command-text
     - id: objectives/impact/degrade/firewall::netsh-firewall-off
     - id: objectives/impact/ransom/encrypt/threat-text::ransom-demand-or-file-threat-wording
     unless:
+    - id: metadata/file/format/log::windows-event-csv-records
     - id: micro-behaviors/metaprogramming/generation::configured-source-builder
   - id: swift-multi-mechanism-recovery-inhibition
     desc: Swift disables recovery and clears event logs
@@ -573,3 +564,18 @@ composite_rules:
       - id: swift-bcdedit-command
       - id: swift-wevtutil-command
       - id: micro-behaviors/process/create/direct::swift-source-process-run
+  - id: shadow-delete-with-acl-takeover-and-log-clear
+    desc: Shadow delete, ACL takeover, and log clear
+    crit: hostile
+    conf: 0.99
+    attack: T1490,T1222.001,T1070.001
+    platforms: [windows]
+    for: [scripts, binaries, go, c, cpp, csharp, rust]
+    all:
+      - id: shadow-copy-delete
+      - id: micro-behaviors/fs/chown::chown-takeown
+      - id: objectives/evasion/indicator-removal/logs::log-clear-windows
+    any:
+      - id: micro-behaviors/fs/acl::icacls-grant-everyone-sid-full
+      - id: micro-behaviors/fs/acl::icacls-grant-everyone-full-shell
+      - id: micro-behaviors/fs/acl::cacls-grant-everyone-full

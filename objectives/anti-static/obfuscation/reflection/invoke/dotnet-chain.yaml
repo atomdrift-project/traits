@@ -5,13 +5,6 @@ defaults:
     - pe
     - dll
 traits:
-  - id: dotnet-invoke-token
-    desc: MethodBase.Invoke reflection token
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      exact: MethodBase.Invoke
   - id: assembly-bytes-buffer
     desc: Assembly bytes buffer token
     crit: notable
@@ -85,49 +78,12 @@ composite_rules:
     near_bytes: 4096
     all:
       - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-class-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
+      - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-class-token
+      - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-currentdomain
       - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
       - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
       - id: micro-behaviors/metaprogramming/reflection::get-methods-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-member-token
-  - id: dotnet-explicit-load-api
-    desc: .NET explicit assembly load API
-    crit: component
-    conf: 0.8
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/resolve::assembly-load-text
-      - id: objectives/anti-static/obfuscation/reflection/class::dotnet-assembly-loadfrom
-  - id: dotnet-appdomain-access
-    desc: .NET AppDomain accessor token
-    crit: component
-    conf: 0.8
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
-      - id: micro-behaviors/process/interpreter/reflection/runtime::getdomain-member-token
-  - id: dotnet-assembly-load-token
-    desc: Assembly.Load member token (cleartext, reversed, or encoded)
-    crit: component
-    conf: 0.8
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
-      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-reversed-assembly-load-token
-      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-base64-assembly-load-token
-  - id: dotnet-assembly-load-invoke
-    desc: .NET dynamic assembly load and invoke
-    crit: suspicious
-    conf: 0.92
-    attack: T1620
-    mbc: E1059
-    all:
-      - id: metadata/lang/compiler/managed::reflection-namespace
-      - id: dotnet-explicit-load-api
-      - id: dotnet-invoke-token
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
-      - id: micro-behaviors/metaprogramming/reflection::get-method-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::method-info-class
-      - id: micro-behaviors/process/interpreter/reflection/runtime::methodbase-class
+      - id: micro-behaviors/metaprogramming/reflection::invoke-member-token
 
   - id: dotnet-network-resource-method-loader
     desc: Downloads Base64 resource for reflective execution
@@ -135,18 +91,21 @@ composite_rules:
     conf: 0.96
     attack: "T1105,T1140,T1620"
     mbc: E1059
+    # IL-merged and framework-bundled libraries carry each leg in a different
+    # assembly image. The download, decode, and invoke of one stub land together.
+    near_bytes: 1048576
     all:
       - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/communications/http/client/managed::getstringasync
+      - id: micro-behaviors/communications/http/get::getstringasync
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-      - id: metadata/binary/resource/identity::clr-resource-large
+      - id: metadata/binary/resource/size::clr-resource-large
       # Mere co-occurrence is common in large IL-merged applications: an HTTP
       # client, credential/JSON Base64 decoding, resources, and library
       # reflection may all belong to unrelated subsystems. Require both access
       # to a managed resource and the explicit Assembly.Load + Invoke chain
       # before describing the combination as a reflective payload loader.
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: dotnet-assembly-load-invoke
+      - id: micro-behaviors/metaprogramming/reflection::dotnet-load-invoke-api-references
       - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
     unless:
       # Fiddler Classic is a signed .NET HTTP debugger. Its update client,
@@ -165,7 +124,7 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
       - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
       - id: micro-behaviors/metaprogramming/reflection::get-methods-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::create-delegate
+      - id: micro-behaviors/metaprogramming/reflection::dotnet-create-delegate-reference
       - id: micro-behaviors/process/interpreter/reflection/runtime::action-member-token
     # Reflection.Emit (a code-generating host) is the softening context here
     # and in the siblings below. The whole `managed/` directory was named
@@ -206,10 +165,10 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
       - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
       - id: micro-behaviors/metaprogramming/reflection::get-methods-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::create-delegate
+      - id: micro-behaviors/metaprogramming/reflection::dotnet-create-delegate-reference
       - id: micro-behaviors/process/interpreter/reflection/runtime::action-member-token
       - id: metadata/file/encoded::hex-encoded-pe-image
-      - id: metadata/binary/resource/identity::clr-resource-large
+      - id: metadata/binary/resource/size::clr-resource-large
     downgrade:
       any:
         - id: metadata/lang/compiler/managed::reflection-emit
@@ -233,7 +192,7 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/build/manifest::pe-manifest-myapplication-template
-      - id: metadata/binary/resource/identity::clr-resource-large
+      - id: metadata/binary/resource/size::clr-resource-large
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
       - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
@@ -256,10 +215,10 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/build/manifest::pe-manifest-myapplication-template
-      - id: metadata/binary/resource/identity::clr-resource-large
+      - id: metadata/binary/resource/size::clr-resource-large
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-      - id: micro-behaviors/process/interpreter/reflection/runtime::methodbase-class
+      - id: micro-behaviors/metaprogramming/reflection::methodbase-class
     unless:
       - id: metadata/signed/platform::microsoft
       - id: metadata/binary/installer/family/
@@ -269,22 +228,6 @@ composite_rules:
       # plus Convert.FromBase64String plus MethodBase is what such an app looks
       # like, not a reflective stager.
       - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
-
-  - id: dotnet-entrypoint-reflection
-    desc: .NET entry point reflection access
-    crit: suspicious
-    conf: 0.92
-    attack: T1620
-    mbc: E1059
-    all:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::get-entrypoint-token
-      - id: dotnet-invoke-token
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
-      - id: dotnet-explicit-load-api
-    downgrade:
-      any:
-        - id: metadata/lang/compiler/managed::reflection-emit
   - id: dotnet-encrypted-overlay-reflective-loader
     desc: .NET encrypted overlay loader invokes a reflected payload
     crit: hostile
@@ -295,9 +238,9 @@ composite_rules:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/binary/layout/overlay::large-overlay-64k
       - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
-      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+      - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
       - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/metaprogramming/reflection::activator
   - id: dotnet-in-memory-assembly-invoke
     desc: .NET in-memory assembly invoke chain
     crit: suspicious
@@ -307,8 +250,8 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/lang/compiler/managed::reflection-namespace
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
-      - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-member-token
+      - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-currentdomain
+      - id: micro-behaviors/metaprogramming/reflection::invoke-member-token
       - id: assembly-bytes-buffer
     any:
       - id: micro-behaviors/metaprogramming/reflection::load-and-invoke-name
@@ -325,77 +268,11 @@ composite_rules:
     mbc: E1059
     all:
       - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-class-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
+      - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-class-token
+      - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-currentdomain
       - id: micro-behaviors/process/interpreter/reflection/runtime::loadassembly-member-token
       - id: assembly-bytes-buffer
       - id: metadata/binary/layout/size::tiny-dotnet
-    downgrade:
-      any:
-        - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/
-  - id: dotnet-appdomain-callbyname-load
-    desc: .NET AppDomain CallByName loader
-    crit: suspicious
-    conf: 0.95
-    attack: T1620
-    mbc: E1059
-    all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-class-token
-      - id: dotnet-appdomain-access
-      - id: dotnet-assembly-load-token
-      - id: micro-behaviors/process/interpreter/reflection/vb::vb-callbyname-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::get-exported-types-token
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
-      - id: micro-behaviors/process/interpreter/reflection/runtime::get-constructors-token
-      - id: micro-behaviors/metaprogramming/reflection::dotnet-assembly-type-reference
-    downgrade:
-      any:
-        - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/
-  # LateGet is the VB late-binding twin of CallByName used by bitmap
-  # stego crypters (Load/CreateInstance often Base64-obscured in #US).
-  - id: dotnet-appdomain-lateget-load
-    desc: .NET AppDomain LateGet loader
-    crit: suspicious
-    conf: 0.95
-    attack: T1620
-    mbc: E1059
-    all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-class-token
-      - id: dotnet-appdomain-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::get-exported-types-token
-      - id: micro-behaviors/process/interpreter/reflection/vb::vb-lateget-token
-    any:
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
-      - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-member-token
-      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-base64-assembly-load-token
-      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-base64-create-instance-token
-    downgrade:
-      any:
-        - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/
-  # The C# spelling of the same loader: AppDomain.CurrentDomain.Load(byte[])
-  # hands back an assembly whose exported types are instantiated through
-  # Activator.CreateInstance, with no VB late-binding helper in between.
-  # Plugin hosts do the same, so it stays notable until a concealed payload
-  # source (a pixel-packed bitmap, an encrypted resource) feeds it.
-  - id: dotnet-appdomain-activator-load
-    desc: .NET AppDomain load with Activator instantiation
-    crit: notable
-    conf: 0.9
-    attack: T1620
-    mbc: E1059
-    all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: dotnet-appdomain-access
-      - id: dotnet-assembly-load-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::get-exported-types-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
-      - id: micro-behaviors/process/interpreter/reflection/runtime::create-instance-token
     downgrade:
       any:
         - id: metadata/lang/compiler/managed::reflection-emit

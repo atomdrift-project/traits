@@ -59,6 +59,13 @@ traits:
     if:
       type: text
       regex: '(?i)-ExecutionPolicy\s+Bypass\s+-File\s+(\.\\|\./)?(scripts|installers)[/\\]'
+  - id: powershell-shim-policy-constraint
+    for: [javascript]
+    desc: PowerShell shim linked to execution policy
+    crit: component
+    if:
+      type: text
+      regex: '(?is)\.ps1.{0,250}execution polic|execution polic.{0,250}\.ps1'
 composite_rules:
   - id: benign-executionpolicy-wrapper-context
     desc: Documented local script execution wrapper
@@ -84,8 +91,8 @@ composite_rules:
     near_bytes: 512
     all:
       - id: micro-behaviors/os/security/policy::powershell-policy-bypass-text
-      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden
-      - id: micro-behaviors/process/deploy::powershell-web-response-piped-eval-text
+      - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden
+      - id: micro-behaviors/process/deploy/script-eval::powershell-web-response-piped-eval-text
     unless:
       - id: benign-executionpolicy-wrapper-context
       - id: well-known/tool/sysadmin/scoop::scoop-bootstrap-installer-context
@@ -99,10 +106,10 @@ composite_rules:
     attack: T1027,T1140,T1059.001
     mbc: B0032,E1059
     all:
-      - id: micro-behaviors/data/encode/payload::large-base64-string-literals
+      - id: metadata/file/encoding::multiple-long-base64-literals
       - id: micro-behaviors/data/decompress/gzip::gzip-decompression-stream
       - id: micro-behaviors/fs/write/file/full::write-all-text
-      - id: micro-behaviors/process/create/start-process::start-process-call
+      - id: micro-behaviors/process/create/exec::start-process-call
       - id: micro-behaviors/process/create/flags::powershell-policy-bypass-value
     any:
       - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
@@ -117,9 +124,10 @@ composite_rules:
     # assemblies commonly contain both features in unrelated methods.
     near_bytes: 1024
     all:
-      - id: micro-behaviors/process/create/flags::execution-policy-bypass
+      - id: micro-behaviors/process/argument/option::execution-policy-bypass
     any:
       - id: micro-behaviors/process/create/hidden/
+      - id: micro-behaviors/process/argument/option::hidden-console-execution
     unless:
       # MSBuild build integration ships the same switches as script text: the
       # <Exec> task and its $(...)/@(...) properties only resolve inside a
@@ -143,6 +151,18 @@ composite_rules:
     any:
       - id: pe-concealed-policy-override-profile
       - id: batch-concealed-policy-override-call
+  - id: npm-removes-powershell-shims-for-policy
+    for: [javascript]
+    desc: npm install hook removes PowerShell shims to avoid execution policy
+    crit: suspicious
+    conf: 0.9
+    near_lines: 40
+    all:
+      - id: micro-behaviors/fs/delete/file/library::fs-unlinkSync
+      - id: micro-behaviors/os/env/package-manager::npm-config-global-scope-read
+      - id: powershell-shim-policy-constraint
+    unless:
+      - id: well-known/tool/development/cli/swytchcode::postinstall-ps1-shim-removal
   - id: policy-bypassing-runtime-replacement
     desc: Admin .NET installer bypasses policy and replaces runtime DLL
     crit: hostile
@@ -151,7 +171,7 @@ composite_rules:
     all:
       - id: micro-behaviors/os/privilege/manifest::require-administrator
       - id: objectives/evasion/hijack-execution-flow/dll-hijacking/runtime::runtime-dll-backup-name
-      - id: micro-behaviors/process/create/spawn::process-token-dotnet
+      - id: metadata/binary/symbols/name::dotnet-processstartinfo-name
     # `bypass-execution-policy` needs the interpreter name and its switches in
     # one contiguous run of text.  A managed launcher assigns
     # ProcessStartInfo.FileName and .Arguments as two separate metadata
@@ -164,7 +184,7 @@ composite_rules:
     any:
       - id: bypass-execution-policy
       - id: micro-behaviors/os/security/policy::powershell-policy-bypass-text
-      - id: micro-behaviors/process/create/flags::execution-policy-bypass-spellings
+      - id: micro-behaviors/process/argument/option::execution-policy-bypass-spellings
   - id: executionpolicy-known-installer-marker
     desc: Known installer execution-policy marker
     crit: notable
@@ -180,3 +200,25 @@ composite_rules:
       - id: executionpolicy-gocross-wrapper
       - id: executionpolicy-local-script-wrapper
       - id: micro-behaviors/fs/path/config/app::vm-config-iso-configuration-context
+
+  # An unsigned PE binary that stages PowerShell execution-policy bypass
+  # arguments alongside the runas verb and a shell interpreter is launching
+  # elevated, unconstrained scripts. Platform signing and installer contexts
+  # are excluded.
+  - id: pe-elevated-powershell-policy-bypass
+    desc: Unsigned PE stages elevated PowerShell policy bypass
+    crit: hostile
+    conf: 0.98
+    for: [pe, dll]
+    attack: T1059.001,T1548.002,T1562.001
+    all:
+      - id: micro-behaviors/process/argument/option::powershell-policy-bypass-argument
+      - id: micro-behaviors/os/privilege/elevation::runas-verb-token
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+    any:
+      - id: micro-behaviors/fs/path/application/executable::cmd-exe-image-name
+      - id: metadata/lang/encoded/wide::shell-interpreter-cmd
+    unless:
+      - id: benign-executionpolicy-wrapper-context
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

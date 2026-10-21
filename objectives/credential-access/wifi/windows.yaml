@@ -1,42 +1,27 @@
 defaults:
   platforms: [windows]
-  for: [python, batch, powershell, pe]
+  # pyc: PyInstaller bundles carry the script as bytecode members, and the
+  # netsh strings survive only there; the PE container's compressed overlay
+  # hides them from a plain text scan.
+  for: [python, batch, powershell, pe, pyc]
   attack: T1555
 traits:
-  - id: netsh-wlan-show-profiles
-    desc: Netsh saved Wi-Fi profile enumeration
-    crit: notable
-    conf: 0.88
-    if:
-      type: text
-      regex: 'netsh\s+wlan\s+show\s+profiles?\b'
-  - id: netsh-wlan-key-clear
-    desc: Netsh Wi-Fi key extraction
-    crit: notable
-    conf: 0.94
-    if:
-      type: text
-      regex: 'netsh\s+wlan\s+show\s+profile\b[^\n]{0,180}\bkey\s*\^?=\s*clear\b'
-  - id: netsh-wlan-key-content-parse
-    desc: Parses netsh Wi-Fi key content
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      regex: 'Key Content|محتوى المفتاح'
   - id: python-netsh-key-clear-argument
     desc: Python requests plaintext Wi-Fi keys
     crit: notable
     conf: 0.94
-    for: [python]
+    for: [python, pyc]
     if:
+      # The quote-adjacent form dominates in source; bundled bytecode builds
+      # the argument as a separate '" key=clear"' fragment whose trailing
+      # marshal byte merges into the run, so no closing boundary is required.
       type: text
-      regex: '["'']key\s*=\s*clear["'']'
+      regex: '[''"]\s*key\s*=\s*clear'
   - id: python-wifi-password-parse
     desc: Python parses Wi-Fi password output
     crit: notable
     conf: 0.94
-    for: [python]
+    for: [python, pyc]
     if:
       type: text
       regex: '\bpassword_match\s*=\s*re\.search\s*\('
@@ -73,33 +58,44 @@ traits:
     if:
       type: text
       regex: 'wlan\s+show\s+profiles?[\s\S]{0,80}key\s*=\s*clear'
-composite_rules:
-  - id: netsh-wifi-password-extraction
-    desc: Netsh saved Wi-Fi password extraction
+  # Command and its first arguments all supplied through variables, so no
+  # literal command name appears. On its own this is only an obfuscated
+  # invocation; the Wi-Fi claim comes from the composite below.
+  - id: powershell-variable-command-invocation
+    desc: Invokes command entirely through variables
     crit: notable
-    conf: 0.96
+    conf: 0.88
+    for: [powershell]
+    if:
+      type: text
+      regex: '&\$[A-Za-z_]\w*\s+\$[A-Za-z_]\w*\s+\$[A-Za-z_]\w*\s+\$[A-Za-z_]\w*'
+composite_rules:
+  - id: python-bytecode-netsh-wifi-key-extraction
+    desc: Bundled Python bytecode extracts Wi-Fi keys via netsh
+    crit: notable
+    conf: 0.95
+    for: [pyc]
     all:
-      - id: netsh-wlan-key-clear
+      - id: python-netsh-key-clear-argument
     any:
-      - id: netsh-wlan-key-content-parse
-      - id: netsh-wlan-show-profiles
-      - id: micro-behaviors/process/create/shell-subprocess::shell-true
+      - id: micro-behaviors/hardware/wireless/network::netsh-profile-query-command-text
+      - id: micro-behaviors/hardware/wireless/network::netsh-wifi-key-output-label
   # A compiled binary that enumerates saved profiles and parses the "Key
   # Content" line of `netsh wlan show profile ... key=clear` output is
   # harvesting Wi-Fi passphrases: inventory tooling lists profiles but never
   # parses the recovered plaintext key. Script carriers stay on the notable
   # composite above, where admin recovery scripts are plausible.
-  - id: native-netsh-wifi-password-harvest
-    desc: Native binary harvests Wi-Fi passwords via netsh
-    crit: hostile
+  - id: netsh-wifi-plaintext-key-harvest
+    desc: Netsh Wi-Fi profile and plaintext-key parsing
+    crit: suspicious
     conf: 0.96
     mbc: E1003
     for: [pe, dll]
     all:
-      - id: netsh-wlan-key-content-parse
+      - id: micro-behaviors/hardware/wireless/network::netsh-wifi-key-output-label
     any:
-      - id: netsh-wlan-show-profiles
-      - id: netsh-wlan-key-clear
+      - id: micro-behaviors/hardware/wireless/network::netsh-profile-query-command-text
+      - id: micro-behaviors/hardware/wireless/network::netsh-plaintext-key-command-text
   - id: wlan-api-plaintext-profile-key
     desc: Windows WLAN API plaintext profile key retrieval
     crit: suspicious
@@ -130,3 +126,18 @@ composite_rules:
       - id: python-netsh-key-clear-argument
       - id: python-wifi-password-parse
       - id: objectives/command-and-control/backdoor/tasking/http::python-http-url-eval-backdoor
+  # Obfuscated script variant: the netsh invocation is built entirely
+  # from variables (typically single-character fragments) so the literal
+  # netsh-wlan-key-clear legs never appear, but the script still parses
+  # the Key Content line that only a key=clear query produces. Plain
+  # admin recovery scripts name netsh literally and stay notable above;
+  # hiding the command name is what earns the hostile level here.
+  - id: powershell-obfuscated-wifi-password-extraction
+    desc: Obfuscated PowerShell extracts saved Wi-Fi passwords
+    crit: hostile
+    conf: 0.95
+    mbc: E1003
+    for: [powershell]
+    all:
+      - id: powershell-variable-command-invocation
+      - id: micro-behaviors/hardware/wireless/network::netsh-wifi-key-output-label

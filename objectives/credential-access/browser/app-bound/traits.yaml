@@ -34,16 +34,6 @@ traits:
     # Bitwarden's signed import helper decrypts app-bound keys to import
     # the user's own Chrome passwords.
     - id: well-known/app/security/bitwarden::verified-bitwarden-windows-binary
-- id: edge-ielevator-iid
-  desc: Edge IElevator credential interface
-  crit: suspicious
-  conf: 0.94
-  platforms: [windows]
-  for: [binaries]
-  attack: T1555.003
-  if:
-    type: text
-    exact: '{c9c2b807-7731-4f34-81b7-44ff7779522b}'
 - id: chromium-abe-config-v1-marker
   desc: Chromium ABE config block version tag
   crit: notable
@@ -54,6 +44,26 @@ traits:
   if:
     type: text
     exact: ABE_CFG_V1
+- id: abe-decrypt-command-line-option
+  desc: ABE decryption command-line mode
+  crit: suspicious
+  conf: 0.96
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1555.003
+  if:
+    type: text
+    exact: --abe-decrypt
+- id: abe-host-key-command-line-option
+  desc: ABE host-key command-line mode
+  crit: suspicious
+  conf: 0.96
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1555.003
+  if:
+    type: text
+    exact: --abe-host-key
 composite_rules:
 - id: chromium-app-bound-key-theft
   desc: Chromium app-bound key theft
@@ -63,7 +73,7 @@ composite_rules:
   for: [python]
   platforms: [windows]
   all:
-  - id: micro-behaviors/communications/http/cookie-store::chromium-app-bound-encrypted-key-field
+  - id: micro-behaviors/data/config/browser-preference::chromium-app-bound-encrypted-key-field
   - id: objectives/credential-access/browser/chromium::cng-ncrypt-decrypt
   any:
   - id: objectives/credential-access/browser/app-bound::chromium-app-bound-key-name
@@ -77,27 +87,11 @@ composite_rules:
   for: [pe, dll]
   platforms: [windows]
   all:
-  - id: micro-behaviors/communications/http/cookie-store::chromium-app-bound-encrypted-key-field
+  - id: micro-behaviors/data/config/browser-preference::chromium-app-bound-encrypted-key-field
   - id: objectives/credential-access/browser/app-bound::chromium-app-bound-key-name
   any:
   - id: micro-behaviors/crypto/library/cryptoapi::ncrypt-open-storage-provider
   - id: micro-behaviors/crypto/library/cryptoapi::ncrypt-open-key
-- id: chromium-app-bound-elevation-service-theft
-  desc: Chromium App-Bound key theft via elevation service
-  crit: hostile
-  conf: 0.97
-  attack: T1555.003
-  for: [pe, dll]
-  platforms: [windows]
-  all:
-  - id: micro-behaviors/communications/http/cookie-store::chromium-app-bound-encrypted-key-field
-  any:
-  - id: micro-behaviors/os/com/invoke::chromium-ielevator-service-guid
-  - id: micro-behaviors/os/com/invoke::chromium-ielevator-service-guid-readonly
-  - id: edge-ielevator-iid
-  unless:
-  - id: metadata/signed/platform/
-  - id: well-known/lib/ui/cef::cef-browser-engine
 - id: native-node-chromium-abe-credential-stealer
   desc: Native Node add-on steals Chromium App-Bound Encryption secrets
   crit: hostile
@@ -114,6 +108,8 @@ composite_rules:
   - id: objectives/supply-chain/hidden-payload/encoding::package-ships-bytenode-bytecode
   unless:
   - id: well-known/lib/ui/cef::cef-browser-engine
+  # Genuine Microsoft-signed Edge uses App-Bound Encryption itself.
+  - id: metadata/signed/certificate/signature::microsoft-signed-edge-runtime-context
 
 # Native helper shipped as a DLL (often mislabeled .bin): waits on a private
 # pipe, instantiates Chromium elevation COM, and targets chrome.exe/msedge.exe.
@@ -128,8 +124,8 @@ composite_rules:
   platforms: [windows]
   size_max: 524288
   all:
-  - id: micro-behaviors/fs/path/application/executable::chrome-exe-process-name
-  - id: micro-behaviors/fs/path/application/executable::browser-apps-msedge-safari
+  - id: micro-behaviors/fs/path/basename::chrome-exe-process-name
+  - id: micro-behaviors/fs/path/basename::msedge-executable-name
   - id: micro-behaviors/communications/ipc/named-pipe::pipe-path-prefix
   - id: micro-behaviors/communications/ipc/named-pipe::wait-named-pipe
   - id: micro-behaviors/os/com/invoke::co-create-instance
@@ -149,7 +145,7 @@ composite_rules:
   platforms: [windows]
   size_max: 524288
   all:
-  - id: micro-behaviors/fs/path/application/executable::chrome-exe-process-name
+  - id: micro-behaviors/fs/path/basename::chrome-exe-process-name
   - id: micro-behaviors/communications/ipc/named-pipe::wait-named-pipe
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   - id: micro-behaviors/process/create/thread::create-thread
@@ -168,8 +164,8 @@ composite_rules:
   all:
   - id: objectives/credential-access/browser/app-bound::chromium-app-bound-key-name
   - id: micro-behaviors/process/create/flags::create-suspended
-  - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
-  - id: micro-behaviors/process/inject/dll::create-remote-thread
+  - id: micro-behaviors/mem/write/arbitrary::write-process-memory-dup
+  - id: micro-behaviors/process/inject/remote-thread::create-remote-thread
   any:
   - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-server
   - id: micro-behaviors/communications/ipc/named-pipe::create-named-pipe
@@ -183,7 +179,7 @@ composite_rules:
   attack: T1555.003
   all:
   - id: micro-behaviors/data/config/browser-preference::chromium-abe-result-code-marker
-  - id: objectives/anti-analysis/debugger-detect/hardware-breakpoints::debugger-attach-loop
+  - id: micro-behaviors/process/debug/event::debugger-attach-event-api-profile
   - id: micro-behaviors/process/info/thread::hardware-breakpoint-register-manipulation
 - id: abe-bypass-thread-context-register-selection
   desc: Chromium ABE thread-context register selection
@@ -192,10 +188,33 @@ composite_rules:
   attack: T1555.003
   for: [pe]
   all:
-  - id: micro-behaviors/fs/path/application/browser::chromium-main-library-name
+  - id: micro-behaviors/fs/path/library::chromium-main-library-name
   - id: micro-behaviors/process/info/thread::set-thread-context-import
-  - id: metadata/binary/instruction::x64-stack-structure-flag-init
-  - id: metadata/binary/instruction::x64-adjacent-stack-pointer-select
+  - id: metadata/binary/instruction/sequence::x64-stack-structure-flag-init
+  - id: metadata/binary/instruction/sequence::x64-adjacent-stack-pointer-select
+# Compiled stealers name the Local State field and the remote-allocation,
+# write, and thread APIs in one image. This is same-file co-occurrence,
+# not a traced call from the key parse into the injected thread.
+- id: app-bound-key-remote-injection-apis
+  desc: App-bound key beside remote injection APIs
+  crit: hostile
+  conf: 0.96
+  attack: T1555.003,T1055.001
+  for: [pe, dll]
+  platforms: [windows]
+  all:
+  - id: micro-behaviors/data/config/browser-preference::chromium-app-bound-encrypted-key-field
+  - id: micro-behaviors/process/inject/remote-thread::create-remote-thread-text
+  - id: micro-behaviors/mem/write/arbitrary::write-process-memory-text
+  - id: micro-behaviors/mem/alloc/remote::virtual-alloc-ex-text
+  any:
+  - id: micro-behaviors/fs/path/application/browser::chrome-windows-profile
+  - id: micro-behaviors/fs/path/application/browser::edge-windows-profile
+  - id: micro-behaviors/fs/path/basename::msedge-executable-name
+  unless:
+  - id: metadata/signed/platform/
+  - id: well-known/app/security/bitwarden::verified-bitwarden-windows-binary
+  - id: well-known/lib/ui/cef::cef-browser-engine
 - id: chromium-abe-config-reflective-stealer
   desc: ABE config on reflective AES loader
   crit: hostile
@@ -206,7 +225,9 @@ composite_rules:
   all:
   - id: chromium-abe-config-v1-marker
   - id: objectives/command-and-control/backdoor/loader/native-reflect::in-memory-pe-loader-with-decryption
-  - id: metadata/binary/provenance/version-info::pe-non-architecture-filename-mismatch
+  - id: abe-decrypt-command-line-option
+  - id: abe-host-key-command-line-option
+  - id: micro-behaviors/communications/ip/resolve::resolve-getaddrinfo-import
   unless:
   - id: metadata/signed/platform/
   - id: well-known/lib/ui/cef::cef-browser-engine

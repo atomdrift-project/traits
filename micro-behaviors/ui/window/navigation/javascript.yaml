@@ -2,11 +2,20 @@ defaults:
   platforms: [windows, unix]
   crit: notable
 traits:
+- id: screen-change-message-type
+  desc: UI screen-change message type
+  conf: 0.9
+  for: [javascript, typescript, html]
+  if:
+    type: text
+    regex: '["'']SCREEN_CHANGE["'']|\btype\s*[:=]\s*["'']SCREEN_CHANGE["'']'
 - id: global-open-string-target-call
   for: [html, javascript]
   desc: Global open with string URL and target
   crit: notable
   conf: 0.9
+  unless:
+  - id: metadata/lang/scripted::dts-declaration-file
   if:
     type: text
     exclude_html_comments: true
@@ -18,6 +27,13 @@ traits:
   if:
     type: text
     regex: '\bwindow\.open\s*\(\s*[''"]https?://'
+- id: browser-modal-dialog-external-url
+  desc: Opens modal dialog to external HTTP URL
+  conf: 0.9
+  for: [javascript, typescript, html]
+  if:
+    type: text
+    regex: '\bshowModalDialog\s*\(\s*[''"]https?://'
 - id: browser-timer-delayed-location-redirect
   desc: Redirects the browser from a setTimeout callback
   for: [javascript, html, php]
@@ -76,7 +92,7 @@ traits:
     type: literal
     substr: 'https://discord.com/channels/@me'
 - id: browser-meta-refresh-external-url
-  for: [javascript, html]
+  for: [javascript, html, text]
   conf: 0.9
   desc: Browser meta refresh to absolute HTTP URL
   # Meta refresh is a neutral browser-navigation mechanism. Phishing and
@@ -84,6 +100,17 @@ traits:
   if:
     type: text
     regex: '(?is)http-equiv=["'']refresh["''][\s\S]{0,80}\burl=[''"]?\s*h[\w\s]*://'
+  unless:
+  - id: well-known/lib/crypto/microsoft-auth::microsoft-live-auth-runtime-context
+  - id: well-known/lib/crypto/microsoft-auth::microsoft-oauth-error-relay-context
+  - id: "metadata/file/naming::test-directory-component"
+- id: browser-meta-refresh-content-first-external-url
+  for: [javascript, html]
+  conf: 0.9
+  desc: Meta refresh with content before http-equiv
+  if:
+    type: text
+    regex: '(?is)\burl=[''"]?\s*https?://[\s\S]{0,90}\bhttp-equiv=[''"]?refresh'
   unless:
   - id: well-known/lib/crypto/microsoft-auth::microsoft-live-auth-runtime-context
   - id: well-known/lib/crypto/microsoft-auth::microsoft-oauth-error-relay-context
@@ -100,7 +127,7 @@ traits:
     type: text
     regex: '(?is)http-equiv=["'']refresh["''].{0,80}content\s*=\s*["'']0\s*;\s*url\s*=\S+'
   not:
-    - regex: '(?i)url\s*=\s*["'']?(https?|file)://'
+    - regex: '(?i)url\s*=\s*["'']?([a-z][a-z0-9+.-]*:|//)'
 - id: browser-window-open
   for: [javascript, typescript]
   desc: Opens browser window or tab
@@ -309,6 +336,8 @@ traits:
     type: text
     exclude_html_comments: true
     regex: '(^|[^.\w$])open\s*\(\s*[A-Za-z_$][\w$]*(\[[^\]]{1,32}\])?\s*,\s*[''"]'
+  not:
+    - regex: '\bopen\s*\(\s*STD(IN|OUT|ERR)\s*,'
   unless:
     # Bare open(path, flags) is file I/O in Node.js, not window navigation.
     - id: metadata/import/npm/fs
@@ -323,17 +352,30 @@ traits:
     type: text
     exclude_html_comments: true
     regex: '\bwindow\.open\(\s*["''][^"''/:\s]{1,60}\.eml["'']'
+# Scripted navigation to a same-directory login.php: the class check keeps it
+# relative (no scheme, slash, or whitespace), so absolute-brand signon URLs
+# stay silent. Legacy PHP sites wire their own login buttons this way, so this
+# stays neutral; a login route does not prove credential harvesting.
+- id: scripted-local-login-route
+  desc: Scripted navigation to a local login page
+  conf: 0.85
+  for: [html, javascript]
+  if:
+    type: text
+    exclude_html_comments: true
+    regex: '(?i)(window\.)?location(\.href)?\s*=\s*[''"]([^''"/:\s]{1,60}/)?login\.php[''"]'
 composite_rules:
   - id: browser-external-redirect
     desc: Browser external redirect
     crit: notable
     conf: 0.92
-    for: [html, javascript, typescript, php]
+    for: [html, javascript, typescript, php, text]
     any:
       - id: micro-behaviors/ui/window/navigation::browser-location-external-method
       - id: micro-behaviors/ui/window/navigation::browser-location-external-assign
       - id: micro-behaviors/communications/http/response::php-location-redirect
       - id: micro-behaviors/ui/window/navigation::browser-meta-refresh-external-url
+      - id: micro-behaviors/ui/window/navigation::browser-meta-refresh-content-first-external-url
   - id: obfuscated-query-navigation
     desc: Obfuscated query parsing and window calls
     crit: suspicious

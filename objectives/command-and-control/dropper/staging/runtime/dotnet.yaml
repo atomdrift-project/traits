@@ -74,8 +74,12 @@ traits:
   # never fire on a pe leaf. csharp-vbs-dropper below (required by
   # dropper-with-cleanup) is `for: [pe]` only, so that composite needs a
   # pe-compatible clone of the same text pattern.
-  - id: dotnet-vbs-file-delete-text
-    desc: .NET binary deletes its dropped VBS file
+  # The matcher is command text that deletes a .vbs file; it carries no
+  # managed-runtime evidence of its own, so native PEs embedding batch
+  # cleanup (worm installers and the like) fire it too. The `.NET` reading
+  # comes from the consuming composite's other legs.
+  - id: vbs-file-delete-text
+    desc: Command text deletes a VBS file
     crit: suspicious
     conf: 0.85
     for: [pe]
@@ -94,8 +98,8 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: micro-behaviors/data/serialize/unsafe::binary-formatter
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
-      - id: micro-behaviors/process/interpreter/reflection/runtime::invoke-member-token
+      - id: micro-behaviors/process/interpreter/runtime/clr::assembly-resolve-event-api
+      - id: micro-behaviors/metaprogramming/reflection::invoke-member-token
       - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
     any:
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
@@ -103,6 +107,13 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/
+      # A self-contained winPEAS publish carries BinaryFormatter, AssemblyResolve,
+      # InvokeMember, ReadAllBytes, and FromBase64String as framework metadata
+      # names. That is the audit assembly, not a reflective stage loader.
+      - id: well-known/tool/offensive/peas::winpeas-current-audit-assembly
+      # JetBrains developer tool and platform assemblies (dotCover, ReSharper)
+      # vendor reflection, assembly resolution, and serialization utilities.
+      - id: well-known/tool/development/editor/jetbrains/
   - id: dotnet-reactor-encrypted-process-stage
     for: [pe]
     desc: Reactor-protected encrypted process stage
@@ -114,7 +125,7 @@ composite_rules:
       - id: metadata/build/protector::dotnet-reactor-module-guid-type
       - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-dup
+      - id: micro-behaviors/mem/write/arbitrary::write-process-memory-dup
     unless:
       # Protecting a commercial build is what .NET Reactor is sold for, and the
       # other three legs are metadata-heap tokens any managed app referencing
@@ -146,8 +157,8 @@ composite_rules:
     all:
       - id: metadata/build/protector::dotnet-reactor-module-guid-type
       - id: micro-behaviors/crypto/symmetric/3des::triple-des-provider
-      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
-      - id: metadata/binary/resource/size::clr-resource-high-entropy
+      - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
+      - id: metadata/binary/resource/entropy::clr-resource-high-entropy
     unless:
       - id: metadata/signed/platform::microsoft
       - id: well-known/tool/reverse-engineering/
@@ -169,9 +180,9 @@ composite_rules:
     attack: T1027.009,T1140
     all:
       - id: micro-behaviors/process/create/compile::codedom-compiler
-      - id: metadata/binary/resource/size::dotnet-large-high-entropy-managed-resource
+      - id: metadata/binary/resource/entropy::clr-resource-size-and-entropy
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+      - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
     unless:
       - id: metadata/signed/platform::microsoft
@@ -182,6 +193,9 @@ composite_rules:
       # Lightning's game front end); an assembly naming a product and a
       # version is an identified build, not an anonymous stub.
       - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
+      # Decrypt, base64, and CodeDOM tokens belong to .NET Reactor's runtime
+      # when its module GUID is in the image, including inside a resource.
+      - id: metadata/build/protector::dotnet-reactor-module-guid-type
 
   - id: dotnet-embedded-executable-resource-stager
     desc: .NET encrypted resource stager with hidden command launch
@@ -193,12 +207,12 @@ composite_rules:
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/binary/layout/embedded::pe-embedded
-      - id: metadata/binary/resource/size::dotnet-large-high-entropy-managed-resource
+      - id: metadata/binary/resource/entropy::clr-resource-size-and-entropy
       - id: micro-behaviors/process/lifecycle/auto-exec::dotnet-module-initializer
       - id: micro-behaviors/data/archive/extract/zip::extract-to-directory
-      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+      - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/metaprogramming/reflection::activator
       - id: micro-behaviors/process/create/hidden::dotnet-create-no-window
       - id: micro-behaviors/fs/path/application/executable::cmd-exe-image-name
     unless:
@@ -267,17 +281,17 @@ composite_rules:
     needs: 3
     any:
       - id: objectives/anti-static/obfuscation/binary-metrics/imports::dotnet-single-import-profile
-      - id: objectives/anti-static/obfuscation/binary-metrics/symbols::dotnet-randomized-symbols
-      - id: objectives/anti-static/obfuscation/reflection/invoke::dotnet-assembly-load-invoke
+      - id: metadata/binary/symbols/compiler::dotnet-nonstandard-namespace-population
+      - id: micro-behaviors/metaprogramming/reflection::dotnet-load-invoke-api-references
       - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
       - id: micro-behaviors/process/interpreter/reflection/runtime::activator-createinstance-token
       - id: micro-behaviors/process/interpreter/reflection/dispatch::methodinfo-invoke-text
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
+      - id: micro-behaviors/process/interpreter/runtime/clr::assembly-resolve-event-api
       - id: "micro-behaviors/data/codec::dotnet-gzip-compression"
     downgrade:
       any:
         - id: metadata/package/versioning/
-        - id: metadata/binary/debug::pdb-visual-studio
+        - id: metadata/binary/debug::pdb-debug-release-layout
         - id: metadata/signed/platform/
         - id: well-known/dual-use/tunnel/connectify/
         - id: metadata/signed/leaf::progress-software-corporation
@@ -285,53 +299,6 @@ composite_rules:
       - id: well-known/game/steamtools::member
       - id: well-known/lib/runtime/managed/dotnet-runtime::dotnet-reference-pack-context
       - id: well-known/lib/runtime/managed/dotnet-runtime::framework-reference-assembly-context
-  - id: dotnet-surveillance-rat-stage
-    desc: .NET surveillance RAT stages a network payload
-    crit: hostile
-    conf: 0.99
-    attack: T1056.001,T1113,T1125,T1105,T1140
-    for: [pe]
-    all:
-      - id: objectives/collection/screenshot::dotnet-multimedia-surveillance-tcp
-      - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
-    any:
-      - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-      - id: "micro-behaviors/data/codec::dotnet-gzip-compression"
-      - id: micro-behaviors/communications/http/client/managed::dotnet-downloadfile-token
-      - id: micro-behaviors/communications/http/client/managed::downloaddata
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/vendor/
-  - id: assemblyresolve-resource-stage-loader
-    for: [pe]
-    desc: .NET AssemblyResolve resource stage loader
-    crit: suspicious
-    conf: 0.96
-    attack: T1027.009
-    all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
-    needs: 2
-    any:
-      - id: metadata/lang/compiler/managed::reflection-namespace
-      - id: micro-behaviors/metaprogramming/reflection::get-method-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
-      - id: "micro-behaviors/data/codec::dotnet-gzip-compression"
-    downgrade:
-      any:
-        - id: metadata/binary/resource/identity::pe-version-resource
-        - id: metadata/binary/provenance/version-info::pe-companyname-field
-        - id: metadata/binary/debug::pdb-visual-studio
-        - id: metadata/signed/platform/
-        - id: well-known/app/
-    unless:
-      - id: well-known/lib/
-      # Costura.Fody's own AssemblyResolve handler loads the references it
-      # embedded at build time; the resource names identify that bundler.
-      - id: metadata/build/bundler/asset::costura-embedded-assembly-resource
-      - id: well-known/lib/runtime/managed/dotnet-runtime::dotnet-reference-pack-context
-      - id: well-known/tool/sysadmin/chocolatey::official-library-pe-context
   - id: vbnet-lzma-resource-stage-loader
     for: [pe]
     desc: VB.NET LZMA resource stage loader
@@ -342,7 +309,7 @@ composite_rules:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/lang/compiler/managed::visual-basic-runtime
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
+      - id: micro-behaviors/process/interpreter/runtime/clr::assembly-resolve-event-api
       - id: vb-loader-resource-pair
     needs: 2
     any:
@@ -353,7 +320,7 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/binary/resource/identity::pe-version-resource
-        - id: metadata/binary/debug::pdb-visual-studio
+        - id: metadata/binary/debug::pdb-debug-release-layout
   - id: vbnet-split-reflection-stage-loader
     for: [pe]
     desc: VB.NET split token resource stage loader
@@ -364,7 +331,7 @@ composite_rules:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/lang/compiler/managed::visual-basic-runtime
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
+      - id: micro-behaviors/process/interpreter/runtime/clr::assembly-resolve-event-api
       - id: vb-loader-data-resource
       - id: vb-loader-lzma-resource
     any:
@@ -376,9 +343,9 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/binary/resource/identity::pe-version-resource
-        - id: metadata/binary/debug::pdb-visual-studio
+        - id: metadata/binary/debug::pdb-debug-release-layout
   - id: vbnet-lzma-latebind-token-cluster
-    for: [pe, csharp]
+    for: [pe]
     desc: VB.NET LZMA late bind stage tokens
     crit: hostile
     conf: 0.99
@@ -390,7 +357,7 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/reflection/vb::vb-latecall-token
       - id: micro-behaviors/process/interpreter/reflection/vb::vb-lateget-token
       - id: micro-behaviors/process/interpreter/reflection/vb::resolveeventhandler-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::create-instance-token
+      - id: metadata/binary/symbols/name::dotnet-create-instance-method-name
   - id: base64-file-dropper
     for: [pe]
     desc: Base64 decode and write file
@@ -465,7 +432,7 @@ composite_rules:
     attack: T1070.004
     all:
       - id: csharp-vbs-dropper
-      - id: dotnet-vbs-file-delete-text
+      - id: vbs-file-delete-text
     any:
       - id: micro-behaviors/process/interpreter/powershell/host::sma-namespace
       - id: micro-behaviors/process/interpreter/powershell/host::runspace-factory
@@ -491,7 +458,7 @@ composite_rules:
       - id: micro-behaviors/data/embedded/payload/resource::opaque-resource-crypto-write-api-surface
     any:
       - id: micro-behaviors/process/create/launch::create-process-api-name
-      - id: micro-behaviors/process/create/spawn::process-token-dotnet
+      - id: metadata/binary/symbols/name::dotnet-processstartinfo-name
       - id: micro-behaviors/process/create/spawn::dotnet-redirected-stdio
     needs: 1
     unless:
@@ -512,14 +479,14 @@ composite_rules:
     mbc: B0009,B0032
     all:
       - id: objectives/anti-static/obfuscation/obfuscator/managed::dotnet-reactor-obfuscator
-      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+      - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
       - id: micro-behaviors/os/api-resolution/dynamic::managed-function-pointer-delegate
-      - id: micro-behaviors/os/api-resolution/dynamic::managed-unmanaged-memory-marshalling
+      - id: micro-behaviors/mem/alloc/heap::dotnet-unmanaged-allocation-name
       - id: metadata/signed/trust-level::unsigned-missing-signature-record
     any:
       - id: metadata/lang/compiler/managed::reflection-emit
       - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/metaprogramming/reflection::activator
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
     needs: 2
     unless:
@@ -549,30 +516,15 @@ composite_rules:
       - id: metadata/binary/framework::dotnet-assembly
       - id: metadata/binary/layout/embedded::pe-embedded
       - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
+      - id: micro-behaviors/process/interpreter/runtime/clr::assembly-resolve-event-api
       - id: micro-behaviors/crypto/symmetric/3des::triple-des-decrypt-chain
       - id: "micro-behaviors/data/codec::dotnet-gzip-compression"
-      - id: micro-behaviors/process/interpreter/reflection/runtime::activator
+      - id: micro-behaviors/metaprogramming/reflection::activator
     unless:
       - id: well-known/lib/data/oracle-managed-data-access::oracle-managed-data-access-library
       - id: well-known/app/development/cratis-stage::cratis-stage-assembly
-
-  # VB.NET wrappers that carry a second native PE plus temp/process staging
-  # strings are classic MSIL crypter/dropper shells (AgentTesla-class).
-  - id: vbnet-embedded-native-temp-dropper
-    for: [pe]
-    desc: VB.NET assembly embeds a native temp-process dropper
-    crit: hostile
-    conf: 0.98
-    attack: T1027.009,T1106,T1059
-    all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: metadata/binary/layout/embedded::pe-embedded
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: micro-behaviors/process/interpreter/reflection/vb::vb-newlatebinding
-      - id: metadata/binary/resource/size::dotnet-large-high-entropy-managed-resource
-      - id: micro-behaviors/process/create/launch::create-process-api-name
-      - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
-    unless:
-      - id: metadata/signed/platform::microsoft
-      - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
+      # Corvus names these loader APIs in its analysis catalogue and stores a
+      # DOS-header magic beside other file signatures. That is not one stub
+      # decrypting an embedded PE.
+      - id: well-known/tool/reverse-engineering/corvus::corvus-reverse-engineering-tool
+      - id: well-known/lib/runtime/managed/dotnet-runtime::framework-reference-assembly-context

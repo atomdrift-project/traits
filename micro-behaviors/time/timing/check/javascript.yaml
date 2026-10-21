@@ -71,7 +71,7 @@ traits:
       - regex: '\.append\(["'']timestamp["''],Date\.now\(\)\).{0,180}\bfetch\b'
     unless:
       - id: metadata/build/
-      - id: well-known/lib/web/nextjs::next-server-build-path
+      - id: well-known/lib/web/site-platforms/nextjs::next-server-build-path
 
   - id: newdate-gated-fetch
     desc: Date object gated fetch
@@ -139,5 +139,49 @@ traits:
       type: text
       # Minifiers fold the day constant to 864e5, but source spells it out
       # as (1000 * 60 * 60 * 24). Both say the comparison is on a calendar
-      # scale: "has it been N days since X".
+      # scale: "has it been N days since X". The flipped `N < delta / 864e5`
+      # form that minifiers emit is a separate trait; both feed
+      # js-elapsed-days-gate.
       regex: '/\s*(\(\s*1000\s*\*\s*60\s*\*\s*60\s*\*\s*24\s*\)|864e5|86400000)\s*\)?\s*[<>]=?\s*\d'
+
+  # Some Vite/esbuild bundles keep the day divisor spelled with a `1e3`
+  # multiplier instead of folding to `864e5`.
+  - id: js-elapsed-days-1e3-divisor
+    desc: Elapsed-ms day divisor uses 1e3
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript, html]
+    if:
+      type: text
+      regex: '/\s*\(?\s*1e3\s*\*\s*60\s*\*\s*60\s*\*\s*24\s*\)?\s*[<>]=?\s*\d'
+
+  # Terser turns `(delta) / 864e5 > 3` into `3 < (delta) / 864e5`. Same
+  # calendar-scale test, opposite comparison order, so the divisor-first
+  # pattern above never sees it.
+  - id: js-elapsed-days-reversed-threshold
+    desc: Flipped elapsed-days comparison
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript, html]
+    if:
+      type: text
+      regex: '\d\s*[<>]=?\s*\(\s*[A-Za-z0-9_$.() \-]{1,48}\s*\)\s*/\s*(864e5|86400000)'
+
+  - id: saved-local-hour-range-branch
+    desc: Branches on a saved hour range
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: 'getHours\(\)[\s\S]{0,80}if\s*\(\s*\w+\s*>\s*\d{1,2}\s*&&\s*\w+\s*<\s*\d{1,2}\s*\)'
+
+composite_rules:
+  - id: js-elapsed-days-gate
+    desc: Elapsed time compared on a day scale
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript, html]
+    any:
+      - id: js-elapsed-days-threshold
+      - id: js-elapsed-days-1e3-divisor
+      - id: js-elapsed-days-reversed-threshold

@@ -18,7 +18,7 @@ traits:
       - id: well-known/lib/runtime/compiled/wasmer::wasmer-installer-prompt
       # Rust source commonly stores install commands as UI/help text. The
       # Rust process rules cover actual subprocess execution separately.
-      - id: metadata/file/naming::rust-source-file-context
+      - id: metadata/file/extension/identity::rust-source-extension
       - id: well-known/tool/packaging/uv::uv-install-sh-bootstrap-url
     if:
       type: text
@@ -54,6 +54,9 @@ traits:
       - regex: curl\s+.{0,200}nixos\.org/nix/install.{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}mise\.(run|jdx\.dev).{0,200}\|\s*sh\b
       - regex: curl\s+.{0,200}create-awesome-vlang-app\.vercel\.app.{0,200}\|\s*sh\b
+      - regex: curl\s+.{0,200}karajancode\.com/install\.sh.{0,200}\|\s*sh\b
+      - regex: curl\s+.{0,200}raw\.githubusercontent\.com/manufosela/karajan-code/.{0,80}/scripts/install-binary\.sh.{0,200}\|\s*sh\b
+      - regex: curl\s+.{0,200}opencode\.ai/install.{0,200}\|\s*(sh|bash)\b
       # The Studio UI renders this installer command for the user; it does
       # not execute the command in the browser process.
       - regex: 'window\.location\.origin[^\n]{0,80}install\.sh\s*\|\s*sh\b'
@@ -82,7 +85,6 @@ traits:
       - id: metadata/package/freeform::pkg-description-content-type-markdown
       - id: metadata/package/files/dependency::vsix-bundled-output-path
       - id: metadata/build/docker::dockerfile-basename
-      - id: metadata/package/testing/
       - id: "metadata/file/naming::test-directory-component"
     if:
       type: text
@@ -134,13 +136,14 @@ traits:
       #   predicate), Go tooling's own published bootstraps served from the
       #   tool's own repository (the line every Go project's CI copies out
       #   of the installation docs: golangci-lint, golang/dep and gosec),
-      #   the official NVM and Anchore Syft bootstraps, the yarn installer,
+      #   the official NVM and Anchore Syft bootstraps, Docker's official
+      #   Engine installer (get.docker.com), the yarn installer,
       #   and an elided URL (documentation,
       #   not a command: nothing is downloaded by `wget ... | sh`).
       # A Dockerfile `RUN` step needs no carve-out: cleave maps those
       # descriptors to Unknown for `for:` purposes, so this shell-scoped
       # rule never fires on them.
-      query: '((pipeline) @pipe (#match? @pipe "^wget\\s[^|\\n]*\\|\\s*sh\\b") (#not-match? @pipe "rustup\\.rs|apt\\.u\\.doover\\.com/install\\.sh|githubusercontent\\.com/(golangci/golangci-lint|golang/dep|securego/gosec)/master/install\\.sh|githubusercontent\\.com/((creationix|nvm-sh)/nvm|anchore/syft)/[^|\\n]{0,80}/install\\.sh|yarnpkg\\.com/install\\.sh|wget\\s+\\.\\.\\.\\s*\\|\\s*sh"))'
+      query: '((pipeline) @pipe (#match? @pipe "^wget\\s[^|\\n]*\\|\\s*sh\\b") (#not-match? @pipe "rustup\\.rs|get\\.docker\\.com|apt\\.u\\.doover\\.com/install\\.sh|githubusercontent\\.com/(golangci/golangci-lint|golang/dep|securego/gosec)/(main|master)/install\\.sh|githubusercontent\\.com/((creationix|nvm-sh)/nvm|anchore/syft)/[^|\\n]{0,80}/install\\.sh|yarnpkg\\.com/install\\.sh|wget\\s+\\.\\.\\.\\s*\\|\\s*sh"))'
   - id: wget-pipe-shell-word
     desc: wget piped to shell
     crit: suspicious
@@ -252,6 +255,9 @@ traits:
     if:
       type: text
       regex: 'curl\s+.{0,200}\|\s*perl\s*(-|\s*)?(\n|$)'
+    # example.com is the documentation host, including Semgrep rule samples.
+    not:
+      - substr: example.com
     unless:
       - id: metadata/package/testing/presence/path::git-tests-directory
       - id: well-known/tool/offensive/nmap::nmap-source-tree
@@ -265,8 +271,9 @@ traits:
       regex: '(?m)^[[:space:]]*(wget\b|[^#[:space:]][^\n]{0,220}\bwget\s+).{0,200}\|\s*perl'
     unless:
       # cpanminus comments that its $0 assignment lets `curl/wget | perl` work.
+      # fatscript.pm is that same installer, fat-packed.
       - type: path
-        regex: App/cpanminus/script\.pm
+        regex: App/cpanminus/
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-vsix
       - id: well-known/tool/development/vscode-extension/vscode-marketplace::bwat-dev-member-path
       - id: metadata/package/testing/
@@ -296,11 +303,14 @@ traits:
       - id: well-known/lib/runtime/scripted/jruby::jruby-home-path
       - id: well-known/lib/runtime/scripted/jruby::module-marker
       - id: well-known/lib/runtime/scripted/jruby::stdlib-archive-marker
+      - id: metadata/package/testing/
+      - id: well-known/tool/detection/
     if:
       type: text
       regex: curl\s+.{0,200}\|\s*ruby
     not:
       - substr: encoding.spec.whatwg.org/encodings.json
+      - substr: example.com
   - id: wget-pipe-ruby
     desc: wget piped to ruby
     crit: suspicious
@@ -392,35 +402,38 @@ composite_rules:
   # /usr/sbin and /opt: zero files contain both a curl/wget pipe-to-shell and an
   # http://<ip> URL. `external-ipv4-http-url` also keeps RFC1918 out, so an
   # internal mirror at 10.x piping an install script is not a match.
-  - id: ip-sourced-pipe-to-shell
-    desc: Pipes a raw-IP download into a shell
-    crit: hostile
-    conf: 0.93
-    attack: "T1105,T1059.004"
-    for: [shell, python, javascript, typescript, ruby, perl, applescript, go, rust]
-    near_lines: 0
-    all:
-      - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
-    any:
-      - id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec-sh-node
-      - id: micro-behaviors/process/create/system::python-curl-pipe-shell-call
-      - id: curl-pipe-sh
-      - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-bash-execution
-      - id: micro-behaviors/process/create/shell/pipeline::wget-pipe-bash
-    unless:
-      - id: well-known/tool/detection/cordon-scanner::cordon-defensive-scanner-context
   - id: raw-ip-wget-stdout-shell
     desc: Raw-IP wget stdout is piped into sh
     crit: hostile
     conf: 0.99
     attack: "T1105,T1059.004"
     for: [shell, python, javascript, ruby, perl]
+    unless:
+      - id: well-known/tool/detection/
     all:
       - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
       - id: micro-behaviors/communications/http/download/wget::wget-cmd
       - id: micro-behaviors/communications/http/download/cli::wget-q-flag
       - id: micro-behaviors/communications/http/download/cli::wget-stdout-flag
       - id: micro-behaviors/data/runtime/keywords::pipe-to-shell
+  - id: raw-ip-curl-stdout-shell
+    desc: Raw-IP curl stdout is piped into shell
+    crit: hostile
+    conf: 0.99
+    attack: "T1105,T1059.004"
+    for: [shell, python, javascript, ruby, perl]
+    # Keep the IP URL and pipe-to-shell evidence in one local command span.
+    # A package can document a trusted curl installer and separately configure
+    # an API endpoint by raw IP; file-wide co-occurrence is not a raw-IP dropper.
+    scope: file
+    near_bytes: 256
+    unless:
+      - id: well-known/tool/detection/
+    all:
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-http-url
+    any:
+      - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-literal
+      - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-bash-execution
   - id: curl-pipe-shell-carveouts
     desc: Known recognized usages of curl-pipe-shell
     crit: notable
@@ -440,7 +453,7 @@ composite_rules:
     mbc: "B0032.001"
     for: [javascript]
     all:
-      - id: micro-behaviors/process/create/shell/bridge::child-process-inline-exec-call
+      - id: micro-behaviors/process/create/shell/bridge::child-process-exec
       - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
     any:
       - id: micro-behaviors/communications/ip/literal::http-ip-url
@@ -543,7 +556,7 @@ composite_rules:
       - { id: curl-pipe-dash }
       - { id: micro-behaviors/process/create/shell/spawn::curl-pipe-exec-python-shell }
       - { id: curl-pipe-perl }
-      - { id: micro-behaviors/process/deploy::curl-pipe-node-stdin }
+      - { id: micro-behaviors/process/deploy/interpreter-stdin::curl-pipe-node-stdin }
       - { id: curl-pipe-ruby }
       - { id: wget-pipe-sh }
       - { id: wget-pipe-shell-word }
@@ -590,7 +603,7 @@ composite_rules:
     attack: T1059,T1105
     near_bytes: 512
     platforms: [windows, unix]
-    for: [scripts, source, javascript, typescript]
+    for: [scripts, source, javascript, typescript, rust]
     all:
       - id: micro-behaviors/communications/url/shortener/
     any:
@@ -599,8 +612,11 @@ composite_rules:
       - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
       - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-in-code
     unless:
-      # Tirith link-scanner tests embed shortened pipe-to-shell vectors.
-      - id: well-known/tool/detection/tirith::tirith-defensive-scanner-context
+      - id: well-known/tool/detection/
+      - id: metadata/package/testing/
+      # A status export quotes the post. The short link and the pipe are text
+      # the author wrote, not a shell this file runs.
+      - id: metadata/file/format/structured::twitter-status-created-at
 
   # Node/Ruby/Python spawn plus a bit.ly (etc.) curl|bash one-liner is the
   # catladder-class npm trojan: a plausible CLI subcommand that runs whatever

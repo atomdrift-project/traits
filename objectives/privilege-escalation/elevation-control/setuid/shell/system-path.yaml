@@ -1,0 +1,45 @@
+# Bind all three operations to one destination. A system-directory copy and
+# an unrelated setuid chmod do not establish a setuid shell installation.
+# This detects installation intent, not successful root execution: permissions,
+# mount flags and the copied shell's privilege handling still govern success.
+defaults:
+  platforms: [unix]
+  for: [shell]
+  attack: T1548.001
+
+traits:
+  - id: root-owned-system-shell-setuid-install
+    desc: Installs root-owned setuid system shell
+    crit: suspicious
+    conf: 0.97
+    if:
+      type: tree-sitter
+      query: |
+        ((program
+          (command name: (command_name (word) @copy) .
+            argument: (word) @source . argument: (word) @destination .) .
+          (command name: (command_name (word) @chown) .
+            argument: (word) @owner . argument: (word) @owned .) .
+          (command name: (command_name (word) @chmod) .
+            argument: (_) @mode . argument: (word) @modified .))
+          (#match? @copy "^(/bin/)?cp$")
+          (#match? @source "^/(usr/)?bin/(ba)?sh$")
+          (#match? @destination "^/(usr/)?s?bin/[A-Za-z0-9_.-]+$")
+          (#match? @chown "^(/bin/)?chown$")
+          (#match? @owner "^root(:root)?$")
+          (#match? @chmod "^(/bin/)?chmod$")
+          (#match? @mode "^(u\\+s|0?4[0-7]{3})$")
+          (#eq? @destination @owned)
+          (#eq? @destination @modified))
+
+composite_rules:
+  - id: setuid-shell-copy-system-path
+    desc: Root-owned setuid shell with audit-log erasure
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: root-owned-system-shell-setuid-install
+    any:
+      - id: objectives/evasion/indicator-removal/logs::beyondtrust-vault-audit-removal
+      - id: objectives/evasion/indicator-removal/logs::appliance-active-security-log-removal
+    near_bytes: 2048

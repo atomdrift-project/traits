@@ -66,10 +66,10 @@ traits:
   # A library filename on an absolute URL with a non-version query string:
   # real jQuery CDNs serve bare versioned paths, while hacked-site loaders
   # fetch `jquery.min.php?<telemetry>` from an unrelated host. A query
-  # opening with `v` is version cache-busting (`?ver=X.Y` on every
-  # self-hosted `wp-includes/.../jquery.js`, `?v=` elsewhere), so the
-  # matcher consumes the first query character and requires a non-`v`
-  # start, keeping ordinary self-hosts out. (A telemetry query that itself
+  # opening with `v` or a digit is version cache-busting (`?ver=X.Y`,
+  # `?2.1.1`, `?v=`), so the matcher consumes the first query character
+  # and requires some other start, keeping ordinary self-hosts out. (A
+  # telemetry query that itself
   # starts with `v` is the accepted miss.) The filename alone is only a
   # notable marker; the composite below adds the dynamic-write context
   # that makes it a loader.
@@ -80,7 +80,7 @@ traits:
     for: [html, javascript, typescript, php]
     if:
       type: text
-      regex: '(?i)src\s*=\s*[''"]https?://[^"''<>]{0,80}jquery[^"''<>]{0,24}\.(js|php)\?[^v\s"''<>]'
+      regex: '(?i)src\s*=\s*[''"]https?://[^"''<>]{0,80}jquery[^"''<>]{0,24}\.(js|php)\?[^v0-9\s"''<>]'
   # jQuery is a static file; no CDN or self-host serves it from a PHP
   # script. An absolute URL to `jquery*.php` is a server-side script wearing
   # the library's filename, the hacked-site loader shape whose query string
@@ -94,6 +94,44 @@ traits:
     if:
       type: text
       regex: '(?i)https?://[^"''<>\s]{0,80}/jquery[\w.-]{0,24}\.php\b'
+  # A script element whose absolute source is a bare, unversioned
+  # `/jquery.js` or `/jquery.min.js` at the root of some host. CDNs serve
+  # versioned paths (`/jquery-3.7.1.min.js`, `/ajax/libs/jquery/...`), and
+  # WordPress and most CMSs self-host under their asset directories, so a
+  # root-level library name on an absolute URL is the usual dress of an
+  # injected third-party loader. A self-hosted copy on the page's own
+  # domain can share the shape, so the atom alone stays notable.
+  - id: root-jquery-absolute-script-src
+    desc: Absolute script src is a root-path jquery.js
+    crit: notable
+    conf: 0.85
+    for: [html]
+    if:
+      type: text
+      regex: '(?i)<script\b[^>]{0,80}\bsrc\s*=\s*["'']https?://[^/"''<>\s]{3,80}/jquery(\.min)?\.js["'']'
+      exclude_html_comments: true
+    not:
+      - regex: '(?i)//code\.jquery\.com/'
+  # A jQuery-named script fetched from a bare public IPv4 host. CDNs and
+  # self-hosting sites serve jQuery from a domain name; a `jquery*.js` on an
+  # IP-literal host is the fake-jQuery loader hacked WordPress pages carry,
+  # often appended beside the theme's real scripts (so the page still calls
+  # jQuery and the unused-library composite cannot see it). Private and
+  # loopback hosts are excluded for intranet and development servers.
+  - id: jquery-named-script-on-ipv4-host
+    desc: jQuery-named script served from bare IP host
+    crit: suspicious
+    conf: 0.88
+    for: [html]
+    attack: T1036.005
+    if:
+      type: text
+      regex: '<script\b[^>]{0,80}src=["'']?https?://\d{1,3}(\.\d{1,3}){3}(:\d+)?/jquery[\w.-]{0,16}\.js'
+      case_insensitive: true
+      exclude_html_comments: true
+    not:
+      - regex: '//(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)'
+      - regex: '//0\.0\.0\.0'
 composite_rules:
   # A dynamically written script element whose source wears a jQuery
   # filename plus a query string: the hacked-site fake-jQuery loader shape.
@@ -124,7 +162,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/name-mangling/lib-mimic::fake-jquery-rquery
     downgrade:
       any:
-        - id: well-known/lib/web/jquery::license-url
+        - id: well-known/lib/web/client-side/jquery::license-url
   # The jQuery-named PHP script receives the infected page's host and the
   # visitor's referrer as campaign query fields: the library mimic hides a
   # traffic-distribution check-in, reporting where each visitor came from
@@ -139,3 +177,19 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/name-mangling/lib-mimic::jquery-named-php-url
       - id: micro-behaviors/communications/http/url/navigation::browser-location-host-read
       - id: micro-behaviors/communications/http/url/navigation::browser-document-referrer-read
+  # The page pulls in a root-path jQuery from an absolute host but never
+  # calls jQuery itself: no `jQuery(`/`jQuery.`, `$(document|function|'...')`
+  # or `$.ajax/get/post/each/fn`. A site that self-hosts jQuery does so to
+  # use it; an injected loader named jquery.min.js is there for its own
+  # side effects (cookie-gated second stages, click-hijack overlays).
+  - id: unused-root-jquery-injected-script
+    desc: Page loads root jquery.js it never uses
+    crit: suspicious
+    conf: 0.85
+    attack: T1036.005
+    for: [html]
+    all:
+      - id: objectives/anti-static/obfuscation/name-mangling/lib-mimic::root-jquery-absolute-script-src
+    unless:
+      - id: well-known/lib/web/client-side/jquery::jquery-global-api-call
+      - id: well-known/lib/web/client-side/jquery::jquery-dollar-api-call

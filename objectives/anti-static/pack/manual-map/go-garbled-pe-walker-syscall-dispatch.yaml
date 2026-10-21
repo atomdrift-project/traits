@@ -1,23 +1,42 @@
-# A Go program with garbled identifiers has no need to read MZ and e_lfanew
-# values or walk PE headers by hand, nor to dispatch Win32 calls through
-# syscall function pointers. Together they are the shape of a loader that
-# parses an image in memory and calls the APIs it needs without import
-# entries, with the signed-looking certificate covering the whole thing.
 defaults:
   platforms: [windows]
   for: [pe]
-  attack: T1620,T1106,T1027
+  arch: [x86-64]
+  attack: T1027,T1620
+
 composite_rules:
-  - id: garbled-go-pe-header-walk-with-syscall-dispatch
-    desc: Garbled Go PE header walk with syscall dispatch
+  # Requires an actual indexed byte transform and computed handoff in addition
+  # to the PE parser and executable allocation. Certificate provenance and
+  # high entropy alone establish none of these operations.
+  - id: go-arithmetic-pe-unpacker
+    desc: Obfuscated Go decodes and manually maps a PE payload
     crit: hostile
-    conf: 0.85
+    conf: 0.98
     all:
-      - id: objectives/anti-static/obfuscation/name-mangling/type-names::go-garbled-main-symbols
-      - id: micro-behaviors/data/format/pe-parser::pe-header-walk-x64
-      - id: micro-behaviors/data/embedded/payload/header::pe-mz-compare-x64
-      - id: micro-behaviors/os/api-resolution/manual::go-syscall-function-pointer-dispatch
+      - id: objectives/anti-static/obfuscation/name-mangling/type-names::obfuscated-go-identifiers
+      - id: micro-behaviors/data/arithmetic::x64-index-scaled-byte-subtraction-loop
+      - id: micro-behaviors/data/parse/portable-executable::pe-mz-compare-x64
+      - id: micro-behaviors/data/arithmetic::go-field-base-sum-call-setup
+      - id: micro-behaviors/os/syscall/invoke::go-syscall-function-pointer-dispatch
+      - id: micro-behaviors/mem/alloc/executable::go-abi-rwx-reserve-commit-call-x64-any
+
+  # Sibling for loaders whose decode loop is not the indexed-subtraction
+  # shape above: garbled identifiers plus inline MZ and e_lfanew validation
+  # of an embedded image, an RWX reserve/commit call through a fixed-arity
+  # wrapper, and manual syscall dispatch. Each leg alone is a loader
+  # primitive; together they describe manual mapping, not a PE inspector,
+  # which has no reason to commit RWX memory or hide its API calls.
+  - id: go-obfuscated-manual-pe-loader
+    desc: Obfuscated Go manually maps a PE image
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: objectives/anti-static/obfuscation/name-mangling/type-names::obfuscated-go-identifiers
+      - id: micro-behaviors/data/parse/portable-executable::pe-mz-compare-x64
+      - id: micro-behaviors/data/parse/portable-executable::pe-header-walk-x64
+      - id: micro-behaviors/mem/alloc/executable::go-abi-rwx-reserve-commit-call-x64-no-slice
+      - id: micro-behaviors/os/syscall/invoke::go-syscall-function-pointer-dispatch
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/tool/reverse-engineering/
       - id: well-known/app/
-      - id: well-known/lib/

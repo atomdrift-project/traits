@@ -15,12 +15,12 @@ composite_rules:
   attack: T1027,T1059.001
   mbc: C0025,E1059
   all:
-  - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+  - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
   - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
   - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-any
-  any:
-  - id: micro-behaviors/process/deploy::powershell-inline-crypto-transform-evaluation
-  - id: objectives/command-and-control/dropper/staging/encrypted::iex-finalscript
+  # Variable names such as $payload and $decryptedScript establish no data
+  # flow. Require the transform result to occur inside the evaluation call.
+  - id: micro-behaviors/process/deploy/script-eval::powershell-inline-crypto-transform-evaluation
   near_lines: 120
 - id: ps-aes-iex-self-deleting-stage-loader
   desc: AES-decrypted PowerShell stage with self-delete
@@ -40,9 +40,9 @@ composite_rules:
   mbc: C0025,B0030,E1059
   for: [powershell]
   all:
-  - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
+  - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
   - id: micro-behaviors/fs/read/file/full::powershell-file-readallbytes
-  - id: micro-behaviors/process/interpreter/eval/compile::powershell-scriptblock-constructor-text
+  - id: micro-behaviors/metaprogramming/generation::powershell-scriptblock-constructor-text
   - id: micro-behaviors/communications/http/lib/invoke-webrequest::download
   any:
   - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
@@ -76,7 +76,7 @@ composite_rules:
   - id: objectives/command-and-control/dropper/staging/encrypted::decrypt-aes-function
   - id: objectives/command-and-control/dropper/staging/encrypted::decrypt-aes-chunk-accumulator
   - id: objectives/command-and-control/dropper/staging/encrypted::decrypted-string-join
-  - id: objectives/command-and-control/dropper/staging/encrypted::iex-finalscript
+  - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-text
   any:
   - id: micro-behaviors/crypto/decrypt::powershell-base64-decryption-cooccurrence
   - id: objectives/command-and-control/dropper/staging/encrypted::base64-symmetric-decrypt-stage-batch
@@ -87,7 +87,7 @@ composite_rules:
   conf: 0.98
   all:
   - id: ps-aes-chunked-stage-loader
-  - id: objectives/evasion/masquerade/file/double-ext::pdf-double-extension-script
+  - id: metadata/file/naming::pdf-double-extension-script
 - id: ps-encoded-xor-eval-stage-loader
   desc: Encoded PowerShell XOR-decodes and evaluates a stage
   crit: hostile
@@ -99,7 +99,7 @@ composite_rules:
   - id: objectives/command-and-control/dropper/staging/encrypted::encoded-powershell-modulo-rotation
   any:
   - id: micro-behaviors/process/interpreter/eval/direct::base64-powershell-eval-command
-  - id: micro-behaviors/process/interpreter/eval/compile::encoded-powershell-scriptblock-constructor
+  - id: micro-behaviors/metaprogramming/generation::encoded-powershell-scriptblock-constructor
 
 - id: ps-custom-base32-stage-loader
   desc: Custom base32 PowerShell stage loader
@@ -132,8 +132,23 @@ composite_rules:
   all:
   - id: micro-behaviors/os/autorun/scheduled::powershell-scheduled-task-arguments
   - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-  - id: micro-behaviors/crypto/symmetric/xor/loop::repeating-key-indexed-bxor-loader
-  - id: micro-behaviors/process/interpreter/eval/compile::powershell-scriptblock-constructor
+  - id: micro-behaviors/data/encoding/xor::powershell-modulo-xor-references
+  - id: micro-behaviors/metaprogramming/generation::powershell-scriptblock-constructor-text
+
+# Bytewise XOR of Base64-decoded data followed by reflected .NET invocation
+# is a distinct in-memory stage path from the AES and modulo-XOR loaders above.
+- id: ps-base64-indexed-xor-reflective-loader
+  desc: PowerShell executes a Base64/XOR stage through reflection
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1140,T1059.001
+  mbc: C0025,B0032,E1059
+  for: [powershell]
+  all:
+  - id: micro-behaviors/data/decode/base64::powershell-frombase64string
+  - id: micro-behaviors/crypto/symmetric/xor/loop::indexed-bxor-byte-cast-rhs
+  - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-assembly-method-invoke
+  - id: powershell-reflected-result-dot-source
 
 # GammaLoad-like final stage: a network response is Base64-decoded, XOR
 # transformed, and evaluated without materialising the decrypted script.
@@ -149,5 +164,17 @@ composite_rules:
   all:
   - id: micro-behaviors/communications/http/client/managed::downloadstring
   - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
-  - id: micro-behaviors/crypto/symmetric/xor/loop::repeating-key-indexed-bxor-loader
+  - id: micro-behaviors/data/encoding/xor::powershell-modulo-xor-references
   - id: micro-behaviors/process/interpreter/eval/direct::powershell-iex-call
+
+traits:
+  # This fragment supplies the execution leg that separates a reflected
+  # payload loader from scripts that only perform Base64/XOR transforms.
+  - id: powershell-reflected-result-dot-source
+    desc: Dot-sources a reflected method result
+    crit: component
+    conf: 0.96
+    for: [powershell]
+    if:
+      type: text
+      regex: '(?is)\.GetMethod\(.{1,120}\)\.Invoke\(.{1,120}\)\s*\.\s*\$[A-Za-z_]\w*'

@@ -1,27 +1,26 @@
-# Python reverse-tunnel implants (TerminalFix-style network pivots and
-# lookalikes): a compact client.py that dials the C2 over TLS/443, upgrades
-# to a WebSocket at a /tunnel endpoint with certificate verification always
-# disabled, and relays C2-instructed arbitrary TCP connections through a
-# custom multiplexed frame header — turning the host into a SOCKS-style
-# pivot into the internal network.
+# Python relay suspicion requires operational forwarding and an unverified
+# controller channel. A path, protocol constant, or unsafe TLS option alone
+# does not establish unwanted access.
 defaults:
   platforms: [windows, unix]
   for: [python]
   attack: T1572,T1071.001
-  mbc: B0022
 
 composite_rules:
-  - id: python-websocket-tunnel-unverified-relay
-    desc: WebSocket tunnel client disables TLS verify
-    crit: hostile
-    conf: 0.95
+  # A fixed path and a struct format do not establish a backdoor. Require
+  # actual relay mechanics and both disabled TLS checks. Authorized tunnels
+  # can still implement this, so retain suspicion rather than hostility.
+  - id: python-websocket-socks-multiplex-pivot
+    desc: Framed TCP relay with disabled TLS checks
+    crit: suspicious
+    conf: 0.96
+    attack: T1572,T1090.001,T1071.001
     all:
-      - id: micro-behaviors/communications/websocket/endpoints::tunnel-ws-endpoint-path
-      - id: micro-behaviors/communications/websocket/framing::python-type-stream-length-header
-    any:
+      - id: micro-behaviors/communications/proxy/relay::python-framed-websocket-tcp-relay
+      - id: micro-behaviors/communications/proxy/socks::socks5-domain-target-constants
+      - id: micro-behaviors/communications/proxy/socks::python-socks-named-domain-branch
       - id: micro-behaviors/communications/tls/verify/disable::python-check-hostname-false
-      - id: micro-behaviors/communications/socket/ssl::verify-mode-none
-      - id: micro-behaviors/communications/socket/ssl::cert-none
+      - id: micro-behaviors/communications/tls/verify/disable::verify-mode-none
 
   # Deployment side (the PowerShell that ships the implant): an embeddable
   # Python runtime is pulled from python.org and the tunnel client launched
@@ -33,8 +32,36 @@ composite_rules:
     conf: 0.93
     for: [powershell]
     all:
-      - id: micro-behaviors/fs/path/application/executable::pythonw-executable-reference
-      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+      - id: micro-behaviors/fs/path/basename::pythonw-executable-reference
+      - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden-option
     any:
       - id: micro-behaviors/communications/websocket/endpoints::tunnel-ws-endpoint-path
       - id: micro-behaviors/process/interpreter/python::python-embed-zip-name
+
+  # Serving side: a Python script downloads ttyd and cloudflared, starts a
+  # writable bash behind a generated credential, and puts it on a public
+  # trycloudflare hostname. Nothing is inbound-reachable on the host, yet
+  # whoever learns the URL gets an interactive shell through NAT.
+  - id: python-ttyd-quick-tunnel-remote-shell
+    desc: Exposes writable shell via public tunnel
+    # An explicitly invoked debugging terminal can legitimately do this.
+    # Installation-triggered access and credential export supply intent below.
+    crit: suspicious
+    conf: 0.93
+    attack: T1572,T1219,T1059
+    all:
+      - id: micro-behaviors/communications/websocket/terminal::ttyd-writable-shell-argv
+      - id: micro-behaviors/communications/proxy/tunnel::cloudflared-local-service-tunnel
+      - id: micro-behaviors/communications/proxy/tunnel::trycloudflare-domain
+
+  # Same shell, run from a Hatch build hook: it fires on `pip install` of the
+  # sdist, so the installer's machine becomes the exposed host.
+  - id: hatch-build-hook-tunneled-remote-shell
+    desc: Build hook exposes shell via public tunnel
+    crit: hostile
+    conf: 0.96
+    attack: T1195.002,T1572,T1059
+    all:
+      - id: metadata/build/package/recipe/setup-hooks::hatch-build-hook-interface
+      - id: metadata/build/package/recipe/setup-hooks::hatch-build-hook-initialize
+      - id: python-ttyd-quick-tunnel-remote-shell

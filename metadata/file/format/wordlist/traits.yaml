@@ -10,8 +10,8 @@ traits:
   # The comma-delimited sibling of the newline lists below. Binaries are in
   # scope on purpose: name and passphrase generators compile their word
   # lists into Go/Rust string pools, where the run reads as one long
-  # `,word,word,` line. Thirty consecutive comma-separated lowercase words
-  # never occur in a banner, a command line or prose.
+  # `,word,word,` line. Exclude runs consisting solely of serialized null or
+  # boolean values: sparse numeric tables are not word lists.
   - id: comma-delimited-word-run
     desc: Comma-delimited lowercase word-list run
     crit: notable
@@ -21,6 +21,10 @@ traits:
     if:
       type: text
       regex: '[a-z]{1,20}(,[a-z]{1,20}){29,}'
+    not:
+      - regex: '^null(,null){29,}$'
+      - regex: '^true(,true){29,}$'
+      - regex: '^false(,false){29,}$'
 
   - id: one-token-per-line-list
     desc: Newline-delimited single-token wordlist
@@ -31,11 +35,13 @@ traits:
       - id: metadata/file/format/structured::binhex-4-header
       - id: "metadata/lang/source/declaration::lisp-function-definition"
       - id: metadata/file/format/serialization::protobuf-schema-source
+      # Grammar production names on separate lines are declarations, not words.
+      - id: metadata/lang/source/declaration::antlr-grammar-declaration
     count_min: 500
     if:
       type: text
-      # Exclude path rows and CSS/code delimiters, not just whitespace.
-      regex: '(?m)^[ \t]*(\d+[ \t]+)?[^\s./{};:][^\s{};:]{0,63}\r?$'
+      # Exclude path rows, comment markers, and CSS/code delimiters, not just whitespace.
+      regex: '(?m)^[ \t]*(\d+[ \t]+)?[^\s./{};:#][^\s{};:]{0,63}\r?$'
   - id: count-prefixed-token-list
     desc: Count-prefixed token wordlist
     crit: notable
@@ -110,6 +116,16 @@ traits:
     if:
       type: text
       regex: '(?im)^#\s*[A-Za-z][A-Za-z ]{1,20} Injection[^\r\n]{0,40}$'
+  # `' ; EXEC xp_cmdshell(...)` is a breakout string kept in a payload
+  # array. It names the procedure; it is not a statement the file runs.
+  - id: quoted-sqli-xp-cmdshell-breakout
+    for: [text, javascript, php, html, vbs, csharp, java]
+    desc: Quoted SQL breakout names xp_cmdshell
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)[''\"]\s*;\s*exec(ute)?\s+xp_cmdshell\b'
   - id: headword-parts-of-speech-entries
     desc: Dense headword-to-abbreviation lexicon entries
     crit: notable
@@ -143,6 +159,38 @@ traits:
       type: text
       regex: '(?im)^word\t(espeak_)?ipa\b'
 
+  # GeoNames dumps and tables cut from them keep U+200C inside romanized
+  # alternate names. The citation marks that name corpus, not a spliced token.
+  - id: geonames-place-dump-citation
+    desc: Cites the GeoNames place dump
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)geonames\.org/export/dump'
+
+  # Official Unicode Consortium data and test suites (such as IdnaTestV2.txt for UTS #46
+  # or UCD character tables). Conformance test suites contain all classes of Unicode
+  # codepoints, including variation selectors and bidi controls, as tested inputs.
+  - id: unicode-consortium-data-citation
+    desc: Cites Unicode Consortium data or spec
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '(?i)unicode\.org/(terms_of_use|reports/tr\d|Public)'
+
+  # One URL per CSV record. Brand and lure hosts in neighboring rows are
+  # independent inventory entries, not a phishing page pairing them.
+  - id: csv-url-record-inventory
+    desc: CSV inventory of many URL records
+    crit: notable
+    conf: 0.9
+    count_min: 40
+    if:
+      type: text
+      regex: '(?m)^[^,\r\n]{1,64},https?://'
+
 composite_rules:
   - id: g2p-pronunciation-dictionary
     desc: Grapheme-to-phoneme pronunciation dictionary or dataset
@@ -173,3 +221,11 @@ composite_rules:
     any:
       - id: command-injection-vector-list
       - id: web-bait-path-list
+  - id: sql-injection-string-corpus
+    desc: SQL injection strings stored as list data
+    crit: exception
+    conf: 0.92
+    for: [text, javascript, php, html, vbs, csharp, java]
+    any:
+      - id: sql-injection-vector-list
+      - id: quoted-sqli-xp-cmdshell-breakout

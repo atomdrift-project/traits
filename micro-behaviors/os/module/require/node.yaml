@@ -76,6 +76,17 @@ traits:
     if:
       type: text
       regex: '\.e\(["'']runtime["'']\)'
+  # Optional-dependency loading that hides the require from bundlers:
+  # eval returns the real require, which then resolves or loads the
+  # module. The evaluated text is the constant 'require', never a
+  # staged payload.
+  - id: node-eval-require-module-load
+    desc: Loads module through eval-obtained require
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'eval\s*\(\s*["'']require["'']\s*\)\s*(\(|\.)'
   - id: node-require-resolve-package-name
     desc: Resolves a named Node package
     crit: notable
@@ -149,8 +160,17 @@ traits:
     crit: notable
     conf: 0.9
     if:
-      type: text
-      regex: 'try\s*\{[\s\S]{0,180}require\('
+      type: tree-sitter
+      query: |
+        (try_statement body: (statement_block
+          [(lexical_declaration (variable_declarator value:
+             (call_expression function: (identifier) @callee)))
+           (variable_declaration (variable_declarator value:
+             (call_expression function: (identifier) @callee)))
+           (expression_statement
+             (call_expression function: (identifier) @callee))]
+        ) @try
+        (#eq? @callee "require"))
   - id: cjs-require-in-catch-fallback
     desc: CommonJS require inside a catch fallback
     crit: notable
@@ -209,12 +229,15 @@ traits:
       # Bare specifier only: leading "." or "/" means a relative/absolute file,
       # which is micro-behaviors/os/module/require::esm-side-effect-local-import.
       regex: '(?m)^\s*import\s+["''][^"''/.][^"''\n]{0,70}["'']\s*;?\s*$'
+    not:
+      - regex: '\.(css|scss|less|sass|styl|pcss)["'']'
     unless:
       # Declaration imports are erased and do not establish runtime loading.
       - id: metadata/lang/scripted::dts-declaration-file
       # Dart files parse as JavaScript, and `import 'package:flutter/…';` is a
       # namespace import there, not an ESM side-effect-only import.
       - id: metadata/file/extension/identity::dart-source-basename
+      - id: metadata/file/extension/identity::markdown-file-basename
   - id: esm-side-effect-local-import
     desc: ESM side-effect-only local import
     crit: notable
@@ -474,12 +497,13 @@ traits:
       kind: member
       substr: builtinModules
   - id: node-require-resolve-call
-    desc: Resolves an installed module path
+    desc: Resolves a Node module path
     crit: notable
     conf: 0.8
     if:
-      type: text
-      regex: '\brequire\.resolve\s*\('
+      type: symbol
+      kind: call
+      exact: require.resolve
 composite_rules:
   - id: scoped-config-package-loader
     desc: Invokes scoped config package loadConfig

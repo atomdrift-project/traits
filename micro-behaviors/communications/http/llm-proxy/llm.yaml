@@ -37,6 +37,17 @@ traits:
   if:
     type: text
     substr: /chat/completions
+- id: llm-audio-transcriptions-path
+  desc: OpenAI-compatible audio transcriptions path
+  crit: notable
+  conf: 0.9
+  for:
+  - scripts
+  - source
+  - python
+  if:
+    type: text
+    substr: /audio/transcriptions
 - id: go-llm-chat-completions-path
   desc: Go OpenAI-compatible chat API path
   crit: notable
@@ -75,21 +86,6 @@ traits:
   if:
     type: text
     regex: \bendpoint\s*=\s*f?["'].{0,240}/inference/v1/generate
-- id: llm-messages-path
-  desc: Anthropic-compatible messages path
-  crit: notable
-  conf: 0.72
-  for:
-  - scripts
-  - source
-  - pe
-  - elf
-  - macho
-  if:
-    type: text
-    substr: /v1/messages
-  unless:
-  - id: metadata/lang/scripted::dts-declaration-file
 - id: jvm-llm-messages-path
   desc: JVM Anthropic-compatible messages path
   crit: notable
@@ -211,13 +207,6 @@ traits:
   if:
     type: text
     substr: upload_request_body
-- id: llm-cloud-body-b64-field
-  desc: Body base64 upload field
-  crit: notable
-  conf: 0.84
-  if:
-    type: text
-    substr: body_b64
 - id: llm-cloud-uploaded-at-field
   desc: Request bodies uploaded timestamp
   crit: notable
@@ -379,7 +368,51 @@ traits:
   if:
     type: text
     regex: (?i)\bgpt-proxy\b.{0,80}\bmerged\b
+- id: huggingface-model-resolve-url
+  desc: Hugging Face model resolve URL
+  crit: notable
+  conf: 0.9
+  for:
+  - pe
+  - elf
+  - macho
+  - scripts
+  - source
+  if:
+    type: text
+    regex: huggingface\.co/.{0,40}resolve/main
+# Legacy completions clients name the prompt and the token budget as quoted
+# keys in one request body. Order follows the OpenAI completions examples:
+# the prompt key, then max_tokens. Chat-completions bodies use messages
+# instead, so they do not match.
+- id: llm-prompt-max-tokens-fields
+  desc: LLM prompt and max_tokens fields
+  crit: notable
+  conf: 0.9
+  for: [python]
+  if:
+    type: text
+    regex: '(?s)["'']prompt["''].{0,900}["'']max_tokens["'']'
 composite_rules:
+- id: llm-messages-path
+  desc: Anthropic-compatible messages path
+  crit: notable
+  conf: 0.72
+  for:
+  - scripts
+  - source
+  - pe
+  - elf
+  - macho
+  all:
+  - id: micro-behaviors/communications/http/url/path::message-list-route
+  any:
+  - id: llm-provider-anthropic-host
+  - id: micro-behaviors/communications/http/authorization-header::anthropic-version-header-map-entry
+  - id: gpt-proxy-log-prefix
+  near_bytes: 2048
+  unless:
+  - id: metadata/lang/scripted::dts-declaration-file
 - id: llm-api-compat-proxy
   desc: Embedded LLM API compatibility proxy
   crit: notable
@@ -429,7 +462,7 @@ composite_rules:
   conf: 0.88
   any:
   - id: llm-cloud-upload-request-body
-  - id: llm-cloud-body-b64-field
+  - id: micro-behaviors/data/encoding/base64::body-b64-field-reference
   - id: llm-cloud-uploaded-at-field
   - id: llm-body-upload-route
 - id: llm-provider-host-allowlist
@@ -454,6 +487,20 @@ composite_rules:
   - id: micro-behaviors/communications/http/url/endpoint::endpoint
   - id: llm-provider-openai-embeddings-endpoint
   - id: llm-provider-openai-images-endpoint
+  # An AI media/assistant tool that reads the user's stored CLI login and
+  # spends it as Bearer auth against the provider's own API (OCR, STT,
+  # chat) is making an authenticated first-party call, not staging the
+  # credential file for upload: the posted file is the tool's input media.
+- id: llm-provider-authenticated-api-call
+  desc: Bearer-authenticated call to an LLM provider API
+  crit: exception
+  conf: 0.9
+  all:
+    - id: micro-behaviors/communications/http/token-auth::bearer-header-from-variable
+  any:
+    - id: llm-provider-host-allowlist
+    - id: llm-provider-audio-endpoint
+    - id: llm-provider-openai-host
 - id: llm-provider-allowlist-without-adapter
   desc: LLM provider allowlist includes adapterless provider
   crit: component
@@ -549,3 +596,14 @@ composite_rules:
   - id: gpt-proxy-websocket-upstream--rx-14
   - id: gpt-proxy-websocket-upstream--rx-15
   - id: gpt-proxy-websocket-upstream--rx-16
+- id: local-chat-server-weight-fetch
+  desc: Local chat server fetches hosted weights
+  crit: notable
+  conf: 0.92
+  for:
+  - pe
+  - elf
+  - macho
+  all:
+  - id: llm-chat-completions-path
+  - id: huggingface-model-resolve-url

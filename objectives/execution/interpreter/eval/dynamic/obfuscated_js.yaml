@@ -5,6 +5,27 @@ defaults:
   platforms: [windows, unix]
   for: [javascript]
 traits:
+  # The first indexed coercion constructs "f"; two computed properties then
+  # reach Function and pass a generated body. The hostile composite below
+  # requires this head and the immediate invocation suffix in one JSFuck run.
+  - id: jsfuck-computed-constructor-head
+    desc: JSFuck computed constructor call head
+    crit: suspicious
+    conf: 0.94
+    for: [javascript, html]
+    if:
+      type: text
+      regex: '\(!\[\]\+\[\]\)\[\+\[\]\]\[[\s\S]{0,240}\]\[[\s\S]{0,240}\]\('
+
+  - id: immediate-call-suffix
+    desc: Obfuscated table value immediately invoked
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, html]
+    if:
+      type: text
+      regex: '\$\w+\[(\d+|[!+{}\[\]]{1,160})\]\)\(\)\s*;'
+
   # Indirect execution through this[eval|Function|constructor]. A generic
   # computed dispatch such as this[type]() is ordinary library code and is
   # intentionally excluded.
@@ -18,6 +39,7 @@ traits:
       regex: 'this\[\s*(eval|Function|constructor)\s*\]\s*\('
     unless:
       - id: well-known/lib/web/
+      - id: well-known/lib/ui/ckeditor/distribution/
       # this[mangledName]() is ordinary computed method dispatch in minified
       # bundles (e.g. transformers.js), not indirect eval. js-known-bundler-output
       # subsumes webpack/esbuild/large-module/large-minified output.
@@ -42,46 +64,7 @@ traits:
         regex: (^|[\\/])builtin-plugins[\\/]tabby-terminal[\\/]dist[\\/]
       - type: basename
         regex: ^(rimraf|run-(script-)?os|ipv6(grep)?)$
-  # Indirect eval execution via global[var]. The bare `window[X](` form is
-  # generic action dispatch (e.g., `window[handler](payload)`); split into
-  # three narrower signals — direct eval/Function name lookup, obfuscator-
-  # style `_0x` lookup, and bracket-call with immediate string argument.
-  - id: js-indirect-eval-window-named
-    desc: Global-object eval or Function bracket lookup
-    crit: suspicious
-    conf: 0.85
-    attack: "T1059.007"
-    if:
-      type: text
-      # Require a complete global-object token: `_global['eval']` is a
-      # Chromium Trusted Types adapter, not a window/global indirect-eval call.
-      # The adapter's trustedScriptFromString argument is also an explicit
-      # non-obfuscating execution path.
-      regex: '\b(window|self|global)\[\s*["''](eval|Function)["'']\]\s*\('
-    downgrade:
-      any:
-        - id: metadata/build/bundler/asset::js-large-module-bundle
-        - id: micro-behaviors/process/interpreter/vm/
-    unless:
-    # A `.js.map` is a description of code, not code: its `sourcesContent`
-    # embeds the original text as JSON strings. Whatever it quotes is already
-    # analyzed in the bundle the map describes, so a finding here is either a
-    # duplicate of that one or text that never executes. Tabby ships
-    # dist/bundle.js.map.
-    - id: metadata/file/format/source-map::sourcemap
-    - id: well-known/app/system/ilebora/
-    - id: well-known/lib/platform/wine::wine-source-tree
-    - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
-    # Linter test corpora (biome noGlobalEval) ship window["eval"](...) fixtures
-    # under tests/specs and .snap snapshots — not real indirect-eval obfuscation.
-    # One directory reference for the shared "test fixture" semantic rather than
-    # a leaf per fixture shape; it also counts as one against the suppression
-    # budget, which the two leaves plus the sourcemap entry had pushed over.
-    - id: metadata/package/testing/
-    # The bracket form is also how two ordinary libraries reach indirect eval
-    # without hiding a call target; see the exception composite below.
-    - id: global-eval-bracket-idiom
-    - id: "metadata/file/naming::test-directory-component"
+  # An obfuscator-style computed global evaluator lookup.
   - id: js-indirect-eval-window-mangled
     desc: window[_0x...] obfuscator bracket lookup
     crit: suspicious
@@ -127,18 +110,22 @@ traits:
       type: text
       substr: return EFUpp[jYAdx(
 composite_rules:
-  # Two known purposes for `window["eval"](...)` that are not call-target
-  # concealment: the legacy `parseJSON` fallback reads a value back with
-  # `window["eval"]("(" + text + ")")`, and Angular's Trusted Types JIT adapter
-  # runs `global['eval'](trustedScriptFromString(body))` through the global
-  # object so bundlers can strip the module.
-  - id: global-eval-bracket-idiom
-    desc: Benign indirect-eval idiom
-    crit: exception
-    conf: 0.9
-    any:
-      - id: micro-behaviors/process/interpreter/eval/direct::eval-parenthesized-expression
-      - id: micro-behaviors/process/interpreter/eval/indirect::global-eval-of-trusted-script
+  # JSFuck alone is evasive but can also be an inert or non-executing string.
+  # The coercion-built constructor head and immediate invocation in the same
+  # encoded run establish concealed dynamic code execution.
+  - id: jsfuck-dynamic-code-execution
+    desc: JSFuck immediately invokes a generated function
+    crit: hostile
+    conf: 0.96
+    attack: T1027.002,T1059.007
+    mbc: B0032
+    for: [javascript, html]
+    all:
+      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::jsfuck-pattern
+      - id: jsfuck-computed-constructor-head
+      - id: immediate-call-suffix
+    near_bytes: 20000
+
   - id: js-assign-common-root
     desc: Common global object assignment (root, self, global)
     crit: notable

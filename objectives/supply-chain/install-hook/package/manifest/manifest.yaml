@@ -6,23 +6,28 @@ defaults:
   for: [package.json]
 traits:
   # `main` carrying a `..` segment resolves outside the directory that holds
-  # the manifest. On a published package that is anomalous: the entry point
-  # should live in the package's own file list. The one ubiquitous exception is
-  # the generated per-subpath resolver stub of a dual CJS/ESM build, where the
-  # climb is the mechanism — that shape is suppressed by name below.
-  - id: npm-main-parent-entrypoint
-    desc: npm main traverses out of package
-    crit: suspicious
-    conf: 0.94
-    attack: T1195.002
+  # the manifest. The path shape is recorded on its own; the suspicious
+  # claim below requires a publishable name. A nameless project-reference
+  # stub (`../lib/...`) is not a package entrypoint.
+  - id: npm-main-parent-path
+    desc: npm main path climbs to a parent
+    crit: notable
+    conf: 0.9
     if:
       type: value
       path: main
       regex: '(^|/)\.\.(/|$)'
     unless:
+      # A `private: true` manifest never reaches a registry, so a parent
+      # entrypoint inside a monorepo build layout (e.g. nx `dist/` output)
+      # is not a published-package traversal risk.
+      - id: metadata/package/publishing::is-private
+      # NOTE: metadata/package/completeness::npm-main-bindings-node is
+      # deliberately not listed: it matches main exactly `bindings/node`,
+      # which contains no `..` segment, so it can never coincide with this
+      # atom's traversal matcher and would be a dead suppression entry.
       - id: metadata/package/files/dependency::node-modules-path
       - id: metadata/package/entrypoint::subpath-entry-shim-manifest
-      - id: metadata/package/completeness::npm-main-bindings-node
       - id: metadata/package/completeness::tree-sitter-language-bindings-main
       - id: well-known/lib/development/tree-sitter-grammar-npm::tree-sitter-grammar-npm-package
       - id: metadata/package/testing/presence/manifest::package-test-or-template-path
@@ -38,6 +43,20 @@ traits:
   # === Install Hooks ===
   # preinstall detection lives with the install-time behavior rules. Composites
   # reference that objective trait directly rather than duplicating metadata.
+  # The older spelling of a local install: descend into an owned subtree
+  # and run a bare `npm install` there (nested package.json from before
+  # flat installs), then return. The ascent only undoes the descent, and
+  # a bare install names no package to inject.
+  - id: postinstall-nested-subdir-bare-install
+    desc: Postinstall installs nested subdir dependencies
+    crit: notable
+    conf: 0.97
+    if:
+      type: value
+      path: scripts.postinstall
+      regex: '(^|&&)\s*cd\s+(\./)?[^.\s&;]+\s*&&[^&;]*\bnpm\s+install(\s+--\S+)*\s*([&;]|$)'
+      not:
+      - regex: '\$\(|`'
   - id: postinstall-runs-npm-install
     desc: postinstall hook runs npm install
     crit: suspicious
@@ -45,11 +64,14 @@ traits:
     if:
       type: value
       path: "scripts.postinstall"
-      regex: "\\bnpm\\s+(install|i|add)\\s"
+      # npm must be in shell command position (start or after ; & |),
+      # not merely mentioned in printed text such as `echo "npm i foo"`.
+      regex: "(^|[\\n;&|]\\s*|\\$\\()\\s*(sudo\\s+)?npm\\s+(install|i|add)(\\s|$)"
     unless:
       - id: metadata/package/runtime::vscode-extension
       - id: well-known/lib/development/extension::vscode-workspace-install-extension
       - id: metadata/package/scripts/lifecycle::postinstall-local-prefix-install
+      - id: objectives/supply-chain/install-hook/package/manifest::postinstall-nested-subdir-bare-install
       # A source-repo toolchain adding a host runtime (electron, esbuild) the
       # manifest deliberately does not record: the embedding host provides it.
       - id: metadata/package/scripts/lifecycle::postinstall-host-runtime-bootstrap
@@ -60,7 +82,7 @@ traits:
     if:
       type: value
       path: "scripts.postinstall"
-      regex: "\\byarn\\s+(add|global add)\\s"
+      regex: "(^|[\\n;&|]\\s*|\\$\\()\\s*(sudo\\s+)?yarn\\s+(add|global\\s+add)(\\s|$)"
   - id: postinstall-runs-pnpm-add
     desc: postinstall hook runs pnpm add
     crit: suspicious
@@ -68,7 +90,7 @@ traits:
     if:
       type: value
       path: "scripts.postinstall"
-      regex: "\\bpnpm\\s+(add|install)\\s"
+      regex: "(^|[\\n;&|]\\s*|\\$\\()\\s*(sudo\\s+)?pnpm\\s+(add|install)(\\s|$)"
   - id: preinstall-runs-npm-install
     desc: preinstall hook runs npm install
     crit: suspicious
@@ -76,7 +98,7 @@ traits:
     if:
       type: value
       path: "scripts.preinstall"
-      regex: "\\bnpm\\s+(install|i|add)\\s"
+      regex: "(^|[\\n;&|]\\s*|\\$\\()\\s*(sudo\\s+)?npm\\s+(install|i|add)(\\s|$)"
     unless:
       - id: metadata/package/testing/presence/harness::example-directory
       # A preinstall that does nothing but bootstrap the native-addon build
@@ -126,7 +148,7 @@ traits:
     if:
       type: value
       path: "scripts.preinstall"
-      regex: "\\byarn\\s+(add|global add)\\s"
+      regex: "(^|[\\n;&|]\\s*|\\$\\()\\s*(sudo\\s+)?yarn\\s+(add|global\\s+add)(\\s|$)"
     unless:
       - id: metadata/package/testing/presence/harness::example-directory
       - type: value
@@ -139,7 +161,7 @@ traits:
     if:
       type: value
       path: "scripts.preinstall"
-      regex: "\\bpnpm\\s+(add|install)\\s"
+      regex: "(^|[\\n;&|]\\s*|\\$\\()\\s*(sudo\\s+)?pnpm\\s+(add|install)(\\s|$)"
     unless:
       - id: metadata/package/testing/presence/harness::example-directory
       - type: value
@@ -367,6 +389,17 @@ traits:
       substr: tabby-builtin-plugin
 # === Composite Rules ===
 composite_rules:
+  # A nameless manifest cannot be published, so the parent path alone is not
+  # a package-traversal finding. Named packages still need the carve-outs
+  # below for private workspaces, shims, and documented build output.
+  - id: npm-main-parent-entrypoint
+    desc: npm main traverses out of package
+    crit: suspicious
+    conf: 0.94
+    attack: T1195.002
+    all:
+      - id: npm-main-parent-path
+      - id: metadata/package/name/convention::npm-has-name
   - id: desc-universal-legitimate-ui-copy
     desc: Universal in legitimate UI package description
     crit: baseline
@@ -454,28 +487,7 @@ composite_rules:
     unless:
       - id: metadata/package/publishing::is-private
       - id: metadata/package/testing/presence/fixture/
-  # Version 1.0.0 with install hooks
-  - id: version-1-0-0-with-hooks
-    desc: Version 1.0.0 with install hooks
-    crit: suspicious
-    conf: 0.75
-    all:
-      - id: metadata/package/versioning/sentinel::npm-version-exactly-1-0-0
-      - id: metadata/package/scripts/lifecycle::install-hooks
-    unless:
-      - id: objectives/supply-chain/install-hook/scripts/prepare/
-      - id: metadata/package/scripts/lifecycle::prepare-package-manager-build
-      - id: metadata/package/completeness::npm-source-native-addon-wrapper
-      - id: metadata/package/testing/presence/harness::example-directory
-      # The rule targets a fresh stub published as 1.0.0 with a hook, not an
-      # application tree with dev-tooling hooks.
-      - id: metadata/package/dependencies/manifest/count::application-manifest
-      - id: well-known/tool/development/agent/respecpow::archive-context
-      - id: metadata/package/dependencies/declaration::npm-parent-directory-file-dependency
-    downgrade:
-      any:
-        - id: metadata/package/freeform::pkg-skeleton-small
-        - id: metadata/package/freeform::npm-template-manifest-placeholder
+      - id: objectives/supply-chain/install-hook/project-rewrite::postinstall-runs-parent-node-script
   - id: npm-registry-provenance-with-hooks
     desc: Install-hook package points provenance to npm
     crit: suspicious
@@ -667,43 +679,6 @@ composite_rules:
       - id: metadata/package/entrypoint::has-bin-field
       - id: metadata/package/publishing::is-private
       - id: objectives/supply-chain/impersonation/package/manifest/
-  - id: scoped-placeholder-squatter
-    desc: Scoped package looks like placeholder squatter
-    crit: notable
-    conf: 0.94
-    attack: "T1195.002"
-    mbc: "B0024"
-    all:
-      - id: metadata/package/name/vocabulary::scoped-package-name
-      - id: metadata/package/entrypoint::has-index-entry
-      - id: metadata/package/empty::npm-empty-description-any
-      - id: metadata/package/empty::npm-empty-author
-      - id: metadata/package/dependencies/manifest/presence::npm-no-deps-devdependencies
-      - id: metadata/package/scripts/develop::npm-init-default-test
-    unless:
-      # Specific identities, as originally written: the directories they were
-      # widened to held this rule's own scoped-package-name leg (name/) and
-      # pkg-skeleton-small (freeform/), the shape of every squatter manifest.
-      - id: metadata/package/name/vocabulary::scoped-known-org
-      - id: metadata/package/freeform::official-react-native-package
-      - id: metadata/package/files/package-json::has-files-field
-      - id: metadata/package/runtime::has-engines
-      - id: metadata/package/entrypoint::has-bin-field
-      - id: metadata/package/publishing::is-private
-      - id: objectives/supply-chain/impersonation/package/manifest/
-  - id: inflated-major-tiny-postinstall-loader
-    desc: Inflated-major package runs postinstall loader
-    crit: hostile
-    conf: 0.97
-    attack: "T1195.002"
-    for: [npm, tar, package.json, javascript]
-    scope: archive
-    all:
-      - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
-      - id: "metadata/package/versioning/scheme::npm-multidigit-major-starting-nine"
-    unless:
-      - id: metadata/package/repository::has-repository-evidence
-      - id: metadata/package/publishing::is-private
   - id: npm-postinstall-package-identity-beacon
     desc: npm postinstall encodes data for a public-IP callback
     crit: hostile

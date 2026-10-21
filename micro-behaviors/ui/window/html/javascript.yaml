@@ -104,13 +104,45 @@ traits:
   # reader sees one destination while the href sends another. Legitimate
   # "paste this link" text is usually not wrapped in an anchor at all; the
   # phishing composites pair this with the mail context that carries it.
+  # The href host is one site and a later path segment is another
+  # hostname (`evil.example/secure.brand.com/login`). The visible URL, when
+  # present, is matched separately. Exclude common document/script suffixes:
+  # WordPress permalinks such as `/article.html/` are not embedded hosts.
+  - id: href-path-embeds-hostname
+    desc: Href path embeds another hostname
+    conf: 0.93
+    for: [html]
+    if:
+      type: text
+      regex: '(?i)href="https?://[^"/]{1,40}/[a-z0-9.-]{1,24}\.(com|net|org|edu)/[^"]{0,50}"'
+      exclude_html_comments: true
+  # Visible host ends at `.com/` while the href host keeps another dotted
+  # suffix (`brand.com.attacker.tld`). A real `.com.au` host has no second
+  # dot before the slash, and showing the full href as text has no `.com/`.
+  - id: anchor-text-hides-dotcom-suffix-host
+    desc: Anchor text hides host past dot-com
+    conf: 0.94
+    for: [html]
+    if:
+      type: text
+      regex: 'href="https?://\S{1,24}\.com\.\S{1,8}\.\S{1,8}/\S{0,48}">https?://\S{1,20}\.com/'
+      exclude_html_comments: true
+      case_insensitive: true
   - id: url-text-anchor
     desc: Anchor display text shows a URL
     conf: 0.93
     for: [html]
     if:
       type: text
-      regex: '(?i)<a\b[^>]{0,50}\bhref[^a-z0-9>]{1,5}h?ttps?://[^\s"''>]{1,50}[^>]{0,40}>\s*https?://'
+      # The href run is unbounded short of the tag close so a payload-long
+      # href (smuggled script in the query) still reaches its anchor text;
+      # [^>] cannot cross the tag boundary, so the adjacency claim holds.
+      # `=3D` is the quoted-printable form of `=` in mailed HTML.
+      # Some malformed/phishing mail HTML corrupts the href separator with
+      # a control byte. Accept a short non-alphanumeric separator as well as
+      # normal `=` / quoted-printable `=3D`, while still requiring the URL
+      # scheme immediately after it.
+      regex: '<a\b[^>]{0,50}\bhref(\s*=\s*(3D)?|[^\w>]{1,5})["'']?h?ttps?://[^>]{0,999}>\s*https?://'
       exclude_html_comments: true
       case_insensitive: true
   # Formatted twin of url-text-anchor: the URL shown as link text sits
@@ -122,8 +154,23 @@ traits:
     for: [html]
     if:
       type: text
-      regex: '(?i)href=.?https?://[^"''>\s]{1,60}.?>\s*<(font|span|b)\b[^>]{0,30}>\s*https?:'
+      regex: '<a\b[^>]{0,350}href=[^>]{0,350}>\s*<(b|font|span|strong)[^>]{0,80}>\s*https?[:;]'
+      case_insensitive: true
       exclude_html_comments: true
+  # The visible text is a login.html URL and the href is some other
+  # address. A link whose href already points at login.html is the
+  # ordinary "show the URL you will open" case and is excluded.
+  - id: login-html-text-off-href
+    desc: Login URL text on a different href
+    conf: 0.92
+    for: [html]
+    if:
+      type: text
+      regex: '<a\b[^>]{0,20}href="https?://[^"]{1,60}">\s*https?://[^<\s]{0,40}login\.html'
+      case_insensitive: true
+      exclude_html_comments: true
+    not:
+      - regex: 'href="https?://[^"]{0,80}login\.html'
   # Bulk-mail furniture: unsubscribe and view-in-browser links mark a
   # legitimate sender. Phish kits omit them; the phishing composites use this
   # as the benign-context exclusion for mailed link deception.

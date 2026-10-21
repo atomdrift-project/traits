@@ -14,21 +14,6 @@ traits:
       # output. Stay inside the same call statement while accepting that layout.
       regex: '(?is)\bVirtualAlloc[AW]?\s*\([^;]{0,240}\bPAGE_EXECUTE_READWRITE\b'
 
-  - id: page-execute-readwrite
-    desc: PAGE_EXECUTE_READWRITE flag
-    crit: notable
-    conf: 0.9
-    attack: T1055
-    for:
-      - pe
-      - dll
-      - c
-      - cpp
-      - csharp
-      - rust
-    if:
-      type: text
-      substr: PAGE_EXECUTE_READWRITE
   - id: kernel-pool-alloc
     desc: Kernel pool memory allocation
     crit: notable
@@ -340,8 +325,11 @@ traits:
       # Go's internal x64 ABI passes the third and fourth integer arguments
       # in CX and DI. This is a call with MEM_RESERVE|MEM_COMMIT (0x3000) and
       # PAGE_EXECUTE_READWRITE (0x40), followed by the empty variadic slice
-      # used by a syscall.LazyProc wrapper.
-      pattern: 'B9 00 30 00 00 BF 40 00 00 00 31 F6 45 31 C0 4D 89 C1 E8 ?? ?? ?? ??'
+      # used by a syscall.LazyProc wrapper. Go 1.23 may also clear R9 and
+      # forward it through R10, with an optional two-byte NOP before the call.
+      # Fixed-arity wrappers may also clear R9/R10, forward R10 to R11,
+      # and clear AX (the requested allocation address) before the call.
+      pattern: 'B9 00 30 00 00 BF 40 00 00 00 31 F6 45 31 C0 [0-10] 4D 89 (C1|CA|D3) [0-4] E8 ?? ?? ?? ??'
   - id: go-abi-rwx-reserve-commit-call-x64-no-slice
     desc: Go ABI RWX call without variadic slice
     crit: notable
@@ -395,39 +383,6 @@ traits:
       type: hex
       section: .text
       pattern: 6A 04
-  - id: page-execute-readwrite-arg-x64
-    desc: 'Load PAGE_EXECUTE_READWRITE into r8d/r9d'
-    crit: baseline
-    conf: 0.7
-    attack: T1055
-    arch: [x86-64]
-    for: [pe, dll]
-    size_max: 5242880
-    if:
-      type: hex
-      section: .text
-      pattern: 41 (B8|B9) 40 00 00 00
-    unless:
-      - id: well-known/app/
-      - id: well-known/lib/
-      - id: well-known/tool/
-  - id: page-execute-read-arg-x64
-    desc: Load PAGE_EXECUTE_READ (0x20) into r8d/r9d
-    crit: baseline
-    conf: 0.7
-    attack: T1055
-    arch: [x86-64]
-    for: [pe, dll]
-    size_max: 5242880
-    if:
-      type: hex
-      section: .text
-      pattern: 41 (B8|B9) 20 00 00 00
-    unless:
-      - id: well-known/app/
-      - id: well-known/lib/
-      - id: well-known/tool/
-
   - id: protected-buffer-indirect-call-x64-reloc
     desc: Calls transformed buffer in reloc section
     crit: suspicious
@@ -440,22 +395,6 @@ traits:
       type: hex
       section: .reloc
       pattern: '48 89 F9 4A BA ?? ?? ?? ?? 00 00 00 00 4B B8 20 00 00 00 00 00 00 00 49 89 E1 4D FF 15 ?? ?? ?? ?? 4A 89 F9 4A 81 C7 ?? ?? ?? ?? 48 FF D7'
-  - id: page-readwrite-arg-x64
-    desc: Load PAGE_READWRITE (0x04) into r8d/r9d
-    crit: baseline
-    conf: 0.7
-    attack: T1055
-    arch: [x86-64]
-    for: [pe, dll]
-    size_max: 5242880
-    if:
-      type: hex
-      section: .text
-      pattern: 41 (B8|B9) 04 00 00 00
-    unless:
-      - id: well-known/app/
-      - id: well-known/lib/
-      - id: well-known/tool/
   - id: safebuffers-directive
     desc: Buffer security check suppression
     crit: notable
@@ -498,7 +437,7 @@ composite_rules:
     attack: T1055
     for: [pe, dll, c, cpp]
     any:
-      - id: page-execute-readwrite
+      - id: micro-behaviors/mem/protect/constant::page-execute-readwrite
       - id: executable-allocation-indicator
     unless:
       - id: micro-behaviors/process/sync/mutex::cpython-gil-ensure

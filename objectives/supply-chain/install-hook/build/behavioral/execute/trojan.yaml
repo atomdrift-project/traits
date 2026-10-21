@@ -5,6 +5,18 @@ defaults:
   crit: suspicious
   attack: T1195.002
 traits:
+- id: setup-py-hex-argv-gated-subprocess
+  desc: Hex-decoded argv-gated setup subprocess
+  crit: suspicious
+  conf: 0.92
+  for:
+  - python
+  if:
+    type: text
+    # Hex-decoding an argv sentinel and then launching a variable-held command
+    # from the gated block conceals setup-time process execution from literal
+    # command scans. The archive composite below also requires a root setup.py.
+    regex: '(?s)fromhex\(.{0,100}\)\.decode\(\).{0,100}in sys\.argv.{0,250}subprocess\.run\(\w+'
 - id: setup-py-subprocess-run
   desc: Custom build_ext class runs subprocess.run
   crit: suspicious
@@ -20,6 +32,8 @@ traits:
     # (AIMET's BuildExtensionCommand) stages local files; it fetches nothing.
     - id: micro-behaviors/process/create/shell/build::local-file-copy-invocation
     - id: micro-behaviors/process/create/shell/build::make-toolchain-invocation
+    - id: micro-behaviors/process/create/shell/build::make-toolchain-variable-invocation
+    - id: micro-behaviors/process/create/shell/build::cmake-build-variable-invocation
 - id: setup-py-subprocess-call
   desc: setup.py install class with subprocess
   crit: suspicious
@@ -49,7 +63,10 @@ traits:
   - python
   if:
     type: text
-    regex: (setup\.py|cmdclass)[\s\S]{0,500}(curl|wget)[\s\S]{0,200}exec
+    # Anchor setup.py against longer installer names (litex_setup.py): the
+    # hook claim is about setup.py itself. The linear-time engine has no
+    # lookaround, so the boundary char is consumed per-match instead.
+    regex: ((^|[^-\w.])setup\.py|cmdclass)[\s\S]{0,500}(curl|wget)[\s\S]{0,200}exec
   unless:
   - id: well-known/tool/detection/
   - id: well-known/lib/format/conda-package/
@@ -162,7 +179,9 @@ traits:
   - package.json
   if:
     type: text
-    regex: '"(pre|post)?install"\s*:\s*"[^"]{0,100}\b(sh|bash|zsh)\s+-c\b'
+    regex: '"(pre|post)?install"\s*:\s*"[^\n]{0,120}\b(sh|bash|zsh)\s+-c[^\n]{0,120}'
+  not:
+    - regex: '\b(test\s+-d|mkdir)\b'
   unless:
   - id: well-known/tool/development/vscode-extension/vscode-marketplace::oxc-vscode-package-name
   - id: metadata/package/testing/presence/manifest::has-karma
@@ -235,15 +254,15 @@ traits:
   - type: text
     regex: ^#!
   - id: well-known/tool/sysadmin/rancher::dapper-release-download
-- id: rust-build-sha256-checksum-compare
-  desc: build.rs compares downloaded archive SHA-256
+- id: rust-build-sha256-verify-call
+  desc: build.rs calls SHA-256 verify routine
   crit: notable
   conf: 0.92
   for:
   - rust
   if:
     type: text
-    regex: assert_eq!\s*\(\s*\w*(digest|hash|checksum)\w*\s*,\s*\w*SHA256\w*
+    regex: '(?m)\bverify_(sha256|checksum)\w*\s*\('
 - id: rust-build-tar-extract-command
   desc: build.rs extracts tar archive
   crit: notable
@@ -263,6 +282,19 @@ traits:
     type: text
     regex: os\.system\([^\n]{0,120}rm\s+-[^\n]{0,120}\.egg-info
 composite_rules:
+- id: sdist-setup-py-hex-argv-gated-subprocess
+  desc: Python source distribution hides gated setup-time process execution
+  crit: hostile
+  conf: 0.96
+  for:
+  - python-sdist
+  - python
+  scope: archive
+  attack: T1195.002,T1027
+  all:
+  - id: setup-py-hex-argv-gated-subprocess
+  - id: metadata/build/pip::root-setup-py-path
+  - id: micro-behaviors/process/create/subprocess::variable-command-argument
 - id: python-packaging-curl-download-execute
   desc: Python packaging executes curl against a remote URL
   crit: hostile
@@ -270,6 +302,12 @@ composite_rules:
   for:
   - python
   scope: file
+  # Illustrative install-hook examples in defensive reviews show the same
+  # setup.py shape without installing anything; the agent-safety context
+  # marks them inert.
+  unless:
+  - id: metadata/package/documentation/agent-safety::scoped-security-test-documentation
+  - id: metadata/package/documentation/security-testing::defensive-review-documentation
   all:
   - id: metadata/build/pip::packaging-setuptools-imported-setup-call
   - id: micro-behaviors/communications/http/curl::curl-command-remote-url
@@ -482,7 +520,7 @@ composite_rules:
   - id: micro-behaviors/communications/url/external/github::github-archive-ref-download
   - id: micro-behaviors/dylib/library/family::cmake-build-ref
   - id: objectives/supply-chain/install-hook/build/behavioral/metadata::rust-build-sha256-pin-constant
-  - id: objectives/supply-chain/install-hook/build/behavioral/execute::rust-build-sha256-checksum-compare
+  - id: metadata/lang/source/shape::rust-hash-comparison-text
   - id: objectives/supply-chain/install-hook/build/behavioral/execute::rust-build-tar-extract-command
 - id: rust-build-rs-pinned-artifact-verify
   desc: build.rs pinned SHA-256 verified download
@@ -491,10 +529,11 @@ composite_rules:
   for:
   - rust
   all:
-  - id: objectives/supply-chain/install-hook/build/behavioral/metadata::rust-build-sha256-pin-constant
+  - id: objectives/supply-chain/install-hook/build/behavioral/metadata::rust-build-sha256-pin-source
   any:
-  - id: objectives/supply-chain/install-hook/build/behavioral/execute::rust-build-sha256-checksum-compare
+  - id: metadata/lang/source/shape::rust-hash-comparison-text
   - id: objectives/supply-chain/install-hook/build/behavioral/metadata::rust-build-sha256-verify-function
+  - id: objectives/supply-chain/install-hook/build/behavioral/execute::rust-build-sha256-verify-call
   - id: micro-behaviors/crypto/hash/digest::rust-sha256-hex-output
 - id: rust-build-rs-external-artifact-download
   desc: build.rs downloads external build artifact
@@ -523,7 +562,7 @@ composite_rules:
   - rust
   all:
   - id: metadata/lang/source/declaration::rust-proc-macro-entrypoint
-  - id: micro-behaviors/process/create/subprocess::rust-process-command
+  - id: micro-behaviors/process/create/subprocess::rust-command-new-call
   unless:
   - id: well-known/lib/development/rust-build-macros::rust-build-macro-crate-context
   - id: micro-behaviors/process/create/direct::rust-git-metadata-command
@@ -538,11 +577,11 @@ composite_rules:
   all:
   - id: metadata/build/ecosystem::cargo-build-script-basename
   - id: micro-behaviors/data/source/syntax/directive::rust-include-bytes
-  - id: micro-behaviors/fs/path/temp::rust-temp-dir
+  - id: micro-behaviors/os/sysinfo/directories::rust-temp-dir
   - id: micro-behaviors/fs/write/file/full::fs-write
   - id: micro-behaviors/fs/chmod/executable/mode::rust-executable-permissions
   - id: micro-behaviors/process/create/direct::rust-indirect-command-new
-  - id: micro-behaviors/process/create/direct::rust-command-deferred-spawn
+  - id: micro-behaviors/process/create/subprocess::rust-command-spawn-call
   - id: micro-behaviors/process/daemonize/spawn::rust-spawn-detached-unix
   - id: micro-behaviors/process/fd/stdio::rust-child-stdout-null
   - id: micro-behaviors/process/fd/stdio::rust-child-stderr-null
@@ -554,17 +593,16 @@ composite_rules:
   for:
   - rust
   all:
-  - id: metadata/lang/source/declaration::rust-proc-macro-entrypoint
   - id: objectives/supply-chain/install-hook/build/behavioral/execute::rust-proc-macro-process-exec
   unless:
   - id: micro-behaviors/process/create/direct::rustfmt-process-command
   - id: micro-behaviors/process/create/direct::rust-cargo-toolchain-command
+  - id: micro-behaviors/process/create/direct::rust-nvcc-version-query
   - id: well-known/lib/testing/cargo-test-macro::source-tree-path
   - id: well-known/lib/development/tauri::tauri-macros-context
   - id: well-known/lib/development/rust-cpp/
   - id: metadata/package/testing/presence/harness::rust-tests-directory-path
-  - id: micro-behaviors/process/create/direct::rust-git-metadata-command
-  - id: micro-behaviors/process/create/direct::rust-shell-git-query-command
+  - id: micro-behaviors/process/create/direct::rust-git-build-state-query
   # Known build-introspection macro crates, and macros whose compile-time
   # exec is the documented protobuf codegen step (pinned protoc helper from
   # protoc-bin-vendored).
@@ -624,4 +662,7 @@ composite_rules:
   - id: objectives/supply-chain/install-hook/build/behavioral/exfil::cargo-archive-build-rs-post-exfil
   - id: objectives/supply-chain/install-hook/build/behavioral/stage::cargo-archive-build-rs-staged-payload-exec
   - id: objectives/supply-chain/install-hook/build/behavioral/exfil::rust-proc-macro-env-http-post
-  - id: objectives/supply-chain/install-hook/build/behavioral/execute::makefile-curl-exec
+  # makefile-curl-exec is covered by its own suspicious composite: a bare
+  # download-and-execute establishes no trojan on its own (official vendor
+  # installers in a project's own build fetch this way), so it must not
+  # escalate a Makefile to a trojan here.

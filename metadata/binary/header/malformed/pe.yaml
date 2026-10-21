@@ -28,13 +28,6 @@ traits:
     if:
       type: symbol
       exact: SetSystemTimeAdjustment
-  - id: import-padding-timer-queue
-    desc: 'CreateTimerQueue import'
-    crit: notable
-    conf: 0.75
-    if:
-      type: symbol
-      exact: CreateTimerQueue
   - id: import-padding-write-profile
     desc: 'WriteProfileSectionA import'
     crit: notable
@@ -81,15 +74,6 @@ traits:
       type: metrics
       field: pe.dos_stub_zeroed
       min: 1
-  - id: pe-dos-stub-modified
-    desc: PE DOS stub region modified
-    crit: notable
-    conf: 0.9
-    ref: sha256:b38ed78c2328a41c8a08e3b6d508edff3ca75b8101cb517b0891be47a14a48e3
-    if:
-      type: metrics
-      field: pe.dos_stub_modified
-      min: 1
   - id: pe-misaligned-section
     desc: PE section alignment anomaly
     crit: notable
@@ -99,20 +83,6 @@ traits:
       type: metrics
       field: pe.misaligned_section_count
       min: 1
-  # Zero populated data directories. Every linker emits at least an import
-  # directory — a PE has to name kernel32 to get a process started — so an
-  # image that declares none resolves its imports at runtime from a hand-built
-  # header. Crypters and shellcode-style loaders produce exactly this; normal
-  # binaries carry four to six. Neutral structural fact: the intent lives in
-  # the packer composites that reference it.
-  - id: pe-no-data-directories
-    desc: PE declares no data directories
-    crit: notable
-    conf: 0.95
-    if:
-      type: metrics
-      field: pe.declared_data_directory_count
-      max: 0
   - id: pe-section-count-mismatch
     desc: PE section count disagrees with COFF header
     crit: notable
@@ -123,30 +93,15 @@ traits:
       min: 1
   - id: pe-section-overlap
     desc: Overlapping PE section file or virtual ranges
-    crit: suspicious
+    # Overlap is an anomalous structural fact, but installers, runtimes,
+    # firmware, and games can produce it legitimately. Intent belongs in the
+    # packer/loader composites that combine this observation with other evidence.
+    crit: notable
     conf: 0.95
     if:
       type: metrics
       field: pe.section_overlap_count
       min: 1
-    unless:
-      - id: metadata/package/testing/presence/path/
-      - id: well-known/lib/crypto/openssl::openssl-cryptogams
-      - id: well-known/game/online::moyu-packed-game-context
-      - id: well-known/lib/runtime/scripted/
-      # NSIS self-extractors routinely report overlapping virtual section ranges
-      # from the stub layout; that is installer packaging, not packing evasion.
-      - id: metadata/binary/installer/script::nsis
-      # Tiny C Compiler embeds a PE header template with overlapping section ranges
-      - id: well-known/lib/runtime/compiled/tiny-c-compiler::tiny-c-compiler-library
-      - type: value
-        path: pe.overlapping_sections
-        exact: set_Xcommand_set
-      # Qt embeds the MIME type database in a dedicated .qtmimedatabase section
-      # whose layout in MinGW builds can report overlapping section ranges.
-      - type: value
-        path: pe.overlapping_sections
-        exact: .qtmimedatabase
   - id: pe-bss-like-sections-multiple
     desc: PE has multiple BSS-style sections
     crit: notable
@@ -190,14 +145,6 @@ traits:
       type: value
       path: pe.data_directories[0].rva
       exact: '268435456'
-  - id: version-info-company-name-absent
-    desc: CompanyName field absent from PE version info
-    crit: baseline
-    conf: 0.8
-    if:
-      type: value
-      path: pe.version.company
-      exists: false
 
 composite_rules:
   - id: pe-97-byte-nonstandard-name-parser-failures
@@ -227,7 +174,7 @@ composite_rules:
       - id: metadata/binary/symbols/count::many-imports
     any:
       - id: import-padding-system-time
-      - id: import-padding-timer-queue
+      - id: micro-behaviors/time/schedule/callback::create-timer-queue-symbol
       - id: import-padding-write-profile
       - id: import-padding-console-alias
   - id: mass-export-aliasing
@@ -263,20 +210,3 @@ composite_rules:
     unless:
       - id: metadata/binary/framework/
       - id: metadata/signed/platform/
-  - id: version-info-string-table-stripped
-    desc: PE version info present but string fields stripped
-    crit: notable
-    conf: 0.85
-    attack: T1036
-    size_min: 32768
-    all:
-      - id: metadata/binary/provenance/version-info::version-info-file-version-present
-      - id: version-info-company-name-absent
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/framework::dotnet-metadata
-      - id: metadata/lang/compiled::autoit-compiled-script
-      - id: well-known/lib/runtime/native-platform/unity::unity-player-loader-reference
-      - id: metadata/package/versioning/scheme::pe-product-name-present
-      - id: metadata/package/versioning/scheme::pe-file-description-present
-      - id: metadata/package/versioning/scheme::pe-legal-copyright-present

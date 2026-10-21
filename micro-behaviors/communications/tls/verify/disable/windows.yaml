@@ -8,11 +8,53 @@ defaults:
 
 traits:
   # Relocated from objectives/command-and-control/backdoor/rat/tasking, where
-  # it was `shad0w-ignore-certificate-validation`. The flag name also appears
-  # in TLS client libraries that map or document it (MariaDB Connector/C's
-  # schannel code), so it is a capability, not a Shad0w marker.
-  - id: ignore-unknown-ca-security-flag
-    desc: References SECURITY_FLAG_IGNORE_UNKNOWN_CA
+  # it was `shad0w-ignore-certificate-validation`. The flag family also appears
+  # in TLS client libraries that map or document the WinINet surface
+  # (MariaDB Connector/C's schannel code) and in API bindings that re-declare
+  # it as constants (golang.org/x/sys/windows types_windows.go), so a bare
+  # reference is a capability signal, not a Shad0w marker and not a bypass:
+  # it stays at the file's notable default while the setter call below and
+  # the composite carry the suspicious level.
+  - id: windows-http-ignore-flag-reference
+    desc: References Windows HTTP certificate-ignore flags
     if:
       type: text
-      substr: SECURITY_FLAG_IGNORE_UNKNOWN_CA
+      regex: '(?i)\bSECURITY_FLAG_IGNORE_[A-Z_]+\b'
+  # SecuritySetMask is the WinINet call that applies a security-flag mask to a
+  # request handle, so a reference to it means the mask is being set rather
+  # than merely re-declared; the flag constants themselves stay with the
+  # reference trait above. The composite requires one of the two alongside
+  # the option write and the skip-verify branch.
+  - id: wininet-certificate-ignore-mask
+    desc: References the WinINet SecuritySetMask setter
+    crit: suspicious
+    if:
+      type: text
+      regex: '(?i)\bSecuritySetMask\b'
+
+  # Match the branch that applies the caller-controlled setting, rather than
+  # merely a struct field declaration.
+  - id: go-insecure-skip-verify-config
+    desc: Branches on Go insecure TLS option
+    for: [go]
+    crit: notable
+    if:
+      type: text
+      regex: '\bif\s+c\.TLSClientConfig\.InsecureSkipVerify\s*\{'
+
+composite_rules:
+  - id: go-wininet-configurable-tls-bypass
+    desc: Go WinINet client configures TLS verification bypass
+    for: [go]
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/tls/verify/configure::wininet-security-flags-option-set
+      - id: go-insecure-skip-verify-config
+    # The ignore mask reaches the handle either through the SecuritySetMask
+    # setter or through ignore flags passed to the option write; the composite
+    # requires one of those alongside the option write and the branch.
+    any:
+      - id: wininet-certificate-ignore-mask
+      - id: windows-http-ignore-flag-reference
+    near_bytes: 3000

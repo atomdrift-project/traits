@@ -48,8 +48,7 @@ traits:
   desc: Addresses a language model
   if:
     type: text
-    regex: \b(language-model code generators?|AI maintenance directive|LLM)\b
-    case_insensitive: true
+    regex: '(?i)\b(language-model code generators?|AI maintenance directive)\b|\bLLM\b'
 - id: repository-agent-directive-marker
   desc: Marks text as an agent directive
   if:
@@ -71,24 +70,6 @@ traits:
     type: text
     regex: '\b(assistant|agent|reviewer|tools?|LLM)\s*:'
     case_insensitive: true
-- id: data-access-verb-token
-  desc: Data-access verb token
-  if:
-    type: text
-    regex: \b(read|copy|reveal|print|expose|paste|locate|dump)\b
-    case_insensitive: true
-- id: data-transfer-verb-token
-  desc: Data-transfer verb token
-  if:
-    type: text
-    regex: \b(post|submit|upload|send|transmit|push)\b
-    case_insensitive: true
-- id: repository-edit-verb-token
-  desc: Repository-edit verb token
-  if:
-    type: text
-    regex: \b(delete|commit|erase|replace|add|insert|merge|update|overwrite|remove)\b
-    case_insensitive: true
 - id: control-action-prose-fragment
   desc: Control-action verb followed by prose
   if:
@@ -106,12 +87,23 @@ traits:
   conf: 0.94
   if:
     type: text
-    regex: \b(do not|don't|never) (mention|tell|disclose|reveal)\b[^.\n]{0,24}
+    regex: \b(do not|don't|never) (mention|tell|disclose|reveal)\b[^.\n]{0,64}
     case_insensitive: true
     # "don't tell them to sign up manually" steers what advice the agent gives;
     # it does not hide an instruction or an action from the user.
+    # "never mention Claude" in a commit-attribution ban names a product,
+    # not an instruction or action being hidden from the user.
+    # "never reveal ... security rules / system instructions" keeps the
+    # prompt text private; the hidden object is the instruction itself.
     not:
     - regex: (?i)\btell\s+(them|the user|users?)\s+to\b
+    - regex: (?i)\bmention\s+["'`]?(claude|chatgpt|copilot|gemini)\b
+    - regex: (?i)\b(security rules|system instructions?)\b
+    # "never reveal credentials/secrets" is a secret-handling guardrail
+    # in an agent persona, not an order to hide the instruction itself.
+    - regex: (?i)\b(credentials?|secrets?|passwords?|tokens?)\b
+    # Product identity guidance conceals no action or instruction from a user.
+    - regex: '(?i)\b(mention|disclose|reveal)\s+(any )?(underlying )?(base|foundation) model( name)?\b'
 - id: repository-agent-silent-action
   desc: Agent action marked for concealment
   conf: 0.94
@@ -134,26 +126,103 @@ traits:
     regex: \bhide (the |this )?[^.\n]{0,48} from the user\b
     case_insensitive: true
 - id: repository-agent-no-review
-  desc: Agent directed around review
+  desc: Action lacks notice or approval
   conf: 0.94
   if:
     type: text
-    # The span reaches back over the clause so the disclaimer exclusion
-    # below can see a change-policy verb (`may change ... without notice`).
-    regex: '[\w\s/,]{0,48}\bwithout (notice|review|asking|confirmation)( me)?\b'
+    # Retain a whole bounded clause, including a leading prohibition, rather
+    # than clipping "Does not record, promote ... without asking" mid-word.
+    regex: '[\w\s/,]{0,100}\bwithout (notice|review|asking|confirmation)( me)?[\w\s]{0,24}'
     case_insensitive: true
   not:
+    # "Do not / Does not / Never ... without asking" requires approval.
+    # Filter only this matched clause: a separate unreviewed action in the
+    # same document must still be detected. Punctuation bounds the clause.
+    - regex: '(?i)\b(do(es)? not|never)\b[\w\s/,]{0,100}\bwithout\b'
     # Vendor change-policy disclaimers (`may change or be removed at any
-    # time without notice`) describe the vendor's own release policy, not a
-    # concealed agent action. `edit` is deliberately not a policy verb, so a
-    # directive such as `Make the edit without notice` still matches.
-    - regex: '(?i)(change[sd]?|remove[sd]?|update[sd]?|modif\w*|subject to change)[^.]{0,48}without (prior )?notice'
+    # time without notice`, `slugs are retired without notice`) describe the
+    # vendor's own release policy, not a concealed agent action. `retire` and
+    # `deprecate` belong to the same class as change/remove/update. `edit`
+    # is deliberately not a policy verb, so a directive such as
+    # `Make the edit without notice` still matches.
+    - regex: '(?i)(change[sd]?|remove[sd]?|update[sd]?|modif\w*|retire[sd]?|deprecat\w*|subject to change)[^.]{0,48}without (prior )?notice'
+    # CLI --force documentation (`Overwrite existing config without
+    # confirmation`) describes a user-invoked flag: the user passing the
+    # flag is the approval. It directs no agent around review. Kept to
+    # confirmation/prompting wording so `without asking` directives still
+    # match.
+    - regex: '(?i)\boverwrit\w* [^.]{0,48}without (confirmation|prompting)\b'
     # First person: the user's own request to their assistant ("ask ... without
     # asking me to reveal it in chat"). Injected text speaks of `the user`.
     - regex: '(?i)without asking me\b'
+    # Enforcement consequences ("submissions will be closed without review")
+    # penalize non-compliance; they direct nobody around review.
+    - regex: '(?i)(closed|rejected) without review'
+    # Continuing an already authorized loop ("rerun without asking for
+    # another continuation") is not a direction to skip review.
+    - regex: '(?i)\brerun without asking\b'
+    # Spec-quality prose ("implement without asking clarifying questions")
+    # says the document should already answer the reader. It does not tell
+    # the agent to skip review of its own actions.
+    - regex: '(?i)without asking( me)?[\w\s]{0,24}questions\b'
+    # Session or chat recording/logging configuration ("Record each chat
+    # without asking; set true to be asked once per chat") configures replay
+    # prompt gates, not a directive commanding an agent to conceal actions.
+    - regex: '(?i)(record|log|save)\w* [^.\n]{0,48}without asking'
+    - regex: '(?i)\bset true to be asked\b'
+    # Direct CLI/offline mode documentation ("without asking the model to do it",
+    # "without asking the model which protocol to run") describes skipping an
+    # AI model call, not concealing an agent action from the user.
+    - regex: '(?i)\bwithout asking (the |an )?(model|llm)\b'
+    # Avoiding repeated user input is not skipping approval of an action.
+    - regex: '(?i)\bwithout asking (the )?users? to (duplicate|repeat|retype)\b'
+    # Interactive CLI permission prompts ("Allow AI agents to run commands
+    # without confirmation prompts?") ask the user for approval mode preferences;
+    # user prompts and prompt options are not concealed agent directives.
+    - regex: '(?i)\bwithout confirmation prompts?\b'
+    # Restoring a run the user already started ("resumes without
+    # confirmation") continues that session. It does not tell an agent
+    # to skip review of a new action.
+    - regex: '(?i)\b(resume|resumes|resumed|resuming|recover\w*)\b[^.]{0,48}without confirmation\b'
+- id: repository-agent-approval-demand
+  desc: Directive requires user approval first
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    # Approval gates ("the client must ask the user first", "asks first",
+    # "must approve", "asks for confirmation"): the text routes the action
+    # through a person rather than around them. The last is the
+    # permission-mode form ("Agent proposes actions and asks for
+    # confirmation", a named confirm mode in agent config). Used as a
+    # suppressor leg, not a detection.
+    regex: '\basks? (the user )?first\b|\bmust ask\b|\basks? for confirmation\b'
+    case_insensitive: true
+- id: repository-agent-honesty-demand
+  desc: Directive demands disclosure or accessibility
+  crit: notable
+  conf: 0.93
+  if:
+    type: text
+    # Honesty guardrails ("tell the user the truth", "the honest status")
+    # order the agent to disclose, so a nearby "do not tell the user"
+    # clause is an anti-deception instruction, not concealment. Data-model
+    # specs that order accessibility of history ("details remain
+    # accessible") are the same disclosure demand over a view.
+    # Used as a suppressor leg, not a detection.
+    regex: '\btell the user the truth\b|\bhonest (status|report)\b|\bremains? accessible\b'
+    case_insensitive: true
+
 - id: repository-agent-deceptive-report
   desc: Agent told to report falsely
   conf: 0.94
+  unless:
+    # Absence assertions (`assert key not in response`, `assertNotIn`) verify
+    # redaction in tests; they do not instruct the agent to conceal anything.
+    - type: text
+      regex: '(?i)assert.{0,60}\bnot in\b'
+    - type: text
+      regex: '(?i)assertNotIn\b'
   if:
     type: text
     regex: \b(say that no secrets were found|claim no credentials|must not appear)\b
@@ -170,8 +239,16 @@ traits:
   conf: 0.93
   if:
     type: text
-    regex: \b(highest-priority|higher-priority|maintainer priority|repository-owner policy)\b
+    # The span reaches forward over the ranked noun so the scheduling
+    # exclusion below can see it ("highest-priority channel").
+    regex: \b((highest|higher)-priority|maintainer priority|repository-owner policy)\b[\w\s]{0,16}
     case_insensitive: true
+  not:
+    # Scheduling prose ranks work items ("highest-priority channel",
+    # "higher-priority fields", "highest-priority registered provider");
+    # only standing claims count.
+    - regex: '(?i)(highest|higher)-priority (channel|field|queue|incomplete task|task|item)s?\b'
+    - regex: '(?i)(highest|higher)-priority registered\b'
 - id: repository-agent-approval-claim
   desc: Prior approval or authoritative wording
   conf: 0.93
@@ -179,47 +256,18 @@ traits:
     type: text
     regex: \b(already approved|authoritative (instructions?|policy)|as authoritative:)
     case_insensitive: true
+  not:
+    # User-directed approval documentation ("work you already approved",
+    # "tasks you already approved") refers to user-granted permissions,
+    # not an attacker claiming false authority to an agent.
+    - regex: '(?i)\b(work|tasks?|commands?|actions?|changes?|requests?|runs?) (that )?you already approved\b'
+    - regex: '(?i)\byou already approved\b'
 - id: repository-agent-system-label
   desc: Labels text as a system message
   conf: 0.93
   if:
     type: text
     regex: \b(system (notice|instruction|message)\b[ \t]*:|supersedes the user's request\b)
-    case_insensitive: true
-- id: secret-data-term-token
-  desc: Secret-data term token
-  conf: 0.9
-  if:
-    type: text
-    regex: \b(private key|credentials?|secrets?|api keys?|oauth token|github_token)\b
-    case_insensitive: true
-- id: environment-data-term-token
-  desc: Environment-data term token
-  conf: 0.9
-  if:
-    type: text
-    regex: \b(environment variables?|password hashes?|system instructions?)\b
-    case_insensitive: true
-- id: repository-agent-security-target
-  desc: Agent directive weakens security checks
-  conf: 0.9
-  if:
-    type: text
-    regex: \b(security tests?|authz\.spec|signature verification|pull_request_target)\b
-    case_insensitive: true
-- id: repository-agent-persistence-target
-  desc: Agent directive names persistence target
-  conf: 0.9
-  if:
-    type: text
-    regex: \b(authorized_keys|postinstall hook|unauthenticated /admin)\b
-    case_insensitive: true
-- id: repository-agent-security-report-target
-  desc: Agent directive suppresses security reports
-  conf: 0.9
-  if:
-    type: text
-    regex: \b(vulnerability reports?|security\.md)\b
     case_insensitive: true
 - id: repository-agent-user-unaware-wording
   desc: Directive keeps the user unaware
@@ -253,11 +301,11 @@ composite_rules:
   conf: 0.94
   near_bytes: 80
   all:
-  - id: sensitive-target-term-token
+  - id: metadata/lang/natural/vocabulary/content-word::sensitive-target-term-token
   any:
-  - id: data-access-verb-token
-  - id: data-transfer-verb-token
-  - id: repository-edit-verb-token
+  - id: metadata/lang/natural/vocabulary/content-word::data-access-verb-token
+  - id: metadata/lang/natural/vocabulary/content-word::data-transfer-verb-token
+  - id: metadata/lang/natural/vocabulary/content-word::english-edit-verb-token
 - id: repository-content-agent-addressee
   desc: Repository content addresses an AI agent
   any:
@@ -270,11 +318,14 @@ composite_rules:
 - id: repository-content-agent-imperative
   desc: Repository content issues an agent action
   any:
-  - id: data-access-verb-token
-  - id: data-transfer-verb-token
-  - id: repository-edit-verb-token
+  - id: metadata/lang/natural/vocabulary/content-word::data-access-verb-token
+  - id: metadata/lang/natural/vocabulary/content-word::data-transfer-verb-token
+  - id: metadata/lang/natural/vocabulary/content-word::english-edit-verb-token
   - id: control-action-prose-fragment
   - id: repository-agent-approval-action
+  unless:
+  - id: metadata/file/catalog/identity::cleave-trait-definition-file
+
 - id: repository-content-agent-addressing-context
   desc: Repository text marks an agent directive
   any:
@@ -302,11 +353,9 @@ composite_rules:
   - id: repository-agent-priority-claim
   - id: repository-agent-approval-claim
   - id: repository-agent-system-label
-- id: sensitive-target-term-token
-  desc: Secret or environment target term
+- id: repository-agent-audience-demand
+  desc: Directive routes action through or reports to the audience
+  conf: 0.92
   any:
-  - id: secret-data-term-token
-  - id: environment-data-term-token
-  - id: repository-agent-security-target
-  - id: repository-agent-persistence-target
-  - id: repository-agent-security-report-target
+  - id: repository-agent-approval-demand
+  - id: repository-agent-honesty-demand

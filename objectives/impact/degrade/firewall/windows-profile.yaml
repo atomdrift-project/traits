@@ -1,7 +1,7 @@
 defaults:
   conf: 0.92
   platforms: [windows]
-  for: [batch, powershell, scripts, java, class, java_class]
+  for: [batch, powershell, scripts, pe, go, java, class, java_class]
   attack: "T1562.004"
 traits:
 - id: windows-firewall-profile-disable--rx-1
@@ -21,6 +21,12 @@ traits:
     regex: advfirewall\s+set\s+allprofiles\s+state\s+off
     case_insensitive: true
 composite_rules:
+- id: profile-disable-test-or-gce
+  desc: Test path or GCE bootstrap script
+  crit: baseline
+  any:
+  - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
+  - id: metadata/file/naming::test-directory-component
 - id: recognized-firewall-admin-source
   desc: Recognized firewall administration source
   crit: exception
@@ -29,23 +35,45 @@ composite_rules:
   - id: well-known/app/system/samba::samba-source-tree
   - id: well-known/app/ai/agent-runtime/aui-agent-builder/
   - id: micro-behaviors/process/create/shell/guard/
+  - id: well-known/tool/detection/pattern-catalog::embedded-sigma-rule-catalog
+- id: recognized-firewall-admin-automation
+  desc: Recognized firewall admin automation or CI
+  crit: exception
+  conf: 0.95
+  any:
+  # Ansible's win_firewall module exists to set profile state either way.
+  - id: well-known/app/infrastructure/ansible::ansible-module-source-context
+  - id: well-known/app/infrastructure/ansible::ansible-collections-wheel-context
+  - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
+  - id: metadata/build/ci/step::kokoro-ci-runner-script-context
 - id: windows-firewall-profile-disable
   desc: Disable Windows firewall profiles
   crit: suspicious
   conf: 0.92
   unless:
   - id: recognized-firewall-admin-source
+  - id: recognized-firewall-admin-automation
   - id: metadata/package/tooling::azure-agentbaker-tree
   - id: well-known/app/enterprise/admintoolbox::endpoint-management-benign-context
   - id: well-known/app/system/sentaince::defensive-guard-context
-  # Ansible's win_firewall module exists to set profile state either way.
-  - id: well-known/app/infrastructure/ansible::ansible-module-source-context
-  - id: well-known/app/infrastructure/ansible::ansible-collections-wheel-context
-  - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
-  - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
   # A first-boot user-data template relaxes the private profile so setup prompts
   # do not block automation on a fresh, ephemeral instance.
   - id: metadata/build/recognized-contexts::cloud-instance-user-data-context
+  - id: profile-disable-test-or-gce
   any:
   - id: windows-firewall-profile-disable--rx-1
   - id: windows-firewall-profile-disable--rx-2
+# A whole-drive Defender exclusion beside this netsh command is the paired
+# impairment a loader runs before its payload, not a firewall-admin script.
+- id: drive-exclusion-with-firewall-disable
+  desc: Drive exclusion with firewall profiles off
+  crit: hostile
+  conf: 0.97
+  for: [pe, dll]
+  attack: T1562.001,T1562.004
+  all:
+  - id: objectives/evasion/anti-av/platform/defender::defender-whole-drive-exclusion
+  - id: pe-netsh-firewall-profiles-off
+  unless:
+  - id: recognized-firewall-admin-source
+  - id: metadata/signed/platform/

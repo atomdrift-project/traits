@@ -5,28 +5,6 @@ defaults:
   platforms:
   - windows
 traits:
-- id: oep-restoration-patch-write
-  desc: Writes OEP restoration jump stub
-  # Six bytes of ordinary x86 (`mov [eax], imm` / `add esp,4` / `jmp rel32`)
-  # occur by chance in any large native image -- Mozilla's 30 MB xul.dll among
-  # them. The sequence is one leg of an infector signature, not a standalone
-  # observation; the composite below supplies the rest.
-  crit: notable
-  conf: 0.94
-  if:
-    type: hex
-    pattern: C7 00 83 C4 04 E9
-    offset_range: [0, null]
-  unless:
-  - id: well-known/dual-use/remote-admin/action1::action1-version-resource-context
-- id: stack-random-exe-drop-name
-  desc: Stack-built random exe drop name
-  crit: notable
-  conf: 0.92
-  if:
-    type: hex
-    pattern: C7 45 ?? ?? ?? 2E 65 C7 45 ?? 78 65
-    offset_range: [0, null]
 - id: executable-wildcard-mask
   desc: References *.exe search mask
   crit: component
@@ -34,13 +12,6 @@ traits:
   if:
     type: text
     regex: '(?i)(\\)?\*\.exe\b'
-- id: ghost-image-filter
-  desc: Excludes Ghost image extensions
-  crit: component
-  conf: 0.85
-  if:
-    type: text
-    regex: (?i)\.gho\b
 - id: cts-trailer-marker
   desc: CTS newline-terminated infection trailer marker
   crit: notable
@@ -51,20 +22,6 @@ traits:
     pattern: 43 54 53 0A
     # CTS appends marker + original size + 16-byte RC4 key.
     offset: -24
-- id: skip-windows-install-dir--windows
-  desc: WINDOWS directory-name token
-  crit: component
-  conf: 0.85
-  if:
-    type: text
-    word: WINDOWS
-- id: skip-windows-install-dir--winnt
-  desc: WINNT directory-name token
-  crit: component
-  conf: 0.85
-  if:
-    type: text
-    word: WINNT
 - id: visua-recursive-walker-marker
   desc: Prepending infector walker delimiter cluster
   crit: notable
@@ -83,7 +40,7 @@ traits:
   if:
     type: value
     path: pe.coff.symbol_table_offset
-    exact: '539362071'
+    regex: '^5393620\d{2}$'
 composite_rules:
 - id: compiled-last-section-rwx-infector
   desc: Makes walked executable hosts' last PE section RWX
@@ -125,7 +82,7 @@ composite_rules:
   - id: micro-behaviors/data/encode/custom::x86-in-place-subtraction-byte-decoder
   - id: metadata/binary/section/header::reloc-overhang-dominant
   - id: metadata/binary/layout/checksum::pe-checksum-mismatch
-  - id: metadata/hardening/memory::wx-section
+  - id: metadata/binary/section/permission::wx-section
   unless:
   - id: metadata/signed/platform/
   - id: well-known/tool/reverse-engineering/
@@ -142,17 +99,22 @@ composite_rules:
   - id: coff-symbol-pointer-20260317-infector-marker
   - id: metadata/binary/section/header::reloc-overhang-dominant
   - id: metadata/binary/layout/checksum::pe-checksum-mismatch
-  - id: metadata/hardening/memory::wx-section
+  - id: metadata/binary/section/permission::wx-section
   unless:
   - id: metadata/signed/platform/
   - id: well-known/tool/reverse-engineering/
-- id: skip-windows-install-dir
-  desc: Skips Windows installation directories
-  crit: component
-  conf: 0.85
-  any:
-  - id: skip-windows-install-dir--windows
-  - id: skip-windows-install-dir--winnt
+- id: coff-marked-rsrc-graft-pe-infector
+  desc: PE infector marks host and grafts XOR-decoded payload into rsrc
+  crit: hostile
+  conf: 0.999
+  attack: T1554,T1140,T1027.009
+  all:
+  - id: coff-symbol-pointer-20260317-infector-marker
+  - id: metadata/binary/section/permission::wx-section
+  - id: micro-behaviors/mem/alloc/virtual::xor-decoded-virtual-alloc-api
+  unless:
+  - id: metadata/signed/platform/
+  - id: well-known/tool/reverse-engineering/
 - id: recursive-pe-infector
   desc: Recursively infects PE files across drives
   crit: hostile
@@ -161,10 +123,12 @@ composite_rules:
   - id: micro-behaviors/fs/file/rename::backup-temp-executable-rename-delete-api-profile
   - id: micro-behaviors/fs/traversal/drives::logical-drive-enumeration
   - id: micro-behaviors/dylib/library/legacy::mfc42-ref
-  any:
-  - id: skip-windows-install-dir
-  - id: ghost-image-filter
-  - id: objectives/evasion/self-delete/file/script::comspec-shortpath-self-delete
+  - id: micro-behaviors/fs/file/rename::crt-file-rewrite-name-table
+  - id: metadata/binary/instruction/sequence::x86-indirect-eof-transfer-loop
+  - id: micro-behaviors/fs/path/extension::executable-and-backup-filter-table
+  - id: micro-behaviors/fs/search::x86-four-suffix-shared-action
+  unless:
+  - id: packed-drive-executable-joiner
 - id: executable-walker-rewrite-infector
   desc: Walks executable targets and rewrites them while preserving timestamps
   crit: hostile
@@ -195,14 +159,14 @@ composite_rules:
   - id: executable-wildcard-mask
   - id: micro-behaviors/fs/traversal/drives::logical-drive-type-enumeration
   - id: micro-behaviors/fs/directory/readdir::find-file-walker-wide
-  - id: micro-behaviors/os/module/load::get-module-filename-dup
+  - id: micro-behaviors/process/info/current::get-module-filename-wide
   - id: micro-behaviors/fs/file/open::file-create-win
   - id: micro-behaviors/fs/read/file/handle::read-file
   - id: micro-behaviors/fs/write/file/handle::write-file
   - id: micro-behaviors/fs/file/handle::set-file-pointer
   - id: micro-behaviors/fs/file/timestamp::set-file-time
   - id: micro-behaviors/fs/file/move::move-file
-  - id: micro-behaviors/fs/delete/file/command::windows-delayed-file-delete-command
+  - id: micro-behaviors/fs/delete/file/command::windows-ping-file-delete-command
   unless:
   - id: metadata/binary/installer/family/
   - id: metadata/signed/platform/
@@ -215,7 +179,7 @@ composite_rules:
   - id: micro-behaviors/fs/directory/readdir::find-file-walker
   - id: executable-wildcard-mask
   - id: micro-behaviors/fs/file/copy::copyfile-a
-  - id: micro-behaviors/fs/file/move::movefile-a-rewrite-api
+  - id: micro-behaviors/fs/file/move::move-file-api-profile
   - id: micro-behaviors/fs/file/open::file-create-win
   - id: micro-behaviors/fs/read/file/handle::read-file
   - id: micro-behaviors/fs/write/file/handle::write-file
@@ -282,7 +246,7 @@ composite_rules:
   - id: metadata/binary/layout/embedded::repeated-standard-pe-images
   - id: metadata/binary/layout/ratio::overlay-over-90pct
   - id: metadata/binary/layout/overlay::large-overlay-64k
-  - id: micro-behaviors/os/module/load::get-module-filename-ansi
+  - id: micro-behaviors/process/info/current::get-module-filename-ansi
   - id: micro-behaviors/fs/file/copy::copyfile-a
   - id: micro-behaviors/fs/file/open::file-create-win
   - id: micro-behaviors/fs/read/file/handle::read-file
@@ -299,13 +263,15 @@ composite_rules:
   conf: 0.96
   attack: T1554
   all:
-  - id: oep-restoration-patch-write
+  - id: metadata/binary/instruction/sequence::x86-stack-adjust-jump-store
   - id: micro-behaviors/data/format/pe-parser::mz-nop-header-scan
   any:
-  - id: stack-random-exe-drop-name
+  - id: metadata/binary/instruction/sequence::x86-stack-exe-suffix-stores
   - id: metadata/binary/layout/size::pe-file-alignment-under-512
   unless:
   - id: metadata/signed/platform/
+  # Prefer the independently verified manual-resolution variant when present.
+  - id: parasitic-entrypoint-api-resolution-profile
 - id: go-pe-rwx-symtab-host-infection
   desc: Go PE host has a writable entry stub and opaque executable .symtab body
   crit: hostile
@@ -398,8 +364,8 @@ composite_rules:
   all:
   - id: metadata/binary/section/permission::executable-rsrc-section
   - id: metadata/binary/section/header::pe-entry-in-writable-section
-  - id: micro-behaviors/data/embedded/payload/header::inline-pe-header-walk
-  - id: metadata/binary/instruction::x86-global-pointer-indirect-call
+  - id: metadata/binary/instruction/operand::x86-pointer-load-displacement-3c
+  - id: metadata/binary/instruction/sequence::x86-global-pointer-indirect-call
   - id: micro-behaviors/fs/file/binary::file-content-io
   unless:
   - id: metadata/signed/platform/
@@ -483,5 +449,24 @@ composite_rules:
   conf: 0.97
   attack: T1027.002,T1554
   all:
-  - id: objectives/anti-static/pack/detect::expressor-packer
+  - id: metadata/build/protector::expressor-section-and-banner
   - id: recursive-pe-infector
+# A patched host keeps its original sections, then runs from a new writable
+# section whose neighbor has no name and contains another PE image.
+- id: blank-section-writable-entry-embedded-pe
+  desc: Writable odd entry beside blank embedded PE
+  crit: hostile
+  conf: 0.97
+  attack: T1554
+  all:
+  - id: metadata/binary/section/header::pe-entry-in-nonstandard-section
+  - id: metadata/binary/section/header::pe-entry-in-writable-section
+  - id: metadata/binary/section/label::empty-or-undecodable-section-name
+  - id: metadata/binary/layout/embedded::pe-embedded
+  - id: metadata/binary/layout/checksum::pe-checksum-mismatch
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: metadata/binary/installer/sfx/
+  - id: well-known/tool/reverse-engineering/
+  - id: well-known/dual-use/packaging/

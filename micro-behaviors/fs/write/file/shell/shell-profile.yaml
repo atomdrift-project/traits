@@ -2,10 +2,14 @@
 # rc-filename references under fs/path/config/shell/ (naming the file is a
 # path reference; this directory's traits bind the write call to the rc
 # target, so archive roll-up cannot pool an unrelated append with them).
-# The append-call half of that binding lives with the other neutral Node
-# append atoms under fs/write/file/append/ (a bare appendFile call carries
-# no shell-profile meaning on its own); the composites below reference them
-# cross-directory and supply the rc target themselves.
+# The append-call half of that binding is the canonical neutral Node append
+# atoms under fs/write/file/append/ (a bare appendFile call carries no
+# shell-profile meaning on its own); the composites below reference them
+# cross-directory and supply the rc target themselves. An earlier
+# `appendFile(target,` text atom lived here and matched any variable named
+# `target` (for example a DECISIONS.md append), claiming a shell-profile
+# write it never established; it was removed rather than renamed because
+# the neutral append atoms already cover the call.
 defaults:
   crit: notable
   conf: 0.9
@@ -28,35 +32,31 @@ traits:
       type: text
       regex: 'path\.join\s*\(\s*home\s*,\s*[''"]?\.(bashrc|zshrc|bash_profile|zprofile|zshenv|profile)\b'
 
-  - id: shell-profile-target-append
-    desc: Appends to a shell profile target
+  # Shell-language sibling of the /etc write atoms under
+  # objectives/persistence/login/shell/rc/system-wide.yaml: an append redirect
+  # or tee -a into a per-user startup file. Same building-block criticality --
+  # appending an export line is the documented way installers and agent-skill
+  # bootstrap guidance put a tool on PATH, so the write alone stays notable;
+  # persistence composites supply the payload and intent. markdown scope:
+  # agent-skill files carry the same redirect in fenced install commands.
+  - id: shell-rc-append-redirect
+    desc: Redirect appends into a user shell rc
+    crit: notable
+    conf: 0.88
+    for: [shell, markdown]
+    platforms: [unix]
     if:
       type: text
-      regex: '\bappendFile\s*\(\s*target\s*,'
-
-  # Legs of the credential-strip shape below: a replace call whose pattern is
-  # an `export <CREDENTIAL>=...` line and whose replacement is empty — the
-  # startup file is being rewritten without that credential export.
-  # Key-rotation helpers replace the old line with a new value, so the empty
-  # replacement is what separates removal from rotation.
-  - id: rc-export-line-replace-open
-    desc: Replace pattern opens on an export line
-    crit: component
+      regex: '>>[ \t]*["'']?(~|\$HOME)?/?\.(bashrc|zshrc|bash_profile|zprofile|zshenv|profile)\b'
+  - id: shell-rc-tee-append
+    desc: tee append into a user shell rc
+    crit: notable
+    conf: 0.88
+    for: [shell, markdown]
+    platforms: [unix]
     if:
       type: text
-      regex: 'replace\(\s*/[^\r\n;]{0,40}\bexport\b'
-  - id: rc-credential-export-name
-    desc: Credential-named export assignment in pattern
-    crit: component
-    if:
-      type: text
-      regex: '(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|_SECRET|_TOKEN)[A-Z_0-9]*='
-  - id: rc-empty-replacement-close
-    desc: Replace flags followed by empty replacement
-    crit: component
-    if:
-      type: text
-      regex: '/[a-z]*\s*,\s*[''"]{0,2}\)'
+      regex: 'tee[ \t]+-[Aa] +["'']?(~|\$HOME)?/?\.(bashrc|zshrc|bash_profile|zprofile|zshenv|profile)\b'
 
 composite_rules:
   - id: append-shell-rc-direct
@@ -74,24 +74,16 @@ composite_rules:
 
   - id: append-shell-rc-bound-target
     desc: Appends a home-derived shell startup target
+    # The append legs are the canonical neutral Node append atoms, mirroring
+    # append-shell-rc-direct above: the call alone says nothing about shell
+    # profiles, and the home-path leg within near_bytes supplies the binding.
     all:
       - id: shell-profile-home-path
-      - id: shell-profile-target-append
+    any:
+      - id: micro-behaviors/fs/write/file/append::node-append-file-sync
+      - id: micro-behaviors/fs/write/file/append::append-file-sync
+      - id: micro-behaviors/fs/write/file/append::append-file-async
     near_bytes: 256
-
-  # The strip shape: one replace call rewriting an `export <CREDENTIAL>=`
-  # line away. Bound to its target and the write-back in the composite
-  # below, since a bare replace-call mention proves nothing about startup
-  # files.
-  - id: rc-credential-export-strip
-    desc: Strips credential export lines from rc content
-    crit: suspicious
-    conf: 0.9
-    all:
-      - id: rc-export-line-replace-open
-      - id: rc-credential-export-name
-      - id: rc-empty-replacement-close
-    near_bytes: 120
 
   # The strip atom bound to its target and the write-back: together this is
   # "this startup file is being rewritten without its credential exports",
@@ -101,8 +93,12 @@ composite_rules:
     crit: suspicious
     conf: 0.92
     all:
-      - id: rc-credential-export-strip
+      - id: micro-behaviors/data/string/replace::js-credential-export-removal
       - id: shell-profile-rc-name
+    any:
+      # The older write aggregate misses bare/destructured writeFileSync
+      # calls. Keep its async coverage and include the canonical call atom.
+      - id: micro-behaviors/fs/write/file/full::node-write-file-sync-call
       - id: micro-behaviors/fs/write/file/full::js-file-write
     near_bytes: 600
 

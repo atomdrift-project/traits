@@ -5,15 +5,6 @@ defaults:
   attack: T1105
 
 traits:
-  - id: hidden-powershell-launch
-    desc: Hidden PowerShell launcher string
-    crit: notable
-    conf: 0.92
-    if:
-      type: text
-      regex: 'powershell\.exe.{0,60}-WindowStyle Hidden'
-      case_insensitive: true
-
   - id: invoke-webrequest-tls12-chain
     desc: Invoke-WebRequest with forced TLS12
     crit: suspicious
@@ -71,7 +62,7 @@ composite_rules:
     all:
       - id: objectives/command-and-control/dropper/staging/native/payload::pe-resource-extraction-to-temp
     any:
-      - id: hidden-powershell-launch
+      - id: micro-behaviors/process/argument/option::powershell-hidden-command-line
       - id: micro-behaviors/os/privilege/elevation::powershell-start-process-runas
       - id: invoke-webrequest-tls12-chain
       - id: micro-behaviors/os/security/defender::defender-exclusion-command
@@ -104,3 +95,47 @@ composite_rules:
       - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
       - id: objectives/evasion/masquerade/version-resource/claim::fake-windows-update-service-versioninfo
     needs: 2
+
+  # An unsigned binary that requires administrator privilege, fetches remote
+  # files over HTTP (URLMon download capability), and carries a launcher that
+  # hides its PowerShell window while overriding the execution policy stages
+  # remote code with concealment at every step: the download, the launch and
+  # the privilege are each ordinary alone, but co-occurring in one unsigned
+  # admin binary they describe a dropper, not an updater. Installer
+  # bootstrapper runtimes (Advanced Installer, platform-signed) ship the same
+  # launcher strings and are carved out.
+  - id: privileged-concealed-downloader
+    desc: Unsigned admin downloader with concealed policy-bypass launcher
+    crit: hostile
+    conf: 0.95
+    attack: T1105,T1059.001
+    all:
+      - id: objectives/evasion/security-bypass/policy/execution::pe-concealed-policy-override-profile
+      - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
+      - id: micro-behaviors/os/privilege/manifest::require-administrator
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/builder::advanced-installer-bootstrapper
+      - id: well-known/tool/
+
+  # A version resource claiming updater identity wrapped around a hidden
+  # PowerShell downloader that fetches a remote payload and immediately
+  # executes it: the updater label is the lure, the concealed
+  # download-and-launch chain is the payload. Legitimate updaters move
+  # files with BITS or WinHTTP, never with a hidden powershell.exe
+  # download-and-Start-Process chain, and an abused-TLD endpoint confirms
+  # the infrastructure is not the vendor's.
+  - id: fake-updater-powershell-downloader
+    desc: Fake updater with hidden PowerShell download
+    crit: hostile
+    conf: 0.95
+    attack: T1105,T1036
+    all:
+      - id: micro-behaviors/process/deploy/file-exec::powershell-outfile-start-process-chain
+    any:
+      - id: metadata/binary/provenance/version-info::pe-version-description-updater-claim
+      - id: objectives/command-and-control/infrastructure/domain/abused-tlds::tld-cyou
+      - id: micro-behaviors/communications/http/download/cli::iwr-outfile-download
+    needs: 1

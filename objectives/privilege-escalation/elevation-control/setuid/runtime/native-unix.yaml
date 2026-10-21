@@ -16,24 +16,6 @@ traits:
       type: text
       substr: .hidden_root
 
-  - id: native-setresuid-root
-    desc: Native setresuid root
-    crit: suspicious
-    conf: 0.94
-    for: [c, elf, kotlin, class]
-    if:
-      type: text
-      substr: setresuid(0,0,0)
-    unless:
-      - id: well-known/app/system/samba::samba-source-tree
-      # An autoconf feature probe compiles `setresuid(0,0,0)` to find out
-      # whether the platform has it -- OpenSSH's configure.ac carries the
-      # snippet verbatim and never runs it as the shipped program.
-      - id: well-known/app/network/openssh::source-tree-path
-      # Cursor's agent sandbox calls setresuid(0,0,0) inside a user namespace
-      # to drop to "root" in the sandbox — not host privilege escalation.
-      - id: well-known/app/ai/coding-agent/cursor-sandbox::cursor-sandbox-context
-      - id: well-known/app/ai/coding-agent/cursor-sandbox::linux-sandbox-context
   - id: unix-uid-map-write
     desc: Unix uid map write
     crit: suspicious
@@ -64,35 +46,13 @@ composite_rules:
       - id: micro-behaviors/process/identity/setuid::root-setid-source
       - id: unix-hidden-root-useradd
 
-  - id: native-setresuid-escalation
-    for: [elf, class, c, kotlin]
-    desc: Native setresuid escalation
-    crit: hostile
-    conf: 0.98
-    unless:
-      - id: well-known/tool/detection/owasp-modsecurity-crs::owasp-crs-rules-directory
-      - id: well-known/app/ai/coding-agent/cursor-sandbox::cursor-sandbox-context
-      # OpenSSH's configure.ac probes setresuid/setresgid and calls them in
-      # an AC_RUN_IFELSE to check the platform honours them; that is the
-      # autoconf feature test, not an escalation.
-      - id: well-known/app/network/openssh::source-tree-path
-      - id: well-known/app/network/openssh::portable-dev-list-address
-      - id: well-known/app/network/openssh::solaris-package-init-variable
-    all:
-      - id: native-setresuid-root
-    any:
-      - id: micro-behaviors/process/identity/setuid::setuid-dup
-      - id: micro-behaviors/process/identity/setuid::setgid
-      - id: micro-behaviors/fs/proc/info/memory::c-procfs-mem-template
-    needs: 1
-
   - id: unix-uid-map-escalation
     for: [class, kotlin]
     desc: Unix uid map escalation
     crit: hostile
     conf: 0.98
     all:
-      - id: native-setresuid-root
+      - id: micro-behaviors/process/identity/setuid::native-all-root-setresuid-reference
       - id: unix-uid-map-write
 
   - id: native-setuid-sudo-escalation
@@ -104,30 +64,6 @@ composite_rules:
       - id: micro-behaviors/process/identity/setuid::setuid-root-retention-diagnostic
       - id: unix-sudo-n-id
 
-  # C source that raises to UID 0 and then hands over a shell: the classic
-  # setuid-root backdoor stub. Anchored on the literal `setuid(0)` /
-  # `setresuid(0,0,0)` call, so ordinary privilege-dropping code (setuid to an
-  # unprivileged uid) does not qualify.
-  - id: native-root-setid-shell-escalation
-    desc: Root UID request with native shell execution
-    crit: hostile
-    conf: 0.98
-    for: [c, cpp]
-    all:
-      - id: micro-behaviors/process/identity/setuid::root-setuid-call
-      - id: micro-behaviors/process/create/shell/native::c-shell-execution-path
-    unless:
-      - id: well-known/lib/crypto/mit-krb5::source-tree-context
-      - id: well-known/lib/web/passenger/
-      - id: metadata/file/extension/identity::markdown-file-basename
-
-  # Compiled form of the same stub. A stripped ELF/Mach-O cannot show that the
-  # setuid target is root, so the three legs below (a `setuid` import, the
-  # string "/bin/sh", an exec* import) are on their own ordinary privileged
-  # Unix userland — /bin/bash, /bin/tar, /sbin/init, su and login all carry
-  # them, as do libraries that shell out under a dropped identity (libwrap).
-  # What separates a dropped stub is shape: a small binary with a handful of
-  # imports, no string corpus and no user-facing CLI surface.
   - id: native-setuid-shell-escalation
     desc: Minimal binary setuids and execs shell
     crit: hostile
@@ -136,14 +72,14 @@ composite_rules:
     size_max: 262144
     all:
       - id: micro-behaviors/process/identity/setuid::setuid-dup
-      - id: micro-behaviors/fs/path/binary::bin-sh-path-reference
+      - id: micro-behaviors/fs/path/application/executable::bin-sh-path-reference
     any:
       - id: micro-behaviors/process/create/exec::execve-import
       - id: micro-behaviors/process/create/execv::exec-variant-symbol-text
     needs: 1
     unless:
       - id: metadata/binary/symbols/count::many-imports-40
-      - id: metadata/binary/section/prose::high-string-count-1000
+      - id: metadata/file/profile/string-population::high-string-count-1000
       - id: micro-behaviors/ui/help/
       - id: metadata/signed/platform::apple
 
@@ -156,4 +92,15 @@ composite_rules:
     all:
       - id: objectives/privilege-escalation/elevation-control/setuid/syscall::setuid-to-root-shell
       - id: "metadata/binary/symbols/table::full-symbol-table-absent-or-empty"
-      - id: micro-behaviors/process/create/execv::x86-64-syscall-execve
+      - id: micro-behaviors/process/create/exec::x86-execve-syscall-sequence
+
+  # Require the unguarded main-body sequence. Generic root-ID and shell
+  # co-occurrence is retained only as a neutral capability.
+  - id: native-root-setid-shell-escalation
+    desc: Unguarded root-ID shell payload requires authority
+    crit: hostile
+    conf: 0.97
+    for: [c, cpp]
+    all:
+      - id: micro-behaviors/process/create/shell/native::unguarded-root-shell-main
+      - id: micro-behaviors/process/identity/setuid::root-setuid-call

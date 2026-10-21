@@ -14,33 +14,6 @@ traits:
     if:
       type: text
       regex: '(?i)DOCKER_IN_DOCKER.{0,500}service docker stop'
-  - id: sc-stop
-    desc: Stops a Windows service with sc.exe
-    crit: notable
-    conf: 0.8
-    platforms: [windows]
-    for: [scripts, source, binaries]
-    if:
-      type: text
-      regex: '(?i)\bsc(\.exe)?\s+stop\s+[''"]?[A-Za-z0-9_.$-]{2,}\b'
-    not:
-      - regex: '%[A-Za-z]'
-      - substr: sc stop cloudflared
-      - substr: sc stop igfxCUIService
-      - substr: sc.exe stop LCD_Service
-      - substr: sc stop sppsvc
-    downgrade:
-    unless:
-      - id: metadata/binary/installer/family/
-  - id: net-stop
-    desc: Windows net stop command
-    crit: notable
-    conf: 0.8
-    platforms: [windows]
-    for: [batch, powershell, python, javascript, typescript, c, cpp, pe, dll]
-    if:
-      type: text
-      regex: '(?i)\bnet(\.exe)?\s+stop\s+[''"]?[A-Za-z0-9_.$-]{2,}\b'
   - id: veeam-sql-agent-stop
     desc: Stops Veeam SQL Agent via net.exe
     crit: suspicious
@@ -50,47 +23,6 @@ traits:
     if:
       type: text
       regex: '(?i)\bnet(\.exe)?\s+stop\s+[''"]?SQLAgent\$VEEAMSQL[A-Za-z0-9_.-]*'
-  - id: sharedaccess-net-service-target
-    desc: Net command targets SharedAccess
-    crit: notable
-    conf: 0.94
-    platforms: [windows]
-    for: [powershell, pe, python, javascript, batch]
-    if:
-      type: text
-      regex: '(?i)\bnet(\.exe)?\s+(stop|start|delete|config)\s+["'']?SharedAccess\b'
-  - id: sharedaccess-sc-service-target
-    desc: Sc command targets SharedAccess
-    crit: notable
-    conf: 0.94
-    platforms: [windows]
-    for: [powershell, pe, python, javascript, batch]
-    if:
-      type: text
-      regex: '(?i)\bsc(\.exe)?\s+(stop|start|delete|config)\s+["'']?SharedAccess\b'
-  - id: sharedaccess-powershell-service-target
-    desc: PowerShell command targets SharedAccess
-    crit: notable
-    conf: 0.94
-    platforms: [windows]
-    for: [powershell, pe, python, javascript, batch]
-    if:
-      type: text
-      regex: '(?i)\b(Stop-Service|Set-Service)\b[^\r\n]{0,80}\bSharedAccess\b'
-  - id: sc-config-start-disabled
-    desc: Disables Windows service via sc config
-    crit: notable
-    conf: 0.92
-    platforms: [windows]
-    for: [batch, powershell, python, javascript, typescript, c, cpp, pe, dll]
-    if:
-      type: text
-      regex: '(?i)\bsc(\.exe)?\s+config\s+\S+\s+start=\s*disabled'
-    unless:
-      - id: metadata/file/string/application-name::microsoft-activation-script-benign-context
-    downgrade:
-      any:
-        - id: metadata/binary/installer/family/
   - id: kill-postgres-kill
     desc: PostgreSQL process termination command
     crit: notable
@@ -139,6 +71,13 @@ traits:
     if:
       type: text
       regex: (?i)\bkill\b[^\n]{0,30}\bmssql\b
+    not:
+      - regex: '(?i)(docker|podman|\$CONTAINER\w*)\s+kill\b'
+    unless:
+      - id: well-known/app/data/sql-server-dsc::module-path-identity
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: "metadata/file/naming::dev-directory-component"
   - id: kill-mssql-stop
     desc: MSSQL stop command
     crit: suspicious
@@ -154,6 +93,7 @@ traits:
       - id: well-known/app/data/sql-server-dsc::module-path-identity
       - id: metadata/package/testing/
       - id: "metadata/file/naming::test-directory-component"
+      - id: "metadata/file/naming::dev-directory-component"
   - id: kill-mongodb-kill
     desc: MongoDB process termination command
     crit: suspicious
@@ -164,6 +104,9 @@ traits:
       # Port post-install notes walk an admin through a manual database
       # migration, including `pkill mongod`; documentation, not a kill.
       - id: metadata/package/files/bsd::openbsd-port-readme-banner
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: "metadata/file/naming::dev-directory-component"
     if:
       type: text
       regex: (?i)\b(killall|pkill|taskkill)\b[\s"'`=-]{0,8}[^\n]{0,22}\b(mongod|mongodb)\b
@@ -274,6 +217,8 @@ traits:
     if:
       type: text
       regex: '(?i)\bdel\b.{0,80}\\Program Files\\.{0,80}\.exe'
+    unless:
+      - id: micro-behaviors/os/package-manager/management::windows-uninstaller-completion-banner
   - id: batch-runs-silent-uninstaller
     desc: Batch runs silent uninstaller
     crit: notable
@@ -337,7 +282,7 @@ composite_rules:
     for: [batch, powershell, python, javascript, typescript, c, cpp, pe, dll]
     all:
       - id: micro-behaviors/os/service/stop::net-stop-dependent-services-command
-      - id: sc-config-start-disabled
+      - id: micro-behaviors/os/service/configure::sc-config-start-disabled
     any:
       - id: micro-behaviors/process/terminate/command::batch-taskkill-image-name
       - id: micro-behaviors/process/terminate/command::powershell-taskkill-image-name
@@ -390,28 +335,7 @@ composite_rules:
       - id: well-known/app/data/sql-server-dsc::module-path-identity
       - id: metadata/package/testing/
       - id: "metadata/file/naming::test-directory-component"
-  - id: sharedaccess-service-target
-    desc: Command targets SharedAccess firewall service
-    crit: component
-    conf: 0.94
-    any:
-      - id: sharedaccess-net-service-target
-      - id: sharedaccess-sc-service-target
-      - id: sharedaccess-powershell-service-target
-
-  - id: sharedaccess-firewall-service-stop
-    for: [pe]
-    desc: Stop or tamper firewall service
-    crit: suspicious
-    conf: 0.97
-    all:
-      - id: sharedaccess-service-target
-      - id: micro-behaviors/os/service/stop::service-stop-control
-    any:
-      - id: micro-behaviors/os/service/dispatch::service-control-dispatch
-      - id: micro-behaviors/os/service/create::create-service
-      - id: micro-behaviors/os/service/query::query-service-status
-    needs: 3
+      - id: "metadata/file/naming::dev-directory-component"
   - id: kill-mongodb
     desc: MongoDB service termination
     crit: suspicious
@@ -419,6 +343,10 @@ composite_rules:
     any:
       - id: kill-mongodb-kill
       - id: mongodb-service-stop
+    unless:
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: "metadata/file/naming::dev-directory-component"
   - id: node-project-self-destruct-stop
     desc: Self-destruct stops Node project processes
     crit: hostile
@@ -436,14 +364,14 @@ composite_rules:
     conf: 0.5
     near_bytes: 80
     all:
-      - id: mongodb-service-name
-      - id: kill-mongodb-stop
+    - id: mongodb-service-name
+    - id: kill-mongodb-stop
     any:
-      - id: micro-behaviors/os/service/stop::systemctl-stop
-      - id: micro-behaviors/os/service/stop::service-stop
-      - id: sc-stop
-      - id: net-stop
-      - id: micro-behaviors/os/service/stop::launchctl-stop-command
+    - id: micro-behaviors/os/service/stop::systemctl-stop
+    - id: micro-behaviors/os/service/stop::service-stop
+    - id: micro-behaviors/os/service/stop::sc-stop
+    - id: micro-behaviors/os/service/stop::net-stop-command-text
+    - id: micro-behaviors/os/service/stop::launchctl-stop-command
   - id: kill-multiple-databases
     desc: Multiple database service families terminated
     crit: suspicious
@@ -457,22 +385,6 @@ composite_rules:
     needs: 2
     unless:
       - id: sysv-service-lifecycle
-  - id: security-service-disable
-    desc: Disables Windows security services
-    crit: hostile
-    conf: 0.97
-    platforms: [windows]
-    for: [powershell, pe, python, javascript]
-    all:
-      - id: sc-config-start-disabled
-      - id: micro-behaviors/os/service/name::sharedaccess-service-name
-    any:
-      - id: net-stop
-      - id: sc-stop
-    downgrade:
-      any:
-        - id: metadata/binary/installer/family/
-        - id: metadata/signed/platform/
   - id: esxi-ransomware-comp
     for: [python, javascript]
     desc: VMware ESXi ransomware
@@ -481,6 +393,46 @@ composite_rules:
     attack: T1486
     mbc: B0040
     all:
-      - id: micro-behaviors/os/sysinfo/vmware::esxcli-tool
+      - id: micro-behaviors/os/virtualization/hypervisor::esxcli-tool
       - id: micro-behaviors/communications/proxy/tor::onion-domain-reference
       - id: objectives/impact/ransom/encrypt/threat-text::ransom-word
+  - id: net-stop-security-product
+    desc: net stop command next to a security product name
+    crit: suspicious
+    conf: 0.96
+    attack: T1562.001
+    platforms: [windows]
+    for: [pe, dll, batch, powershell]
+    near_bytes: 160
+    all:
+      - id: micro-behaviors/os/service/stop::net-stop-command-text
+    any:
+      - id: micro-behaviors/os/security/product::kingsoft-antivirus-name
+      - id: micro-behaviors/os/security/product::kingsoft-security
+      - id: micro-behaviors/os/security/product::kaspersky-name
+      - id: micro-behaviors/os/security/product::mcafee-name
+      - id: micro-behaviors/os/security/product::norton-name
+      - id: micro-behaviors/os/security/product::sophos-name
+      - id: micro-behaviors/os/security/product::eset-name
+      - id: micro-behaviors/os/security/product::bitdefender-name
+      - id: micro-behaviors/os/security/product::malwarebytes-name
+      - id: micro-behaviors/os/security/defender::defender-product-name-reference
+      - id: micro-behaviors/os/security/product::rising-av
+      - id: micro-behaviors/os/security/product::huorong-security
+      - id: micro-behaviors/os/security/product::tencent-security
+      - id: micro-behaviors/os/security/product::baidu-security
+  - id: winexec-stops-security-product
+    desc: WinExec stops a named security product service
+    crit: hostile
+    conf: 0.97
+    attack: T1562.001
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: net-stop-security-product
+      - id: micro-behaviors/process/create/exec::winexec
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/
+      - id: well-known/app/security/
+      - id: well-known/tool/sysadmin/

@@ -15,14 +15,14 @@ traits:
       regex: '\bspawn\w*\s*\(\s*(this\.)?shell\s*,\s*\[\s*["'']-i["'']'
 
   - id: node-pty-history-isolation
-    desc: PTY teardown disables shell history
+    desc: PTY or stream disables shell history
     crit: notable
     conf: 0.96
     attack: T1070.003
     for: [javascript, typescript]
     if:
       type: text
-      regex: '\bptyProcess\.write\s*\(\s*[''"](?s:.*?)set \+o history'
+      regex: '\b(ptyProcess|stream|channel|proc|child)\.write\s*\(\s*[''"](?s:.*?)set \+o history'
 
   - id: shell-history-space-isolation
     desc: Space-prefixed shell history suppression
@@ -317,19 +317,20 @@ traits:
       exact: pty.spawn
     unless:
       - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
-  - id: pty-spawn-inline-shell-text
-    desc: Inline Python command spawns a PTY shell
+  - id: python-pty-shell-call
+    desc: Python pty.spawn invokes a shell
     crit: notable
     conf: 0.96
     attack: T1059.006
-    for:
-    - python
-    - shell
-    - markdown
-    - text
+    for: [python]
     if:
-      type: text
-      regex: pty\.spawn\(\s*["']/bin/(sh|bash)["']\s*\)
+      type: symbol
+      kind: call
+      exact: pty.spawn
+      arg:
+        index: 0
+        kind: string
+        regex: '^/bin/(sh|bash)$'
 
   - id: node-pty-module-ref
     desc: node-pty module reference
@@ -543,6 +544,17 @@ traits:
       kind: call
       regex: '(^|\.)_?(pty|term)\w*\.resize$'
 
+  # Binaries built on the portable-pty Rust crate (cargo registry path
+  # with version suffix) are terminal emulators and multiplexer daemons.
+  - id: portable-pty-crate-path
+    desc: portable-pty crate registry path
+    crit: notable
+    conf: 0.95
+    for: [elf, macho, pe]
+    if:
+      type: text
+      substr: portable-pty-
+
 composite_rules:
   - id: shell-history-suppression-context
     desc: PTY or zsh setting that keeps history out
@@ -573,7 +585,7 @@ composite_rules:
     all:
       - id: metadata/lang/compiler/systems::go-binary
       - id: go-creack-pty-path
-      - id: micro-behaviors/fs/path/binary::bin-sh-path-reference
+      - id: micro-behaviors/fs/path/application/executable::bin-sh-path-reference
 
   - id: openpty
     desc: Open pseudoterminal
@@ -717,12 +729,10 @@ composite_rules:
       - id: forkpty
       - id: posix-openpt
       - id: rust-pty-allocation
-  - id: interactive-shell
-    desc: Interactive shell via PTY
+  - id: pty-api-cluster
+    desc: Multiple PTY API references
     crit: notable
     conf: 0.8
-    attack: T1059
-    mbc: B0022
     for: [scripts, binaries, c, cpp]
     needs: 2
     any:
@@ -737,19 +747,12 @@ composite_rules:
         - id: metadata/signed/entitlements::debugger
         - id: metadata/signed/platform::apple
         - id: micro-behaviors/dylib/library/family/
-        - id: micro-behaviors/communications/http/client/wininet::wininet-dll-name-reference
-  - id: posix-pty-shell
-    # Full PTY allocation plus a shell spawn — the interactive-terminal
-    # capability shared by terminal emulators, tmux, script(1), expect and
-    # sshd. It is NOT a backdoor on its own; that requires redirecting the PTY
-    # to a socket (see objectives/command-and-control/reverse-shell/pty, whose
-    # composites add the network leg). Neutral capability: notable, accurate
-    # name, no intent assertion.
-    desc: Full PTY allocation with shell spawn
+        - id: micro-behaviors/fs/path/library::wininet-dll-name-reference
+  - id: posix-pty-shell-api-cooccurrence
+    # The APIs coexist; this does not bind a shell to a PTY.
+    desc: PTY allocation and shell API references
     crit: notable
     conf: 0.95
-    attack: T1059
-    mbc: B0022
     for:
       - elf
       - macho
@@ -766,7 +769,7 @@ composite_rules:
       any:
         - id: metadata/binary/vendor/
         - id: micro-behaviors/dylib/library/family/
-        - id: micro-behaviors/communications/http/client/wininet::wininet-dll-name-reference
+        - id: micro-behaviors/fs/path/library::wininet-dll-name-reference
         - id: micro-behaviors/dylib/library/app
   - id: pty-network-backdoor
     desc: PTY with socket and fork operations
@@ -782,12 +785,12 @@ composite_rules:
       - id: micro-behaviors/communications/socket/create::create
       - id: micro-behaviors/communications/socket/connect::connect
       - id: micro-behaviors/process/create/fork::fork
-      - id: interactive-shell
+      - id: pty-api-cluster
     any:
       - id: micro-behaviors/communications/socket/receive::receive
       - id: micro-behaviors/communications/socket/send::send
       - id: micro-behaviors/process/create/exec::execve-import
-      - id: micro-behaviors/process/interpreter/shell::bin-sh
+      - id: micro-behaviors/fs/path/application/executable::unix-shell-executable-path
   - id: go-creack-pty
     desc: github.com/creack/pty library
     crit: notable

@@ -10,6 +10,15 @@ traits:
   if:
     type: text
     exact: dummy_not_found_ever_temp
+# The command line is a sprintf template: the first %s is a temp directory
+# and the second is the file the dropper just wrote for Notepad to show.
+- id: temp-notepad-quoted-launch-format
+  desc: Quoted temp notepad launch format
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    exact: '"%s\notepad.exe" "%s"'
 - id: dmd-msvcr120-runtime-dll
   desc: DMD bundled Microsoft CRT runtime DLL
   crit: notable
@@ -24,29 +33,82 @@ composite_rules:
   conf: 0.99
   attack: "T1027.009"
   all:
-  - id: micro-behaviors/os/module/load::get-module-filename-dup
+  - id: micro-behaviors/process/info/current::get-module-filename-wide
   - id: micro-behaviors/fs/file/open::file-create-win
   - id: micro-behaviors/fs/read/file/handle::read-file
-  - id: micro-behaviors/fs/temp/directory::get-temp-path-name
+  - id: micro-behaviors/os/sysinfo/directories::win32-temp-path-name
   - id: micro-behaviors/fs/write/file/handle::write-file
   - id: micro-behaviors/process/create/shellexec::shell-execute
   - id: micro-behaviors/fs/file/pe-inspect::inline-pe-signature-check
   unless:
   - id: metadata/binary/installer/
   - id: metadata/signed/platform/
-- id: encoded-temp-command-stager
-  desc: Large encoded data with Temp staging and command execution
-  crit: suspicious
-  conf: 0.9
+# Retired encoded-temp-command-stager: Base64-alphabet data, Temp APIs,
+# cmd.exe and process APIs can be unrelated (including in OpenCV native
+# support libraries). These facts do not bind decoded bytes to a staged file
+# or process argument. Keep the four neutral observations at their own homes.
+# A small unsigned PE that hides its real API surface (hand-rolled export
+# resolution plus a fragment-table copy loop, so process creation and the
+# payload bytes never appear in the import table or as plain strings) while
+# carrying executable paths in user-writable directories and the file-creation
+# API to write them. Legitimate updaters and installers stage executables
+# openly: they are signed or identify their builder, and they do not resolve
+# their imports by scanning memory backwards for an MZ header. The
+# concealment legs are the precision: without them this would be an ordinary
+# staging shape. Worked example: an unsigned 44KB GUI dropper ("LookFor")
+# that resolves its APIs at runtime, drops its payload EXE to
+# Temp/Downloads/Desktop paths embedded in its overlay, and executes it.
+- id: concealed-import-user-dir-exe-dropper
+  desc: Concealed-API dropper stages executables in user directories
+  crit: hostile
+  conf: 0.93
+  attack: "T1027.009"
+  size_max: 262144
   all:
-  - id: metadata/file/encoded::large-base64-like-string
-  - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
-  - id: micro-behaviors/fs/path/application/executable::cmd-exe-image-name
-  - id: micro-behaviors/process/create/spawn::child-process-creation-api
+  - id: micro-behaviors/os/api-resolution/manual::x86-backward-module-export-walk
+  - id: micro-behaviors/data/decode/custom::x86-fragment-table-byte-reassembly
+  - id: micro-behaviors/fs/file/open::file-create-win
+  - id: metadata/signed/trust-level::unsigned-missing-signature-record
+  any:
+  - id: micro-behaviors/fs/path/temp::windows-temp-executable-path
+  - id: micro-behaviors/fs/path/app-data::win-users-downloads-executable-path
   unless:
-  - id: metadata/binary/installer/
-  - id: metadata/binary/framework/
-  - id: well-known/app/
-  - id: well-known/tool/
-  - id: well-known/dual-use/remote-admin/meshcentral::meshcentral-agent-binary-context
-  - id: well-known/lib/runtime/scripted/node-runtime/
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: metadata/binary/installer/script/
+  - id: well-known/tool/reverse-engineering/
+  # A dominant overlay of unrelated sandbox execution paths is padding.
+  # Those strings are not this image's drop destinations.
+  - id: objectives/anti-static/obfuscation/string/junking::sandbox-execution-path-padding
+- id: mingw-temp-exec-ping-beacon-dropper
+  desc: MinGW temp dropper builds ping -t beacon process commands
+  crit: hostile
+  conf: 0.92
+  attack: T1105,T1059
+  all:
+  - id: metadata/lang/compiler/native::mingw-built-pe
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
+  - id: micro-behaviors/process/create/exec::create-process-a
+  - id: micro-behaviors/process/argument/executable::ping-continuous-host-command-format
+  any:
+  - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
+  - id: micro-behaviors/data/parse/portable-executable::pe-header-walk-x64
+  - id: micro-behaviors/fs/file/pe-inspect::inline-pe-signature-check
+  needs: 1
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+- id: mingw-temp-notepad-ping-beacon-dropper
+  desc: Temp dropper launches notepad and ping
+  crit: hostile
+  conf: 0.94
+  attack: T1105,T1059
+  all:
+  - id: metadata/lang/compiler/native::mingw-built-pe
+  - id: micro-behaviors/fs/temp/file::temp-path-file-api-primitives
+  - id: micro-behaviors/process/create/exec::create-process-a
+  - id: temp-notepad-quoted-launch-format
+  - id: micro-behaviors/process/argument/executable::ping-continuous-host-command-format
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/

@@ -10,7 +10,7 @@ YARA_UPDATE ?= $(if $(shell command -v yara-update 2>/dev/null),yara-update,$(ab
 
 COMPILED_DIR := third-party/compiled
 
-.PHONY: validate validate-uncached validate-profile taxonomy-check h3-import-reference-check precompile yara-compile yara-update install-precommit
+.PHONY: validate validate-uncached validate-profile taxonomy-check h3-import-reference-check npm-security-hold-check precompile yara-compile yara-update install-precommit
 
 # Rule validation.
 #
@@ -40,11 +40,22 @@ validate-profile:
 h3-import-reference-check:
 	python3 testdata/taxonomy/import-reference-precision/run_cases.py --cleave "$(CLEAVE)"
 
+npm-security-hold-check:
+	python3 testdata/taxonomy/npm-security-hold/check.py --cleave "$(CLEAVE)"
+
 # Taxonomy-migration checks (NEW_TAXONOMY_PLAN.md). Python-based and depends on
 # untracked scripts/, so it is kept out of `validate`.
 taxonomy-check:
+	$(MAKE) npm-security-hold-check
+	python3 testdata/taxonomy/winrt-json-bytecode/check.py --cleave "$(CLEAVE)"
 	python3 testdata/taxonomy/browser-import-candidate/run_cases.py --cleave "$(CLEAVE)"
 	python3 testdata/taxonomy/import-reference-precision/run_cases.py --cleave "$(CLEAVE)"
+	python3 testdata/taxonomy/embedded-shell-exclusion/check.py --cleave "$(CLEAVE)"
+	python3 testdata/taxonomy/go-keygen-embedded-js-exclusion/check.py --cleave "$(CLEAVE)"
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/axios-objective-boundary/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/python-requests-import-consumers-2026-10-16/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/python-requests-objective-boundary/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/javascript-private-key-environment-variable/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/node-stream-pipe-placement/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/ptrace-name-table-retirement/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/kernel-header-catalog/cases.json
@@ -53,10 +64,31 @@ taxonomy-check:
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/unicode-script-context/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/nostr-protocol-placement/cases.json --record taxonomy-migration/research/h1-nostr-protocol-placement-audit-2026-10-13/emitted-findings.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/aws-sdk-wheel-s3-context/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/aws-credential-access-placement-2026-10-16/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/provenance-core-suppressor/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/vultisig-suppressor/cases.json
+	python3 scripts/check-retired-trait-ids.py --manifest testdata/taxonomy/yubico-identity-retirement/retired-ids.json
+	python3 scripts/check-retired-trait-ids.py --manifest testdata/taxonomy/js-local-fileserver-retirement/retired-ids.json
+	python3 scripts/check-retired-trait-ids.py --manifest taxonomy-migration/batches/301-elex-lpadv-profiles/retired-ids.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/elex-lpadv-profile-controls/cases.json
+	python3 testdata/taxonomy/scapy-outer-suppressor/check.py --cleave "$(CLEAVE)"
+	python3 testdata/taxonomy/libpcap-source-tree-suppressor/check.py --cleave "$(CLEAVE)" --quiet
+	python3 testdata/taxonomy/opamp-exception-suppressor/run.py --cleave "$(CLEAVE)"
+	sh testdata/taxonomy/lsquic-suppressor-controls/build-controls.sh
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/lsquic-suppressor-controls/cases.json
+	sh testdata/taxonomy/push-rocks-suppressor-controls-2026-10-16/build-controls.sh
+	python3 testdata/taxonomy/push-rocks-suppressor-controls-2026-10-16/run.py --cleave "$(CLEAVE)"
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/console-font-markers-2026-10-16/cases.json --record taxonomy-migration/batches/296-console-font-markers/emitted-findings.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/getstream-route-reference/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/power-pages-route/cases.json
+	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/office-macro-delivery/cases.json
+	python3 testdata/taxonomy/getstream-generated-path-suppressor/check.py "$(CLEAVE)"
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/wget-pipe-eval-semantics/cases.json --skip-traces
 	python3 testdata/taxonomy/embedded-python-exclusion/check.py --cleave "$(CLEAVE)"
 	python3 -m unittest discover -s scripts/tests -p 'test_taxonomy_batch_ledger.py'
 	python3 -m unittest discover -s scripts/tests -p 'test_taxonomy_review_signals.py'
+	uv run --with pyyaml python -m unittest discover -s scripts/tests -p 'test_taxonomy_map.py'
+	python3 -m unittest discover -s scripts/tests -p 'test_retired_trait_ids.py'
 	python3 scripts/check-taxonomy-batch-ledger.py taxonomy-migration/batches/277-shell-profile-retirement/branch-preservation-ledger.json --source-inventory taxonomy-migration/batches/277-shell-profile-retirement/source-inventory --destination-inventory taxonomy-migration/batches/277-shell-profile-retirement/destination-inventory
 	uv run --with pyyaml python scripts/test-taxonomy-move.py
 	python3 scripts/test-taxonomy-corpus-comparison.py
@@ -77,6 +109,8 @@ taxonomy-check:
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/wordpress-theme-upload-boundary/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/php-uploaded-copy-structure/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/java-stream-copy-precision/cases.json
+	python3 testdata/taxonomy/shell-option-command/check.py
+	python3 testdata/taxonomy/play-store-suppression/check.py
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/batch-variable-camouflage/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/truncate-zero-command-fragment/cases.json
 	python3 scripts/check-taxonomy-cases.py --cleave "$(CLEAVE)" --cases testdata/taxonomy/llm-extraction-exception-selector/cases.json

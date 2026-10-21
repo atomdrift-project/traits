@@ -4,6 +4,36 @@ defaults:
   platforms: [windows, unix]
   for: [javascript, typescript]
 traits:
+  - id: child-process-destructured-spawn-call
+    desc: Calls destructured child_process spawn
+    crit: notable
+    conf: 0.94
+    if:
+      type: tree-sitter
+      query: |
+        (program
+          (lexical_declaration
+            (variable_declarator
+              name: (object_pattern
+                (pair_pattern
+                  key: (property_identifier) @api
+                  value: (identifier) @alias))
+              value: (call_expression
+                function: (identifier) @require
+                arguments: (arguments
+                  (string (string_fragment) @module)))))
+          (function_declaration
+            body: (statement_block
+              (expression_statement
+                (call_expression
+                  function: (member_expression
+                    object: (call_expression
+                      function: (identifier) @callee
+                      arguments: (arguments (identifier) @program)))))))
+          (#eq? @api "spawn")
+          (#eq? @require "require")
+          (#eq? @module "child_process")
+          (#eq? @alias @callee))
   # === Detached spawn execution indicators ===
   - id: detached-true
     desc: Detached process spawn option
@@ -11,12 +41,11 @@ traits:
     conf: 0.85
     mbc: "F0011"
     attack: "T1059"
-    # A quoted error string such as throwInvalidSyncOption("detached: true")
-    # names the option without setting it. Require the property to follow a
-    # brace or comma, which is how an options object is written.
+    # Pinia's $subscribe uses detached:true too. Require a process-launch call.
     if:
-      type: text
-      regex: '[{,]\s*[''"]?detached[''"]?\s*:\s*(true|!\s*0\b)'
+      type: tree-sitter
+      kind: call
+      regex: '(?s)\b(spawn|fork|execFile)(Sync)?\s*\(.{0,512}detached["'']?\s*:\s*(true|!0\b)'
   - id: detached-dynamic
     desc: Detached spawn with dynamic value
     crit: notable
@@ -65,18 +94,6 @@ traits:
     if:
       type: tree-sitter
       query: '((pair key: (property_identifier) @key value: (false)) @option (#eq? @key "shell"))'
-  - id: shell-true
-    desc: "shell: true option"
-    crit: notable
-    conf: 0.9
-    attack: "T1059"
-    # Tree-sitter like the shell-false sibling: a text regex also matches
-    # comments describing the option (a virgil-cli comment documents
-    # shell:true while the call passes shell:false), and a comment never
-    # spawns a shell.
-    if:
-      type: tree-sitter
-      query: '((pair key: (property_identifier) @key value: (true)) @option (#eq? @key "shell"))'
   - id: shell-obfuscated-dynamic
     desc: "shell option via obfuscated alias"
     crit: notable
@@ -96,16 +113,6 @@ traits:
     if:
       type: text
       regex: "spawn\\(['\"]bash['\"]"
-  - id: node-spawn-powershell-process
-    desc: Spawns powershell.exe child process
-    crit: notable
-    conf: 0.92
-    mbc: "C0017"
-    attack: "T1059.001"
-    for: [javascript, typescript, pe]
-    if:
-      type: raw
-      regex: '(?i)(spawn|execFile|execSync|exec)\s*\(\s*["'']powershell(\.exe)?["'']'
   - id: child-process-member-spawn
     desc: Node.js child_process spawns an external process
     crit: notable
@@ -139,6 +146,7 @@ traits:
     crit: notable
     conf: 0.95
     attack: T1059.007
+    for: [scripts, source, text, json]
     if:
       # Keep working in large bundles where call facts are unavailable. The
       # literal interpreter argument distinguishes this from arbitrary spawn
@@ -211,13 +219,6 @@ traits:
     if:
       type: text
       regex: '[''"]-jar[''"]|[^\w]-jar\s+[^''"\s]{1,160}\.jar'
-  - id: node-lazy-daemon-entry-resolution
-    desc: Resolves lazy Node.js broker entrypoint
-    crit: notable
-    conf: 0.86
-    if:
-      type: text
-      regex: 'resolveDefaultBrokerEntry|brokerEntry\s*\?\?|fileURLToPath\s*\(\s*new\s+URL'
   - id: node-bearer-health-probe
     desc: Node bearer-authenticated health probe
     crit: notable
@@ -225,14 +226,18 @@ traits:
     if:
       type: text
       regex: 'fetch\s*\([^;]{0,500}/health[^;]{0,500}Authorization\s*:'
-  - id: fork-call
-    desc: child_process fork of a script path
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      regex: '\bfork\(\s*(path\b|__dirname|["\x27\x60])'
 composite_rules:
+  # A tracing API can also expose fork(), and examples in comments do not
+  # launch processes. Require a parsed call and a Node child_process import.
+  - id: fork-call
+    desc: Node child_process import accompanies fork call
+    crit: notable
+    conf: 0.9
+    all:
+      - id: micro-behaviors/data/control-flow/dispatch::fork-call-target
+    any:
+      - id: metadata/import/builtin::require-child-process
+      - id: metadata/import/builtin::child-process-import-runtime
   - id: spawn-call
     desc: Calls imported Node child_process spawn
     crit: notable
@@ -283,7 +288,7 @@ composite_rules:
     conf: 0.9
     all:
       - id: detached-ignored-unref-spawn
-      - id: node-lazy-daemon-entry-resolution
+      - id: micro-behaviors/fs/path-ops/parse::file-url-to-path-call-text
     any:
       - id: micro-behaviors/process/create/exec::node-spawn-current-executable
       - id: node-bearer-health-probe

@@ -40,13 +40,6 @@ traits:
   if:
     type: text
     substr: "4164642d4d70507265666572656e6365"
-- id: defender-exclusion-telegram-downloads
-  desc: Telegram Desktop download path reference
-  crit: notable
-  conf: 0.95
-  if:
-    type: text
-    regex: (?i)(Downloads\\Telegram Desktop|Telegram Desktop)
 - id: defender-add-mppreference-concat
   desc: Fragmented Add-MpPreference command
   crit: notable
@@ -85,6 +78,9 @@ traits:
     type: text
     regex: '-ExclusionPath[\s\S]{0,240}(\$env:UserProfile\b|%UserProfile%)([\s";,)]|$)'
     case_insensitive: true
+  unless:
+  - id: metadata/build/ci/github-actions::github-ci-runner-script-context
+  - id: metadata/build/ci/agent::ci-runner-windows-configuration-context
 - id: defender-exclusion-programdata-environment
   desc: Defender excludes the ProgramData tree
   crit: suspicious
@@ -232,12 +228,13 @@ traits:
     # directories ('-ExclusionPath C:\ProgramData','C:\Users','C:\'). A rooted
     # subdirectory (C:\folder) does not match: the char after the backslash
     # must terminate the argument.
-    regex: -ExclusionPath[^\r\n]{0,200}["']?[A-Za-z]:\\["']?(\s|,|;|$)
+    regex: '-ExclusionPath[^\r\n]{0,200}["'']?[A-Za-z]:\\+["'']?([\s,;"'']|$)'
     case_insensitive: true
   unless:
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
   - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
   - id: metadata/build/ci/agent::azure-pipelines-runner-configuration-context
+  - id: metadata/build/ci/github-actions::workflow-definition-path
 - id: malwarebytes-stop-service
   desc: Malwarebytes stopservice flag
   crit: suspicious
@@ -272,16 +269,6 @@ traits:
     regex: (sc|net)\s+\w+.{0,50}(WinDefend|WdNisSvc|SecurityHealthService)
     case_insensitive: true
 
-- id: tasklist-av-check-a
-  desc: Tasklist checks common AV set A
-  crit: suspicious
-  conf: 0.8
-  for:
-  - batch
-  if:
-    type: text
-    regex: tasklist.{0,50}(Malwarebytes|avast|avg|norton)
-    case_insensitive: true
 - id: tasklist-av-check-b
   desc: Tasklist checks common AV set B
   crit: suspicious
@@ -351,16 +338,6 @@ traits:
   if:
     type: text
     regex: \b(McShield|McTray)(\.exe)?\b
-    case_insensitive: true
-- id: tasklist-imagename-filter
-  desc: Tasklist filters by IMAGENAME (process check)
-  crit: notable
-  conf: 0.75
-  for:
-  - batch
-  if:
-    type: text
-    regex: tasklist\s+/FI\s+["']?IMAGENAME\s+eq\s+
     case_insensitive: true
 
 # Several writes through this native settings broker form the concrete
@@ -495,11 +472,14 @@ composite_rules:
   desc: Adds an entire drive to Defender exclusions
   crit: hostile
   conf: 0.99
-  for: [pe, batch, python, javascript, powershell, vbs]
+  for: [pe, batch, python, javascript, powershell, vbs, go]
   unless:
   - id: well-known/tool/sysadmin/kubernetes/bootstrap::kubernetes-windows-gce-script
   - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
   - id: metadata/build/ci/agent::azure-pipelines-runner-configuration-context
+  - id: metadata/build/ci/github-actions::workflow-definition-path
+  - id: well-known/tool/detection/
+  - id: micro-behaviors/process/create/shell/guard/
   all:
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
   any:
@@ -553,15 +533,18 @@ composite_rules:
   - id: objectives/impact/degrade/edr/targeting::edr-security-process-termination
   near_bytes: 1024
 
-- id: native-defender-exclusion-loader
-  desc: Native loader invokes PowerShell to add Defender exclusions
+- id: native-hidden-defender-suppression
+  desc: Hidden Defender-disable/exclusion API profile
   crit: hostile
   conf: 0.99
   attack: T1059.001,T1562.001
   for: [pe, dll]
   all:
+  - id: micro-behaviors/os/security/defender::defender-disable-realtime
+  - id: micro-behaviors/process/create/hidden::powershell-hidden-window
+  - id: micro-behaviors/process/create/exec::create-process-a
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
-  - id: micro-behaviors/process/create/shell/lang::powershell-keyword
+  - id: micro-behaviors/process/argument/option::powershell-command-options-text
   - id: micro-behaviors/os/privilege/check::admin-sid-check
   unless:
   - id: metadata/signed/platform/
@@ -575,7 +558,7 @@ composite_rules:
   - id: dotnet-defender-suppression-cluster
   - id: micro-behaviors/process/enumerate/managed::get-processes-by-name
   - id: micro-behaviors/os/service/configure::change-service-config
-  - id: micro-behaviors/process/terminate/kill::kernel-terminate-process-reference
+  - id: micro-behaviors/process/terminate/kill::native-terminate-process-reference
 - id: dotnet-defender-suppression-cluster
   desc: Multiple .NET Defender suppressions
   crit: suspicious
@@ -609,8 +592,8 @@ composite_rules:
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
   - id: micro-behaviors/communications/http/client/webclient::system-net-webclient
   - id: micro-behaviors/communications/http/download/webclient::webclient-downloadfile-call
-  - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
-  - id: micro-behaviors/process/create/start-process::start-process-call
+  - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden-option
+  - id: micro-behaviors/process/create/exec::start-process-call
 - id: hidden-powershell-users-root-exclusion
   desc: Hidden PowerShell excludes the C:\Users profile root
   crit: hostile
@@ -619,7 +602,7 @@ composite_rules:
   mbc: B0030
   for: [batch, powershell, java, vbs]
   all:
-  - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden
+  - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden
   - id: defender-exclusion-users-root
   any:
   - id: micro-behaviors/os/security/defender::defender-preference-option-prefix
@@ -726,7 +709,7 @@ composite_rules:
   for: [pe, batch, vbs]
   all:
   - id: micro-behaviors/process/create/hidden::powershell-hidden-window
-  - id: micro-behaviors/process/create/flags::execution-policy-bypass
+  - id: micro-behaviors/process/argument/option::execution-policy-bypass
   - id: micro-behaviors/os/security/defender::defender-exclusion-path-parameter
 - id: defender-temp-exclusion-via-obfuscated-iex
   desc: Obfuscated Defender temp exclusion
@@ -740,7 +723,7 @@ composite_rules:
   - id: micro-behaviors/os/env/user-paths::env-temp-dup
   - id: objectives/anti-static/obfuscation/string/broken-api::iex-backtick-obfuscated
 - id: ransomware-prep-blinding
-  for: [batch, powershell]
+  for: [batch, powershell, pe, go]
   desc: Ransomware prep blinding chain
   crit: hostile
   conf: 0.96
@@ -750,21 +733,21 @@ composite_rules:
   any:
   - id: objectives/impact/degrade/firewall::windows-firewall-profile-disable
   - id: objectives/evasion/security-bypass/policy/network::smb-anonymous-weaken
+  unless:
+  - id: well-known/tool/development/toolchain/go-x-build::go-x-build-infra-context
 - id: defender-excludes-telegram-stage
   desc: Defender excludes Telegram and stage
   crit: hostile
   conf: 0.98
   all:
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
-  - id: defender-exclusion-telegram-downloads
+  - id: micro-behaviors/fs/path/personal::telegram-desktop-download-path
   - id: micro-behaviors/fs/path/system::programdata-directory-path
 - id: defender-disable
   desc: Windows Defender disabled
   crit: notable
   conf: 0.95
-  for:
-  - batch
-  - powershell
+  for: [batch, powershell, pe, go]
   any:
   - id: micro-behaviors/os/security/defender::defender-disable-realtime
   - id: objectives/evasion/anti-av/blinding::defender-disable-behavior
@@ -792,18 +775,8 @@ composite_rules:
   - batch
   all:
   - id: av-process-name-list
-  - id: tasklist-imagename-filter
+  - id: micro-behaviors/process/enumerate/shell::tasklist-imagename-filter
   near_lines: 8
-- id: tasklist-av-check
-  desc: Tasklist checking for AV processes
-  crit: suspicious
-  conf: 0.85
-  for:
-  - batch
-  any:
-  - id: tasklist-av-check-a
-  - id: tasklist-av-check-b
-  - id: tasklist-av-imagename-loop
 - id: windows-bypass
   desc: Windows security bypass detected
   crit: suspicious
@@ -816,7 +789,6 @@ composite_rules:
   - id: objectives/evasion/anti-av/amsi::amsi-bypass
   - id: malwarebytes-stop-service
   - id: uac-bypass-comp
-  - id: tasklist-av-check
   unless:
   - id: well-known/app/ai/agent-runtime/aui-agent-builder/
   - id: well-known/app/data/dbeaver::windows-defender-exclusion-helper-script
@@ -876,7 +848,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/client/urlmon::url-download-to-file
   any:
   - id: micro-behaviors/process/create/exec::create-process-a
-  - id: micro-behaviors/process/create/system::shell-execute-ex-a
+  - id: micro-behaviors/process/create/shellexec::shell-execute-ex-a
 
 - id: defender-exclusion-with-encrypted-loader
   desc: Defender exclusion with encrypted process loader
@@ -885,7 +857,7 @@ composite_rules:
   for: [pe, dll]
   all:
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
-  - id: metadata/file/data-blob::low-entropy-binary-with-dense-region
+  - id: metadata/binary/layout/entropy::low-entropy-binary-with-dense-region
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   - id: micro-behaviors/process/create/spawn::child-process-creation-api
 
@@ -978,8 +950,8 @@ composite_rules:
   all:
     - id: defender-single-path-scan
     - id: defender-skip-response-test
-- id: defender-native-protection-teardown
-  desc: Native payload disables Defender protections
+- id: defender-protection-disable-command-cluster
+  desc: PE Defender protection-disable command cluster
   crit: hostile
   conf: 0.995
   for: [pe, dll]

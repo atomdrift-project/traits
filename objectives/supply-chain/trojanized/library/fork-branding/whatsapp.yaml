@@ -27,6 +27,15 @@ defaults:
   attack: T1195.002
 
 composite_rules:
+  - id: whatsapp-library-fork-repeating-preset-newsletter-follow
+    desc: Baileys fork repeatedly follows preset channel on connect
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: objectives/impact/ui/manipulation/social::connect-time-repeating-preset-newsletter-follow
+
   # The consumer installs the shim, but the behaviour lives in a scoped fork
   # pulled in as a dependency, so the shim's own tarball shows none of it.
   # A re-export with no WAProto tree of its own is the laundering shape; it is
@@ -146,6 +155,7 @@ composite_rules:
     downgrade:
       any:
         - id: objectives/impact/ui/manipulation/social::forged-official-whatsapp-newsletter-attribution
+        - id: objectives/impact/ui/manipulation/social::hardcoded-channel-outgoing-attribution
 
   - id: whatsapp-library-fork-delayed-obfuscated-follow
     desc: Baileys fork runs delayed obfuscated channel follow
@@ -323,6 +333,18 @@ composite_rules:
       - id: well-known/lib/network/baileys::baileys-library-identity
       - id: objectives/impact/ui/manipulation/social::connect-immediate-hardcoded-newsletter-follow
 
+  # The sidecar-module sibling: autoFollowChannels and newsletterIds sit in a
+  # grafted helper module while lib/Socket/index.js only calls the helper on
+  # connection open. Worked example: @randev404/baileys 1.0.0.
+  - id: whatsapp-library-fork-sidecar-session-open-newsletter-follow
+    desc: Baileys fork sidecar follows channels on connect
+    crit: hostile
+    conf: 0.98
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: objectives/impact/ui/manipulation/social::archive-sidecar-session-open-newsletter-follow
+
   # The config-default sibling: the fork bakes a DEFAULT_AUTO_FOLLOW_CHANNELS
   # list into the socket config defaults and the session-open loop follows
   # whatever the config carries, so the follow target never appears at the
@@ -341,7 +363,7 @@ composite_rules:
   # connection opens and swallows the errors. Library identity plus the
   # file-local hostile follow says "a Baileys fork did this to consumers".
   - id: whatsapp-library-fork-connect-swallowed-roster-follow
-    desc: Baileys fork silently follows roster on connect
+    desc: Baileys fork silently follows hardcoded channels on connect
     crit: hostile
     conf: 0.98
     scope: archive
@@ -413,3 +435,109 @@ composite_rules:
     all:
       - id: well-known/lib/network/baileys::baileys-library-identity
       - id: objectives/command-and-control/remote-command/dispatch::sse-stream-drives-whatsapp-tasks
+
+  # Upstream Baileys fetches its version manifest from a raw content URL; a
+  # fork that points fetchLatestBaileysVersion at a github.com/... page URL
+  # pulls HTML, silently falls back, and leaves a mutable repointable endpoint
+  # under the operator's control. Worked example: @chatunity/baileys
+  # (GHSA-2vxg-pmhf-2c8r).
+  - id: whatsapp-library-fork-github-page-version-manifest
+    desc: Baileys fork repoints version check to GitHub page URL
+    crit: hostile
+    conf: 0.92
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: micro-behaviors/communications/messaging/channel::baileys-version-check-github-page-url
+
+  # Upstream Baileys uploads outbound media to WhatsApp CDN hosts. A fork that
+  # implements uploadFile as a rotation through several anonymous public file
+  # hosts gives the operator a URL for arbitrary buffers the consumer passes
+  # through the library. Worked example: @chatunity/baileys 1.2.2
+  # lib/Utils/messages-media.js.
+  - id: whatsapp-library-fork-anonymous-media-upload-relay
+    desc: Baileys fork relays media via anonymous file hosts
+    crit: hostile
+    conf: 0.95
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: micro-behaviors/communications/http/services/file-hosting::multi-public-file-hosting-services
+
+  # Mutable GitHub-sourced libsignal on a republished Baileys tree is the same
+  # supply-chain move as pinning crypto to an attacker-controlled branch.
+  # Worked example: @chatunity/baileys (GHSA-2vxg-pmhf-2c8r family).
+  - id: whatsapp-library-fork-github-libsignal-dependency
+    desc: Baileys fork pins libsignal to GitHub VCS ref
+    crit: hostile
+    conf: 0.93
+    for: [javascript, typescript, npm, tar, zip, package.json]
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: metadata/package/name/vocabulary::npm-baileys-name-segment
+      - id: metadata/package/dependencies/manifest/source::npm-libsignal-github-vcs-dependency
+
+  # Republished Baileys trees that ship a full "antiban" stack with zero-width
+  # and punctuation mutation exist to defeat duplicate-content detection on bulk
+  # WhatsApp sends. Upstream Baileys does not bundle this evasion layer.
+  # Worked example: @xrelly-stack/bails 2.3.6 lib/Utils/antiban.js.
+  - id: whatsapp-library-fork-zero-width-bulk-messaging-evasion
+    desc: Baileys fork bundles zero-width message variation
+    crit: hostile
+    conf: 0.94
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: objectives/evasion/security-bypass/anti-bot/automation::zero-width-text-content-variation
+
+  # Upstream @whiskeysockets/baileys pins libsignal to
+  # git+https://github.com/whiskeysockets/libsignal-node. That published pin is
+  # not a fork. Count a mutable Git runtime dependency only when it sits on
+  # some other manifest than that canonical package.
+  - id: other-manifest-mutable-git-runtime-dependency
+    desc: Other manifest has mutable Git runtime dep
+    crit: notable
+    conf: 0.9
+    scope: file
+    for: [package.json]
+    any:
+      - id: metadata/package/dependencies/manifest/source::npm-git-url-dependency
+      - id: metadata/package/dependencies/manifest/source::npm-github-protocol-dependency
+    unless:
+      - id: metadata/package/name/vocabulary::npm-whiskeysockets-baileys-name
+
+  # Runtime dependencies pinned to an unpinned Git transport let the remote
+  # repo replace native or bridge code on every install. git+https and the
+  # npm github: protocol are the same mutable ref; a commit-less github:owner/repo
+  # is not a registry pin. Worked examples: @xrelly-stack/bails 2.3.6
+  # (git+https whatsapp-rust-bridge-baron) and 2.3.1 (github:7ucg/whatsapp-rust-bridge).
+  - id: whatsapp-library-fork-mutable-git-runtime-dependency
+    desc: Baileys fork uses mutable Git URL runtime dep
+    crit: hostile
+    conf: 0.91
+    for: [javascript, typescript, npm, tar, zip, package.json]
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: other-manifest-mutable-git-runtime-dependency
+
+  # The manifestless hollow-barrel sibling of the graft composites above: the
+  # tarball ships a lib entry that presents the full Baileys API surface
+  # (makeWASocket, proto, and the submodule re-exports) under a forker
+  # console banner, but carries no publish manifest and none of the local
+  # submodules the barrel wires up. Upstream Baileys always ships
+  # package.json alongside lib/, and never prints an import-time publisher
+  # banner, so the banner rules out a botched upstream publish: this is a
+  # deliberately republished fork facade that cannot load as a library and
+  # exists to occupy the fork's distribution slot.
+  # Worked example: @chatunity-baileys 1.0.2 (package/lib/index.js only).
+  - id: whatsapp-library-fork-manifestless-hollow-barrel
+    desc: Baileys fork ships manifestless barrel over absent modules
+    crit: hostile
+    conf: 0.95
+    scope: archive
+    all:
+      - id: well-known/lib/network/baileys::baileys-library-identity
+      - id: metadata/package/entrypoint::runtime-shipped-without-publish-manifest
+      - id: well-known/lib/network/baileys::baileys-fork-publisher-console-banner

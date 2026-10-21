@@ -75,7 +75,57 @@ traits:
       type: text
       substr: RABlAGwAZQB0AGUAZAAgAHIAZQBzAHQAbwByAGUAIABwAG8AaQBuAHQA
 
+  - id: pyc-all-files-encrypted-message
+    desc: Bytecode says all files were encrypted
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      substr: all of your files have been encrypted
+      case_insensitive: true
+
 composite_rules:
+  - id: pyc-walk-remove-filecoder-bytecode
+    desc: Python bytecode pairs directory walk with file removal
+    crit: suspicious
+    conf: 0.92
+    scope: leaf
+    all:
+      - id: micro-behaviors/fs/directory/traverse::pyc-walk-name-record
+      - id: micro-behaviors/fs/delete/file/library::pyc-remove-name-record
+    any:
+      - id: pyc-all-files-encrypted-message
+      - id: readme-decrypt-note
+      - id: leave-ransom-note
+      - id: cryptor-extension
+      - id: enc-extension
+    unless:
+      # zoneinfo walks timezone directories and removes set keys.
+      - id: well-known/lib/runtime/scripted/cpython::zoneinfo-tzpath-module
+      # setuptools command modules walk build trees and delete leftovers.
+      - id: well-known/lib/runtime/scripted/setuptools::setuptools-command-module
+
+  - id: pyinstaller-walk-remove-filecoder-archive
+    desc: PyInstaller archive entry logic walks files and deletes
+    crit: hostile
+    conf: 0.95
+    for: [zip, tar, pe, pyc]
+    scope: archive
+    all:
+      - id: metadata/build/bundler/runtime::pyinstaller-pe-bundle-markers
+      - id: pyc-walk-remove-filecoder-bytecode
+
+  - id: pyinstaller-walk-remove-encrypted-claim
+    desc: Bundled walk-delete bytecode claims encryption
+    crit: hostile
+    conf: 0.96
+    for: [zip, tar, pe, pyc]
+    scope: archive
+    all:
+      - id: metadata/build/bundler/runtime::pyinstaller-pe-bundle-markers
+      - id: pyc-walk-remove-filecoder-bytecode
+      - id: pyc-all-files-encrypted-message
+
   - id: encrypt-walk-ransom
     desc: Python bytecode recursive encrypt with note
     crit: hostile
@@ -114,19 +164,3 @@ composite_rules:
       - id: micro-behaviors/crypto/symmetric/encrypt::pyc-encrypt-name-record
       - id: micro-behaviors/fs/directory/traverse::pyc-walk-name-record
       - id: micro-behaviors/fs/delete/file/library::pyc-remove-name-record
-
-  # Same filecoder shape as the CBC rule with an AEAD cipher: the script walks
-  # a target-extension list, encrypts each file with a fixed key, removes the
-  # original and shows a payment demand. ChaCha20-Poly1305 is the cipher a
-  # from-scratch locker picks to avoid a padding step.
-  - id: pyc-aead-file-encryption-ransom-demand
-    desc: ChaCha20-Poly1305 file encryption with ransom demand
-    crit: hostile
-    conf: 0.95
-    all:
-      - id: micro-behaviors/crypto/symmetric/stream/chacha::chacha20-poly1305-identifier
-      - id: micro-behaviors/crypto/symmetric/encrypt::pyc-encrypt-name-record
-      - id: micro-behaviors/fs/directory/traverse::pyc-walk-name-record
-      - id: micro-behaviors/fs/delete/file/library::pyc-remove-name-record
-      - id: objectives/impact/ransom/note::ransom-deface-phrase
-

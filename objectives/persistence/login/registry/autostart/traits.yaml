@@ -18,6 +18,7 @@ traits:
       type: text
       regex: (?i)\\Winlogon\\Userinit\b
     unless:
+      - id: metadata/file/format/log::windows-event-csv-records
       - id: well-known/app/utility/siw::siw-family-identity
   - id: set-itemproperty-run
     desc: Set-ItemProperty Run
@@ -121,7 +122,7 @@ traits:
     for: [batch]
     if:
       type: text
-      regex: '(?i)\breg(\.exe)?\s+add\b[^\r\n]{0,160}\s/d\s+["'']?[^"\r\n]{0,80}%(~[a-z]*)?0'
+      regex: '(?i)\breg(\.exe)?\s+add\b[^\r\n]{0,160}\s/d\s+["'']?[^"\r\n]{0,80}%(~[a-z]*)?0\b'
   - id: batch-run-key-fragment
     desc: Batch Run key fragment
     crit: component
@@ -191,6 +192,22 @@ traits:
       type: text
       regex: '(?i)\bpersisted\s+via\s+run\s+key\s*\('
 composite_rules:
+  - id: unsigned-winlogon-notify-registration
+    desc: Unsigned module references Winlogon Notify persistence
+    crit: hostile
+    conf: 0.9
+    attack: T1547.004
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/os/registry/keys/autostart::winlogon-notify-subkey
+      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+    unless:
+      - id: well-known/lib/platform/wine/
+      - id: well-known/tool/sysadmin/nirsoft/
+      # Notify DLL installers are signed system components; an unsigned
+      # module naming the Notify subkey is registering itself to load at
+      # logon. The leading byte of the path stays wildcarded so
+      # single-character mutations ("Xinlogon\Notify") still match.
   - id: unsigned-native-run-key-persistence-status
     desc: Unsigned PE reports Run-key persistence
     crit: hostile
@@ -200,7 +217,7 @@ composite_rules:
     all:
       - id: run-key-persistence-status
       - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
-      - id: micro-behaviors/process/create/api-system::native-import
+      - id: micro-behaviors/process/create/shell/native::c-system-import
       - id: metadata/signed/trust-level::unsigned-missing-signature-record
     unless:
       - id: metadata/signed/platform/
@@ -215,7 +232,7 @@ composite_rules:
       - id: objectives/persistence/login/registry/autostart::run-key-persistence-api-block
       - id: metadata/binary/layout/ratio::many-pe-embedded
     any:
-      - id: objectives/impact/system/crash::bsod-raise-error
+      - id: micro-behaviors/os/syscall/invoke::ntdll-hard-error-api-profile
       - id: micro-behaviors/process/inject/runtime/call::remote-process-memory-api-cluster
     needs: 1
     unless:
@@ -250,8 +267,10 @@ composite_rules:
     near_lines: 20
     all:
       - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run"
-      - id: micro-behaviors/os/registry/write::powershell-new-itemproperty-variable-path
+      - id: micro-behaviors/data/property/write::powershell-new-itemproperty-variable-path
       - id: micro-behaviors/os/registry/write::registry-powershell-executable
+    unless:
+      - id: metadata/build/ci/github-actions::workflow-definition-path
   - id: common-persistence-keys
     desc: References one or more Windows autostart registry paths
     crit: component
@@ -367,7 +386,7 @@ composite_rules:
     all:
       - id: micro-behaviors/os/registry/write::batch-reg-add-run-key-direct
       - id: micro-behaviors/fs/path/system::programdata-directory-path
-      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
+      - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden-option
       - id: micro-behaviors/process/create/shell/command-flag::powershell-file-flag
       - id: objectives/command-and-control/dropper/file-exec/command/batch::self-extracting-gzip-powershell-stage
   - id: batch-hidden-powershell-run-key-persistence
@@ -378,8 +397,8 @@ composite_rules:
     attack: "T1059.001,T1547.001,T1564.003"
     all:
       - id: micro-behaviors/os/registry/write::batch-reg-add-run-key-direct
-      - id: micro-behaviors/process/create/hidden::powershell-windowstyle-hidden-option
-      - id: micro-behaviors/process/create/flags::powershell-policy-bypass-flag
+      - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden-option
+      - id: micro-behaviors/process/argument/option::powershell-policy-bypass-flag
       - id: micro-behaviors/process/create/shell/command-flag::powershell-file-flag
   - id: batch-encoded-user-run-persistence
     desc: Batch drops hidden per-user Run-key persistence
@@ -402,7 +421,7 @@ composite_rules:
       - id: powershell-run-path-variable-write
       - id: powershell-appdata-exe-target
       - id: micro-behaviors/fs/write/file/full::write-all-bytes
-      - id: micro-behaviors/process/create/start-process::start-process-call
+      - id: micro-behaviors/process/create/exec::start-process-call
   - id: scrambled-upx-run-key-dropper
     desc: Tampered UPX binary persists through a Run key and spawns a process
     crit: hostile
@@ -410,7 +429,21 @@ composite_rules:
     for: [pe]
     attack: T1027.002,T1547.001,T1106
     all:
-      - id: objectives/anti-static/pack/upx::scrambled-upx-header
+      - id: metadata/binary/layout/stub::upx-sections-without-early-magic
       - id: metadata/binary/layout/overlay::high-entropy-overlay
       - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run-key-path"
       - id: micro-behaviors/process/create/spawn::create-process-w
+  - id: self-mutating-cleartext-updater-run-persistence
+    desc: Self-mutating Run-key updater fetches over unauthenticated HTTP
+    crit: hostile
+    conf: 0.96
+    for: [pe]
+    attack: T1547.001,T1105
+    all:
+      - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run"
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+      - id: micro-behaviors/fs/write/file/executable::self-hash-rotation-relaunch
+      - id: objectives/command-and-control/dropper/download::unverified-winhttp-stack-and-bare-ip-url
+    unless:
+      - id: metadata/signed/platform/
+      - id: metadata/binary/installer/family/

@@ -54,6 +54,13 @@ traits:
     if:
       type: text
       regex: '(?i)(startsWith|test|match)\s*\(\s*["''](magnet:|urn:btih:|ftp:\/\/|ed2k:\/\/)'
+  # Anchor href download scheme selector (e.g. a[href^='magnet:'])
+  - id: anchor-download-scheme-selector
+    desc: Checks anchor selector for download scheme
+    conf: 0.93
+    if:
+      type: text
+      regex: '(?i)a\[href\^?=\s*["'']?(magnet:|urn:btih:|ftp:\/\/|ed2k:\/\/)'
   # Download URL file extension scoping: checks for file download extensions
   # (.torrent, .zip, etc.).
   - id: download-extension-target-check
@@ -110,7 +117,8 @@ traits:
     conf: 0.86
     if:
       type: text
-      regex: '(document|window)\s*\[[^\]\n]{1,160}addEventLi[^\]\n]{0,160}\]\s*\('
+      # The event argument must actually be click; pageshow is not a click.
+      regex: '(document|window)\s*\[["'']addEventListener["'']\]\s*\(\s*["'']click["'']'
   - id: dom-computed-click-call
     desc: Calls click through computed DOM property
     conf: 0.86
@@ -153,6 +161,24 @@ traits:
     if:
       type: text
       regex: "getAttribute\\(\\s*['\"]target['\"]\\s*\\)\\s*===?\\s*['\"]_blank['\"]"
+
+  - id: anchor-click-scoped-to-container
+    desc: Anchor click handling checks containment
+    conf: 0.9
+    if:
+      type: text
+      # The handler resolves the clicked anchor and then checks that it
+      # belongs to the app's own containers (a known element id or a
+      # `.contains()` membership test) before acting. Extension pages use
+      # this shape for their own dropdown menus and saved-link lists;
+      # page-wide click forwarding does not gate on containment.
+      regex: 'closest\s*\(\s*["'']a\[href\]["'']\s*\)[\s\S]{0,220}(closest\s*\(\s*["'']#|\.contains\s*\()'
+  - id: anchor-click-origin-check
+    desc: Anchor click handler checks origin
+    conf: 0.88
+    if:
+      type: text
+      regex: '\b(origin\s*===?\s*(window\.)?location\.origin|location\.origin\s*===)'
 composite_rules:
   - id: capture-phase-event-listener
     desc: Registers capture-phase DOM event listener
@@ -174,7 +200,16 @@ composite_rules:
     conf: 0.93
     any:
       - id: download-scheme-target-check
+      - id: anchor-download-scheme-selector
       - id: download-extension-target-check
+  - id: anchor-click-scoped-to-origin
+    desc: Anchor click handling checks link origin
+    crit: notable
+    conf: 0.9
+    near_lines: 30
+    all:
+      - id: clicked-anchor-url-read
+      - id: anchor-click-origin-check
   - id: extension-document-link-click-forwarding
     desc: Extension globally forwards cancelled link clicks
     crit: suspicious
@@ -184,3 +219,10 @@ composite_rules:
       - id: browser-global-click-listener
       - id: clicked-anchor-url-read
       - id: micro-behaviors/communications/ipc/message::cancelled-event-url-runtime-message
+    downgrade:
+      any:
+        # Container-scoped link handling is the extension acting on its own
+        # UI (route the click through the background tab opener); only
+        # unscoped forwarding reads as navigation hijacking.
+        - id: anchor-click-scoped-to-container
+        - id: anchor-click-scoped-to-origin

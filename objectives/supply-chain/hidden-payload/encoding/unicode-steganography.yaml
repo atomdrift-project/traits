@@ -11,80 +11,13 @@ defaults:
 traits:
   # ── Unicode Steganography Components ─────────────────────────────────
 
-  # Variation selector decoding: codePointAt + VS hex constants
-- id: codepoint-vs-decoder
-  desc: Variation selector converted to byte value
-  crit: suspicious
-  conf: 0.95
-  # Manifest types included: the Glassworm family appends its decoder and
-  # payload after the closing brace of package.json, where the JavaScript-only
-  # default in this file would never see it.
-  for: [javascript, typescript, package.json, json, package-lock.json, text]
-  if:
-    type: text
-    # Range checks are normal terminal/grapheme width handling. Subtracting
-    # the variation-selector base is the byte-decoder operation.
-    regex: 'codePointAt.{0,60}\)[\s\S]{0,160}-\s*0x[Ff][Ee]00'
-  # Emoji/grapheme iterators consume U+FE0E/FE0F after a base code point via
-  # charCodeAt equality — text shaping, not stego extraction.
-  not:
-    - regex: 'charCodeAt\([^)]*\)\s*===\s*0x[Ff][Ee]0[EeFf]'
-  unless:
-    - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
-- id: vs-decoder-low-range
-  desc: Code-point variation selector range check
-  crit: notable
-  conf: 0.94
-  for: [javascript, typescript, text]
-  if:
-    type: text
-    regex: 'codePointAt[\s\S]{0,120}0x[Ff][Ee]00[\s\S]{0,120}0x[Ff][Ee]0[Ff]'
-  unless:
-  - id: well-known/lib/format/pdfjs/
-- id: vs-decoder-supp-range
-  desc: Variation selector supplementary range decoder
-  crit: notable
-  conf: 0.94
-  for: [javascript, typescript, text]
-  if:
-    type: text
-    regex: 'codePointAt[\s\S]{0,120}0x[Ee]0100[\s\S]{0,120}0x[Ee]01[Ee][Ff]'
-  unless:
-  - id: well-known/lib/format/pdfjs/
+  # Variation-selector decoding and range observations live in their
+  # capability homes; objective composites below add the hidden-payload context.
   # The neutral eval(Buffer.from(...)) capability lives under the eval
   # micro-behaviors directory; objective composites add the obfuscation
   # context that makes it a hidden-payload signal.
   # AST: eval() with any call expression argument (catches deeply nested
   # decode chains like eval(Buffer.from(s(x)).toString('utf-8')))
-- id: eval-call-expr-arg
-  desc: "eval() decoder-like call argument"
-  crit: notable
-  conf: 0.8
-  if:
-    type: tree-sitter
-    query: |
-      [
-        (call_expression
-          function: (identifier) @fn
-          arguments: (arguments
-            (call_expression
-              function: (identifier) @callee))
-          (#eq? @fn "eval")
-          (#match? @callee "^(atob|decodeURI|decodeURIComponent|unescape)$"))
-        (call_expression
-          function: (identifier) @fn
-          arguments: (arguments
-            (call_expression
-              function: (member_expression
-                property: (property_identifier) @callee_prop)))
-          (#eq? @fn "eval")
-          (#match? @callee_prop "^(from|fromCharCode|fromCodePoint|toString|charCodeAt|codePointAt)$"))
-      ]
-  unless:
-  - id: metadata/lang/compiled::erlang-module-marker
-  - id: metadata/package/testing/
-  # eval(atob(...)) — base64 decode and eval
-  - id: "metadata/file/naming::test-directory-component"
 - id: eval-atob
   desc: eval() of atob() decoded data
   crit: suspicious
@@ -96,6 +29,8 @@ traits:
   unless:
   - id: metadata/package/testing/corpus/
   - id: well-known/tool/detection/
+  # A scanner's test files quote the eval(atob()) fixture to assert detection.
+  - id: metadata/package/testing/harness/unit::vitest-import
   - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
   - id: well-known/tool/offensive/payload-corpus::xss-alert-probe-corpus
   - id: metadata/package/testing/presence/scripted::dot-spec-filename
@@ -103,21 +38,15 @@ traits:
   - id: metadata/package/documentation/source::documentation-dir-path
   if:
     type: text
-    regex: eval\(\s*atob\s*\(
-- id: eval-decode-uri
-  desc: eval() of URL-decoded data
-  crit: suspicious
-  conf: 0.9
-  unless:
-  - id: metadata/package/testing/harness/fixture::jsimplifier-benignjs-corpus-path
-  - id: well-known/app/browser-extension/content-blocker::adblock-filter-resource
-  - id: metadata/file/format/markup::adblock-filter-list
-
-  if:
-    type: text
-    regex: 'eval\(\s*decodeURIComponent\s*\('
-  # (0, eval)(Buffer. — indirect eval immediately receiving a Buffer argument;
-  # this is the actual attack payload: (0,eval)(Buffer.from(s,'base64').toString())
+    # A quoted 'eval(atob(' names the pattern (scanner signature tables and
+    # labels quote it as data); only an unquoted occurrence invokes it. The
+    # optional leading quote is inside the match span so `not:` can see it.
+    # Include the atob argument so a short quoted token is visible to not:.
+    # Eight alphabet characters is six decoded bytes, too small for a script.
+    regex: '[''"`]?eval\(\s*atob\s*\([^)\n]{0,48}'
+  not:
+    - regex: '^[''"`]'
+    - regex: 'atob\s*\(\s*["''][A-Za-z0-9+/]{1,8}={0,2}["'']'
 - id: indirect-eval-buffer-arg
   desc: Indirect eval with Buffer argument
   crit: notable
@@ -140,42 +69,8 @@ traits:
   if:
     type: text
     regex: 'setTimeout\(\s*atob\s*\('
-# The same payload delivered inside a manifest rather than a source file.
-#
-# reworm 2.2.1 (Glassworm, 2025) appended ~36KB of variation-selector-encoded
-# JavaScript after the closing brace of `package.json`, preceded by a decoder
-# and an `eval`. JSON parsers stop at the closing brace and a reviewer sees a
-# normal manifest, but anything that evaluates the file as text runs the
-# payload. The JavaScript-scoped rules in this file never reach a
-# manifest-typed file, so this atom carries the same evidence there.
-- id: manifest-eval-decoded-buffer
-  desc: Manifest evaluates a decoded buffer
-  crit: suspicious
-  conf: 0.95
-  for: [package.json, json, package-lock.json, text]
-  attack: T1027,T1059.007
-  if:
-    type: text
-    regex: '\beval\s*\(\s*Buffer\s*\.\s*from\s*\('
 
 composite_rules:
-  # Either spelling of the same sink: the AST form for parsed sources, the
-  # text form for manifests and patches where no AST exists. Grouped so the
-  # hostile composites below need the sink once, in whichever form it comes.
-- id: eval-decoded-buffer-either
-  desc: eval() of a decoded buffer either form
-  crit: suspicious
-  conf: 0.95
-  for: [javascript, typescript, package.json, json, package-lock.json, text]
-  any:
-  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-buffer-from-argument
-  - id: manifest-eval-decoded-buffer
-  unless:
-  - id: metadata/package/testing/harness/fixture::inert-detection-fixture-header
-  # SkillTotal's install-script scanner quotes `node -e "eval(Buffer.from(...))"`
-  # in its finding text as the pattern it detects.
-  - id: well-known/tool/detection/security-scanner::skilltotal-scanner-module-path
-  - id: well-known/tool/detection/security-scanner::skilltotal-package-import-marker
   # ── Hostile: Unicode Steganography + Eval ────────────────────────────
 
   # eval(Buffer.from(decoder(...))) + variation selector constants
@@ -187,11 +82,11 @@ composite_rules:
   mbc: B0032
   for: [javascript, typescript, text]
   all:
-  - id: eval-decoded-buffer-either
-  - id: codepoint-vs-decoder
+  - id: micro-behaviors/process/interpreter/eval/direct::decoded-buffer-eval-call-or-command
+  - id: micro-behaviors/data/decode/custom::javascript-variation-selector-byte-decoder
   any:
-  - id: vs-decoder-low-range
-  - id: vs-decoder-supp-range
+  - id: micro-behaviors/data/string/unicode::javascript-variation-selector-range
+  - id: micro-behaviors/data/string/unicode::javascript-supplementary-selector-range
   - id: metadata/file/invisible-unicode::multiple
   # eval(Buffer.from(...)) in minified code — dropper pattern
 - id: eval-decoded-buffer-obfuscated
@@ -216,12 +111,14 @@ composite_rules:
   conf: 0.9
   attack: T1027
   all:
-  - id: objectives/anti-static/obfuscation/code-metrics/structure::appended-long-line
+  - id: metadata/file/line::last-line-over-1000
+  - id: metadata/file/line::file-has-30-plus-lines
+  - id: metadata/file/line::single-long-line-outlier
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
   any:
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-buffer-from-argument
   - id: eval-atob
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::decoded-function-constructor-argument
+  - id: micro-behaviors/metaprogramming/generation::function-from-decoder-or-buffer
   - id: micro-behaviors/data/encode/charcode
   - id: micro-behaviors/data/string/access::js-codepoint-at
   unless:
@@ -235,7 +132,7 @@ composite_rules:
   crit: hostile
   conf: 0.9
   all:
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::decoded-function-constructor-argument
+  - id: micro-behaviors/metaprogramming/generation::function-from-decoder-or-buffer
   - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
   # Indirect eval (0,eval) immediately receiving a decoded buffer or base64 arg.
   # Uses indirect-eval-buffer-arg (raw co-occurrence) instead of buffer-keyword
@@ -269,15 +166,17 @@ composite_rules:
   size_max: 200000
   all:
   - id: micro-behaviors/data/string/access::js-codepoint-at
-  - id: vs-decoder-supp-range
+  - id: micro-behaviors/data/string/unicode::javascript-supplementary-selector-range
   any:
   - id: micro-behaviors/data/encode/charcode::charcode-at
-  - id: micro-behaviors/data/decode/charset::fromcharcode-call
+  - id: micro-behaviors/data/string/conversion::fromcharcode-call
   near_bytes: 1024
   unless:
+  - id: well-known/tool/detection/
   - id: well-known/lib/ui/blessed::blessed-terminal-unicode-module
   - id: well-known/tool/development/cli/socket-cli::socket-dev-cli-vendored-path
   # Terminal string-width logic embedded in JS source maps is not stego.
   - id: metadata/file/format/source-map::sourcemap
   - id: metadata/file/format/source-map::sourcemap-sources-content
   - id: metadata/file/format/source-map::sourcemap-context
+

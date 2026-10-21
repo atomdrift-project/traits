@@ -32,25 +32,61 @@ traits:
   - id: websocket-javascript-constructor
     desc: Calls a JavaScript WebSocket constructor
     conf: 0.86
-    for: [javascript, typescript, html]
+    for: [javascript, typescript, html, php]
     if:
-      type: symbol
-      kind: call
-      regex: '(^|\.)(WebSocket|ws(_[0-9]+)?\.default)$'
+      type: text
+      regex: '\bnew\s+([\w$]{1,40}\.){0,3}(WebSocket|ws(_[0-9]+)?\.default)\s*\('
+      exclude_html_comments: true
 
-  # Any emitter can take an open listener; the Baileys socket client drives
-  # its post-connect side effects (including injected channel follows) from
-  # `ws.on('open', ...)`, so the autonomous-trigger composites pair this
-  # neutral registration with the protocol operations it dispatches.
-  - id: ws-open-event-handler
-    desc: Registers a WebSocket open event handler
+  # Taking the endpoint host from `location` connects back to the serving
+  # origin. This is shared by preview/HMR clients and malicious pages such
+  # as AdFection stagers; it establishes neither benign nor malicious intent.
+  - id: websocket-location-host-constructor
+    desc: WebSocket constructed from the page's own origin
+    conf: 0.92
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: 'new\s+WebSocket\s*\([^)\n]{0,120}\blocation\.(host|origin)\b'
+
+  # Require a complete endpoint literal. An opening quote alone also matches
+  # computed endpoints such as "wss://" + location.host, which do not embed a
+  # peer. Interpolated templates likewise do not establish a literal endpoint.
+  - id: websocket-literal-endpoint-constructor
+    desc: Constructs a WebSocket from a literal endpoint
     conf: 0.9
     for: [javascript, typescript]
     if:
       type: text
-      regex: '\.(on|once)\s*\(\s*["'']open["'']'
+      regex: 'new\s+WebSocket\s*\(\s*[''`"]wss?://[^''`"\s$]{1,512}[''`"]\s*[,)]'
+
+  # The receiver convention supplies transport context to the generic open
+  # event observation under data/control-flow/dispatch.
+  - id: ws-receiver-open-listener
+    desc: Registers open listener on ws receiver
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '\bws\s*\.\s*(on|once)\s*\(\s*["'']open["'']'
 
 composite_rules:
+  # "Registers a WebSocket open event handler" needs both the registration
+  # and WebSocket context: MongoDB and SSH clients register `open` listeners
+  # on their own connection emitters, and a bare constructor reference
+  # registers nothing. The `ws` package receiver convention supplies the
+  # transport when the receiver is a parameter or variable.
+  - id: ws-open-event-handler
+    desc: Registers a WebSocket open event handler
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/data/control-flow/dispatch::js-open-event-listener
+    any:
+      - id: websocket-javascript-constructor
+      - id: node-runtime-websocket-api-exposure
+      - id: websocket-literal-endpoint-constructor
+      - id: ws-receiver-open-listener
   - id: websocket-library-api-reference
     desc: WebSocket library or handler API reference
     conf: 0.88
@@ -59,8 +95,8 @@ composite_rules:
       # transport API reference. Require a connection operation for Python;
       # the import remains visible on its own through library/import traits.
       - id: micro-behaviors/communications/websocket/library::python-websocket-client
-      - id: micro-behaviors/communications/websocket/library::python-websocket-class-client
       - id: micro-behaviors/communications/websocket/library::python-websockets-client
+      - id: micro-behaviors/communications/websocket/library::python-websocket-class-client
       - id: websocket-java-type
       - id: websocket-java-endpoint
       - id: websocket-javascript-constructor

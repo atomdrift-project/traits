@@ -34,15 +34,6 @@ traits:
     scope: archive
     any:
     - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
-- id: your-files-ref
-  desc: Encryption-context reference to the user's files
-  crit: notable
-  conf: 0.8
-  if:
-    type: text
-    regex: '(?i)\b(encrypt|decrypt)\w*\s+(all\s+)?your\s+files?\b'
-  unless:
-    - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
 - id: all-files-encryption-ref
   desc: All-files reference near encryption terms
   crit: notable
@@ -82,6 +73,13 @@ traits:
     type: text
     regex: don.t.{0,30}interrupt.{0,30}process
     case_insensitive: true
+- id: reboot-warning-msg
+  desc: Do not reboot computer warning
+  crit: suspicious
+  conf: 0.75
+  if:
+    type: text
+    regex: '(?i)\bdo\s+not\s+(turn\s+off|reboot)\b.{0,20}\b(computer|pc|system)\b'
 - id: decrypt-sample-term
   desc: Decrypt sample phrase
   crit: suspicious
@@ -198,6 +196,20 @@ traits:
     type: text
     regex: (don.t\s+use\s+gmail|\buse\b.{0,30}protonmail|secure\s+mail\s+service)
     case_insensitive: true
+- id: telegram-ransom-contact
+  desc: Telegram ransom contact channel
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?i)(\btelegram:\s*[@%a-z0-9]|contact\s+(us\s+)?(on|via)\b.{0,15}\btelegram\b)'
+- id: simplex-ransom-contact
+  desc: Simplex chat ransom contact channel
+  crit: notable
+  conf: 0.8
+  if:
+    type: text
+    regex: '(?i)(simplex\s*\(backup\):|https?://[a-z0-9.-]*simplex\.(im|chat))'
 - id: encrypt-decrypt-func
   desc: Encrypt/decrypt function artifact
   crit: suspicious
@@ -251,36 +263,16 @@ traits:
   if:
     type: text
     case_insensitive: true
-    regex: (README!\.txt|readme(_to_|-)[a-zA-Z0-9_]+\.txt)
+    regex: (README!\.txt|readme_to_[A-Za-z0-9_]+\.txt|readme-(decrypt|ransom)[A-Za-z0-9_]*\.txt)
 - id: readme-note-file--rx-2
-  desc: 'Matches ''(HOW_TO_DECRYPTtxt READ_ME_NOWtxt)'''
+  desc: Readme or recovery note filename
   crit: notable
   conf: 0.7
   if:
     type: text
     case_insensitive: true
-    regex: (HOW_TO_DECRYPT\.txt|READ_ME_NOW\.txt)
+    regex: (HOW_TO_DECRYPT\.txt|READ_ME_NOW\.txt|HOW_RECOVERY_[A-Za-z0-9_]+\.txt)
 composite_rules:
-- id: encryption-technology-msg
-  desc: Encryption claim tied to user files
-  crit: suspicious
-  conf: 0.7
-  all:
-  - id: micro-behaviors/crypto/library/keyword::encrypt-decrypt-keyword
-  any:
-  - id: your-files-ref
-  - id: all-files-encryption-ref
-  - id: encrypted-all-files-ref
-  near_lines: 5
-  unless:
-  - id: well-known/tool/sysadmin/alpine-packages/binary::alpine-datadog-agent
-  - id: well-known/tool/sysadmin/unix-benign::zipcloak-utility
-  - id: well-known/lib/stdlib/python-stdlib::zipfile-module
-  - id: well-known/lib/stdlib/python-stdlib::zipfile-module-path
-  - id: well-known/lib/media/ffmpeg::ffmpeg-wasm-runtime-context
-  - id: well-known/lib/media/ffmpeg::ffmpeg-wasm-mxf-encrypted-string
-  - id: well-known/app/utility/360-file-guard::360-file-guard-identity
-  - id: well-known/tool/development/toolchain/darling/
 - id: decrypt-free-sample
   desc: Free decryption sample offer
   crit: suspicious
@@ -303,11 +295,12 @@ composite_rules:
   any:
   - id: network-penetrated
   - id: recover-files-msg
-  - id: encryption-technology-msg
   - id: strong-encryption-method-msg
   - id: dont-interrupt-msg
+  - id: reboot-warning-msg
   - id: decrypt-free-sample
   - id: data-will-be-published
+  - id: objectives/impact/ransom/note::attacked-by-ransomware-claim
 - id: ransom-contact
   desc: Ransom note contact channel
   crit: suspicious
@@ -321,6 +314,8 @@ composite_rules:
   - id: tutanota-contact
   - id: secure-email-warning
   - id: micro-behaviors/communications/proxy/tor::onion-domain-reference
+  - id: telegram-ransom-contact
+  - id: simplex-ransom-contact
 - id: encryption-artifacts
   desc: Encryption code artifacts
   crit: suspicious
@@ -341,6 +336,9 @@ composite_rules:
   - id: readme-note-file
   unless:
   - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+  # Parser-library malware-fixture corpora (saferwall/pe test/): the
+  # specimen is inert test data, not a shipped ransomware locker.
+  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 - id: native-bitcoin-payment-ransom
   for: [pe]
   desc: Native PE ransom note demands a bitcoin transfer
@@ -368,7 +366,7 @@ composite_rules:
   - id: readme-note-file--rx-1
   - id: readme-note-file--rx-2
   not:
-  - regex: (?i)[\\/][^\r\n]{0,200}(README!\.txt|readme(_to_|-)[a-zA-Z0-9_]+\.txt|how_to_decrypt\.txt|read_me_now\.txt)
+  - regex: (?i)[\\/][^\r\n]{0,200}(README!\.txt|readme(_to_|-)[a-zA-Z0-9_]+\.txt|how_to_decrypt\.txt|read_me_now\.txt|how_recovery_[a-zA-Z0-9_]+\.txt)
 # CryptoAPI locker with a Tor payment note: the note names the locked data
 # and the recovery action, a .onion address names the payment channel, and
 # CryptoAPI does the locking. The wipe/enumeration/persistence leg confirms
@@ -389,3 +387,7 @@ composite_rules:
   - id: micro-behaviors/os/autorun/scheduled::windows-schtasks-create
   unless:
   - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
+  # Parser-library malware-fixture corpora (saferwall/pe test/): the
+  # specimen is inert test data, not a shipped ransomware locker.
+  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
+

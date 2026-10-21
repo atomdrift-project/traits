@@ -16,17 +16,6 @@ traits:
   if:
     type: text
     regex: '(?i)shell_?code.?generator'
-- id: shellcode-locator-func
-  desc: Shellcode locator function name
-  crit: suspicious
-  conf: 0.9
-  for: [c, cpp, pe, dll]
-  if:
-    type: text
-    # The name has to end at the noun: `find_shellcode_area` in a kernel
-    # patchfinder names a region it patches, not a routine that locates a payload.
-    regex: '(?i)(locate|find).?shell_?code\b'
-  # memcpy as raw match for source code (symbol detection misses C source)
 - id: powershell-shellcode-bin-path
   desc: PowerShell shellcode bin path
   crit: notable
@@ -188,7 +177,7 @@ composite_rules:
   any:
   - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite-push
   - id: micro-behaviors/mem/alloc/executable::virtualalloc-rwx-commit-x86
-  - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite-arg-x64
+  - id: metadata/binary/instruction/operand::x64-load-r8-r9-40
   - id: native-shellcode-function-marker
   - id: native-shellcode-execution-marker
   unless:
@@ -231,7 +220,7 @@ composite_rules:
   all:
   - id: go-syscall-proc-call
   - id: micro-behaviors/os/api-resolution/manual::go-syscall-dynamic-api-dispatch
-  - id: micro-behaviors/mem/alloc/executable::page-execute-readwrite-arg-x64
+  - id: metadata/binary/instruction/operand::x64-load-r8-r9-40
   unless:
   - id: metadata/signed/platform/
   - id: well-known/tool/
@@ -296,7 +285,7 @@ composite_rules:
   arch: [x86-64]
   all:
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
-  - id: micro-behaviors/mem/protect/modify::rw-rx-constants-protection-thread-apis
+  - id: micro-behaviors/mem/protect/modify::integer-loads-protection-thread-apis
   - id: micro-behaviors/communications/http/url/external-ip::url-external-ip-binary
 - id: concealed-shellcode-loader-x64
   desc: Concealed shellcode loader (PEB walk + W^X + minimal IAT)
@@ -305,14 +294,17 @@ composite_rules:
   for: [pe, dll]
   arch: [x86-64]
   size_max: 5242880
+  # The PEB walk and both page-protection immediates belong to one stub.
+  # A large image can contain each of those bytes in unrelated functions.
+  near_bytes: 4096
   all:
-  - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
-  - id: micro-behaviors/data/format/pe-parser::pe-header-walk-x64
-  - id: micro-behaviors/mem/alloc/executable::page-readwrite-arg-x64
-  - id: micro-behaviors/mem/alloc/executable::page-execute-read-arg-x64
+  - id: micro-behaviors/process/info/query::peb-access-x64
+  - id: micro-behaviors/data/parse/portable-executable::pe-header-walk-x64
+  - id: metadata/binary/instruction/operand::x64-load-r8-r9-04
+  - id: metadata/binary/instruction/operand::x64-load-r8-r9-20
   any:
   - id: micro-behaviors/data/format/pe-parser::mz-magic-check
-  - id: metadata/binary/instruction::pe-signature-immediate-compare
+  - id: metadata/binary/instruction/sequence::pe-signature-immediate-compare
   - id: objectives/anti-static/obfuscation/imports/api-hashing::pe-api-hashing-indicator-single
   - id: micro-behaviors/os/api-resolution/hash-based::multiplicative-hash-loop-x64
   needs: 2
@@ -333,8 +325,8 @@ composite_rules:
   arch: [x86-64]
   size_max: 5242880
   all:
-  - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
-  - id: micro-behaviors/data/format/pe-parser::pe-header-walk-x64
+  - id: micro-behaviors/process/info/query::peb-access-x64
+  - id: micro-behaviors/data/parse/portable-executable::pe-header-walk-x64
   - id: objectives/anti-static/obfuscation/imports/api-hashing::djb2-byte-hash-loop-x64
   - id: micro-behaviors/mem/alloc/virtual::virtualalloc-readwrite-commit-register-x64
   - id: micro-behaviors/mem/protect/modify::virtualprotect-executable-read-register-x64
@@ -382,7 +374,7 @@ composite_rules:
   arch: [x86-64]
   size_max: 5242880
   all:
-  - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
+  - id: micro-behaviors/process/info/query::peb-access-x64
   - id: micro-behaviors/mem/alloc/heap::heap-create-enable-execute-flag
   unless:
   - id: metadata/binary/framework/
@@ -408,9 +400,14 @@ composite_rules:
   for: [pe]
   attack: T1055,T1620
   all:
-  - id: micro-behaviors/mem/protect/modify::managed-native-memory-loader-api-cluster
   - id: metadata/lang/compiler/managed::reflection-emit
   - id: objectives/anti-analysis/sandbox-detect/suite::managed-sandbox-fingerprint-suite
+  any:
+  - id: micro-behaviors/mem/alloc/virtual::virtual-alloc-string
+  - id: micro-behaviors/mem/protect/modify::virtual-protect-text-pe
+  - id: micro-behaviors/mem/copy::rtl-move-memory-name
+  - id: micro-behaviors/dylib/lookup::get-proc-address
+
 
 - id: tls-encrypted-wx-thread-loader
   desc: Multiple TLS callbacks with encrypted data and W^X thread staging
@@ -420,7 +417,7 @@ composite_rules:
   arch: [x86-64]
   attack: T1027,T1055
   all:
-  - id: micro-behaviors/mem/protect/modify::rw-rx-constants-protection-thread-apis
+  - id: micro-behaviors/mem/protect/modify::integer-loads-protection-thread-apis
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   - id: metadata/binary/section/entropy::high-entropy-rdata-section
   - id: micro-behaviors/crypto/symmetric/aes/runtime-library::rust-aes-gcm-crate-path
@@ -442,6 +439,23 @@ composite_rules:
   - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   - id: micro-behaviors/process/create/thread::create-thread
 
+- id: x86-tea-payload-self-injection-loader
+  desc: x86 TEA payload decrypted and executed in-process
+  crit: hostile
+  conf: 0.98
+  for: [pe, dll]
+  arch: [x86]
+  attack: T1027,T1055,T1620
+  all:
+  - id: micro-behaviors/crypto/symmetric/xxtea::x86-tea-decrypt-round
+  - id: micro-behaviors/mem/protect/modify::virtual-protect-text-pe
+  - id: metadata/binary/instruction/sequence::x86-global-pointer-indirect-call
+  - id: metadata/signed/trust-level::unsigned-missing-signature-record
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/reverse-engineering/
+
 - id: constant-xor-wx-thread-loader-x64
   desc: Obfuscated x64 payload copied into executable thread memory
   crit: hostile
@@ -450,8 +464,8 @@ composite_rules:
   arch: [x86-64]
   attack: T1027,T1055,T1620
   all:
-  - id: micro-behaviors/mem/alloc/executable::page-readwrite-arg-x64
-  - id: micro-behaviors/mem/alloc/executable::page-execute-read-arg-x64
+  - id: metadata/binary/instruction/operand::x64-load-r8-r9-04
+  - id: metadata/binary/instruction/operand::x64-load-r8-r9-20
   - id: micro-behaviors/data/decode/xor::x64-constant-dword-xor-decode-loop
   - id: micro-behaviors/dylib/lookup::get-proc-address-import
   unless:
@@ -473,18 +487,3 @@ composite_rules:
   - id: micro-behaviors/process/inject/runtime/call::byte-copy-loop-register-jump-x64
   unless:
   - id: metadata/signed/platform/
-
-# Obfuscated Lua allocates executable memory (PAGE_EXECUTE_READWRITE) for in-process execution.
-- id: lua-rwx-memory-shellcode-loader
-  desc: Obfuscated Lua allocates executable memory for shellcode execution
-  crit: hostile
-  conf: 0.99
-  attack: T1055,T1027
-  for: [lua]
-  all:
-  - id: micro-behaviors/mem/alloc/executable::lua-virtualalloc-rwx-alias-call
-  any:
-  - id: metadata/lang/encoding::lua-many-decimal-escaped-strings
-  - id: objectives/anti-static/obfuscation/obfuscator/lua-prometheus::lua-if-vm-branches
-  - id: micro-behaviors/data/string/concat::lua-double-indexed-concat-loop
-  - id: micro-behaviors/data/control-flow/return::lua-return-vararg-wrapper

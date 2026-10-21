@@ -25,7 +25,9 @@ traits:
     conf: 0.8
     size_min: 8193
     if:
-      type: text
+      # Literal trailer bytes only. Decoded strings reuse nearby offsets and
+      # are not an appended script.
+      type: raw
       regex: '#!/(bin/|usr/bin/)(sh|shell|zsh)'
       offset_range:
         - -1024
@@ -41,77 +43,6 @@ traits:
       offset_range:
         - -1024
         - null
-  - id: upx-lzma-elf32-stub-name
-    desc: UPX LZMA ELF32 stub name
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      exact: LZMA_ELF00
-  - id: upx-elfmainx-stub-name
-    desc: UPX ELFMAINX stub name
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      exact: ELFMAINX
-  - id: upx-elfmainz-stub-name
-    desc: UPX ELFMAINZ stub name
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      exact: ELFMAINZ
-  - id: appended-elf-binary
-    desc: ELF64 little-endian binary appended to file
-    crit: suspicious
-    conf: 0.9
-    size_max: 1000000
-    if:
-      type: hex
-      # e_ident (magic + ELFCLASS64 + ELFDATA2LSB + EI_VERSION=1), then the
-      # ABI/pad bytes, then a coherent header: e_type in {REL,EXEC,DYN},
-      # e_machine in the single-byte range, e_version=1. Requiring the whole
-      # header — not just the 7-byte e_ident prefix — is what makes "a binary
-      # is appended here" true: a bare magic near EOF (fuzzer mutations, a
-      # copied ident field) leaves no room for an image behind it.
-      pattern: 7F 45 4C 46 02 01 01 ?? [8] (01|02|03) 00 ?? 00 01 00 00 00
-      offset_range:
-        - 1
-        - null
-    unless:
-      - id: metadata/binary/layout/stub::elf-image-carried-by-design
-      # A UPX image carries the loader stub's ELF template alongside the payload.
-      - id: objectives/anti-static/pack/detect::upx-marker
-      # When the carrier is itself an ELF that the parser rejected, its byte
-      # layout is unknown, so a second e_ident inside it is far more likely a
-      # corrupted/duplicated header than a deliberately appended payload.
-      # A real polyglot carrier parses as whatever format it claims to be.
-      - type: metrics
-        field: elf.parse_failed
-        min: 1
-      # An ELF core dump embeds the crashed program's own image inside a PT_LOAD
-      # segment, so an ELF magic appears at a non-zero offset — that is the
-      # nature of a core file, not an appended-binary polyglot.
-      - type: value
-        path: elf.type
-        exact: core
-      # An already-extracted embedded sub-object (UPX payload, eBPF object) is not
-      # a polyglot/appended-ELF file. cleave's synthetic sub-object path carries
-      # the `!!embedded` marker, available during evaluation.
-      - type: path
-        regex: '!!embedded'
-      - type: metrics
-        field: binary.overlay_size
-        max: 4096
-      # CUDA/Triton PE libraries carry device-code ELF images in read-only
-      # data; their verified NVIDIA signature identifies that construction.
-      - id: metadata/signed/certificate/subject::pe-signer-nvidia-corporation
-    downgrade:
-      any:
-        - type: metrics
-          field: binary.string_count
-          min: 50
   - id: appended-elf32-le-binary
     desc: ELF32 little-endian binary appended to file
     crit: suspicious
@@ -127,7 +58,7 @@ traits:
         - null
     unless:
       - id: metadata/binary/layout/stub::elf-image-carried-by-design
-      - id: objectives/anti-static/pack/detect::upx-marker
+      - id: metadata/build/protector::upx-packing-token-reference
       # A rejected ELF has unknown/truncated layout. Internal header templates
       # do not establish a deliberately appended second executable.
       - type: metrics
@@ -188,9 +119,9 @@ composite_rules:
     crit: notable
     conf: 0.9
     any:
-      - id: upx-lzma-elf32-stub-name
-      - id: upx-elfmainx-stub-name
-      - id: upx-elfmainz-stub-name
+      - id: metadata/build/protector::upx-lzma-elf32-stub-name
+      - id: metadata/build/protector::upx-elfmainx-stub-name
+      - id: metadata/build/protector::upx-elfmainz-stub-name
 
   # Both of these need `for: [png]`. The file default is [elf, macho, pe], and
   # without an override a composite named "PNG trailing data with executable
@@ -213,7 +144,7 @@ composite_rules:
     all:
       - id: image-embedded-exec-magic
     any:
-      - id: metadata/binary/header/malformed::png-trailing-data
+      - id: metadata/image/trailing::png-trailing-data
       - id: metadata/image/trailing::png-chunks-after-iend
   # Hostile-grade sibling of png-trailing-embedded-exec: instead of byte magic
   # (which a compressed pixel stream can produce by coincidence), this requires
@@ -221,6 +152,18 @@ composite_rules:
   # executable image. A PNG whose own structure disowns bytes that form a valid
   # PE/ELF/Mach-O has no legitimate construction -- the magic-based suspicious
   # above stays for the weaker evidence.
+  # Magic sniffers call a shellcode trailer an archive when a later 1F 8B
+  # byte pair is not a gzip member. The PEB read is the payload signal, and
+  # it only becomes a stager when the image also has a real trailer.
+  - id: png-trailer-x64-peb-shellcode
+    desc: PNG trailer carries x64 PEB-walk shellcode
+    crit: hostile
+    conf: 0.97
+    attack: T1027.009
+    for: [png]
+    all:
+      - id: micro-behaviors/data/embedded/payload/image::x64-gs-peb-walk-in-png
+      - id: metadata/image/trailing::png-trailing-data
   - id: png-trailing-stowaway-executable
     desc: PNG unclaimed trailer parses as an executable
     crit: hostile
@@ -230,7 +173,7 @@ composite_rules:
     all:
       - id: metadata/file/format/media::media-stowaway-executable
     any:
-      - id: metadata/binary/header/malformed::png-trailing-data
+      - id: metadata/image/trailing::png-trailing-data
       - id: metadata/file/format/media::media-trailing-data
   # An image that still decodes but carries a server-side shell after its own
   # data: the container walker confirms the unclaimed trailer, and the trailer

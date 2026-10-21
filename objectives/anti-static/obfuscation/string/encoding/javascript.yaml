@@ -3,26 +3,6 @@ defaults:
   - windows
   - unix
 traits:
-- id: js-interspersed-hex-escapes
-  desc: Interspersed hex escape sequences
-  crit: notable
-  conf: 0.8
-  mbc: B0032
-  attack: T1027
-  for:
-  - javascript
-  - typescript
-  if:
-    type: string_literal
-    regex: (\\x[0-9a-fA-F]{2}.{1,3}){4,}
-  unless:
-  - id: metadata/package/testing/harness/runtime/
-  - id: well-known/app/ai/browser-agent/open-webui-computer/
-  - id: metadata/file/naming::compiled-directory-component
-  - id: metadata/build/
-  - type: text
-    regex: (\\\\x[0-9a-fA-F]{2}-\\\\x[0-9a-fA-F]{2}){2,})
-  - id: "metadata/file/naming::short-stem-js-basename"
 - id: js-hex-encoded-require
   desc: Hex-encoded require statement
   crit: suspicious
@@ -31,6 +11,11 @@ traits:
   attack: T1027
   for:
   - javascript
+  unless:
+  # js-x-ray detects this pattern, so its probe sources and README document
+  # the exact call shape; the scanner's distribution carries it as reference
+  # data, not as obfuscation.
+  - id: well-known/tool/detection/js-x-ray::js-x-ray-distribution
   if:
     type: text
     regex: require\s*\(\s*Buffer\.from\([^)]{0,120}hex[^)]{0,120}\)\.toString\(\)
@@ -55,12 +40,13 @@ traits:
   - javascript
   if:
     type: tree-sitter
-    kind: assignment
     language: javascript
-    regex: \bwindow\.(o[^n]\w*|[^o]\w*)\s*=\s*(new\s+Function|Function|eval)\b
+    query: '(assignment_expression left: (member_expression object: (identifier) @o
+      property: (property_identifier) @p) right: (identifier) @r (#eq? @o "window")
+      (#match? @r "^(Function|eval)$") (#not-eq? @p @r)) @a'
   unless:
-  - id: well-known/lib/web/docsify::docsify-library
-  - id: well-known/lib/web/docsify::docsify-execute-result-marker
+  - id: well-known/lib/web/authoring/docsify::docsify-library
+  - id: well-known/lib/web/authoring/docsify::docsify-execute-result-marker
 - id: js-window-write-decode
   desc: window assignment to decode primitive
   crit: notable
@@ -99,9 +85,10 @@ traits:
   - javascript
   if:
     type: tree-sitter
-    kind: assignment
     language: javascript
-    regex: \bglobalThis\.\w+\s*=\s*(new\s+Function|Function|eval)\b
+    query: '(assignment_expression left: (member_expression object: (identifier) @o
+      property: (property_identifier) @p) right: (identifier) @r (#eq? @o "globalThis")
+      (#match? @r "^(Function|eval)$") (#not-eq? @p @r)) @a'
 - id: js-globalthis-write-decode
   desc: globalThis assignment to decode primitive
   crit: notable
@@ -220,18 +207,6 @@ traits:
     type: text
     regex: require(\.resolve)?\s*\(\s*Buffer\.from\(\s*\[\s*\d{2,3}\s*,
 composite_rules:
-- id: js-reverse-string-recognized-marker
-  desc: Recognized reverse-string bundle marker
-  crit: component
-  conf: 0.9
-  any:
-  - id: metadata/build/bundler/asset::js-any-bundle-output
-  - id: metadata/build/minifier::js-large-minified-bundle
-  - id: metadata/build/bundler/asset::js-mermaid-bundle
-  - id: well-known/lib/development/vscode-webview::vscode-webview-bundle
-  - id: well-known/lib/development/vscode::vscode-extension-marker
-  - id: well-known/lib/development/vscode-webview::acquire-vscode-api
-  - id: well-known/lib/format/json-ts::converter-bundle
 - id: js-unicode-escape-recognized-marker
   desc: Unicode escape recognized marker
   crit: component
@@ -264,15 +239,15 @@ composite_rules:
   - id: js-global-property-write-assignment
   any:
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
-  - id: micro-behaviors/process/interpreter/eval/compile::js-function-constructor
+  - id: micro-behaviors/metaprogramming/generation::js-function-constructor
   - id: micro-behaviors/data/decode/base64::atob-decode
-  - id: micro-behaviors/process/interpreter/eval/compile::js-new-function-constructor
+  - id: micro-behaviors/metaprogramming/generation::js-new-function-constructor
   unless:
   - id: metadata/build/
-  - id: well-known/lib/web/jquery::license-url
-  - id: well-known/lib/web/prototype::copyright
-  - id: well-known/lib/web/ecmascript::shutter-reloaded-lightbox
-  - id: well-known/lib/web/docsify::docsify-library
+  - id: well-known/lib/web/client-side/jquery::license-url
+  - id: well-known/lib/web/client-side/prototype::copyright
+  - id: well-known/lib/web/client-side/ecmascript::shutter-reloaded-lightbox
+  - id: well-known/lib/web/authoring/docsify::docsify-library
   - id: well-known/lib/runtime/scripted/electron::electron-app-asar-member-path
   - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
 - id: js-window-property-write-assignment
@@ -291,9 +266,14 @@ composite_rules:
   - id: js-globalthis-write-exec
   - id: js-globalthis-write-decode
   - id: js-globalthis-write-network
+# Aliasing a native exec/decode/network primitive under a new window or
+# globalThis name. Alone this is ordinary: OpenNext keeps the unpatched
+# `fetch` as `globalThis.internalFetch` before Next.js wraps it. The
+# obfuscation finding is js-global-property-write above, which also needs
+# eval, Function, or atob in the same file.
 - id: js-global-property-write-assignment
-  desc: Global object property assignment
-  crit: suspicious
+  desc: Global alias of exec/decode/network primitive
+  crit: notable
   conf: 0.6
   attack: T1027.002
   mbc: B0032
@@ -306,21 +286,9 @@ composite_rules:
   - id: metadata/package/testing/presence/harness::test-directory
   - id: "metadata/file/naming::test-directory-component"
   - id: metadata/build/
-  - id: well-known/lib/web/docsify::docsify-library
+  - id: well-known/lib/web/authoring/docsify::docsify-library
   - id: well-known/lib/runtime/scripted/electron::electron-app-asar-member-path
   - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
-- id: js-local-fileserver-test-marker
-  desc: Local Express static test server marker
-  crit: component
-  conf: 0.95
-  for:
-  - javascript
-  all:
-  - id: metadata/import/npm/express
-  - id: metadata/import/npm/serve-index
-  - id: metadata/import/npm/multer
-  - id: metadata/import/npm/resources
-  - id: metadata/import/npm/httpserver
 - id: electron-ml-parity-runner
   desc: Electron ML parity test runner
   crit: component
@@ -353,7 +321,7 @@ composite_rules:
   - javascript
   all:
   - id: js-b64-encoded-require
-  - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::hex-name-mangling
+  - id: metadata/lang/source/declaration::hex-identifier-declarations
 - id: js-strong-obfuscation
   desc: Multiple JavaScript string-obfuscation indicators
   crit: suspicious
@@ -366,7 +334,7 @@ composite_rules:
   any:
   - id: objectives/anti-static/obfuscation/string/charcode-url::dense-fromcharcode
   - id: metadata/lang/encoding::js-three-unicode-escapes
-  - id: micro-behaviors/data/encode/hex::js-dense-hex-escapes
+  - id: metadata/lang/encoding::js-dense-hex-escapes
   - id: js-hex-encoded-require
   - id: js-b64-encoded-require
   - id: objectives/anti-static/obfuscation/string/reconstruct::js-string-deobfuscation

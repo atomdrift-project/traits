@@ -16,6 +16,10 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/http/request/credentials::shell-filtered-env-stdin-http-upload
       - id: micro-behaviors/os/env/pipeline::shell-env-credential-name-filter
+    unless:
+      - id: well-known/tool/detection/
+      - id: metadata/build/ci/github-actions::action-testdata-path
+      - id: metadata/package/testing/
   # Workflow `run:` steps are analysed as shell members, so the hostile
   # verdict for a CI step comes from env-secret-dump-piped-to-network-client
   # above, on the parsed pipeline. The former workflow-level rule matched
@@ -23,24 +27,33 @@ composite_rules:
   # redirected text; it was removed rather than kept alongside.
 
   # The sibling above requires a credential-name grep filter. This one covers
-  # the unfiltered dump -- `env | curl ...` / `printenv | wget ...` -- where the
-  # attacker ships the entire process environment to a remote collector without
-  # pre-filtering (the shape observed in the Langflow MCP command-injection
-  # payloads). The destination leg must be remote: curl-command-remote-url and
-  # external-ipv4-shell-endpoint both exclude loopback (and reserved example
-  # hosts), so a local `env | curl http://127.0.0.1/diagnostic` upload stays
-  # out. A tight near_bytes window keeps enumeration, client and destination in
-  # the same pipeline rather than three unrelated commands in the file.
+  # the unfiltered dump. The parsed pipeline must feed env/printenv directly
+  # into curl's @- request body. Curl ignores stdin without that option.
+  # A remote URL must overlap that pipeline, keeping unrelated commands and
+  # loopback diagnostics out of the conviction.
   - id: env-full-dump-piped-to-network-client
-    desc: Pipes entire environment to a remote client
+    desc: Uploads entire environment as remote HTTP body
     crit: hostile
     conf: 0.95
-    near_bytes: 80
+    near_bytes: 0
     all:
-      - id: micro-behaviors/os/env/pipeline::shell-env-pipe
-      - id: micro-behaviors/process/create/shell/pipeline::pipe-to-http-client
+      - id: micro-behaviors/communications/http/request/credentials::shell-env-stdin-curl-upload
     any:
       - id: micro-behaviors/communications/http/curl::curl-command-remote-url
-      - id: micro-behaviors/communications/ip/literal::external-ipv4-shell-endpoint
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-shell-literal
     unless:
       - id: metadata/file/format/source-map::sourcemap-sources-content
+
+  # RPM scriptlets run during installation with package-manager privileges.
+  # Keep this archive-level rule distinct from shell files: its two legs
+  # require an install scriptlet and the atomic filtered-environment upload
+  # behavior in that archive.
+  - id: rpm-scriptlet-filtered-env-export
+    desc: RPM install scriptlet uploads filtered environment
+    crit: hostile
+    conf: 0.99
+    platforms: [linux]
+    scope: leaf
+    all:
+      - id: objectives/supply-chain/install-hook/distro-scriptlet::rpm-install-scriptlet-body
+      - id: micro-behaviors/communications/http/request/credentials::shell-filtered-env-stdin-http-upload

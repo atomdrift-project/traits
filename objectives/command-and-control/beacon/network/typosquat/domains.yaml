@@ -28,6 +28,8 @@ traits:
       regex: githab\.[a-z]{2,}
     unless:
       - id: well-known/app/browser-extension/content-blocker::adblock-ruleset-resource
+      - id: well-known/tool/detection/
+      - id: metadata/package/testing/
   - id: typosquat-githup-domain
     desc: Githup typosquat domain
     crit: suspicious
@@ -98,6 +100,9 @@ traits:
       # that classifies visitors, not a host the program contacts.
       - type: text
         regex: '(?m)^(search|social|email|paid)\t[A-Z][\w .&-]{1,30}\t[a-z0-9]'
+      # Genuine Microsoft-signed Edge embeds lookalike tables as protection
+      # data, not beacon targets.
+      - id: metadata/signed/certificate/signature::microsoft-signed-edge-runtime-context
   - id: typosquat-apple-domain
     desc: Apple typosquat domain
     crit: suspicious
@@ -122,7 +127,11 @@ traits:
     conf: 0.95
     if:
       type: text
-      regex: (microsof|microsft|micrsoft)\.[a-z]{2,}
+      # Require a real public suffix (same gate as typosquat-google-domain).
+      # Edge packs its host table with suffix compression, and the overlap
+      # between `copilot.microsoft.com` and `copilot-stg.com` yields the
+      # byte run `microsof.copilot` — `copilot` is no TLD.
+      regex: (microsof|microsft|micrsoft)\.(com|net|org|io|co|ru|cn|info|biz|xyz|top|cc|tk|ml|ga|cf)\b
     unless:
       # Microsoft's Windows Application Certification Kit license text contains a typoed URL on download.microsft.com.
       - type: text
@@ -132,6 +141,10 @@ traits:
         substr: "fabric.microsoft"
       - type: text
         substr: "dfs.fabric"
+      # The genuine Microsoft-signed Edge runtime packs its own host table
+      # (copilot.microsoft.com, copilot-stg.com); compression artifacts in
+      # that table are vendor strings, not beacon infrastructure.
+      - id: metadata/signed/certificate/signature::microsoft-signed-edge-runtime-context
     downgrade:
       any:
         - id: metadata/binary/vendor/
@@ -157,6 +170,18 @@ traits:
     if:
       type: text
       substr: 'panel.php'
+  # `analytics-google.<tld>` swaps the two words of `google-analytics`.
+  # Google never hosted telemetry there.
+  - id: reversed-google-analytics-host
+    desc: Reversed Google Analytics hostname
+    crit: suspicious
+    conf: 0.95
+    for: [html, javascript]
+    if:
+      type: text
+      regex: '(?i)\banalytics-google\.[a-z]{2,8}\b'
+    unless:
+      - id: well-known/app/browser-extension/content-blocker::adblock-filter-resource
 composite_rules:
   - id: github-typosquat
     desc: GitHub typosquatting domain
@@ -204,6 +229,20 @@ composite_rules:
   # domain is the 2024 polyfill.io pattern and the general shape of a CDN
   # supply-chain inject: the second stage arrives from a host that reads as
   # ordinary telemetry in any network log.
+  # `analytics-google.<tld>` is the word-swapped form of that cover.
+  - id: reversed-analytics-script-load
+    desc: Script loads from reversed analytics host
+    crit: hostile
+    conf: 0.96
+    for: [html]
+    attack: T1189
+    near_bytes: 200
+    all:
+      - id: reversed-google-analytics-host
+      - id: micro-behaviors/communications/http/client/resource::remote-script-element-source
+    unless:
+      - id: well-known/app/browser-extension/content-blocker::adblock-filter-resource
+
   - id: typosquat-analytics-script-load
     for: [elf, macho, pe, javascript]
     desc: Script loaded from lookalike analytics host
@@ -213,4 +252,4 @@ composite_rules:
     attack: T1189
     all:
       - id: typosquat-google-analytics-domain
-      - id: micro-behaviors/process/deploy::dynamic-script-element-load
+      - id: micro-behaviors/data/collection/dom::script-create-near-src-assignment

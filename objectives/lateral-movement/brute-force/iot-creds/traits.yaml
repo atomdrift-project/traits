@@ -13,14 +13,14 @@ traits:
     if:
       type: text
       substr: 7ujMko0admin
-  - id: mirai-cred-vizxv
-    desc: Mirai credential variant (7ujMko0vizxv)
+  - id: iot-password-vizxv
+    desc: IoT default password token vizxv
     crit: suspicious
     conf: 0.8
     attack: T1110.001
     if:
       type: text
-      substr: 7ujMko0vizxv
+      substr: vizxv
   - id: mirai-cred-juantech
     desc: Mirai credential variant (juantech)
     crit: suspicious
@@ -79,14 +79,6 @@ traits:
     if:
       type: text
       substr: hi3518
-  - id: camera-cred-vizxv
-    desc: IP camera credential (vizxv)
-    crit: suspicious
-    conf: 0.75
-    attack: T1110.001
-    if:
-      type: text
-      substr: vizxv
   - id: camera-cred-xmhdipc
     desc: IP camera credential (xmhdipc)
     crit: suspicious
@@ -202,8 +194,9 @@ traits:
   # (tadashi.mips: key 0x45, NUL terminators become the key byte), so every
   # plaintext credential atom above stays dark. YARA's xor modifier tries all
   # keys per string; key 0 is excluded so a plaintext table -- already covered
-  # above -- is not counted twice. Three distinct device-specific credentials
-  # under any key do not occur by accident in a binary.
+  # above -- is not counted twice. The dictionary is one contiguous table:
+  # three credentials must share a 4KB window. Separate 5-byte hits under
+  # unrelated keys are ordinary in a large Go binary.
   - id: xor-encoded-iot-credential-table
     desc: XOR-hidden IoT default credential table
     crit: suspicious
@@ -234,7 +227,11 @@ traits:
             $c17 = "zsun1188" xor(1-255)
             $c18 = "1001chin" xor(1-255)
           condition:
-            3 of them
+            for any of ($c*) : (
+              for any m in (1..#) : (
+                3 of ($c*) in (@[m] .. @[m] + 4096)
+              )
+            )
         }
 composite_rules:
   # Keyed on distinct *device-specific* credentials. This was one alternation
@@ -255,7 +252,7 @@ composite_rules:
     unless:
       - id: mirai-credential-telnet-attack-bot
     any:
-      - id: mirai-cred-vizxv
+      - id: iot-password-vizxv
       - id: mirai-cred-juantech
       - id: mirai-cred-jvbzd
       - id: mirai-cred-smcadmin
@@ -283,18 +280,9 @@ composite_rules:
       - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-network-syscalls
       - id: micro-behaviors/communications/socket/syscall::arm-literal-pool-socket-connect-pair
       - id: micro-behaviors/communications/socket/syscall::i386-socketcall-wrapper
+      - id: micro-behaviors/communications/socket/syscall::aarch64-direct-network-syscalls
+      - id: micro-behaviors/communications/socket/syscall::sparc-socketcall-wrapper
 
-  - id: xor-credential-table-watchdog-bot
-    desc: Hidden IoT credential table with watchdog device targeting
-    crit: hostile
-    conf: 0.98
-    attack: T1110.001,T1562.001
-    mbc: E1017,B0030
-    all:
-      - id: xor-encoded-iot-credential-table
-    any:
-      - id: micro-behaviors/fs/path/device/special::multi-watchdog-device-cluster
-      - id: micro-behaviors/fs/path/device/special::dev-watchdog-xor
   - id: telnet-scan-or-brute-description
     desc: Telnet scanning or brute-force description
     crit: suspicious
@@ -344,12 +332,28 @@ composite_rules:
         - id: mirai-credential-busybox-stager
     all:
       - id: mirai-credential-access
-      - id: micro-behaviors/process/create/script/file::shell-pipes-downloaded-script
+      - id: micro-behaviors/process/create/shell/pipeline::shell-pipes-downloaded-script
       - id: micro-behaviors/process/create/local-exec::chmod-then-local-execute-command
     any:
-      - id: micro-behaviors/fs/path/binary::bin-busybox-path
+      - id: micro-behaviors/fs/path/application/executable::bin-busybox-path
       - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
     needs: 1
+  # Credentials plus download syntax do not bind authentication to staging.
+  # Keep this as a suspicious co-occurrence, including unpacked binaries.
+  - id: iot-default-credentials-with-downloader
+    desc: IoT default credentials with download-output syntax
+    crit: suspicious
+    conf: 0.96
+    platforms: [linux]
+    all:
+      - id: mirai-credential-access
+      - id: micro-behaviors/communications/http/download/cli::fetch-output-option-script
+    downgrade:
+      any:
+        - id: mirai-credential-busybox-stager
+        - id: mirai-credential-pipe-chmod-stager
+    unless:
+      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   - id: mirai-credential-access
     desc: Two distinct IoT default credential variants
     crit: suspicious
@@ -362,7 +366,7 @@ composite_rules:
         - id: mirai-credential-telnet-attack-bot
     any:
       - id: mirai-cred-admin
-      - id: mirai-cred-vizxv
+      - id: iot-password-vizxv
       - id: mirai-cred-juantech
       - id: mirai-cred-xc3511
       - id: mirai-cred-jvbzd
@@ -373,8 +377,6 @@ composite_rules:
       - id: mirai-cred-loldongs
       - id: router-cred-gpon
       - id: router-cred-sugar
-      # The vizxv substring is already contained in mirai-cred-vizxv; counting
-      # both can turn a single password into two supposedly distinct variants.
       - id: router-cred-zte
   - id: iot-credential-spray-profile
     desc: Known IoT credential spray table
@@ -394,11 +396,11 @@ composite_rules:
     mbc: E1017
     all:
       - id: mirai-cred-admin
-      - id: mirai-cred-vizxv
+      - id: iot-password-vizxv
       - id: mirai-cred-xc3511
       - id: objectives/lateral-movement/brute-force/iot::admin1234
       - id: micro-behaviors/fs/proc/info/path::proc-net-tcp
-      - id: micro-behaviors/process/create/script/file::shell-pipes-downloaded-script
+      - id: micro-behaviors/process/create/shell/pipeline::shell-pipes-downloaded-script
     any:
       - id: micro-behaviors/communications/http/download/busybox::busybox-wget-http-reference
       - id: micro-behaviors/communications/ftp/download/busybox::ftpget-elf-reference
@@ -415,8 +417,21 @@ composite_rules:
       - id: well-known/lib/native/uclibc::static-uclibc-string-tables
     any:
       - id: micro-behaviors/communications/ip/literal::external-ipv4-binary
-      - id: micro-behaviors/communications/ip/literal::external-ipv4-host-literal-binary
+      - id: micro-behaviors/communications/ip/literal::external-ipv4-shaped-text-binary
       - id: micro-behaviors/communications/ip/literal::http-ip-url
+  # A credential dictionary and a proxy banner do not establish brute force
+  # or identify a bot. The former xc3511/proc-self-exe variant duplicated this
+  # observation using one password and a generic self-image reference.
+  - id: iot-default-credentials-with-proxy-banner
+    desc: IoT default credentials with SOCKS banner
+    crit: suspicious
+    conf: 0.96
+    platforms: [linux]
+    all:
+      - id: mirai-credential-access
+      - id: micro-behaviors/communications/proxy/socks::socks5-proxy-status-banner
+    unless:
+      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
   - id: mirai-telnet-credential-spray
     desc: Mirai credential spray with Telnet status and procfs scan
     crit: hostile
@@ -492,23 +507,79 @@ composite_rules:
     downgrade:
       any:
         - id: mirai-credential-telnet-attack-bot
-  # Architecture-neutral form of the Mirai propagation-plus-flood pair: the
-  # hidden spray dictionary, a Source Engine query payload (the VSE flood),
-  # and an embedded-device marker (DVR Sofia path, watchdog or BusyBox). It
-  # needs no per-architecture syscall atom, so SPARC, SH4 and m68k builds
-  # of the same bot are reported like the MIPS and ARM ones.
-  - id: xor-credential-table-source-query-device-bot
+  # These architecture-neutral profiles establish content co-occurrence.
+  # A Source Engine query is also used by ordinary game clients; neither
+  # profile proves scanning, command reception or packet flooding. Keep
+  # those claims in rules requiring the corresponding implementation.
+  - id: xor-credential-table-source-query-device-profile
     desc: Hidden IoT credentials, VSE query and device markers
-    crit: hostile
+    crit: suspicious
     conf: 0.95
-    attack: T1110.001,T1498.001,T1027
-    mbc: E1017,B0030
+    attack: T1110.001,T1027
     all:
       - id: xor-encoded-iot-credential-table
       - id: micro-behaviors/communications/socket/udp::source-engine-query-payload
     any:
-      - id: micro-behaviors/process/info/name::sofia-executable-path
+      - id: micro-behaviors/fs/path/application/executable::sofia-executable-path
       - id: micro-behaviors/fs/path/device/special::dev-misc-watchdog-elf-text
-      - id: micro-behaviors/fs/path/binary::bin-busybox-path
+      - id: micro-behaviors/fs/path/application/executable::bin-busybox-path
     needs: 2
+
+  - id: xor-credential-table-device-profile
+    desc: Hidden IoT credentials and device markers
+    crit: suspicious
+    conf: 0.98
+    attack: T1110.001,T1027
+    platforms: [linux]
+    all:
+      - id: xor-encoded-iot-credential-table
+      - id: mirai-credential-access
+    any:
+      - id: micro-behaviors/fs/path/application/executable::sofia-executable-path
+      - id: micro-behaviors/fs/path/device/special::dev-misc-watchdog-elf-text
+      - id: micro-behaviors/fs/path/device/special::dev-watchdog-elf-text
+      - id: micro-behaviors/fs/path/application/executable::bin-busybox-path
+    needs: 2
+
+  - id: dvr-executable-hidden-credential-table
+
+    desc: DVR executable references with hidden credentials
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/fs/path/application/executable::dvr-platform-executable-references
+      - id: xor-encoded-iot-credential-table
+    unless:
+      - id: metadata/signed/platform/
+
+  # Independent implementation evidence: hidden device-specific credentials,
+  # the bounded byte-XOR decoder, and construction of TCP SYNs to port 23.
+  # No filename, controller address or platform executable name is required.
+  - id: arm-hidden-telnet-credential-scanner
+    desc: Hidden IoT credentials with ARM Telnet scanner code
+    crit: hostile
+    conf: 0.98
+    attack: T1110.001,T1046
+    all:
+      - id: xor-encoded-iot-credential-table
+      - id: micro-behaviors/data/arithmetic::arm-indexed-xor54-byte-loop
+      - id: micro-behaviors/communications/socket/tcp::arm-tcp-syn-telnet-header
+
+  # Obfuscated IoT credential table combined with an embedded SSH client:
+  # the propagation half of an IoT SSH worm.
+  - id: xor-credential-table-ssh-worm-spreader
+    desc: Hidden IoT credentials with SSH spreader client
+    crit: hostile
+    conf: 0.98
+    attack: T1110.001,T1021.004,T1105
+    mbc: E1017,B0040
+    all:
+      - id: xor-encoded-iot-credential-table
+    any:
+      - id: micro-behaviors/communications/ssh/client::ssh-userauth
+      - id: micro-behaviors/communications/ssh/client::libssh
+      - id: micro-behaviors/communications/ssh/client::openssh-protocol-banner
+    unless:
+      - id: metadata/package/testing/
+      - id: well-known/tool/
 

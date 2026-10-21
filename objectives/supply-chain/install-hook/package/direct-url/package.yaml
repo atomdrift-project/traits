@@ -11,21 +11,6 @@ defaults:
   attack: "T1195.002"
   mbc: "E1195"
 traits:
-  # The attacker's own staging path names the technique. A dependency tarball
-  # served from a URL whose host/path contains a dependency-confusion marker
-  # (e.g. .../depenconf/pkg.tgz) is self-identifying malicious infrastructure;
-  # no legitimate dependency resolves from such a location.
-  - id: dep-url-depconf-staging-marker
-    desc: Dependency URL contains confusion staging marker
-    crit: suspicious
-    conf: 0.95
-    if:
-      type: value
-      path: dependencies.*
-      regex: '://[^"\s]{0,256}(depenconf|dep[-_]?confusion|dependency[-_]?confusion)'
-    downgrade:
-      any:
-        - id: npm-single-depconf-staging-dependency
   - id: jpartifacts-runtime-dependency
     desc: Runtime dependency uses jpartifacts host
     crit: suspicious
@@ -66,6 +51,10 @@ composite_rules:
       # under metadata/package/testing/; a broad testing/ unless suppressed this
       # composite on ordinary published packages that include index.d.ts.
       - id: metadata/package/testing/presence/manifest::package-test-or-template-path
+      # A tagged GitHub release tarball is a pinned UI asset, not a mutable drop host.
+      - id: metadata/package/dependencies/manifest/source::npm-github-release-tarball-dependency
+      # A GitHub repository URL is a public VCS repository, not a direct drop host.
+      - id: metadata/package/dependencies/manifest/source::npm-github-repository-dependency
   - id: dynamic-dns-plaintext-tarball-dependency
     desc: Dynamic-DNS plaintext tarball dependency
     crit: hostile
@@ -103,6 +92,15 @@ composite_rules:
       - id: metadata/package/dependencies/manifest/source::npm-single-https-runtime-dependency
       - id: objectives/supply-chain/install-hook/scripts/import-chain::scripts-postinstall-external-require
       - id: micro-behaviors/os/module/require::node-bracket-module-require-call
+  - id: npm-gcs-tarball-hex-identity-preinstall-payload
+    desc: GCS tarball dependency runs hex identity OAST preinstall
+    crit: hostile
+    conf: 0.99
+    for: [package.json, npm]
+    scope: package
+    all:
+      - id: metadata/package/dependencies/direct-url::gcs-bucket-runtime-dependency-kv
+      - id: objectives/exfiltration/stealer/system-info/identity::npm-preinstall-hex-identity-oob-benchmark-exfil
   - id: url-dependency-with-hooks
     desc: Runtime direct URL dependency with install hooks
     crit: hostile
@@ -123,6 +121,9 @@ composite_rules:
       # A hook that only runs `bower install` hands off to a second manifest
       # the same tooling already reads; it delivers nothing itself.
       - id: metadata/package/scripts/lifecycle::package-manager-bootstrap-hook
+      # preinstall that only checks the Node major version does not fetch or
+      # run the URL dependency. The git dependency stays a notable reference.
+      - id: metadata/package/scripts/lifecycle::preinstall-engine-requirements-script
   - id: duplicated-plaintext-http-dependency
     desc: Plain HTTP dependency in runtime and dev scopes
     # Duplicating one URL across development and runtime scopes is risky but
@@ -180,36 +181,3 @@ composite_rules:
       # tag-pinned GitHub shorthand. A manifest that resolves eight or more
       # runtime dependencies is not "minimal metadata" whatever its size.
       - id: metadata/package/dependencies/manifest/count::npm-dependency-fanout
-  # `inflated-single-url-dependency` moved to
-  # objectives/supply-chain/impersonation/depconf/inflated-url-stub.yaml: it
-  # describes a confusion squat's versioning move, and this directory is
-  # install-time execution, which that package does not do.
-  # The staging marker is a renameable path token: it corroborates, but a
-  # conviction cannot rest on it alone. Require squat context alongside it --
-  # an inflated major winning resolution, no source repository to hold
-  # accountable, or an install hook executing at install time -- so a renamed
-  # staging path still needs structural abuse evidence to convict.
-  - id: dependency-confusion-staging-url
-    desc: Staging URL dependency with confusion-squat context
-    crit: hostile
-    conf: 0.995
-    scope: archive
-    for: [npm, package.json, tar, zip]
-    all:
-      - id: dep-url-depconf-staging-marker
-      - id: metadata/package/dependencies/direct-url::runtime-url-dependency
-    any:
-      - id: metadata/package/versioning/sentinel::npm-version-major-40-plus
-      - id: metadata/package/repository::manifest-lacks-repository-metadata
-      - id: metadata/package/scripts/lifecycle::install-hooks
-
-  - id: npm-single-depconf-staging-dependency
-    desc: npm manifest pins one depconf staging tarball
-    crit: hostile
-    conf: 0.998
-    attack: T1195.002,T1041
-    scope: archive
-    for: [npm, package.json, tar, zip]
-    all:
-      - id: dependency-confusion-staging-url
-      - id: metadata/package/dependencies/manifest/source::npm-single-https-runtime-dependency

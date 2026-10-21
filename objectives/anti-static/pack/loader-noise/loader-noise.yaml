@@ -89,7 +89,7 @@ traits:
   - id: well-known/app/browser/internet-explorer/
   # Large MSVC images can have a high-entropy .reloc section simply because
   # it contains thousands of genuine base-relocation entries. When the
-  # overhang composite also fires, reloc-concealed-encrypted-payload uses
+  # overhang composite also fires, high-entropy-reloc-overhang uses
   # high-entropy-reloc-section instead so a stuffed trailer is not suppressed.
   - id: metadata/binary/section/reloc::reloc-entry-count-high
 - id: x64-xor-dec-dword-payload-loop
@@ -105,21 +105,21 @@ traits:
   unless:
   - id: metadata/binary/framework/
   - id: metadata/signed/platform/
-- id: reloc-dominates-image
-  desc: .reloc dominates PE image layout
+# x86 sibling of the decoder above. EDX holds the decoded dword, EDI is the
+# destination, ECX counts bytes, and EBX walks the source. Short junk
+# instructions may sit between the XOR, the decrement, and the pointer
+# updates; the key immediate is not part of the signature.
+- id: x86-xor-dec-dword-payload-loop
+  desc: x86 XOR then decrement dword decode loop
   crit: notable
-  conf: 0.84
+  conf: 0.9
+  arch: [x86]
   if:
-    type: section
-    regex: ".reloc"
-    compare_to: total
-    # 0.65 catches Expiro-class hosts where .reloc is ~70% of the file
-    # but packing/alignment keeps the ratio just under a hard 0.7 cut.
-    size_ratio_min: 0.65
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
-    - id: metadata/file/string/identity::is-windows-named
+    type: hex
+    section: .text
+    pattern: "81 F2 ?? ?? ?? ?? [0-6] 4A [0-4] 89 17 [0-6] 83 E9 04 83 C7 04 83 C3 04"
+  unless:
+  - id: metadata/signed/platform/
 - id: lol-rwx-payload-section
   desc: Large RWX .lol packed payload section
   crit: suspicious
@@ -141,14 +141,6 @@ traits:
     executable: true
     entropy_min: 7.0
     length_min: 65536
-- id: entry-in-data-like-section
-  desc: PE entry point in data-like section
-  crit: notable
-  conf: 0.92
-  if:
-    type: value
-    path: pe.entry_section
-    regex: '^\.(data|bss|idata|tls)[0-9]*$'
   # === Attack-context-specific fragments (per TAXONOMY.md exception) ===
   # These regex-combined atoms only appear together in packed-loader decoys —
   # video-capture APIs, MAPI allocator internals, and the shlwapi/path-hash
@@ -172,12 +164,6 @@ traits:
   if:
     type: import
     exact: MprSetupProtocolEnum
-- id: video-capture-import
-  desc: Open a video-capture window
-  crit: notable
-  if:
-    type: import
-    regex: ^(capCreateCaptureWindow[AW]|capGetDriverDescription[AW]|videoThunk32)$
   # MAPI allocator internals (decomposed per ML-feature-depth guidance)
 - id: mapi-free-buffer-import
   desc: Release MAPI-allocated memory buffer
@@ -266,13 +252,6 @@ traits:
   if:
     type: text
     exact: "PEStub.dll"
-- id: venvlauncher-pdb-marker
-  desc: Embedded venvlauncher PDB path marker
-  crit: notable
-  conf: 0.97
-  if:
-    type: text
-    substr: "venvlauncher.pdb"
 - id: python-launcher-banner-marker
   desc: Embedded Python Launcher banner string
   crit: notable
@@ -469,8 +448,8 @@ composite_rules:
   attack: T1027,T1497.001,T1620
   all:
   - id: metadata/binary/section/layout::large-low-entropy-rwx-section
-  - id: entry-in-data-like-section
-  - id: metadata/file/data-blob::low-entropy-binary-with-dense-region
+  - id: metadata/binary/section/header::pe-entry-in-data-like-section
+  - id: metadata/binary/layout/entropy::low-entropy-binary-with-dense-region
   - id: objectives/anti-analysis/vm-detect/cluster::explicit-vm-execution-rejection-message
   unless:
   - id: metadata/signed/platform/
@@ -510,7 +489,9 @@ composite_rules:
   - id: metadata/binary/header/malformed::pe-bss-like-sections-multiple
   - id: metadata/binary/code/entropy::high-code-entropy
   - id: metadata/binary/symbols/imports::pe-imports-max-six
+  any:
   - id: metadata/binary/section/header::pe-nonstandard-entry
+  - id: metadata/binary/section/header::pe-entry-in-nonstandard-section
   unless:
   - id: metadata/signed/platform/
 - id: virtual-text-rwx-payload-loader
@@ -530,27 +511,6 @@ composite_rules:
   - id: metadata/signed/platform/
   - id: metadata/binary/framework::dotnet-metadata
   - id: metadata/binary/installer/family/
-# Loaders that hide an ENCRYPTED stage in .reloc: the section is high-entropy
-# AND the overhang metric proves most of it is non-relocation data. Two independent
-# structural anomalies (entropy + overhang) co-firing on .reloc is effectively
-# never benign. Family-agnostic: catches the ACRStealer/Shelma-style loader
-# as well as executable-reloc loaders grafted onto otherwise legitimate hosts.
-# Use the metadata high-entropy reloc atom rather than
-# reloc-readonly-encrypted-payload, which suppresses on high entry counts that
-# are normal for the same large hosts these loaders graft onto.
-- id: reloc-concealed-encrypted-payload
-  desc: Encrypted payload concealed in oversized reloc
-  crit: hostile
-  conf: 0.97
-  attack: "T1027.009"
-  all:
-  - id: metadata/binary/section/entropy::high-entropy-reloc-section
-  - id: metadata/binary/section/header::reloc-overhang-dominant
-  unless:
-  - id: well-known/app/system/google-update::google-update-offline-bootstrapper-layout
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
 - id: decoy-resource-string-suite
   desc: Gibberish localized decoy resource string suite
   crit: component
@@ -639,7 +599,7 @@ composite_rules:
   any:
   - id: micro-behaviors/fs/volume/admin::set-volume-label-w
   - id: micro-behaviors/os/event/shutdown::abort-system-shutdown-w
-  - id: micro-behaviors/fs/temp/directory::get-temp-file-name
+  - id: micro-behaviors/fs/temp/file::get-temp-file-name
   - id: micro-behaviors/os/env/block::get-environment-strings-wide
   needs: 2
   unless:
@@ -672,7 +632,7 @@ composite_rules:
   conf: 0.86
   all:
   - id: micro-behaviors/mem/combined::memory-management-api-evidence
-  - id: video-capture-import
+  - id: micro-behaviors/hardware/display/camera::vfw-capture-interface-import
   any:
   - id: mapi-free-buffer-import
   - id: mapi-sc-bin-from-hex-import
@@ -727,9 +687,9 @@ composite_rules:
   - id: metadata/binary/code/entropy::code-region-entropy-78
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   any:
-  - id: metadata/binary/instruction::golden-ratio-immediate-mov
-  - id: metadata/binary/instruction::golden-ratio-immediate-add-eax
-  - id: metadata/binary/instruction::golden-ratio-immediate-stack-store
+  - id: metadata/binary/instruction/sequence::golden-ratio-immediate-mov
+  - id: metadata/binary/instruction/sequence::golden-ratio-immediate-add-eax
+  - id: metadata/binary/instruction/sequence::golden-ratio-immediate-stack-store
   unless:
   - id: metadata/binary/framework::dotnet-assembly
   - id: metadata/binary/installer/family/
@@ -761,7 +721,7 @@ composite_rules:
   any:
   - id: metadata/binary/section/ratio::largest-section-at-least-90-percent
   - id: metadata/binary/code/complexity::few-functions
-  - id: metadata/binary/section/label::writable-rdata
+  - id: metadata/binary/section/permission::writable-rdata
   needs: 2
   downgrade:
     any:
@@ -803,7 +763,7 @@ composite_rules:
   - id: reloc-rwx-payload-section
   needs: 3
   any:
-  - id: reloc-dominates-image
+  - id: metadata/binary/section/ratio::reloc-dominates-image
   - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
   - id: micro-behaviors/os/service/dispatch::service-control-dispatch
   - id: micro-behaviors/os/service/dispatch::service-dispatch-triad
@@ -820,8 +780,8 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/payload/section/layout::x64-unrolled-dword-decoder-stub
   - id: reloc-rwx-payload-section
-  - id: reloc-dominates-image
-  - id: micro-behaviors/os/api-resolution/manual::peb-access-x64
+  - id: metadata/binary/section/ratio::reloc-dominates-image
+  - id: micro-behaviors/process/info/query::peb-access-x64
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   unless:
@@ -836,11 +796,11 @@ composite_rules:
   - id: reloc-rwx-payload-section
   needs: 4
   any:
-  - id: reloc-dominates-image
+  - id: metadata/binary/section/ratio::reloc-dominates-image
   - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
   - id: objectives/evasion/masquerade/debug::fake-chrome-service-facade
   - id: micro-behaviors/os/service/dispatch::service-control-dispatch
-  - id: micro-behaviors/os/module/load::module-export-resolution-imports
+  - id: micro-behaviors/dylib/lookup::module-export-resolution-imports
   - id: micro-behaviors/dylib/load/runtime::load-library-ex
   - id: micro-behaviors/os/security/descriptor::acl-rewrite-cluster
   - id: metadata/lang/compiler/native::lld-pdb-marker
@@ -850,7 +810,7 @@ composite_rules:
   conf: 0.96
   all:
   - id: reloc-rwx-payload-section
-  - id: reloc-dominates-image
+  - id: metadata/binary/section/ratio::reloc-dominates-image
   - id: micro-behaviors/fs/read/file/handle::pe-module-path-file-io-overlay
   any:
   - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
@@ -898,8 +858,8 @@ composite_rules:
   attack: T1027.002,T1055,T1622
   all:
   - id: metadata/binary/section/entropy::large-high-entropy-rwx-reloc
-  - id: reloc-dominates-image
-  - id: micro-behaviors/os/api-resolution/manual::peb-access-both-architectures
+  - id: metadata/binary/section/ratio::reloc-dominates-image
+  - id: micro-behaviors/process/info/query::peb-access-both-architectures
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   - id: metadata/signed/trust-level::unsigned-missing-signature-record
   - id: metadata/binary/layout/checksum::pe-checksum-mismatch
@@ -913,10 +873,11 @@ composite_rules:
   conf: 0.99
   all:
   - id: reloc-readonly-encrypted-payload
-  - id: reloc-dominates-image
+  - id: metadata/binary/section/ratio::reloc-dominates-image
   - id: micro-behaviors/os/service/dispatch::service-dispatch-triad
   any:
   - id: x64-xor-dec-dword-payload-loop
+  - id: x86-xor-dec-dword-payload-loop
   - id: objectives/evasion/anti-av/api-hashing
   - id: objectives/evasion/indicator-removal/timestamps::timestamp-anomaly
   needs: 2
@@ -929,7 +890,7 @@ composite_rules:
   conf: 0.99
   all:
   - id: reloc-rwx-payload-section
-  - id: reloc-dominates-image
+  - id: metadata/binary/section/ratio::reloc-dominates-image
   - id: objectives/evasion/masquerade/version-resource/python-dll::python-launcher-version-resource
   any:
   - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
@@ -944,13 +905,13 @@ composite_rules:
   conf: 0.99
   all:
   - id: reloc-rwx-payload-section
-  - id: reloc-dominates-image
+  - id: metadata/binary/section/ratio::reloc-dominates-image
   - id: objectives/evasion/masquerade/version-resource/claim::asus-getdeviceversion-version-resource
   any:
   - id: asus-armoury-sdk-path
   - id: getdeviceversion-pdb-path
-  - id: metadata/hardening/memory::wx-section
-  - id: micro-behaviors/os/module/load::module-export-resolution-imports
+  - id: metadata/binary/section/permission::wx-section
+  - id: micro-behaviors/dylib/lookup::module-export-resolution-imports
   needs: 2
 - id: trojanized-asus-lightingservice-loader
   desc: Trojanized ASUS Lighting Service loader
@@ -1001,7 +962,7 @@ composite_rules:
   - id: pak-triplet-loader-layout
   - id: pestub-dll-marker
   any:
-  - id: venvlauncher-pdb-marker
+  - id: metadata/binary/debug::venvlauncher-pdb-marker
   - id: python-launcher-banner-marker
   - id: python-launcher-usage-marker
   - id: metadata/binary/layout/embedded::pe-embedded

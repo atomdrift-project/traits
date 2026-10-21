@@ -62,7 +62,74 @@ traits:
   conf: 0.95
   if:
     type: text
-    regex: _MARKERS\s*=\s*\[|FORBIDDEN_\w+\s*[:=]|BLACKLIST_\w+\s*[:=]
+    regex: '_MARKERS\s*=\s*\[|(FORBIDDEN|BLACKLIST|_?ATTACK|_?INJECTION)_\w+\s*[:=]'
+# Attack-harness records: keyword-built payload objects carrying a
+# malicious/benign label, replayed through a defense and scored as caught,
+# slipped, or false positive (swedefend's SWExploit in kiss-agent-framework).
+# The payload source is a string under test, never executed.
+- id: python-labeled-payload-record
+  for:
+  - python
+  desc: Python payload record with malicious label
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: (?s)\b(payload|patch_source|issue_text)\w*\s*=.{0,400}?\bis_malicious\s*=\s*(True|False)
+- id: python-defense-catch-scoring
+  for:
+  - python
+  desc: Python scores attacks as caught or slipped
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: \b(caught|slipped|missed|false_positives)\.append\(
+- id: scanner-true-positive-tuple
+  for:
+  - python
+  desc: True-positive tuple with rule id
+  crit: notable
+  conf: 0.95
+  count_min: 5
+  if:
+    type: text
+    regex: \(\s*"[^"]{1,99}",\s*"[a-z]{2,10}",\s*"[a-z0-9-]{2,30}",\s*[01]\s*\)
+- id: scanner-tests-testdata-path
+  for:
+  - python
+  desc: Python file under tests testdata
+  crit: notable
+  conf: 0.95
+  if:
+    type: path
+    regex: '[\\/]testdata[\\/][A-Za-z0-9_]+\.py$'
+- id: illustrative-placeholder-pipe-host
+  # Unit tests and docs use a one-letter stand-in on an example command line.
+  # Keep this line-anchored: a Python subprocess can execute `curl x | sh`
+  # inside an argv string, so the same token there is behavior, not an example.
+  for:
+  - scripts
+  - source
+  desc: Illustrative single-label pipeline host
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    regex: '(?im)^[ \t]*\$?[ \t]*(curl|wget)\s+(-\w+\s+)?[a-z]\s*\|\s*(sh|bash|zsh|dash)'
+- id: prompt-override-denylist-rule-table
+  # A scanner rulebook tabulates the attack it detects: a markdown table row
+  # naming a prompt-override rule with a deny verdict quotes the attack
+  # phrases as detection patterns, not instructions.
+  for:
+  - markdown
+  - text
+  desc: Rule table denies prompt override
+  crit: notable
+  conf: 0.97
+  if:
+    type: text
+    regex: '\|\s*`(prompt[-_]override|prompt[-_]?injection)`\s*\|\s*deny\s*\|'
 - id: python-counterfactual-scenario-record
   for:
   - python
@@ -108,7 +175,43 @@ traits:
   if:
     type: text
     regex: (?i)remediation[_-]?patches?
+- id: python-benign-step-label-assignment
+  for: [python]
+  desc: Python assigns benign step labels
+  crit: notable
+  conf: 0.97
+  if:
+    type: text
+    regex: '\w+\["label"\]\s*=\s*["'']benign["'']'
+- id: python-malicious-step-label-assignment
+  for: [python]
+  desc: Python assigns malicious step labels
+  crit: notable
+  conf: 0.97
+  if:
+    type: text
+    regex: '\w+\["label"\]\s*=\s*["'']malicious["'']'
+- id: python-jsonl-output-declaration
+  for: [python]
+  desc: Python source declares JSONL output
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: '\.jsonl["'']'
 composite_rules:
+- id: scanner-labeled-tuple-testdata
+  desc: Scanner tuples in tests testdata
+  # True-positive rows are (snippet, language, rule-id, expected-count)
+  # tuples: quoted attack strings a scanner is measured on, never executed.
+  # Either half alone is insufficient, so the tests-tree testdata path and
+  # the labeled rows are both required.
+  crit: baseline
+  for:
+  - python
+  all:
+  - id: metadata/package/testing/corpus::scanner-tests-testdata-path
+  - id: metadata/package/testing/corpus::scanner-true-positive-tuple
 - id: inert-labeled-security-data
   desc: Labeled detector corpus or declarative test rule
   crit: exception
@@ -170,3 +273,35 @@ composite_rules:
   - id: python-classified-verdict-field
   - id: python-security-policy-field
   - id: python-remediation-policy-field
+# Quoted attack phrases inside a fixture or verdict table. Runtime names such
+# as evaluate_intent are not tables, so they are not legs of this exception.
+- id: prompt-override-fixture-tables
+  desc: Fixture or verdict tables quoting attack phrases
+  crit: exception
+  conf: 0.95
+  any:
+  - id: rule-test-case-detection-verdicts
+  - id: command-verdict-case-rows
+  - id: python-threat-generator-table
+  - id: python-detection-marker-table
+  - id: python-classified-verdict-field
+- id: python-labeled-attack-harness
+  for:
+  - python
+  desc: Python attack harness scoring labeled payloads
+  crit: exception
+  conf: 0.95
+  all:
+  - id: python-labeled-payload-record
+  - id: python-defense-catch-scoring
+- id: python-generated-labeled-jsonl-corpus
+  for:
+  - python
+  desc: Writes labeled benign and malicious JSONL records
+  crit: exception
+  conf: 0.97
+  all:
+  - id: python-benign-step-label-assignment
+  - id: python-malicious-step-label-assignment
+  - id: python-jsonl-output-declaration
+  - id: micro-behaviors/data/serialize/json::json-dumps-call

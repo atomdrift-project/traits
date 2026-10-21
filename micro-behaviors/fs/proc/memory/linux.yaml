@@ -57,7 +57,7 @@ traits:
       - id: well-known/app/ai/coding-agent/tabby::tabby-basename
       - id: micro-behaviors/fs/proc/info/path::proc-self-path-fragment
   - id: process-variable-pid-maps
-    desc: Builds a variable /proc PID maps path
+    desc: References a variable-PID procfs maps path
     crit: notable
     conf: 0.88
     # The template syntax is shared by shell expansion, Python/Rust format
@@ -73,7 +73,8 @@ traits:
     crit: suspicious
     conf: 0.75
     if:
-      type: text
+      type: literal
+      kind: string
       regex: /proc/[0-9]{1,10}/mem
     unless:
       # Permission and safety tests use /proc/PID/mem as a denied-path
@@ -91,9 +92,8 @@ traits:
   - id: process-variable-pid-mem
     desc: Interpolated /proc PID mem path template
     # A path template, like the printf (`process-pid-mem-format`) and Rust
-    # (`process-pid-mem-template-rust`) forms. Pairing it with a maps walk of
-    # an arbitrary PID is the scraping behavior; `process-memory-pid-maps`
-    # and `process-arbitrary-memory-dump-elf` carry that at suspicious.
+    # (`process-pid-mem-template-rust`) forms. A compiled path set is only a
+    # reference, not evidence of a memory read or dump.
     crit: notable
     conf: 0.88
     for: [scripts, source, binaries, -beam, -wasm, -pyc, -staticlib, -elixir, -clojure]
@@ -137,6 +137,20 @@ traits:
       - id: metadata/package/testing/presence/harness/
       - id: micro-behaviors/fs/proc/info/path::proc-self-path-fragment
       - id: "metadata/file/naming::test-directory-component"
+  # Crash reporters open this path read-only. O_RDWR beside the format is
+  # the injector shape: the fd is later seeked and written.
+  - id: proc-pid-mem-rdwr-open
+    desc: Opens /proc pid mem read-write
+    crit: suspicious
+    conf: 0.9
+    for: [c, cpp]
+    if:
+      type: text
+      regex: '/proc/%[a-z][^/\n]{0,8}/mem[\s\S]{0,160}O_RDWR'
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
+      - id: micro-behaviors/process/debug/tool-markers::gdb-debugger-text-marker
+      - id: micro-behaviors/process/debug/tool-markers::org-gnu-gdb-marker
   - id: process-pid-mem-template-rust
     desc: Rust procfs process memory path template
     crit: notable
@@ -153,6 +167,21 @@ traits:
     downgrade:
       any:
         - id: micro-behaviors/ui/help/
+  # `/proc/self/mem` is the caller's own address space. Runtimes keep that
+  # path next to a `%d/maps` template; it is not a dump of another PID.
+  - id: process-other-pid-mem-template-rust
+    desc: Rust other-PID proc mem template
+    crit: notable
+    conf: 0.88
+    for: [rust, elf]
+    platforms: [routeros, appliance, unix]
+    if:
+      type: text
+      regex: '/proc/(\{.{0,80}\}|[0-9]{1,8})/(task/[^/]{1,32}/)?mem\b'
+    unless:
+      - id: micro-behaviors/process/debug/tool-markers::gdb-debugger-text-marker
+      - id: micro-behaviors/process/debug/tool-markers::org-gnu-gdb-marker
+      - id: micro-behaviors/process/debug/tool-markers::lldb-ptrace-text-marker
   - id: process-maps-cmdline-fragment-cluster
     desc: Split proc maps/cmdline path cluster
     crit: notable
@@ -227,7 +256,7 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/proc/info/path::process-arbitrary
       - id: micro-behaviors/fs/proc/info/path::python-proc-path-join
-      - id: micro-behaviors/os/privilege/paths::proc-mem
+      - id: micro-behaviors/fs/proc/memory::process-memory-path-reference
   - id: process-memory-dumper
     desc: Dumps process memory via /proc
     crit: suspicious

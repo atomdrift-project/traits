@@ -47,7 +47,12 @@ traits:
     conf: 0.7
     if:
       type: text
-      regex: '(?i)passwordauthentication|ssh_userauth_password'
+      # java.net.PasswordAuthentication is the JDK HTTP-authenticator class
+      # (used by downloaders such as the Maven wrapper), not the OpenSSH
+      # keyword. The config spelling is the keyword plus yes or no; a call
+      # paren or a dotted qualifier never takes that form. libssh names the
+      # method ssh_userauth_password.
+      regex: '(?i)(^|[^[:alnum:].])passwordauthentication[ \t]+(yes|no)\b|ssh_userauth_password'
   - id: ssh2-userauth-request
     desc: SSH2 user-auth request packet constant
     crit: notable
@@ -237,8 +242,33 @@ traits:
     for: [python]
     platforms: [unix]
     if:
-      type: text
-      regex: 'subprocess\.run\s*\(\s*\[\s*"ssh"\s*,'
+      # Call arguments expose the list as a shape, not individual argv items.
+      # Require ssh as its first element, and bind bare/aliased run calls to
+      # their from-import. Quoted code and an unrelated run() are not launches.
+      type: tree-sitter
+      query: |
+        ((call
+          function: (attribute object: (identifier) @module attribute: (identifier) @method)
+          arguments: (argument_list . (list . (string (string_content) @exe))))
+          (#eq? @module "subprocess") (#eq? @method "run") (#eq? @exe "ssh"))
+        ((module
+          (import_from_statement
+            module_name: (dotted_name (identifier) @module)
+            name: (dotted_name (identifier) @method))
+          (expression_statement (call
+            function: (identifier) @callee
+            arguments: (argument_list . (list . (string (string_content) @exe))))))
+          (#eq? @module "subprocess") (#eq? @method "run")
+          (#eq? @callee @method) (#eq? @exe "ssh"))
+        ((module
+          (import_from_statement
+            module_name: (dotted_name (identifier) @module)
+            name: (aliased_import name: (dotted_name (identifier) @method) alias: (identifier) @alias))
+          (expression_statement (call
+            function: (identifier) @callee
+            arguments: (argument_list . (list . (string (string_content) @exe))))))
+          (#eq? @module "subprocess") (#eq? @method "run")
+          (#eq? @callee @alias) (#eq? @exe "ssh"))
     unless:
       - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
@@ -376,8 +406,8 @@ composite_rules:
     any:
       - id: ssh2-userauth-request
       - id: ssh-userauth-request
-  - id: library-comp
-    desc: SSH client/auth library
+  - id: ssh-client-reference-cluster
+    desc: Multiple SSH protocol or client references
     crit: notable
     conf: 0.75
     needs: 2
@@ -392,12 +422,12 @@ composite_rules:
       - id: node-ssh
       - id: well-known/lib/network/paramiko::paramiko-python-library
       - id: fabric
-  - id: full-implementation
-    desc: SSH authentication implementation
+  - id: ssh-client-reference-error-cluster
+    desc: SSH client references and error messages
     crit: notable
     conf: 0.85
     all:
-      - id: library-comp
+      - id: ssh-client-reference-cluster
     any:
       - id: micro-behaviors/os/message/error::permission-denied
       - id: micro-behaviors/os/message/error::authentication-failed

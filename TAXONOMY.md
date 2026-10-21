@@ -238,25 +238,38 @@ classifier field), and test the exact suppression it performs.
 
 ### Structure and limits
 
-**Rules live only in leaves.** A directory holds YAML or subdirectories, never
-both, for traits, composites and aliases alike; mixed nodes grew duplicate homes.
-A parent stays referenceable. A single child is fine if it adds meaning.
+**Rules live only in leaves.** A directory may contain rules or rule-bearing
+descendants, never both; this applies equally to traits, composites and aliases.
+Mixed nodes create duplicate homes. Parents remain referenceable; a single child
+is fine if it adds meaning. This is repository policy, not a check currently
+enforced by general Cleave validation; run `python3 scripts/taxonomy-map.py` to
+report mixed rule/descendant directories for review.
 
-| Check (`make validate`) | Limit |
+| Validator check | Limit |
 |---|---|
-| Rules per directory | **100** traits plus composites is the review trigger, summed over its YAML files and criticalities. A higher leaf budget requires a reviewed, exact-path entry in Cleave and evidence that its rules are accurate, at the right level, and nonduplicative; filenames create no budgets. |
+| Rules per directory | **100** traits plus composites is the default validator budget and review trigger, summed over its YAML files and criticalities. A higher leaf budget requires a reviewed, exact-path entry in Cleave and evidence that its rules are accurate, at the right level, and nonduplicative; filenames create no budgets. |
 | Subdirectories | Hard error above 150 immediate subdirectories. Split broad catalogs by a stable function with a tiebreaker. |
 | Depth | Soft warning beyond five levels below the tier (`objectives/a/b/c/d/e/f/x.yaml` warns). Soft warnings fail `make validate`; `cleave validate --soft` only reports them. |
 | Sparse siblings | Soft warning when, below level 1 of a behavioral tier, two or more child subtrees hold fewer than 35 rules together — unless the exact partition is in `REVIEWED_SPARSE_TAXONOMY_PARTITIONS` (`cleave/src/capabilities/validation/taxonomy.rs`). |
 | Sibling stems | Soft warning on shared stems. A shared stem is not synonymy (account identity ≠ process accounting); document the boundary or merge. |
 | Platforms | Soft warning at four or more. `platforms: [all]` only in `ALL_PLATFORM_DIRECTORY_ALLOWLIST` (same file). |
 
+`micro-behaviors/communications/http/url/path` has a reviewed budget of 101:
+the Stream Chat route literal and `/_api/<entity>` are distinct path
+observations. The latter is used only with Power Pages/Dataverse context in a
+composite; neither path fact establishes a request, SDK identity or endpoint
+operation. The exact budget is enforced in Cleave; the default review trigger
+remains 100.
+
 `platforms: [all]` is allowed only where a fact means the same on every OS:
 `metadata/package/description/disclosure`,
 `metadata/package/documentation/{claims,security-advisory,source}`,
 `metadata/registry`, `metadata/file/naming`,
 `metadata/file/profile/{test-indications,source-indications}` and
-`micro-behaviors/communications/url/host`. Naming properties record the scanned
+`micro-behaviors/communications/url/host` and
+`objectives/supply-chain/security-hold`. Security-holding status is independent
+of the target OS; its policy classifier does not assert code portability.
+Naming properties record the scanned
 filename or naming measurements; OS-specific path rules still require their
 own explicit platform scopes. Test-indication profiles combine metadata and
 directory observations; each child retains its OS/type gate, and the profile
@@ -384,7 +397,7 @@ processes to `process`.
 | `hardware` | Device and peripheral I/O or control. | Host property queries (`os/sysinfo`); windows and widgets (`ui`); surveillance (objectives). |
 | `process` | Execution contexts: creation, lifecycle, coordination, descriptors, interpreters, attach/hook/inject. | Privilege (`os/privilege`); durable activation (`objectives/persistence`). |
 | `dylib` | Native library loading, unloading, enumeration, symbol lookup. | Language modules (`os/module`); manual API resolution (`os/api-resolution`). |
-| `metaprogramming` | The program inspecting, generating or transforming program structure: `ast`, `generation`, `reflection` *(legacy: `process/interpreter/reflection`)*. Reflection includes inspecting class/member metadata, resolving members and invoking a resolved member. | Loading, defining or activating executable classes (`process/interpreter/runtime`); an AST the *analyzer* uses to match. |
+| `metaprogramming` | The program inspecting, generating or transforming program structure: `ast`, `generation`, `reflection` *(legacy: `process/interpreter/reflection`)*. `generation` includes turning supplied source or an AST into an executable representation without requiring its invocation; reflection includes inspecting class/member metadata, resolving members and invoking a resolved member. | Running compiled/generated code (`process/interpreter/eval/constructed`); launching a compiler process (`process/create`); loading, defining or activating executable classes (`process/interpreter/runtime`); an AST the *analyzer* uses to match. |
 | `os` | Host services without a more specific facility: registry, services, environment, accounts, privilege, security controls, kernel, packages, autorun, sysinfo, telemetry, clipboard, console. | File, process and network operations, even through an OS API. |
 | `time` | Clocks, waits, elapsed time, in-process scheduling. | OS task registration (`os/autorun`, `os/service`); evasion gates (objectives). |
 | `ui` | Presentation and interaction. | Display hardware or capture (`hardware/display`); deception (objectives); framework identity (`well-known/lib/ui`). |
@@ -396,6 +409,7 @@ processes to `process`.
 |---|---|
 | `communications/<protocol>/<operation>` | DNS, FTP, TFTP, SSH, TLS, WebSocket, RPC, gRPC, email, messaging, IRC, MCP, ICS protocols (`modbus`, `dnp3`, `s7`, `bacnet`, `ethernet-ip`, `opcua`, `profinet`). Children are operations (connect, authenticate, send, receive, serve, configure). A vendor, SDK or client library is not a protocol. |
 | `communications/http/{client,server}` | Method-unspecified client use; server-side handling. No `request` leaf duplicating `client`. |
+| `communications/http/url/path` | HTTP URL path references, including literal API routes such as `/_api/...` or `/api/v2/chat/`. A route reference alone establishes neither a request, SDK identity, nor endpoint operation. |
 | `communications/http/{get,post,put,patch,delete,head,options}` | A required method. |
 | `communications/http/{download,upload}` | A response saved as an artifact (ordered retries in `download/fallback`); a file or attachment sent. GET alone is `get` and POST alone `post`; neither is upload, exfiltration or execution. |
 | `communications/http/{header,cookies,auth,redirect,response,form}` | Classify a header by meaning: authentication → its auth leaf (`oauth` incl. device code, `token-auth`, `jwt`, `basic-auth`; `auth` when unknown), `user-agent`, `cookies`; otherwise `header`. A cookie-jar path is `fs/path/cookie`. |
@@ -412,6 +426,25 @@ processes to `process`.
 
 Don't duplicate WebSocket under HTTP, or a client library under each HTTP verb.
 A port literal is not a service, scan or authentication state.
+
+Protocol configuration follows the configured facility, not its INI/JSON
+carrier. `communications/irc/configure` admits a recognized IRC server-setting
+structure containing a server and port; describe it as a declared endpoint,
+not a connection. A custom variable named `%flserv` or `%flport` alone does not
+establish that structure or role. Parsing a configuration file is a separate
+data operation; recognizing its section syntax is format metadata. File-path
+references keep their `fs/path` homes even inside protocol configuration.
+The reviewed IRC children are `command` (protocol-command vocabulary or
+construction) and `configure` (declared connection settings). Command text
+does not establish endpoint settings, and endpoint settings do not establish
+a command being sent.
+
+`communications/http/client/initialize` records construction or opening of an
+HTTP client or connection object without a required request method. An
+`HttpURLConnection` cast beside `openConnection()` belongs here; a bound POST
+method belongs in `http/post`, and an arbitrary `openConnection()` without an
+HTTP receiver does not establish this subject. Opening the object does not
+prove network transmission. Library spelling belongs in the ID and scope.
 
 ### Cryptography
 
@@ -470,7 +503,7 @@ A keyed XOR cipher is `crypto/symmetric/xor`; XOR scrambling is
 | `data/encoding/<scheme>` | Direction-neutral scheme evidence (an embedded Base64 alphabet); asserts no operation. |
 | `data/{compress,decompress}/<algorithm>` | Directional compression; languages and libraries share the algorithm leaf. |
 | `data/codec` | Direct evidence for a codec interface or support spanning directions; keep a known scheme in the trait ID. A flat leaf may remain until a matcher-proven child axis fits every rule. Unknown scheme alone does not admit a child; never add an `unknown` or `other` bucket. Size alone does not justify a split. |
-| `data/compression` | Composite findings spanning codec schemes or compression directions; direct codec evidence stays in `data/codec`. |
+| `data/compression` | Composite findings that relate encoding/decoding to compression/decompression or span codec schemes or directions; direct codec evidence stays in `data/codec`. |
 | `data/{parse,serialize,format}/<format>` | Parsing input; object ↔ representation (JSON, YAML, protobuf, pickle; general record fields in `serialize/schema-object`, credential-shaped records in `serialize/schema-credential`); formatting (`format/string` for number text, `format/credentials` for token shapes). Format identity alone is metadata. |
 | `data/archive/{create,extract,list,modify}` | Code that manipulates archives. A rule binding a member to its extracted file is `extract`, though it also writes. |
 | `data/{string,buffer,collection,property}/<operation>` | Operations on strings, byte buffers, collections (DOM trees in `collection/dom`) and object members (`property/{access,assign,define,enumerate}`), classified by receiver and operation, not method name. |
@@ -483,6 +516,12 @@ A keyed XOR cipher is `crypto/symmetric/xor`; XOR scrambling is
 to `metaprogramming`, execution constructs to `data/control-flow`, artifact and
 language facts to `metadata`. A function *defined* with a utility's name is not
 a call to it.
+
+`data/encoding/xor` records direction-neutral XOR scrambling structure. A
+state-update/byte-XOR/store sequence fits even when the same loop can encode
+and decode. A bare XOR instruction does not establish scrambling. Required
+reconstruction context can establish decoding in a consuming rule; the atom
+must not acquire a direction from its consumer.
 
 ### Files, memory and hardware
 
@@ -518,7 +557,7 @@ a call to it.
 | `process/fd/{query,control,close,dup,stdio}` | Descriptor operations, including child standard-stream configuration, redirection, and descriptor duplication. Creating an IPC pipe is `communications/ipc`. |
 | `process/io/stream/<operation>` | Reading, writing, piping, or relaying stream data, including paired relays between a peer stream and child stdin/stdout. This is the data-movement operation; stdio configuration and descriptor setup or duplication remain under `process/fd`. |
 | `process/tty/<operation>` | Terminal interaction and PTYs. |
-| `process/interpreter/<operation>` | In-process execution: `eval/{direct,indirect,compile,source}`. `eval` executes an expression; `source` executes a file in the current shell. This includes shell `eval` and `source "$x"`, plus `bof` (Beacon Object File host APIs), `wasm`, and `vm`. Launching an interpreter is `process/create`; language identity is metadata. |
+| `process/interpreter/<operation>` | In-process execution: `eval/{direct,indirect,constructed,source}` plus `bof` (Beacon Object File host APIs), `wasm`, and `vm`. `eval` executes supplied code in an existing interpreter. Launching an interpreter is `process/create`; compilation without required invocation is `metaprogramming/generation`; language identity is metadata. |
 | `process/{attach,debug,hook,inject}/<mechanism>` | Attaching, debugging, intercepting and transferring execution, with no established attacker purpose. |
 | `process/deploy/<sink>` | Neutral acquisition- or staging-to-activation chains (an updater fetching and launching its image), by the [payload sinks](#payload-activation-and-staging). |
 | `dylib/{load,unload,lookup,enumerate}` | Native loader operations. Language modules are `os/module`; export walking or API hashing is `os/api-resolution`; hiding import identity is an anti-static claim. |
@@ -533,6 +572,34 @@ a call to it.
 | `os/application/target` | An app or package cited as the program's target (wallet brands, `SpringBoard`); neither discovery nor the file's identity. |
 | `time/{query,sleep,timing,schedule}` | Read time; wait; measure elapsed time (`timing/check`); schedule in-process callbacks (`schedule/timeout` for alarms). |
 | `ui/{controls,dialog,graphics,help,menu,terminal,wallpaper,window}` | Credential-entry controls (`controls/credential`), wallet UI (`controls/wallet`), prompts (`dialog/prompt`), `--help` text (`help`), window hooks, enumeration and notifications. Deceptive hiding is evasion. |
+
+`process/interpreter/eval/` answers one question: **how does supplied code begin
+executing inside an existing interpreter?** Admission requires execution, not a
+compiler name, source-shaped string, constructor reference, or code object that
+is merely produced. Its children are:
+
+| Child | Definition and boundary | Example | Counterexample |
+|---|---|---|---|
+| `direct` | A recognized evaluator consumes source, a form or an expression directly. Input provenance stays in the trait name. | `eval(decoded)`; Python `exec(code)`; shell `eval "$cmd"`. | `compile(source, ..., "exec")` produces a code object but does not run it. |
+| `indirect` | The evaluator is reached through an alias, global/member lookup, callback, bridge or other computed dispatch. The matcher must still establish evaluator semantics. | `(0, eval)(code)`; passing `eval` as a promise callback. | Calling an arbitrary variable or computed member is `data/control-flow/dispatch`. |
+| `constructed` | Required evidence both creates or obtains an executable unit and invokes that unit. | `new Function(body)()`; `exec(compile(source, ...))`; `ScriptBlock.Create(text).Invoke()`. | `new Function(body)`, `ScriptBlock.Create(text)` and Lua `load(text)` without invocation are `metaprogramming/generation`. |
+| `source` | A file is evaluated in the current interpreter context rather than launched as a child. | shell `source file`; PowerShell `& "file.ps1"`. | Node `Module._compile` is `os/module/load`; `bash file` creates an interpreter process. |
+
+Precedence is `source` for a required file, then `constructed` when creation and
+invocation are both required, then `indirect` when dispatch obscures or reroutes
+the evaluator, otherwise `direct`. A decoder, decryptor, HTTP response or object
+field does not create another child: those facts qualify the input, not the
+execution mechanism.
+
+Within `metaprogramming/generation`, runtime compilation answers a different
+question: **does the program turn supplied program text or structure into an
+executable representation?** It includes Python `compile`, JavaScript
+`Function`, PowerShell `ScriptBlock.Create`, expression-tree `Compile`, and
+similar callable/code-object construction. It excludes execution-only APIs,
+compiler/toolchain identity, external compiler process creation, module loading,
+and quoted compiler wording. Generation is the existing broader operation—it
+already includes JIT and C# compilation—and remains one leaf while the combined
+catalog fits the default 100-rule budget and one-operation contract.
 
 #### Process creation
 
@@ -555,6 +622,14 @@ An explicit shell argument beats the wrapper. An API's optional features are no
 evidence that this call uses them, and the launched executable does not change
 the mechanism. Under `shell`, pick one command-form axis (interactive session,
 command text, script file, pipeline).
+
+`process/inject/remote-thread` records remote-thread APIs and their accompanying
+remote-memory preparation. It does not require a DLL payload: allocation,
+writing and `CreateRemoteThread` references fit; allocating and writing without
+an execution-transfer API do not. `process/inject/dll` needs DLL-loading
+evidence. Neither an API profile nor a JVM interface declaration proves that a
+particular buffer became the thread's entry point. Imported method references
+and declarations remain distinct evidence.
 
 ## Attacker behaviors: `objectives/`
 
@@ -583,7 +658,7 @@ distinguishes it.
 | `lateral-movement` | `exploit/<remote-surface>`, `brute-force/<service>`, `pass-the-hash`, `smb`, `ssh`, `worm`, `usb-worm`, `delivery` *(open)*, `social-engineering` | Reaching or spreading to **another** system. A mechanism-specific exploit or credential reuse beats a generic protocol home. Scanning is discovery; local cracking is `credential-access/cracking`; infecting local files is `impact/infect`. |
 | `persistence` | `login/<surface>`, `system/<surface>`, `firmware/<surface>` | Durable, unwanted reactivation, [by trigger](#persistence-follows-the-trigger). |
 | `privilege-escalation` | `exploit/<boundary>`, `elevation-control/<bypass>`, `token-manipulation`, `hijack-execution-flow/<surface>`, `modify-service`, `kernel-modules`, `install-certificate`, `process-injection` | A required crossing to greater authority. A privileged API, requested permission, `sudo` text or injection alone is not one. |
-| `supply-chain` | `impersonation/<deception>`, `trojanized/<trusted-input>`, `hidden-payload/<inspection-evasion>` | Abuse of component selection, distribution, or build and update trust; [package scope is not enough](#supply-chain-trust). |
+| `supply-chain` | `impersonation/<deception>`, `trojanized/<trusted-input>`, `hidden-payload/<inspection-evasion>`, `security-hold` | Abuse of component selection, distribution, or build and update trust; [package scope is not enough](#supply-chain-trust). `security-hold` is the explicit classification-policy exception below. |
 
 ### Objective boundaries
 
@@ -769,6 +844,19 @@ keys, now in `login/{account,ssh}`) is an [open checkpoint](#open-checkpoints).
 
 ### Supply-chain trust
 
+**Security-hold classification policy.** `security-hold` classifies a recognized
+security-held package as `hostile`, including an inert npm replacement or a
+vendored copy. This is an explicit exception to the usual requirement for
+artifact evidence of an attack. The finding describes security-holding status,
+not payload execution. An npm manifest must carry both `0.0.1-security` and the
+canonical npm security-holder repository in that same manifest; an authoritative
+registry record may instead supply its security-hold flag or holder description.
+A version, repository reference, README mention, ordinary deprecation, or
+unresolved dependency alone does not establish this classification. Metadata
+observations retain their own criticality; the hostile classification belongs
+only to `objectives/supply-chain/security-hold`. Archive parents inherit a
+matched member's finding, but different members must not supply separate legs.
+
 Read the claim without the package name. If it still only says "steals
 credentials" or "runs a downloaded payload", that result owns the composite;
 the lifecycle hook (`metadata/package/scripts/lifecycle`) or package-manager
@@ -818,19 +906,87 @@ identity goes with that subject.
 | `image` | `pixel`, `segment`, `trailing`: decoded-image measurements, segment totals, trailing layout | Whole-file byte entropy is `file/entropy`. A metric name proves no color channel or end marker. Rendering and capture are capabilities. |
 | `font`, `media` | *Reserved:* font table and container validity; cross-carrier byte coverage | Whitelisted; create with the first supported rule. |
 | `import` | `builtin`, `package`, `framework`; engine-emitted `<lang>/<module>` nodes | A dependency reference, not library identity or proof of use. `import base64` supports both directions, so it is an import fact, not `data/decode`. |
-| `lang` | `source`, `compiled`, `scripted`, `compiler`, `runtime`, `version`, `encoding` (*legacy: `encoded`*), `natural`, `locale`, `generated`, `upstream` | "Built with compiler X" is here; "this file *is* compiler X" is `well-known/`. Code transformation is `build`; runtime reflection is `metaprogramming`. |
+| `lang` | `source`, `compiled`, `scripted`, `compiler`, `runtime`, `version`, `encoding` (*legacy: `encoded`*), `natural`, `locale`, `generated`, `upstream` | "Built with compiler X" is here; "this file *is* compiler X" is `well-known/`. Code transformation is `build`; runtime reflection is `metaprogramming`. Engine-emitted `metadata/lang/embedded::<language>` marks detected source inside a containing file; it does not say that source ran. |
 | `package` | A manifest field or package role (below) | Properties of the distributed component, not its runtime behavior. |
 | `permission` | Declared authority by protected surface (`host`, `clipboard`, `storage`, `network`, …); grant scope and manifest-level profiles combining declared authority or target scope | A hostname without grant context is not a permission; a grant or target profile does not prove API use, injection, interception or theft. Invoking an API is a capability. |
 | `registry` | Package-registry publication records: release history, reach, custody, listing claims | Not the Windows registry (`micro-behaviors/os/registry`). Reputation is not a verdict. |
 | `signed` | `certificate`, `entitlements`, `platform`, `script`, `trust-level` | A signer name is neither product identity nor proof of a valid chain. |
 | `vendor` | OS or platform vendor provenance (Apple, Microsoft, NetBSD, GNU) | Certificate fields are `signed`; manifest vendor fields are `package`; third-party products are `well-known/`. |
 
+Text shaped like `require('../common')` or `function test()` does not alone
+establish a package test-harness role. The rule combining those alternative
+source forms belongs in `metadata/lang/source/shape`; a single call form belongs
+in `metadata/lang/source/syntax/call`, outside broad `metadata/package/testing`
+selectors. An actual module-loading call belongs
+under `micro-behaviors/os/module`; a corroborated test-harness role belongs
+under `metadata/package/testing`. Preserve explicit consumers when relocating
+weak source context rather than granting every test exclusion that context.
+`metadata/lang/source/literal` records quoted source forms, such as an epoch
+comparison written inside a Python string. It does not establish that the
+quoted operation executes; its explicit consumers retain that distinction.
+
+**Source syntax.** `metadata/lang/source/syntax` asks **which grammatical construct is present?**
+Its children require the construct's source form; a text or literal matcher
+may observe embedded code, examples or comments. These observations establish
+neither execution nor the capability suggested by an identifier. Language,
+API and parser remain scope and filenames, not children.
+
+| Child | Required property | Boundary and deciding example |
+|---|---|---|
+| `assignment` | A value assigned to a variable or expression, including counted assignments. | `buf = "..."` and `__info__ = {...}` fit. A required `const`, function or type declaration goes to `source/declaration`; a mapping entry goes to `key-value`. |
+| `call` | A call-shaped expression, its arguments, or bounded relationships between calls. | `fetch(a.url, b.options)`, `send({...})`, and an end handler near `eval(` fit. A bare `EventDispatcher` name goes to `source/naming`; parentheses must be required for a call claim. |
+| `command` | Command words, options, operands or pipelines in command text or an argument list. | `git log --patch` and `install -D` fit. A parenthesized method invocation goes to `call`; a bare cmdlet name goes to `source/naming`. |
+| `directive` | Source-processing directives, event annotations or named language sections. | ASP.NET `<%@ Page ... %>`, MIDL `cpp_quote`, `@event timer.action`, and YARA `strings:` fit. A type or rule declaration introducing a name goes to `source/declaration`; an ordinary mapping key goes to `key-value`. |
+| `key-value` | A named key/value entry or markup attribute, including the value's source form. | `"command": "..."`, `pattern: /.../`, and an HTML `href="...?q=..."` fit. `obj.command` goes to `member`; assignment to a standalone variable goes to `assignment`. |
+| `member` | A qualified name, member selection, subscripted member, or template field reference. | `Net::HTTP`, `exports.KNOWN_C2_DOMAINS`, `obj['a' + 'b']`, and `{{.Field}}` fit. If invocation parentheses are required, use `call`; a field's initializer belongs in `key-value`. |
+| `operator` | An operator or cast relates expressions or a value and a type. | A function-pointer cast and a comparison against an epoch constant fit. A function-pointer declaration belongs in `source/declaration`; a large numeric call argument belongs in `call`. |
+
+**Choose by the required relationship, then its operands.** A declaration
+introducing a binding or type goes to `source/declaration`; an assignment
+without that declaration evidence stays in `syntax/assignment`. A field entry
+beats an incidental member name in its value. For expressions, required
+assignment beats a nested call, a call/argument relationship beats incidental
+member access, and a cast/comparison beats its operand's spelling. A shell
+command's words and options belong together in `command`, even when serialized
+as an argument array. An API name alone never acquires call semantics.
+
+Use the existing neighboring subjects when no single syntax construct is the
+claim: `source/naming` for identifier vocabulary and function-name populations,
+`source/literal` for array values or the contents and line shape of literals,
+and `source/origin` for a source layer's carrier or extraction provenance.
+`source/shape` holds source-context profiles spanning constructs, declarations
+or source-file evidence: the Delphi/YARA source signatures, Haxe basename or
+package declaration, frontend member-or-hook literal profile, scanner schema
+exception, source-catalog label and encoding-related source profile. A single
+assignment does not become a whole-source profile because it is counted.
+
+The [source syntax move inventory](testdata/taxonomy/source-syntax-placement/migration.json)
+places all 101 former direct rules. The audit found no identical effective
+definitions to consolidate. Matchers, defaults, scope, criticality and explicit
+dependencies are preserved. The two PHP-panel directory exclusions use the
+shared `source/shape::source-syntax-known-benign-context` profile to retain
+their original observation set, including relocated observations. Its PHP scope
+matches those consumers; it follows the existing named exclusion-group
+convention and retains `component` criticality for source context alone.
+
+Raw signed-entitlement keys are emitted as runtime facts under
+`metadata/entitlement/<category>::<key>`. The rules in
+`metadata/signed/entitlements` interpret those facts into named properties;
+the raw entitlement IDs are engine output, not duplicate YAML declarations.
+
+`metadata/file/format/console-font` holds console-font format signatures and
+fragment-manifest structure. A matched header prefix alone does not establish
+whole-file validity. The reserved `metadata/font` home is for font-table or
+cross-carrier properties, not a duplicate format identity.
+
 **`metadata/file/profile` holds static, file-scoped measurements and
 relationships.** A profile must state one stable, testable claim, the relation
 among its evidence, and its file scope. It needs benign controls and near
 misses. It does not establish runtime behavior, malware or product identity,
 intent, or benign purpose. Same-file co-occurrence alone is not a profile, and
-this directory is not a fallback for evidence without a defensible claim.
+this directory is not a fallback for evidence without a defensible claim. This
+contract is reviewed through rule review and focused fixtures; general Cleave
+validation does not establish that a profile's semantics are sound.
 
 **Archive boundaries follow the observed property.** Member names and member
 table observations belong in `file/archive`, even when the name is a hash,
@@ -888,6 +1044,12 @@ named module references belong in `metadata/import`, and neither proves use.
 `file/padding` requires an observed filler span, not a whitespace ratio.
 `file/arithmetic` is limited to parsed operator-population measures; actual
 arithmetic operations belong in `micro-behaviors/data/arithmetic`.
+
+`binary/symbols/descriptor` records type-descriptor shapes in executable
+constant or symbol tables. A JVM byte-array/slice method descriptor belongs
+here without asserting that the method is imported or that a particular
+constructor uses it. An imported method name belongs with its capability;
+an import count belongs in `binary/symbols/imports`.
 
 The existing `file/data-blob` and `file/policy` branches are closed to new
 rules. They mix unrelated claims and have no residual catch-all home: migrate

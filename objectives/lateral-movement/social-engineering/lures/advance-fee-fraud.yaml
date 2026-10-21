@@ -76,6 +76,45 @@ traits:
       type: text
       regex: '(?i)\b(refe?renz[ .:/-]+nr|ticketnummer)\b'
 
+  - id: unearned-profit-share-proposal
+    crit: component
+    desc: Proposes sharing unearned profits equally
+    if:
+      # Partnership-proposal 419s (`shared equally on equity between us`,
+      # `netting ... as profits monthly`, `equity sharing ratio`). Equity
+      # plans use the same words, so this means nothing alone.
+      type: text
+      regex: '(?i)equity sharing|shared equally|netting[^.<]{0,40}profits'
+
+  - id: confidential-secrecy-plea
+    crit: component
+    desc: Asks to keep the deal confidential
+    if:
+      # `kept CONFIDENTIAL between the two of us`. Kits split the word
+      # across tags (`CONFIDENTI</B>...AL`), so one gap is allowed.
+      # Footers say this too, so this means nothing alone.
+      type: text
+      regex: '(?i)\bconfidenti\s?al\b'
+
+  - id: fake-balance-claim-copy
+    crit: component
+    desc: Shows a payment-received account balance
+    if:
+      # `PAYMENT RECEIVED / ACCOUNT BALANCE: $5417.97`, but also the
+      # sibling kit spelling (`TRANSFER RECEIVED / BONUS BALANS: $2466.12`).
+      # Bank statements show balances too, so this means nothing alone.
+      type: text
+      regex: '(?i)(account|bonus) balan[cs]e?:\s*\$|(payment|transfer) received[\s\S]{0,120}balan[cs]e?'
+
+  - id: claim-funds-cta-copy
+    crit: component
+    desc: Urges claiming funds through sign-up
+    if:
+      # `GET NOW / To Claim Funds, Please Sign-Up*`. Payout flows use
+      # the same words, so this means nothing alone.
+      type: text
+      regex: '(?i)to claim funds|claim (your|these|the) (funds|balance|profits?)'
+
 composite_rules:
   # English and German spellings of the same reference-number leg. Grouped so
   # one translated letter (or a gettext catalog pairing `reference number`
@@ -88,8 +127,35 @@ composite_rules:
       - id: claim-reference-number-quote
       - id: claim-reference-number-german-quote
 
+  # Unearned payout, prize, parcel delivery or profit claim at the core of an
+  # advance-fee fraud solicitation.
+  - id: advance-fee-payout-lure
+    desc: Advance-fee payout or unearned delivery lure
+    crit: component
+    conf: 0.8
+    any:
+      - id: lottery-payout-notification
+      - id: unclaimed-prize-money-claim
+      - id: cash-card-delivery-claim
+      - id: courier-parcel-release-claim
+      - id: unearned-profit-share-proposal
+      - id: fake-balance-claim-copy
+
+  # Administrative, secrecy, or claim-funds hook paired with an unearned payout lure.
+  - id: advance-fee-corroboration-hook
+    desc: Advance-fee administrative hook or claim call
+    crit: component
+    conf: 0.8
+    any:
+      - id: reconfirm-recipient-details-request
+      - id: claim-reference-number
+      - id: confidential-secrecy-plea
+      - id: claim-funds-cta-copy
+      - id: micro-behaviors/communications/email/address::consumer-webmail-address
+
   # Two of these in one document is a letter about money the reader has not
-  # earned, addressed to whoever opens it.
+  # earned, addressed to whoever opens it. Requires both an unearned payout claim
+  # and a corroborating reply or administrative hook.
   - id: advance-fee-fraud-letter
     desc: Advance-fee fraud solicitation
     crit: suspicious
@@ -111,16 +177,55 @@ composite_rules:
       - id: metadata/package/testing/
       - id: "metadata/file/naming::test-directory-component"
       - id: metadata/file/extension/identity::jsonl-data-file
-    needs: 2
+      - id: metadata/file/format/wordlist::search-ranking-csv-header
+      # Detection-rule corpora quote fraud vocabulary as signature content.
+      - id: well-known/tool/detection/emerging-threats::detection-ruleset
     # Scam claims and their reply route occur in one short letter. Requiring
     # locality prevents unrelated TLD names and contributor addresses in a
     # public-suffix database from combining across thousands of lines.
     near_lines: 80
-    any:
-      - id: lottery-payout-notification
-      - id: unclaimed-prize-money-claim
-      - id: cash-card-delivery-claim
-      - id: courier-parcel-release-claim
-      - id: reconfirm-recipient-details-request
-      - id: claim-reference-number
+    all:
+      - id: advance-fee-payout-lure
+      - id: advance-fee-corroboration-hook
+
+  # Partnership-proposal 419s promise shared millions and route replies
+  # through free webmail rather than the impersonated firm's domain. Either
+  # leg alone is ordinary business mail, so the pairing stays suspicious.
+  - id: profit-share-webmail-reply-lure
+    desc: Profit-share lure via webmail reply
+    crit: suspicious
+    conf: 0.85
+    near_lines: 80
+    unless:
+      - id: metadata/file/format/markup::adblock-filter-list
+      - id: metadata/file/format/database-dump::mysql-database-dump
+      - id: metadata/file/format/wordlist::one-token-per-line-list
+      - id: metadata/file/format/wordlist::count-prefixed-token-list
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/file/extension/identity::jsonl-data-file
+      - id: metadata/file/format/wordlist::search-ranking-csv-header
+    all:
+      - id: unearned-profit-share-proposal
       - id: micro-behaviors/communications/email/address::consumer-webmail-address
+
+  # Fake-balance lures show a payment-received balance and push the reader
+  # to claim it through sign-up. Statements show balances and payout flows
+  # urge claims, so the pairing stays suspicious.
+  - id: fake-balance-claim-lure
+    desc: Fake balance with claim-funds call
+    crit: suspicious
+    conf: 0.85
+    near_lines: 80
+    unless:
+      - id: metadata/file/format/markup::adblock-filter-list
+      - id: metadata/file/format/database-dump::mysql-database-dump
+      - id: metadata/file/format/wordlist::one-token-per-line-list
+      - id: metadata/file/format/wordlist::count-prefixed-token-list
+      - id: metadata/package/testing/
+      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/file/extension/identity::jsonl-data-file
+      - id: metadata/file/format/wordlist::search-ranking-csv-header
+    all:
+      - id: fake-balance-claim-copy
+      - id: claim-funds-cta-copy

@@ -38,6 +38,9 @@ traits:
   unless:
   - type: text
     regex: 'rejectUnauthorized\s*={2,3}\s*false'
+  # Semgrep rule test fixtures demonstrate the bypass under `// ruleid:`
+  # annotations; the call is example data for the detector, not a live bypass.
+  - id: metadata/package/testing/presence/fixture::semgrep-rule-fixture
 
   # got: `got(url, { https: { rejectUnauthorized: false } })`
 - id: axios-https-agent-bypass--rx-2
@@ -84,20 +87,9 @@ traits:
     type: text
     regex: 'got\s*\([^\n]{0,400}https\s*:\s*\{[^}\n]{0,200}rejectUnauthorized\s*:\s*false'
 
-  # node-fetch + custom Agent is a useful component, but a custom agent is not
-  # itself a TLS bypass: proxy clients and database tooling use agents
-  # routinely. The composite below requires explicit TLS-verification evidence
-  # nearby before escalating.
-- id: node-fetch-agent-bypass--rx-6
-  desc: node-fetch passed a custom HTTPS agent
-  crit: notable
-  conf: 0.92
-  if:
-    type: text
-    regex: 'node-fetch[\s\S]{0,200}new\s+https?\.Agent|new\s+https?\.Agent[\s\S]{0,200}node-fetch'
 - id: check-server-identity-arrow-empty
-  desc: Disables TLS hostname verification
-  crit: suspicious
+  desc: Configures an empty TLS hostname callback
+  crit: notable
   conf: 0.92
   if:
     type: text
@@ -117,6 +109,10 @@ traits:
   - type: text
     regex: 'No hostname on a UDS'
   - id: micro-behaviors/communications/tls/verify/inspect::tls-peer-certificate-probe
+  # Certificate-free TLS-PSK connections authenticate by proof of the shared
+  # key; no server certificate is exchanged, so a stub identity callback is
+  # required plumbing for the mode, not a hostname-validation bypass.
+  - id: micro-behaviors/communications/tls/initialize::tls-psk-certificate-free-context
 - id: check-server-identity-return-empty
   desc: checkServerIdentity returns empty
   crit: suspicious
@@ -138,6 +134,9 @@ traits:
   - id: well-known/app/data/opensearch::security-dashboards-plugin-path
   - id: micro-behaviors/communications/tls/verify/inspect::tls-peer-certificate-probe
   - id: "metadata/file/naming::test-directory-component"
+  # Same as arrow-empty: a TLS-PSK connection exchanges no server certificate,
+  # so the stub identity callback is mode plumbing, not a bypass.
+  - id: micro-behaviors/communications/tls/initialize::tls-psk-certificate-free-context
 composite_rules:
 - id: tls-bypassed-remote-code-loader
   desc: TLS-bypassed HTTPS response executes as code
@@ -180,7 +179,6 @@ composite_rules:
   - id: micro-behaviors/communications/tls/verify/disable::reject-unauthorized-false
   - id: axios-https-agent-bypass
   - id: got-rejectunauthorized-false
-  - id: node-fetch-agent-bypass
   - id: check-server-identity-bypass
   - id: micro-behaviors/communications/tls/verify/disable::node-tls-verification-env-disable
   unless:
@@ -200,30 +198,9 @@ composite_rules:
   - id: axios-https-agent-bypass--rx-2
   - id: axios-https-agent-bypass--rx-3
   - id: axios-https-agent-bypass--rx-4
-- id: node-fetch-agent-bypass
-  desc: node-fetch with TLS-bypass agent
-  crit: suspicious
-  conf: 0.92
-  near_bytes: 512
-  all:
-  - id: micro-behaviors/communications/http/request/client::node-fetch-import
-  - id: micro-behaviors/communications/tls/verify/disable::reject-unauthorized-false
-  unless:
-  - id: metadata/build/ci/
-  - id: metadata/package/files/dependency::node-modules-path
-  - id: metadata/build/bundler/vscode::vscode-extension-generated-asset
-  - id: well-known/tool/development/vscode-extension/atlascode/
-  - id: well-known/tool/development/automation/zapier::zapier-platform-sdk-context
-  - id: micro-behaviors/communications/http/middleware::opt-in-tls-bypass-middleware-path
-  - id: well-known/tool/development/cli/socket-cli/
-  - id: "metadata/file/naming::test-directory-component"
-- id: node-fetch-custom-agent
-  desc: node-fetch uses a custom HTTPS agent
-  crit: notable
-  conf: 0.88
-  all:
-  - id: micro-behaviors/communications/http/request/client::node-fetch-import
-  - id: node-fetch-agent-bypass--rx-6
+# A node-fetch import near a permissive agent establishes no evasion intent.
+# Keep TLS setup and explicit verification-disable observations in their
+# micro-behavior homes; consumers needing intent must supply that evidence.
 - id: check-server-identity-bypass
   desc: checkServerIdentity callback disables TLS hostname validation
   crit: suspicious

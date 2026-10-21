@@ -34,6 +34,9 @@ traits:
   - substr: api.telegram.org/bot01234567:abcdefghijklmn_ABCDEFGH
   # The placeholder token printed in Telegram's own Bot API examples.
   - substr: api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrSTUvwxyz
+  # Test doubles spell the secret as a fake rather than a random bot token.
+  - substr: FakeToken
+  - substr: FakeFake
   - substr: UseSTD3RulesAccept-
   - regex: api\.telegram\.org/bot\d+:\d+$
   - regex: api\.telegram\.org/bot\d{8}:[0-9a-f]{24,35}
@@ -53,6 +56,21 @@ traits:
   if:
     type: text
     regex: '["'']\d{8,12}:[A-Za-z0-9_-]{30,60}["'']'
+  not:
+  # The example token BotFather/docs print (123456789:AAH...) is reused
+  # verbatim by tutorials and test doubles; it controls no real bot.
+  - substr: 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw
+- id: powershell-hardcoded-bot-token
+  desc: Hardcoded Telegram-format bot token literal
+  crit: notable
+  conf: 0.95
+  for:
+  - powershell
+  if:
+    type: text
+    regex: '["'']\d{8,12}:[A-Za-z0-9_-]{30,60}["'']'
+  not:
+  - substr: 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw
 - id: encoded-bot-api-endpoint
   desc: Telegram bot endpoint in encoded string
   crit: suspicious
@@ -65,15 +83,6 @@ traits:
   if:
     type: encoded
     regex: 'api\.telegram\.org/bot[0-9]{6,12}:'
-- id: pytelegrambotapi-telebot-client
-  desc: pyTelegramBotAPI TeleBot client
-  crit: notable
-  conf: 0.95
-  for:
-  - python
-  if:
-    type: text
-    regex: \btelebot\.TeleBot\s*\(
 - id: common-password-dictionary-filename
   desc: Common-password dictionary filename
   crit: component
@@ -83,17 +92,6 @@ traits:
   if:
     type: text
     regex: \bcommon-passwords\.txt
-- id: sensitive-document-name-targets--rx-1
-  desc: Sensitive doc filename targets (credentials)
-  crit: notable
-  conf: 0.92
-  for:
-  - python
-  unless:
-  - id: common-password-dictionary-filename
-  if:
-    type: text
-    regex: \b(passwords|credentials)\.(txt|docx|xlsx)\b
 - id: sensitive-document-name-targets--rx-2
   desc: Sensitive doc filename targets (secrets/seed)
   crit: component
@@ -167,7 +165,8 @@ traits:
   - binaries
   if:
     type: text
-    regex: (?i)clipboard[^\n]{0,48}telegram
+    # A dot is a string-table join (clipboard.Telegram), not a send.
+    regex: (?i)clipboard[^\n.]{0,48}telegram
 - id: twelve-or-twentyfour-word-phrase
   desc: Checks a 12 or 24 word phrase
   crit: notable
@@ -202,7 +201,7 @@ composite_rules:
   - python
   scope: file
   all:
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
+  - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
   - id: encoded-bot-api-endpoint
 - id: python-impersonator-execs-decoded-blob
   desc: Impersonated package executes a decoded blob
@@ -216,7 +215,7 @@ composite_rules:
   - python_sdist
   - pkginfo
   all:
-  - id: objectives/anti-static/obfuscation/payload/encoded/exec::direct-base64-exec
+  - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
   - id: objectives/supply-chain/impersonation/metadata-theft::metadata-identity-impersonation
 - id: verified-secret-scan-telegram-routing
   desc: Verified secret scan results routed to Telegram
@@ -259,7 +258,7 @@ composite_rules:
   crit: component
   conf: 0.92
   any:
-  - id: sensitive-document-name-targets--rx-1
+  - id: micro-behaviors/fs/path/filename-credential::credential-document-filename
   - id: sensitive-document-name-targets--rx-2
   - id: sensitive-document-name-targets--rx-3
 - id: telegram-hardcoded-bot-token
@@ -366,11 +365,62 @@ composite_rules:
   near_bytes: 4096
   all:
   - id: micro-behaviors/communications/http/services/telegram::telegram-api-host
-  - id: micro-behaviors/communications/http/auth::hardcoded-telegram-bot-token-literal
   - id: micro-behaviors/communications/messaging/send::hardcoded-chat-id-literal
+  any:
+  - id: micro-behaviors/communications/http/auth::hardcoded-telegram-bot-token-literal
+  - id: powershell-hardcoded-bot-token
   unless:
   - id: well-known/app/ai/gateway/opencode-router
   - id: objectives/exfiltration/stealer/system-info/profile::telegram-system-profile-exfil
+- id: powershell-telegram-hardcoded-bot-credential
+  desc: Hardcoded Telegram bot token in PowerShell script
+  crit: notable
+  conf: 0.96
+  for:
+  - powershell
+  any:
+  - id: micro-behaviors/communications/http/auth::hardcoded-telegram-bot-token-literal
+  - id: powershell-hardcoded-bot-token
+- id: powershell-telegram-hardcoded-host-exfil
+  desc: PowerShell sends host identity to a hardcoded Telegram bot
+  crit: hostile
+  conf: 0.97
+  attack: T1041,T1082,T1567
+  mbc: E1041
+  for:
+  - powershell
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-send-message
+  - id: micro-behaviors/communications/messaging/send::hardcoded-chat-id-literal
+  - id: powershell-telegram-hardcoded-bot-credential
+  any:
+  - id: micro-behaviors/os/env/system-info::env-computername
+  - id: micro-behaviors/os/env/system-info::env-username
+  needs: 1
+  unless:
+  - id: metadata/package/testing/
+- id: powershell-telegram-hardware-wallet-beacon
+  desc: PowerShell reports hardware wallet presence via Telegram
+  crit: hostile
+  conf: 0.96
+  attack: T1082,T1567,T1555
+  mbc: E1041
+  for:
+  - powershell
+  near_bytes: 8192
+  all:
+  - id: micro-behaviors/communications/messaging/send::telegram-bot-send-message
+  - id: powershell-telegram-hardcoded-bot-credential
+  - id: micro-behaviors/fs/path/check::test-path
+  any:
+  - id: metadata/file/profile/token-population::repeated-trezor-token
+  - id: micro-behaviors/os/application/target::hardware-wallet-keyword-cluster--rx-7
+  - id: micro-behaviors/os/application/target::hardware-wallet-keyword-cluster--rx-8
+  - id: micro-behaviors/os/application/target::hardware-wallet-keyword-cluster--rx-9
+  - id: micro-behaviors/os/application/target::hardware-wallet-keyword-cluster--rx-10
+  unless:
+  - id: metadata/package/testing/
 - id: react-native-telegram-mobile-profile-channel
   desc: Hardcoded Telegram logger paired with mobile device profiling
   crit: hostile
@@ -544,24 +594,8 @@ composite_rules:
   - id: metadata/package/testing/presence/harness::python-test-file
   - id: "metadata/file/naming::uppercase-readme-md-basename"
   all:
-  - id: pytelegrambotapi-telebot-client
+  - id: micro-behaviors/communications/messaging/telegram::pytelegrambotapi-client
   - id: python-hardcoded-bot-token
-- id: python-telegram-file-exfil
-  desc: Python Telegram file exfiltration
-  crit: suspicious
-  conf: 0.96
-  for:
-  - python
-  unless:
-  - id: well-known/lib/network/pyTelegramBotAPI::pytelegrambotapi-package-archive
-  - id: well-known/lib/network/pyTelegramBotAPI::pytelegrambotapi-source-distribution
-  - id: well-known/lib/network/pyTelegramBotAPI::github-repository
-  - id: metadata/package/testing/presence/harness::example-directory
-  - id: metadata/package/testing/presence/harness::python-test-file
-  - id: "metadata/file/naming::uppercase-readme-md-basename"
-  all:
-  - id: pytelegrambotapi-telebot-client
-  - id: micro-behaviors/communications/messaging/send::chat-send-document-method
 - id: python-telegram-bulk-file-exfil
   desc: Python Telegram bulk filesystem file exfiltration
   crit: hostile
@@ -571,7 +605,7 @@ composite_rules:
   - python
   all:
   - id: python-telegram-hardcoded-bot
-  - id: python-telegram-file-exfil
+  - id: micro-behaviors/communications/messaging/send::pytelegrambotapi-send-document
   any:
   - id: micro-behaviors/fs/directory/traverse::traverse-walk-call
   - id: micro-behaviors/fs/directory/traverse::traverse-walk
@@ -583,7 +617,7 @@ composite_rules:
   - python
   all:
   - id: python-telegram-hardcoded-bot
-  - id: python-telegram-file-exfil
+  - id: micro-behaviors/communications/messaging/send::pytelegrambotapi-send-document
   - id: micro-behaviors/fs/directory/traverse::traverse-walk
   - id: sensitive-document-name-targets
 - id: telegram-bot-encoded-file-exfil
@@ -657,7 +691,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/services/telegram::python-telegram-api-url-template
   - id: micro-behaviors/communications/messaging/send::telegram-bot-api-file-upload
   any:
-  - id: micro-behaviors/fs/directory/readdir::directory-listing-or-traversal-evidence
+  - id: micro-behaviors/fs/directory/traverse::directory-enumeration-or-traversal
   - id: micro-behaviors/data/archive/create/zip::python-zipfile-writer
 - id: python-telegram-session-theft-exfil
   desc: Python uploads harvested Telegram sessions to a hardcoded bot

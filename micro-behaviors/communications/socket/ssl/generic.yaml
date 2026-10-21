@@ -25,6 +25,18 @@ traits:
     if:
       type: import
       exact: javax/net/ssl/SSLSocket.startHandshake
+  # A hand-built POST line written to an SSLSocket, not java.net.http.
+  # The preamble is one string; the socket write is the send.
+  - id: jvm-manual-http-post-preamble
+    desc: Manual HTTP POST request preamble
+    crit: notable
+    conf: 0.93
+    for: [class, java_class]
+    platforms: [unix, windows]
+    if:
+      type: value
+      path: class.strings[*]
+      regex: 'POST [\s\S]{0,80}Content-Length:'
   # Setting the SNI list by hand overrides the name the JVM would otherwise
   # derive from the connect address. Clients that dial a host by raw IP need
   # this to reach a virtual host; so does code that wants the certificate name
@@ -170,31 +182,6 @@ traits:
     if:
       type: symbol
       exact: SSL_CTX_use_PrivateKey_file
-  - id: mbedtls-server-certificate-api
-    desc: Mbed TLS certificate parsing API
-    crit: notable
-    conf: 0.86
-    for: [c, cpp, elf, macho, pe, dll]
-    if:
-      type: symbol
-      regex: '^mbedtls_x509_crt_parse(_file)?$'
-  - id: mbedtls-server-private-key-api
-    desc: Mbed TLS private key parsing API
-    crit: notable
-    conf: 0.86
-    for: [c, cpp, elf, macho, pe, dll]
-    if:
-      type: symbol
-      regex: '^mbedtls_pk_parse_key(_file)?$'
-  - id: mbedtls-server-handshake
-    desc: Mbed TLS handshake API
-    crit: notable
-    conf: 0.86
-    for: [c, cpp, elf, macho, pe, dll]
-    if:
-      type: symbol
-      exact: mbedtls_ssl_handshake
-
   - id: tls-openssl-unrecognized-name
     desc: OpenSSL unrecognized SNI alert
     crit: notable
@@ -267,15 +254,6 @@ traits:
       # Generated OpenAPI clients assign CERT_NONE only on the verify_ssl=false
       # branch beside CERT_REQUIRED — configuration, not an unconditional bypass.
       - id: metadata/lang/generated::openapi-generator-source-banner
-  - id: verify-mode-none
-    desc: verify_mode = ssl.CERT_NONE (Python)
-    crit: notable
-    conf: 0.85
-    for:
-      - python
-    if:
-      type: text
-      regex: '(?m)^[ \t]{0,40}([A-Za-z_][A-Za-z0-9_]*\.)?verify_mode\s*=\s*(ssl\.)?CERT_NONE\b'
   - id: reject-unauthorized-negated-flag
     desc: Node TLS check gated by negated flag
     crit: notable
@@ -301,6 +279,20 @@ traits:
     if:
       type: text
       regex: '(case\s*|verificationMode\s*===\s*)[''"]certificate[''"]'
+  # libpq names the certificate-only level `verify-ca` (hostname check skipped,
+  # chain still verified); drivers mapping `sslmode` need the same selector as
+  # the `verificationMode === 'certificate'` spelling. Literal spaces cover the
+  # usual code styles.
+  - id: libpq-verify-ca-mode-selector
+    desc: libpq verify-ca TLS mode selected
+    crit: notable
+    conf: 0.85
+    for:
+      - javascript
+      - typescript
+    if:
+      type: text
+      regex: '(sslmode *===? *|case *)[''\"]verify-ca[''\"]'
   - id: reject-unauthorized-verification-mode-driven
     desc: rejectUnauthorized on or mode-bound
     crit: notable
@@ -374,6 +366,16 @@ traits:
     unless:
       - id: metadata/lang/upstream::linux-kernel-primary-tree-path
 composite_rules:
+  - id: jvm-sslsocket-manual-http-post
+    desc: SSLSocket writes a hand-built HTTP POST
+    crit: notable
+    conf: 0.95
+    for: [class, java_class]
+    platforms: [unix, windows]
+    all:
+      - id: jvm-sslsocket-handshake-call
+      - id: jvm-manual-http-post-preamble
+      - id: micro-behaviors/data/buffer/transfer::jvm-outputstream-write
   - id: tls-unrecognized-name-alert
     desc: Rejects TLS for unrecognized SNI
     crit: notable
@@ -395,42 +397,31 @@ composite_rules:
       - id: openssl-ssl-accept-function
 
   - id: tls-server-certificate
-    desc: TLS server certificate material
+    desc: TLS certificate file API or path reference
     crit: notable
     conf: 0.92
     for: [scripts, binaries, source]
     any:
       - id: openssl-server-certificate-file
-      - id: mbedtls-server-certificate-api
       - id: tls-server-certificate-path
 
   - id: tls-server-private-key
-    desc: TLS server private key material
+    desc: TLS private-key file API or path reference
     crit: notable
     conf: 0.92
     for: [scripts, binaries, source]
     any:
       - id: openssl-server-private-key-file
-      - id: mbedtls-server-private-key-api
       - id: tls-server-private-key-path
 
   - id: tls-server-certificate-key-pair
-    desc: TLS server certificate and private key material
+    desc: TLS certificate and private-key file references
     crit: notable
     conf: 0.92
     for: [scripts, binaries, source]
     all:
       - id: tls-server-certificate
       - id: tls-server-private-key
-
-  - id: tls-server-handshake
-    desc: TLS server handshake API
-    crit: notable
-    conf: 0.9
-    for: [c, cpp, elf, macho, pe, dll]
-    any:
-      - id: openssl-ssl-accept-function
-      - id: mbedtls-server-handshake
 
   - id: verify-skip
     desc: Skip SSL certificate verification
@@ -439,38 +430,10 @@ composite_rules:
     size_max: 10000
     any:
       - id: micro-behaviors/communications/tls/verify/disable::insecure-skip-verify
-      - id: verify-mode-none
+      - id: micro-behaviors/communications/tls/verify/disable::verify-mode-none
       - id: micro-behaviors/communications/tls/verify/disable::reject-unauthorized-false
       - id: python-ssl-false
       - id: python-verify-ssl-false
-  # Pair signal: when BOTH check_hostname and verify_mode are disabled
-  # the TLS context accepts any cert from any host — leaves the connection
-  # cryptographically authenticated only by the underlying socket destination.
-  # This is the standard pattern for talking to a hardcoded IP while still
-  # presenting an HTTPS-looking request.
-  - id: tls-validation-fully-disabled
-    desc: TLS hostname and certificate validation both disabled
-    crit: notable
-    conf: 0.95
-    for: [python]
-    all:
-      - id: micro-behaviors/communications/tls/verify/disable::python-check-hostname-false
-      - id: verify-mode-none
-    unless:
-      - id: metadata/package/testing/
-      - id: well-known/lib/network/websocket-client::websocket-client-source
-      - id: well-known/app/system/kagent::kagent-source-path
-      - id: well-known/tool/detection/security-scanner/
-      - id: well-known/app/ai/gateway/litellm::litellm-package-path
-      - id: well-known/tool/development/mobile/pymobiledevice3
-      - id: well-known/lib/crypto/cheroot::cheroot-ssl-module
-      - id: well-known/tool/development/lacelang-executor::http-timing-module
-  # A class that implements X509TrustManager and defines both callbacks is
-  # supplying its own certificate-trust decision. Neutral on its own: cert
-  # pinning, private-CA validation, and trust-all bypasses share this shape.
-  # Class-scoped: the interface reference and both callbacks must belong to one
-  # class. At jar/zip scope an archive root pools them from unrelated members.
-      - id: "metadata/file/naming::test-directory-component"
   - id: jvm-custom-x509trustmanager
     desc: Class implements a custom X509 trust manager
     crit: notable
@@ -486,5 +449,7 @@ composite_rules:
     conf: 0.9
     near_bytes: 400
     all:
-      - id: tls-verification-mode-certificate-selector
       - id: reject-unauthorized-verification-mode-driven
+    any:
+      - id: tls-verification-mode-certificate-selector
+      - id: libpq-verify-ca-mode-selector

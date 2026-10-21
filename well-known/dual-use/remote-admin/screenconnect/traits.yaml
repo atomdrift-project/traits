@@ -38,19 +38,17 @@ traits:
     type: text
     regex: '(?i)\bClientLaunchParameters\b'
     section: ".text"
-- id: screenconnect-clientservice-dll
+- id: screenconnect-client-service-version
   size_min: 512
   size_max: 500000000
-  desc: ScreenConnect ClientService
+  desc: ScreenConnect client-service version identity
   crit: notable
-  conf: 0.95
-  platforms:
-  - windows
+  conf: 0.99
+  platforms: [windows]
   if:
-    type: text
-    substr: ScreenConnect.ClientService
-    section: ".text"
-  mbc: C0048
+    type: value
+    path: pe.version.original_filename
+    regex: '^ScreenConnect\.ClientService\.(exe|dll)$'
 - id: screenconnect-client-dll
   size_min: 512
   size_max: 500000000
@@ -64,32 +62,6 @@ traits:
     substr: ScreenConnect.Client.dll
     section: ".text"
   mbc: C0048
-- id: screenconnect-core-dll
-  size_min: 512
-  size_max: 500000000
-  desc: ScreenConnect Core DLL
-  crit: notable
-  conf: 0.95
-  platforms:
-  - windows
-  if:
-    type: text
-    substr: ScreenConnect.Core
-    section: ".text"
-  mbc: C0048
-- id: screenconnect-windows-dll
-  size_min: 512
-  size_max: 500000000
-  desc: ScreenConnect Windows DLL
-  crit: notable
-  conf: 0.95
-  platforms:
-  - windows
-  if:
-    type: text
-    substr: ScreenConnect.Windows
-    section: ".text"
-  mbc: C0048
 - id: screenconnect-client-exe
   size_min: 512
   size_max: 500000000
@@ -99,9 +71,9 @@ traits:
   platforms:
   - windows
   if:
-    type: text
-    regex: "(ScreenConnect\\.WindowsClient|ScreenConnect\\.ClientService)"
-    section: ".text"
+    type: value
+    path: pe.version.original_filename
+    regex: "^ScreenConnect\\.(WindowsClient|ClientService)\\.exe$"
   mbc: C0048
 - id: screenconnect-backstage-shell
   size_min: 512
@@ -125,9 +97,9 @@ traits:
   platforms:
   - windows
   if:
-    type: text
-    substr: ScreenConnect.WindowsFileManager
-    section: ".text"
+    type: value
+    path: pe.version.original_filename
+    exact: ScreenConnect.WindowsFileManager.exe
   mbc: C0048
 - id: screenconnect-auth-package
   size_min: 512
@@ -181,6 +153,19 @@ traits:
     regex: '(?i)\b(ConnectWise Control|ScreenConnect\.ClientService)\b'
     section: ".text"
   mbc: C0048
+- id: screenconnect-installer-actions-original-filename
+  size_min: 512
+  size_max: 500000000
+  desc: ScreenConnect installer-actions filename
+  crit: notable
+  conf: 0.99
+  platforms:
+  - windows
+  if:
+    type: value
+    path: pe.version.original_filename
+    exact: ScreenConnect.InstallerActions.dll
+  mbc: C0048
 - id: screenconnect-product-version-resource
   size_min: 512
   size_max: 500000000
@@ -192,6 +177,22 @@ traits:
   if:
     type: value
     path: pe.version.product_name
+    exact: ScreenConnect
+  mbc: C0048
+# Twin reading the version_info tree: some layouts expose product metadata
+# only there, so the pe.version spelling above misses them (e.g. the
+# DotNetRunner launcher whose product name is still ScreenConnect).
+- id: screenconnect-product-version-info-resource
+  size_min: 512
+  size_max: 500000000
+  desc: ScreenConnect version_info product identity
+  crit: notable
+  conf: 0.99
+  platforms:
+  - windows
+  if:
+    type: value
+    path: pe.version_info.product_name
     exact: ScreenConnect
   mbc: C0048
 - id: screenconnect-clientsetup-filename
@@ -284,20 +285,6 @@ traits:
     type: text
     regex: '(?i)\bScreenConnect\.ClientService\.exe\b'
   mbc: C0048
-- id: connectwise-authenticode-subject
-  size_min: 512
-  size_max: 500000000
-  desc: ConnectWise Authenticode signer identity
-  crit: notable
-  conf: 0.98
-  platforms:
-  - windows
-  if:
-    type: value
-    path: pe.signatures[0].subject
-    regex: 'Connectwise\\?, LLC'
-    case_insensitive: true
-  mbc: C0048
 - id: screenconnect-clickonce-runner-pdb
   size_min: 512
   size_max: 500000000
@@ -312,6 +299,21 @@ traits:
     regex: '\\cwcontrol\\.*ClickOnceRunner\.pdb$'
     case_insensitive: true
   mbc: C0048
+# The interactive client/viewer executable. It names
+# ScreenConnect.ClientService.exe only as a process to launch or elevate, so a
+# ClientService string inside it does not make it the unattended service.
+- id: screenconnect-windows-client-pdb
+  size_min: 512
+  size_max: 500000000
+  desc: ScreenConnect WindowsClient viewer PDB
+  crit: notable
+  conf: 0.98
+  platforms:
+  - windows
+  if:
+    type: value
+    path: pe.debug.pdb.basename
+    exact: ScreenConnect.WindowsClient.pdb
 - id: screenconnect-dotnet-service-runner-pdb
   size_min: 512
   size_max: 500000000
@@ -339,6 +341,22 @@ traits:
     regex: '\\cwcontrol\\Custom\\DotNetRunner\\Release\\DotNetRunner\.pdb$'
     case_insensitive: true
     section: .rdata
+  mbc: C0048
+# Managed client assemblies (ScreenConnect.Windows, ClientInstallerRunner)
+# build under the Product tree rather than the Custom runner tree above.
+- id: screenconnect-client-assembly-pdb
+  size_min: 512
+  size_max: 500000000
+  desc: ScreenConnect managed client assembly PDB
+  crit: notable
+  conf: 0.98
+  platforms:
+  - windows
+  if:
+    type: value
+    path: pe.debug.pdb.path
+    regex: '\\cwcontrol\\Product\\.*ScreenConnect\.[A-Za-z]+\.pdb$'
+    case_insensitive: true
   mbc: C0048
 - id: screenconnect-vendor-hosted-endpoint
   size_min: 512
@@ -455,10 +473,11 @@ composite_rules:
   - windows
   mbc: C0048
   all:
-  - id: connectwise-authenticode-subject
+  - id: metadata/signed/certificate/subject::connectwise-authenticode-subject
   - id: metadata/signed/certificate/issuer/name::pe-cert-issuer-digicert
+  - id: screenconnect-product-version-resource
 - id: screenconnect-verified-authenticode-signer
-  desc: Valid ConnectWise ScreenConnect Authenticode signature
+  desc: Intact ConnectWise ScreenConnect Authenticode signature
   crit: notable
   conf: 0.99
   platforms:
@@ -479,10 +498,10 @@ composite_rules:
   mbc: C0048
   needs: 3
   any:
-  - id: screenconnect-clientservice-dll
+  - id: screenconnect-client-service-version
   - id: screenconnect-client-dll
-  - id: screenconnect-core-dll
-  - id: screenconnect-windows-dll
+  - id: metadata/import/package::screenconnect-core-reference
+  - id: metadata/import/package::screenconnect-windows-reference
   - id: screenconnect-client-exe
   - id: screenconnect-backstage-shell
   - id: screenconnect-file-manager
@@ -502,7 +521,7 @@ composite_rules:
   mbc: C0048
   all:
   - id: screenconnect-component-detected
-  - id: objectives/persistence/system/service/install::service-startup
+  - id: micro-behaviors/os/service/start::service-create-or-start
 # Product identity is notable because ScreenConnect is legitimate dual-use RMM
 # software. Deployment anomalies provide the suspicious or hostile context; a
 # stock client must not be convicted merely because it supports unattended use.
@@ -560,6 +579,46 @@ composite_rules:
   - id: screenconnect-clickonce-runner-pdb
   - id: screenconnect-dotnet-service-runner-pdb
   - id: screenconnect-dotnet-runner-pdb
+
+- id: screenconnect-runner-binary-context
+  desc: ScreenConnect native runner binary context
+  crit: exception
+  conf: 0.98
+  size_min: 512
+  size_max: 500000000
+  platforms:
+  - windows
+  any:
+  - id: screenconnect-clickonce-runner-pdb
+  - id: screenconnect-dotnet-service-runner-pdb
+  - id: screenconnect-dotnet-runner-pdb
+# Managed launcher product: version_info-tree product name plus the
+# DotNetRunner PDB. Covers launchers whose metadata the pe.version spelling
+# misses, without reopening the family composite.
+
+- id: screenconnect-managed-launcher-product
+  desc: ScreenConnect managed launcher product markers
+  crit: notable
+  conf: 0.97
+  size_min: 512
+  size_max: 500000000
+  platforms:
+  - windows
+  all:
+  - id: screenconnect-product-version-info-resource
+  - id: screenconnect-dotnet-runner-pdb
+# Either product composite identifies the deployment as ScreenConnect.
+- id: screenconnect-product-identity
+  desc: ScreenConnect product identity
+  crit: notable
+  conf: 0.97
+  size_min: 512
+  size_max: 500000000
+  platforms:
+  - windows
+  any:
+  - id: screenconnect-family
+  - id: screenconnect-managed-launcher-product
 - id: screenconnect-unattended-access-client
   desc: ScreenConnect unattended remote-access client
   crit: notable
@@ -567,11 +626,13 @@ composite_rules:
   platforms:
   - windows
   all:
-  - id: screenconnect-core-dll
+  - id: metadata/import/package::screenconnect-core-reference
   any:
-  - id: screenconnect-clientservice-dll
+  - id: screenconnect-client-service-version
   - id: screenconnect-backstage-shell
   - id: screenconnect-relay-uri-scheme
+  unless:
+  - id: screenconnect-windows-client-pdb
 
 # "Configured for unattended service access": either the PE side shows a full
 # headless service client (core + ClientService/BackstageShell), or the MSI

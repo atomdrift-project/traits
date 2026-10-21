@@ -4,15 +4,6 @@ defaults:
     - windows
   for: [source]
 traits:
-  - id: package-json-basename
-    desc: Filename is package.json
-    crit: notable
-    conf: 0.95
-    for: [package.json]
-    if:
-      type: path
-      basename: true
-      exact: package.json
   - id: composer-json-basename
     desc: Filename is composer.json
     crit: baseline
@@ -107,16 +98,35 @@ traits:
       path: archive.members[*].path
       regex: '(^|/)package/lib/warmup\.(c?js|mjs)$'
   - id: npm-runtime-code-member
-    desc: npm archive ships runtime-tree code
+    desc: npm archive ships runtime JavaScript
     crit: baseline
     conf: 0.95
     # gzip-wrapped npm tarballs are analyzed as archive containers too; keep
-    # their member facts available to entrypoint composites.
+    # their member facts available to entrypoint composites. Root-level files
+    # and code-tree files are one observation here — the implementation
+    # ships — so the emptied-release composites need a single suppressor
+    # for it.
     for: [npm, tar, zip]
     if:
       type: value
       path: "archive.members[*].path"
-      regex: '(^|/)package/([^/]+/){0,4}(dist|lib|src|out|bin)/.+\.[cm]?[jt]sx?$'
+      # formatters/ is the published product for TSLint and ESLint formatter
+      # packages; it sits beside dist/lib/src rather than under them.
+      regex: '(^|/)package/(([^/]+/){0,4}(dist|lib|src|out|bin|formatters)/.+|[^/]+)\.[cm]?[jt]sx?$'
+  # Contract-source distributions (@perp/voting-escrow, Curve-style ve escrow
+  # packages) ship their product as Solidity and Vyper sources plus Hardhat
+  # artifact JSONs -- no JavaScript at all, and their manifests often still
+  # name an unpublished TypeChain index.js. "Ships no runtime code" is false
+  # for them; the emptied-release composites consult this fact.
+  - id: npm-contract-source-member
+    desc: npm archive ships contract sources
+    crit: baseline
+    conf: 0.95
+    for: [npm, tar, zip]
+    if:
+      type: value
+      path: "archive.members[*].path"
+      regex: '(^|/)package/[^/]+/.+\.(sol|vy)$'
   - id: npm-vendored-node-modules-runtime-member
     desc: Archive bundles npm runtime under node_modules
     crit: baseline
@@ -162,8 +172,23 @@ traits:
     if:
       type: value
       path: "archive.members[*].path"
-      regex: '(^|/)package/(install|preinstall|postinstall)\.(c?js|mjs)$'
+      regex: '(^|/)package/(install|preinstall|postinstall)\.(c?js|mjs|sh)$'
       case_insensitive: true
+  # Source checkouts and GitHub archives do not use npm's package/ prefix.
+  # A hook loader sitting next to the manifest is present, not omitted.
+  # node_modules copies do not count: they are not this package's loader.
+  - id: source-tree-companion-loader-member
+    desc: Archive contains a root hook loader file
+    crit: notable
+    conf: 0.95
+    for: [npm, tar, zip]
+    if:
+      type: value
+      path: "archive.members[*].path"
+      regex: '(^|/)(install|preinstall|postinstall)\.(c?js|mjs|sh)$'
+      case_insensitive: true
+    not:
+      - regex: '(^|/)node_modules/'
   - id: extension-directory-root-js-file
     desc: JavaScript directly under extension directory
     crit: baseline
@@ -520,7 +545,7 @@ composite_rules:
     crit: baseline
     conf: 0.75
     all:
-      - id: package-json-basename
+      - id: metadata/file/naming::package-json-basename
     any:
       - id: "metadata/file/extension/identity::png-file-basename"
       - id: ico-extension-basename

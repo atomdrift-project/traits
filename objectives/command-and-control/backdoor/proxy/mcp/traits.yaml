@@ -3,13 +3,6 @@ defaults:
   platforms: [unix, windows]
   attack: T1557
 traits:
-  - id: jsonrpc-envelope
-    desc: JSON-RPC 2.0 protocol envelope
-    crit: component
-    conf: 0.7
-    if:
-      type: text
-      regex: jsonrpc.{0,10}2\.0
   - id: mcp-installer-tool-name
     desc: MCP tool exposes an installer operation
     crit: notable
@@ -38,13 +31,6 @@ traits:
     if:
       type: text
       regex: '(mcp_id.{0,120}env_vars|env_vars.{0,120}mcp_id)'
-  - id: remote-mcp-list-fetch
-    desc: Fetches a remote MCP package list
-    crit: suspicious
-    conf: 0.95
-    if:
-      type: text
-      substr: fetchBundledMcps
   - id: mcp-launcher-token-environment
     desc: MCP launcher uses an access-token key
     crit: notable
@@ -52,20 +38,6 @@ traits:
     if:
       type: string_literal
       exact: TOOL_TOKEN
-  - id: mcp-token-environment-text
-    desc: MCP launcher references an access token
-    crit: notable
-    conf: 0.95
-    if:
-      type: text
-      substr: TOOL_TOKEN
-  - id: mcp-portal-token-config
-    desc: MCP config carries portal token
-    crit: notable
-    conf: 0.95
-    if:
-      type: text
-      regex: 'TOOL_TOKEN[\s\S]{0,180}PORTAL_URL'
   - id: mcp-bundled-npx-package-launch
     desc: MCP launches bundled packages via npx -y
     crit: notable
@@ -98,23 +70,28 @@ composite_rules:
     any:
       - id: mcp-install-command-field
       - id: mcp-install-parameters-text
+  # JSON-RPC to a child process, a readline prompt, and an HTTP client
+  # co-exist in a large session-manager bundle without forming a relay.
+  # The envelope, the stdin read, and the post have to share one span.
   - id: stdin-http-relay
     desc: Stdin-to-HTTP relay proxy
     crit: suspicious
     conf: 0.9
+    near_bytes: 8192
     all:
-      - id: jsonrpc-envelope
+      - id: micro-behaviors/communications/rpc::jsonrpc-2-protocol-object
       - id: micro-behaviors/process/fd/stdio::js-stdin-read
       - id: micro-behaviors/process/fd/stdio::js-readline-interface-create
     any:
       - id: micro-behaviors/communications/http/post::axios-post-call
       - id: micro-behaviors/communications/http/post::fetch-post-call
-      - id: micro-behaviors/communications/http/post::http-request-post
+      - id: micro-behaviors/communications/http/post::node-http-request-post
     unless:
       - id: well-known/tool/development/vscode-extension/tencent-codebuddy::codebuddy-marker
       - id: well-known/app/ai/agent-runtime/guangnao-agent-cli::guangnao-agent-cli-context
       - id: well-known/app/ai/agent-runtime/pikaa-cli::pikaa-agent-cli-context
       - id: well-known/app/ai/agent-runtime/paigy-harness::paigy-harness-context
+      - id: well-known/app/ai/agent-runtime/claude-gateway::claude-gateway-context
   - id: mcp-mitm-proxy
     desc: MCP man-in-the-middle proxy
     crit: hostile
@@ -125,7 +102,7 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/http/post::axios-post-call
       - id: micro-behaviors/communications/http/post::fetch-post-call
-      - id: micro-behaviors/communications/http/post::http-request-post
+      - id: micro-behaviors/communications/http/post::node-http-request-post
   - id: mcp-tunnel-exfil
     desc: MCP proxy via tunnel service
     crit: hostile
@@ -136,7 +113,7 @@ composite_rules:
     any:
       - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-tunnel
       - id: micro-behaviors/communications/url/host/oob::ngrok-free-domain
-      - id: objectives/command-and-control/infrastructure/domain/tunnel::ngrok-io-endpoint
+      - id: micro-behaviors/communications/url/host/name::ngrok-io-endpoint
   - id: mcp-obfuscated-remote-install
     for: [javascript, typescript, npm]
     desc: Obfuscated MCP server executes remote install data
@@ -150,18 +127,4 @@ composite_rules:
       - id: metadata/import/builtin::require-child-process
       - id: micro-behaviors/process/create/shell/bridge::child-process-compiled-computed-call
       - id: micro-behaviors/communications/http/request/client::js-fetch-call
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::any-name-mangling
-  - id: mcp-obfuscated-tokenized-detached-launch
-    for: [javascript, typescript, npm]
-    desc: Obfuscated MCP launcher tokenizes detached child
-    crit: hostile
-    conf: 0.97
-    attack: T1027,T1059.007,T1557
-    scope: archive
-    all:
-      - id: micro-behaviors/communications/mcp::mcp-server-constructor
-      - id: micro-behaviors/communications/mcp::mcp-client-config-key--mcpservers
-      - id: mcp-portal-token-config
-      - id: mcp-token-environment-text
-      - id: micro-behaviors/process/daemonize/detach::node-obfuscated-detached-stdio-options
-      - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::any-name-mangling
+      - id: metadata/lang/javascript-features::generated-name-or-state-syntax

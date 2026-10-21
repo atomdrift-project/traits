@@ -23,6 +23,8 @@ traits:
   - id: net-connect
     desc: Node net.connect or createConnection usage
     conf: 0.86
+    unless:
+    - id: metadata/lang/scripted::dts-declaration-file
     if:
       type: text
       regex: '\b(net|node_net_[0-9]+|import_net[0-9]*\.default)\.(connect|createConnection)\s*\('
@@ -33,18 +35,6 @@ traits:
       type: symbol
       kind: call
       regex: '^(net|node_net_[0-9]+|import_net[0-9]*\.default)\.createConnection$'
-  - id: node-net-createconnection-import
-    desc: Node net named createConnection import
-    conf: 0.92
-    if:
-      type: text
-      regex: '\bimport\s*\{.{0,40}\bcreateConnection\b.{0,40}\}\s*from\s*["''](node:)?net["'']'
-  - id: node-net-namespace-import
-    desc: Imports Node net as a namespace
-    conf: 0.9
-    if:
-      type: text
-      regex: '\brequire\s*\(\s*["'']node:net["'']\s*\)'
   - id: node-net-options-connect-call
     desc: Node net.connect call with options object
     conf: 0.9
@@ -58,13 +48,34 @@ traits:
       regex: '^(net|node_net_[0-9]+|import_net[0-9]*\.default)\.connect$'
       arg:
         kind: object
-  - id: node-socket-connect-call
-    desc: Calls connect on socket-named receiver
-    conf: 0.8
+  - id: node-bound-socket-connect
+    desc: Connects a locally bound net.Socket instance
+    conf: 0.95
     if:
-      type: symbol
-      kind: call
-      regex: '^(socket|sock)\.connect$'
+      type: tree-sitter
+      query: |
+        ((_
+          [(lexical_declaration
+             (variable_declarator name: (identifier) @created
+               value: (new_expression
+                 constructor: (member_expression object: (identifier) @net
+                   property: (property_identifier) @ctor))))
+           (variable_declaration
+             (variable_declarator name: (identifier) @created
+               value: (new_expression
+                 constructor: (member_expression object: (identifier) @net
+                   property: (property_identifier) @ctor))))
+           (expression_statement
+             (assignment_expression left: (identifier) @created
+               right: (new_expression
+                 constructor: (member_expression object: (identifier) @net
+                   property: (property_identifier) @ctor))))]
+          (expression_statement
+            (call_expression
+              function: (member_expression object: (identifier) @used
+                property: (property_identifier) @connect)))) @connection
+          (#eq? @net "net") (#eq? @ctor "Socket")
+          (#eq? @connect "connect") (#eq? @created @used))
   - id: deno-connect-call
     desc: Deno TCP connect call
     conf: 0.9
@@ -88,8 +99,8 @@ composite_rules:
     all:
       - id: micro-behaviors/data/source/function/names::create-connection-call-target
     any:
-      - id: node-net-createconnection-import
-      - id: node-net-namespace-import
+      - id: metadata/import/package::node-net-createconnection-import
+      - id: metadata/import/package::node-net-namespace-import
     # Large but ordinary TypeScript modules often place imports at the top and
     # use the imported socket primitive in a later helper.  Keep this same-file
     # relationship while covering the compiled 18 KB package module.
@@ -99,5 +110,5 @@ composite_rules:
     conf: 0.92
     all:
       - id: micro-behaviors/communications/socket/create::net-socket-connect-method
-      - id: node-socket-connect-call
+      - id: node-bound-socket-connect
     near_bytes: 2048

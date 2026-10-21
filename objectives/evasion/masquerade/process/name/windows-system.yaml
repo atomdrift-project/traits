@@ -7,53 +7,6 @@ defaults:
   attack: T1036.005
   mbc: F0004
 traits:
-  - id: audiodg-name
-    desc: audiodg.exe process name
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      word: audiodg.exe
-  - id: wininit-name
-    desc: wininit.exe process name
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      word: wininit.exe
-  - id: taskhost-name
-    desc: taskhost.exe process name
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      word: taskhost.exe
-  - id: numeric-svchost-executable-name
-    desc: Numeric svchost name with optional separator
-    crit: notable
-    conf: 0.9
-    # Malware commonly adds digits to a trusted Windows process name while
-    # retaining the .exe identity. Keep this language-neutral so source and
-    # binary artifacts in different implementation languages are covered.
-    for: [scripts, go, rust, c, cpp, csharp, python, powershell, batch, pe, dll]
-    if:
-      type: text
-      regex: '(?i)\bsvchost[_-]?[0-9]+\.exe\b'
-  - id: variable-suffixed-svchost-executable-name
-    desc: Variable-suffixed svchost executable name
-    crit: notable
-    conf: 0.94
-    for: [powershell, batch]
-    if:
-      type: text
-      regex: '(?i)\bsvchost[_-]?\$[A-Za-z_]\w*\.exe\b'
-  - id: fontdrvhost-name
-    desc: fontdrvhost.exe process name
-    crit: notable
-    conf: 0.84
-    if:
-      type: text
-      word: fontdrvhost.exe
   - id: chrpssdecr-name
     desc: ChrPssDecr executable name
     crit: suspicious
@@ -103,101 +56,13 @@ traits:
       exact: csrss.exe
       case_insensitive: true
 composite_rules:
-  # A single executable name that impersonates a Windows system process. Pulled
-  # together so an objective can require "names itself after a system process"
-  # once, without caring which one; component because one name alone is just a
-  # reference (Process.Start("svchost.exe") is an ordinary shell-out).
-  - id: windows-system-process-exe-name
-    desc: Executable name impersonates a Windows system process
-    crit: component
-    conf: 0.85
-    for: [scripts, go, rust, c, cpp, csharp, python, powershell, batch, pe, dll]
-    any:
-      - id: numeric-svchost-executable-name
-      - id: variable-suffixed-svchost-executable-name
-      - id: audiodg-name
-      - id: wininit-name
-      - id: taskhost-name
-      - id: fontdrvhost-name
-      - id: micro-behaviors/process/info/name::svchost-executable-reference
-      - id: micro-behaviors/process/info/name::lsass-executable-reference
-      - id: micro-behaviors/process/info/name::winlogon-executable-reference
-
-  # The install step of a disguised implant, language-neutral: it writes a file
-  # that is named after a Windows system process and then arms an autostart
-  # entry (Run key, scheduled task, or service) to relaunch it. The numeric
-  # svchost+service form is already covered above; this adds the Run-key and
-  # scheduled-task persistence paths and any system-process name, which is the
-  # variant RL documented for the Midnight Blizzard-linked CornFlake backdoor
-  # (svchost32.exe under %LOCALAPPDATA%\Microsoft with an HKCU Run value and a
-  # Schedule.Service task). No legitimate program installs itself under a
-  # system-process name and arms autostart for it.
-  - id: masqueraded-system-exe-install-persistence
-    desc: System-process-named executable installed with autostart persistence
-    crit: hostile
-    conf: 0.96
-    attack: T1036.005,T1547.001
-    for: [scripts, go, rust, c, cpp, csharp, python, powershell, batch, pe, dll]
-    all:
-      - id: windows-system-process-exe-name
-      - id: micro-behaviors/fs/write/file/full/
-    any:
-      - id: micro-behaviors/os/registry/keys/autostart::currentversion-run
-      - id: micro-behaviors/os/registry/keys/autostart::windows-run-key-path
-      - id: micro-behaviors/os/autorun/scheduled::task-scheduler-com-progid
-      - id: micro-behaviors/os/autorun/control::register-task-definition
-      - id: objectives/persistence/system/service/install/
-    unless:
-      - id: metadata/signed/platform/
-
-  - id: runservices-browser-input-process-masquerade
-    desc: RunServices persistence uses browser and input process names
-    crit: hostile
-    conf: 0.98
-    attack: T1036.005,T1547.001
-    for: [pe]
-    all:
-      - id: micro-behaviors/process/info/name::iexplore-exe-name
-      - id: micro-behaviors/process/info/name::internat-name
-      - id: "micro-behaviors/os/registry/keys/autostart::runservices-key-path"
-      - id: micro-behaviors/os/registry/access::registry-write-api-chain
-      - id: micro-behaviors/fs/path/check::get-module-filename
-    any:
-      - id: micro-behaviors/os/sysinfo/directories::get-system-directory
-      - id: micro-behaviors/os/sysinfo/directories::get-windows-directory
-    needs: 1
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
-  - id: unsigned-system-process-name-set
-    desc: Unsigned binary embeds many system process names
-    crit: suspicious
-    conf: 0.93
-    any:
-      - id: audiodg-name
-      - id: wininit-name
-      - id: taskhost-name
-      - id: micro-behaviors/process/info/name::svchost-executable-reference
-      - id: micro-behaviors/process/info/name::lsass-executable-reference
-      - id: micro-behaviors/process/info/name::winlogon-executable-reference
-      - id: micro-behaviors/fs/path/application/executable::explorer-executable-reference
-      - id: fontdrvhost-name
-    needs: 6
-    unless:
-      - id: metadata/signed/trust-level::signer-evidence-present
-      - id: well-known/game/cheat::nm7-cheat-context
-    downgrade:
-      any:
-        - id: metadata/binary/vendor::microsoft-corp-versioninfo
-        - id: metadata/signed/platform/
-        - id: metadata/binary/symbols/count::many-imports
   - id: numeric-svchost-service-persistence
     desc: Service persistence with numeric svchost masquerade
     crit: hostile
     conf: 0.98
     for: [scripts, go, rust, c, cpp, csharp, python, powershell, batch, pe, dll]
     all:
-      - id: numeric-svchost-executable-name
+      - id: micro-behaviors/process/info/name::numeric-svchost-executable-name
     any:
       - id: objectives/persistence/system/service/install::go-service-autostart-install
       - id: objectives/persistence/system/service/install::user-writable-service-image-autostart
@@ -216,8 +81,8 @@ composite_rules:
     all:
       - id: well-known/app/browser/microsoft-edge::msedgewebview2-exe-name
       - id: micro-behaviors/fs/path/temp::windows-temp-executable-path
-      - id: micro-behaviors/communications/http/client/managed::httpclient-bytearray-download
-      - id: micro-behaviors/process/create/spawn::process-start-member-token
+      - id: micro-behaviors/communications/http/get::getbytearrayasync
+      - id: metadata/binary/symbols/name::process-start-member-token
     unless:
       - id: metadata/signed/platform/
   - id: unsigned-renamed-csrss-binary
@@ -233,4 +98,16 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/vendor::microsoft-prefixed-company
+      - id: well-known/lib/platform/microsoft-system::microsoft-known-system-context
+  - id: unsigned-explorer-writable-packed-stub
+    desc: Unsigned packed stub masquerades as explorer.exe
+    crit: hostile
+    conf: 0.98
+    attack: T1036.005,T1027.002
+    for: [pe]
+    all:
+      - id: explorer-original-filename-claim
+      - id: objectives/evasion/masquerade/trust::unsigned-microsoft-writable-nonexec-entry
+    unless:
+      - id: metadata/signed/platform/
       - id: well-known/lib/platform/microsoft-system::microsoft-known-system-context

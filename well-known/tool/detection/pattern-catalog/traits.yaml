@@ -19,17 +19,6 @@
 defaults:
   platforms: [unix, windows]
 traits:
-  - id: danger-catalog-constant
-    for: [python]
-    crit: notable
-    conf: 0.9
-    size_min: 200
-    desc: Module constant naming dangerous patterns
-    if:
-      type: text
-      # Require a pattern/command/signature catalog, not an application's
-      # ordinary BLOCKED_PATHS, BLOCKED_EXTENSIONS, or UI state constants.
-      regex: '(?m)^_?(DANGEROUS|MALICIOUS|BLOCKED)_(COMMAND|PATTERN|SIGNATURE)[A-Z0-9_]*[ ]*[:=]'
   - id: suspicion-catalog-constant
     for: [python]
     crit: notable
@@ -39,12 +28,7 @@ traits:
     if:
       type: text
       regex: '(?m)^_?(SUSPICIOUS|RISKY|FORBIDDEN)_(COMMAND|PATTERN|SIGNATURE)[A-Z0-9_]*[ ]*[:=]'
-
-  # A generated ATT&CK technique map: one entry per technique, each carrying
-  # MITRE's own prose description. Those descriptions quote the commands the
-  # technique uses ("vssadmin delete shadows", "wevtutil cl"), so the impact
-  # and ransomware objectives fire on the reference data. Assemblyline ships
-  # `assemblyline/common/attack_map.py` with ~1200 entries this way.
+  # A generated ATT&CK technique map quotes attack descriptions as data.
   - id: attack-technique-map-module
     desc: ATT&CK technique map data module
     for: [python, json, data]
@@ -125,6 +109,16 @@ traits:
     if:
       type: text
       regex: '(?is)true_positive:.{0,600}false_positive:'
+  - id: embedded-sigma-rule-catalog
+    size_max: 5000000
+    desc: Embedded Sigma detection rule YAML catalog
+    crit: notable
+    conf: 0.95
+    for: [scripts, source, documents, text, json]
+    count_min: 3
+    if:
+      type: text
+      regex: '(?m)tags:\s*\n\s*-\s*attack\.[a-z0-9_.-]+'
   - id: python-vulnerability-pattern-catalog
     size_max: 5000000
     desc: Python vulnerability pattern catalog
@@ -395,11 +389,41 @@ traits:
     if:
       type: text
       regex: 'new Set\(\[\s*[''"]sh[''"],\s*[''"]bash[''"]'
+  # Recog (and embeds of it) stores service banners and vendor URLs as
+  # fingerprint XML. An FTP 220 example next to a .php description is the
+  # corpus, not a client greeting a PHP gate.
+  - id: recog-service-fingerprint-xml
+    desc: Recog service fingerprint database
+    crit: notable
+    conf: 0.95
+    for: [pe]
+    size_min: 1000000
+    size_max: 134217728
+    if:
+      type: text
+      substr: '<fingerprint pattern='
+      section: .rdata
 composite_rules:
   # The PHP scanner signature database: a namespaced rule-id table with
   # detection regexes and severity grades. Attack code carries no reporting
   # schema, so requiring all three keys distinguishes scanner rule tables
   # from config that merely quotes one of them.
+  - id: php-scanner-rule-id-shape
+    desc: PHP scanner rule id shape
+    crit: notable
+    conf: 0.93
+    for: [php]
+    any:
+      - id: "metadata/lang/source/syntax/key-value::php-scanner-rule-id-entries"
+      - id: "metadata/lang/source/syntax/key-value::php-scanner-rule-snake-id"
+  - id: php-scanner-rule-severity-shape
+    desc: PHP scanner severity shape
+    crit: notable
+    conf: 0.9
+    for: [php]
+    any:
+      - id: "metadata/lang/source/syntax/key-value::php-scanner-rule-severity-key"
+      - id: "metadata/lang/source/syntax/key-value::php-scanner-rule-severity-constant"
   - id: php-scanner-signature-rule-table
     desc: PHP scanner signature rule table
     crit: exception
@@ -407,9 +431,9 @@ composite_rules:
     for: [php]
     size_max: 5000000
     all:
-      - id: "metadata/lang/source/syntax::php-scanner-rule-id-entries"
-      - id: "metadata/lang/source/syntax::php-scanner-rule-pattern-key"
-      - id: "metadata/lang/source/syntax::php-scanner-rule-severity-key"
+      - id: php-scanner-rule-id-shape
+      - id: "metadata/lang/source/syntax/key-value::php-scanner-rule-pattern-key"
+      - id: php-scanner-rule-severity-shape
   - id: python-namedtuple-audit-rules-catalog
     for: [python]
     size_min: 200
@@ -428,7 +452,7 @@ composite_rules:
     crit: exception
     conf: 0.95
     all:
-      - id: danger-catalog-constant
+      - id: metadata/file/catalog/pattern-rules::danger-catalog-constant
       - id: suspicion-catalog-constant
   # A rule-spec table beside severity verdicts: the module declares
   # detection rules as data, so attack-pattern strings inside it are the

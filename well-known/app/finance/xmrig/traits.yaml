@@ -7,29 +7,24 @@ defaults:
   - binaries
   size_max: 5000000
 traits:
-- id: xmrig-lower
+# IoT botnets stage the stock ARM build under its release name, often
+# inside packed string tables where no word boundary surrounds it, so the
+# word matcher misses; the release name itself stays distinctive.
+- id: xmrig-arm
   size_min: 512
   size_max: 500000000
   for:
   - binaries
-  desc: XMRig string (lowercase)
+  desc: XMRig ARM build binary name
   crit: notable
-  conf: 0.8
+  conf: 0.9
   if:
-    id: micro-behaviors/process/info/name::xmrig-product
+    type: text
+    substr: xmrig-arm
+    case_insensitive: true
   unless:
   - id: well-known/tool/detection/clawmetry/
   - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
-  # Animica blockchain dual-mines via an Animica-forked xmrig binary/API and
-  # documents that name in its package tree — not a covert stock miner drop.
-  - type: path
-    regex: '(?i)(^|[\\/])mining[\\/]'
-  - type: text
-    regex: '(?i)xmrig-animica|animica[- ].{0,40}xmrig'
-  - type: text
-    regex: '(?i)xmrig.{0,40}animica|\banimica\b.{0,80}\bxmrig\b'
-  - id: well-known/app/ai/knowledge/animica/
-  - id: objectives/impact/degrade/rival-bot/competitor/
 - id: xmrig-title
   size_min: 512
   size_max: 500000000
@@ -106,19 +101,103 @@ traits:
     type: text
     substr: "'--url'"
     section: ".text"
+  unless:
+    # A --help option enumeration ("--runtime, --llama-cpp-url, --url,
+    # --model") lists long flags as documentation; it invokes nothing. A
+    # genuine miner still matches xmrig-name and its cryptonight strings.
+    - id: micro-behaviors/ui/help::long-option-enumeration
+
+# Source-level identity that survives a product rename: XMRig's path
+# placeholders (expanded in config paths) and its developer-donation banner.
+- id: xmrig-path-placeholder-vars
+  size_min: 512
+  size_max: 500000000
+  for:
+  - binaries
+  desc: XMRig config path placeholder variables
+  crit: notable
+  conf: 0.95
+  if:
+    type: text
+    regex: '\bXMRIG_(EXE_DIR|HOME_DIR|DATA_DIR|TEMP_DIR)\b'
+- id: xmrig-dev-donate-banner
+  size_min: 512
+  size_max: 500000000
+  for:
+  - binaries
+  desc: XMRig developer-donation status banner
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    substr: dev donate started
+# MSVC RTTI keeps the xmrig C++ namespace even when banners and PascalCase
+# product strings are absent. Unpacked images store it in .rdata; a
+# populated UPX0 image keeps the same type descriptors in that section.
+# A loader that copies the descriptors into writable data leaves them in .data.
+- id: xmrig-msvc-rtti
+  size_min: 512
+  size_max: 500000000
+  for: [pe]
+  platforms: [windows]
+  desc: XMRig MSVC RTTI in read-only data
+  crit: notable
+  conf: 0.97
+  if:
+    type: text
+    substr: "@xmrig@@"
+    section: rdata
+- id: xmrig-msvc-rtti-upx0
+  size_min: 512
+  size_max: 500000000
+  for: [pe]
+  platforms: [windows]
+  desc: XMRig MSVC RTTI in UPX0 image
+  crit: notable
+  conf: 0.97
+  if:
+    type: text
+    substr: "@xmrig@@"
+    section: UPX0
+- id: xmrig-msvc-rtti-data
+  size_min: 512
+  size_max: 500000000
+  for: [pe]
+  platforms: [windows]
+  desc: XMRig MSVC RTTI in writable data
+  crit: notable
+  conf: 0.97
+  if:
+    type: text
+    substr: "@xmrig@@"
+    section: data
 composite_rules:
+- id: xmrig-binary-markers
+  desc: XMRig binary with path and donation fingerprints
+  size_min: 512
+  size_max: 500000000
+  for: [binaries]
+  crit: notable
+  conf: 0.98
+  all:
+    - id: micro-behaviors/process/info/name::xmrig-product
+    - id: xmrig-path-placeholder-vars
+    - id: xmrig-dev-donate-banner
 - id: xmrig-name
   size_min: 512
   size_max: 500000000
-  desc: XMRig miner name (any case variant)
+  desc: XMRig miner identity markers
   crit: notable
   conf: 0.9
-  attack: T1496
+  # Product identity does not establish unauthorized resource use.
   any:
-  - id: xmrig-lower
+  - id: xmrig-binary-markers
   - id: xmrig-title
   - id: xmrig-upper
   - id: xmrig-pascal
+  - id: xmrig-msvc-rtti
+  - id: xmrig-msvc-rtti-upx0
+  - id: xmrig-msvc-rtti-data
 - id: user-flag
   size_min: 512
   size_max: 500000000
@@ -164,8 +243,8 @@ composite_rules:
     - id: xmrig-name
     - id: micro-behaviors/crypto/hash/mining::cryptonight-str
   any:
-    - id: micro-behaviors/communications/socket/tcp::stratum-ssl-url
-    - id: micro-behaviors/crypto/hash/mining::xmrig-config-donate-level
+    - id: micro-behaviors/communications/url/scheme::stratum-ssl-url
+    - id: micro-behaviors/data/config/syntax::json-donate-level-field
     - id: micro-behaviors/crypto/hash/mining::cn-v8
   needs: 1
   unless:

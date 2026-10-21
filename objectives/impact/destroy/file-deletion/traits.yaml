@@ -192,7 +192,9 @@ traits:
     # and comments in bundled source are not treated as executable commands.
     # `Bash(rm -rf /*)` is a Claude Code permission pattern, not a wipe.
     # Subshell/command-substitution forms still match via `^\(` / `\s\(` / `$(`.
-    regex: '(?i)(^|[\n;&|)]|(^|\s)\(|\$\()\s*(sudo\s+)?rm\s+-[a-z]*(rf|fr)[a-z]*\s+/\*(\s|$|[;&|)"''])'
+    # A closing paren glued to the next token is a string-table join
+    # (`(root)rm -rf /*`), not a shell boundary; newline and `;` still count.
+    regex: '(?i)(^|[\n;&|]|(^|\s)\(|\$\()\s*(sudo\s+)?rm\s+-[a-z]*(rf|fr)[a-z]*\s+/\*(\s|$|[;&|)"''])'
   unless:
     - id: well-known/lib/native/uclibc::static-uclibc-string-tables
     - id: metadata/package/testing/harness/unit::rust-test
@@ -448,20 +450,32 @@ composite_rules:
   unless:
   - id: metadata/signed/platform/
   - id: metadata/binary/installer/family/
-- id: drive-wide-nonallowed-list-file-deleter
-  desc: Deletes non-allowed listed files across drives
+# A small unsigned PE that enumerates files and deletes them while hiding its
+# real API surface behind hand-rolled export resolution: the import table
+# shows only GUI and file-enumeration APIs, and the names it actually
+# resolves are staged encrypted. Ordinary file tools (cleaners, search
+# utilities) enumerate and delete openly; they do not scan memory backwards
+# for an MZ header to resolve hidden imports. That concealment leg is the
+# precision: without it this would be an everyday file-utility shape.
+- id: concealed-enumerator-file-deleter
+  desc: Concealed file enumerator deletes files
   crit: hostile
-  conf: 0.97
+  conf: 0.93
   for: [pe]
   platforms: [windows]
+  size_max: 262144
   all:
-  - id: micro-behaviors/fs/delete/file/library::delete-win
-  - id: micro-behaviors/fs/traversal/drives::logical-drive-enumeration
-  - id: objectives/impact/infect/binary/rewrite::skip-windows-install-dir
-  - id: exe-gho-bak-allowed-list
-  any:
-  - id: micro-behaviors/dylib/library/legacy::mfc42-ref
-  - id: objectives/impact/infect/binary/rewrite::ghost-image-filter
+  - id: micro-behaviors/fs/directory/readdir::find-file-walker
+  - id: micro-behaviors/fs/delete/file/library::deletefile-a
+  - id: micro-behaviors/os/api-resolution/manual::x86-backward-module-export-walk
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/installer/family/
+  - id: metadata/binary/installer/script/
+  - id: well-known/tool/reverse-engineering/
+  # LookFor shows a wait window and opens prev.inf. Find/Delete are imported
+  # but never called; the export walk sits on a command the program never sends.
+  - id: objectives/anti-static/obfuscation/imports/concealment::lookfor-wait-window-opens-inf
 
 # The file-deletion face of a root wipe: an `rm` with a root-path glob. The
 # build-recipe and shell-out rules convict the recipe or the caller; this one

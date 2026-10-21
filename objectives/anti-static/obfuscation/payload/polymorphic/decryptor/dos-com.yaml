@@ -253,16 +253,6 @@ traits:
       type: hex
       pattern: "2E 80 32 ?? [0-2] (E3|E2) [0-8] 49 46 EB"
 
-  # Bytewise decoder used by small encrypted DOS COM infector bodies:
-  # MOV AH,[SI] / XOR AH,imm8 / MOV [SI],AH / INC SI / LOOP.
-  - id: dos-fixed-key-xor-si-loop
-    desc: DOS in-place fixed-key XOR decoder
-    crit: notable
-    conf: 0.92
-    if:
-      type: hex
-      pattern: "8A 24 80 F4 ?? 88 24 46 E2"
-
   # In-place XOR [SI],imm8 loops sometimes self-modify the short branch byte
   # they use as the first payload byte, then DEC DX/JNZ back to the XOR.
   - id: dos-self-modifying-xor-si-dx-loop
@@ -346,13 +336,6 @@ traits:
       type: hex
       pattern: "C6 06 ?? ?? 30 E8 ?? ??"
 
-  - id: dos-call-register-xor-stub
-    desc: DOS sets up and calls XOR loop
-    crit: notable
-    conf: 0.94
-    if:
-      type: hex
-      pattern: "B9 ?? ?? B0 ?? BE ?? ?? E8 ?? ??"
 
   # Copying word decoder: LODSW, swap bytes, XOR with a 16-bit immediate,
   # swap back, STOSW, LOOP, then RET into the revealed body. The key is a
@@ -377,6 +360,42 @@ traits:
     if:
       type: hex
       pattern: "E8 ?? 00 90 [0-14] 5D"
+
+  # ROR [BX], XOR [BX], ADD [BX], ROR [BX], RET. One-byte EB 01 jumps hide
+  # the arithmetic. YARA so a short image is still scanned.
+  - id: dos-junked-word-mix-decrypt
+    desc: DOS mixes a word between junk jumps
+    crit: notable
+    conf: 0.94
+    if:
+      type: yara
+      source: |
+        rule dos_junked_word_mix_decrypt {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $dec = { D1 0F [0-8] 81 37 ?? ?? [0-6] 81 07 ?? ?? [0-8] D1 0F [0-4] C3 }
+          condition:
+            $dec
+        }
+
+  # JMP $+3 over a single camouflage byte, repeated through a short stub.
+  - id: dos-repeated-eb01-junk-skip
+    desc: DOS repeats one-byte junk skips
+    crit: notable
+    conf: 0.9
+    size_max: 1024
+    if:
+      type: yara
+      source: |
+        rule dos_repeated_eb01_junk_skip {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $junk = { EB 01 }
+          condition:
+            #junk >= 4
+        }
 
 composite_rules:
   # Rollups so composites can require "a delta stub" or "an XOR loop" without
@@ -407,7 +426,7 @@ composite_rules:
       - id: dos-fixed-key-xor-word-copy-loop
       - id: dos-fixed-key-xor-word-bx-loop
       - id: dos-fixed-key-xor-loop
-      - id: dos-fixed-key-xor-si-loop
+      - id: objectives/impact/infect/binary/dos/overwrite::dos-call-xor-dta-overwrite-code
       - id: dos-self-modifying-xor-si-dx-loop
       - id: dos-fixed-key-xor-word-si-loop
       - id: dos-fixed-key-xor-overlap-word-si-loop
@@ -429,19 +448,18 @@ composite_rules:
       - id: dos-patched-retf-xor-loop
       - id: dos-patched-retf-xor-call
 
-  # An XOR loop that only runs position-independent (or only runs behind a
-  # divide-error guard) is how encrypted DOS virus bodies start; packer stubs
-  # do not pair these shapes, so the combination convicts.
-  - id: dos-encrypted-virus-body
-    desc: DOS virus decrypts an encrypted body
-    crit: hostile
+  # XOR plus an indirect entry or exception guard suggests concealment,
+  # but does not establish infection; legitimate protectors also use it.
+  - id: dos-xor-loop-with-call-or-guard
+    desc: DOS XOR loop with call or guard
+    crit: suspicious
     conf: 0.93
     all:
       - id: dos-xor-loop-dispatch
     any:
       - id: dos-delta-offset-dispatch
       - id: objectives/anti-analysis/debugger-detect/exception::dos-int0-div-trigger
-      - id: dos-call-register-xor-stub
+      - id: metadata/binary/code/control-transfer::dos-register-setup-near-call
 
   - id: dos-appended-two-stage-incrementing-xor
     desc: DOS decodes an appended body through two incrementing-XOR stages
@@ -490,4 +508,20 @@ composite_rules:
       - id: dos-fixed-key-stack-word-xor
       - id: objectives/impact/infect/binary/dos/file::dos-seek-append-near-call-infector
       - id: objectives/impact/infect/binary/dos/interrupt::dos-exec-hook-infector
+
+  - id: dos-junked-word-decryptor
+    desc: DOS camouflages a word decryptor with jumps
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: dos-junked-word-mix-decrypt
+      - id: dos-repeated-eb01-junk-skip
+
+  - id: dos-looped-word-decryptor
+    desc: DOS loops a word decryptor
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: dos-junked-word-mix-decrypt
+      - id: micro-behaviors/os/msdos/interrupt::dos-inc-bx-int21-loop
 

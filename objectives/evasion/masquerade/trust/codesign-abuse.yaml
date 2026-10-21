@@ -9,46 +9,39 @@ defaults:
   attack: T1553.002
   mbc: B0032
 composite_rules:
-  # A vendor's signature over bytes that are no longer the vendor's.
-  #
-  # The composites below reach for proxies -- checksum mismatch, high-entropy
-  # overlay, overlay-over-90pct -- because until filefacts recomputed the
-  # Authentihash there was no way to ask the question directly. This asks it
-  # directly: the image digest the signature commits to does not match the
-  # image, and the certificate wearing that signature belongs to a platform
-  # vendor. Patching a stolen signed binary leaves exactly this pair, and
-  # `verified` stays true throughout because the PKCS#7 blob is untouched.
-  #
-  # The vendor leg is what separates this from an installer that stamps its own
-  # configuration in after signing: that binary breaks its own signature, not
-  # somebody else's.
-  - id: vendor-signature-over-modified-image
-    desc: Vendor-signed PE modified after signing
+  # Post-signing grafts that add executable sections with nonstandard names
+  # (packer stubs, parasite code) break the Authentihash while keeping the
+  # vendor PKCS#7 blob intact — the same trust-abuse pairing as above, with
+  # layout evidence that the image is not merely re-stamped configuration.
+  - id: vendor-signed-image-nonstandard-section-graft
+    desc: Vendor-signed PE grafted with nonstandard executable sections
     crit: hostile
-    conf: 0.97
-    attack: T1036.001,T1553.002
+    conf: 0.96
+    attack: T1553.002,T1027.002
     all:
-      - id: metadata/binary/provenance/signature::pe-signature-digest-mismatch
+      - id: metadata/signed/certificate/signature::pe-signature-digest-mismatch
+      - id: metadata/binary/section/label::multiple-nonstandard-section-names
     any:
       - id: metadata/signed/leaf::microsoft-corporation
       - id: metadata/signed/leaf::mozilla-corporation
       - id: metadata/signed/platform/
     unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/section/label::cape-sandbox-dump-section
       - id: well-known/tool/sysadmin/sysinternals::process-explorer-build-identity
-      # StormAttack-style service DLL hijack already reports the hostile
-      # persistence chain; keep digest mismatch from stacking a third verdict.
-      - id: objectives/persistence/system/service/loader::lanmanserver-resource-injection-hijack
-      - id: well-known/app/browser/mozilla-firefox::firefox-cache2-entry-context
 
   # Certificate table points outside the image while the body walks the
   # filesystem to touch other executables — transplanted signing on an infector.
+  # CAPE-reconstructed images lose the overlay certificate (certs are not
+  # mapped) and gain a synthetic section, so a dangling cert directory there
+  # is a sandbox artifact, not a transplant.
   - id: cert-transplant-file-walker-infector
     desc: Transplanted-cert PE enumerates files and timestomps
     crit: hostile
     conf: 0.97
     attack: T1553.002,T1554,T1070.006
     all:
-      - id: metadata/binary/layout/checksum::cert-transplant-indicators
+      - id: metadata/binary/layout/checksum::invalid-cert-directory-checksum
       - id: micro-behaviors/fs/directory/readdir::find-file-walker
     any:
       - id: micro-behaviors/fs/file/timestamp::set-file-time
@@ -58,19 +51,31 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
+      - id: metadata/binary/section/label::cape-sandbox-dump-section
+      # 7-Zip SFX extraction walks directories and restores timestamps.
+      # That is the installer, not a file infector.
+      - id: metadata/binary/installer/sfx::7zip-sfx-resource-profile
 
+  # A CAPE-reconstructed memory image keeps UPX section names with unpacked
+  # content while the overlay certificate is gone, so the same dangling-cert
+  # plus UPX-layout pairing is a sandbox artifact there, not a transplant.
   - id: cert-transplant-fake-upx-carrier
     desc: Transplanted certificate on stripped UPX-layout PE
     crit: hostile
     conf: 0.96
     attack: T1553.002,T1027.002
     all:
-      - id: metadata/binary/layout/checksum::cert-transplant-indicators
+      - id: metadata/binary/layout/checksum::invalid-cert-directory-checksum
       - id: metadata/binary/section/label::upx-section-pair
     unless:
-      - id: objectives/anti-static/pack/upx::upx-magic-bytes
+      - id: metadata/binary/layout/stub::upx-early-magic
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
+      - id: metadata/binary/section/label::cape-sandbox-dump-section
+      # Stock and rebuilt 7-Zip SFX modules keep UPX section names after the
+      # packer magic is gone, and a rebuilt stub often leaves a stale
+      # certificate directory. That is the SFX module, not a transplanted cert.
+      - id: metadata/binary/installer/sfx::7zip-sfx-resource-profile
 
   - id: signed-nsis-zero-width-overlay-carrier
     desc: Microsoft-signed NSIS carrier hides a zero-width-marked high-entropy overlay
@@ -117,18 +122,20 @@ composite_rules:
       - id: well-known/app/system/dell-update::dell-update-package-binary
       - id: well-known/app/browser/mozilla-firefox::firefox-cache2-entry-context
 
-  # Carries a code-signing certificate AND conceals an encrypted payload in an
-  # oversized .reloc. A genuinely signed product never hides an encrypted stage
-  # in its relocation section, so the pairing is the trust-abuse signature of a
-  # trojanized signed host. References the concealed-payload composite so the
-  # structural gate (entropy + overhang) is inherited.
-  - id: signed-host-concealed-payload
-    desc: Signed host conceals encrypted payload
+  # A certificate table over a zeroed checksum means the file was signed and
+  # then modified; paired with an executable resource section dominated by
+  # encrypted bytes, the pairing is the tamper signature of an infected
+  # signed host (file infectors preserve the cert while rewriting the body).
+  - id: tampered-cert-encrypted-resource-body
+    desc: Tampered cert over dominant resource body
     crit: hostile
-    conf: 0.95
+    conf: 0.94
     all:
-      - id: metadata/binary/layout/checksum::cert-table-present
-      - id: objectives/anti-static/pack/loader-noise::reloc-concealed-encrypted-payload
+      - id: metadata/binary/layout/checksum::cert-data-zeroed-checksum
+      - id: metadata/binary/section/permission::executable-rsrc-section
+      - id: metadata/binary/section/ratio::largest-section-at-least-90-percent
+    unless:
+      - id: well-known/dual-use/packaging/enigma-protector::v1-loader-stub
 
   # Epic Games does not publish Huorong/Inno Setup installers.  The signer is
   # an abuse anchor here; the hostile verdict also requires a verified legacy
@@ -171,7 +178,7 @@ composite_rules:
     attack: T1553.002,T1036.005,T1055.003
     all:
       - id: metadata/binary/provenance/version-info::pe-basename-differs-from-original-filename
-      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
+      - id: metadata/binary/layout/overlay::signed-pe-large-noncertificate-overlay
       - id: micro-behaviors/process/info/thread::get-thread-context-import
       - id: micro-behaviors/mem/protect/modify::virtual-protect
     any:
@@ -180,6 +187,7 @@ composite_rules:
     unless:
       - id: metadata/binary/installer/family/
       - id: metadata/signed/platform/
+      - id: well-known/tool/sysadmin/sysinternals/
 
   # Signed binary with a massive high-entropy non-certificate overlay and
   # native loader API surface (e.g. trojanized signed loaders / ACRStealer).
@@ -189,7 +197,7 @@ composite_rules:
     conf: 0.98
     attack: T1553.002,T1027.002,T1620
     all:
-      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
+      - id: metadata/binary/layout/overlay::signed-pe-large-noncertificate-overlay
       - id: metadata/binary/layout/overlay::overlay-80kb-high-entropy
       - id: objectives/command-and-control/backdoor/loader/native-reflect::loader-api-surface
     unless:
@@ -205,9 +213,9 @@ composite_rules:
     conf: 0.98
     attack: T1553.002,T1027.002,T1055
     all:
-      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
+      - id: metadata/binary/layout/overlay::signed-pe-large-noncertificate-overlay
       - id: metadata/file/entropy::overall-entropy-78
-      - id: micro-behaviors/process/inject/runtime/call::write-process-memory-binary
+      - id: micro-behaviors/mem/write/arbitrary::write-process-memory-binary
     any:
       - id: micro-behaviors/mem/sync/cache::flush-instruction-cache
       - id: micro-behaviors/process/create/thread::create-thread
@@ -215,24 +223,3 @@ composite_rules:
       - id: metadata/binary/installer/
       - id: metadata/signed/platform/
       - id: recognized-signed-component-overlay-known-benign-context
-
-  # Signed binary with a high-entropy non-certificate overlay and obfuscated
-  # memory allocation or protection API (e.g. parasitic infectors like Floxif
-  # or trojanized signed hosts unpacking payload into memory).
-  - id: signed-host-encrypted-overlay-obfuscated-memory-protect
-    desc: Signed host with encrypted overlay and obfuscated memory protection
-    crit: hostile
-    conf: 0.98
-    attack: T1553.002,T1027.002,T1620
-    all:
-      - id: metadata/binary/signing::signed-pe-large-noncertificate-overlay
-      - id: metadata/binary/layout/overlay::overlay-80kb-high-entropy
-    any:
-      - id: micro-behaviors/mem/protect/modify::xor-decoded-virtual-protect-api
-      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-process-write-api
-      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-virtual-alloc-api
-    unless:
-      - id: metadata/binary/installer/
-      - id: metadata/signed/platform/
-      - id: recognized-signed-component-overlay-known-benign-context
-

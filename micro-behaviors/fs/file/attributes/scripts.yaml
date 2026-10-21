@@ -48,19 +48,16 @@ traits:
     if:
       type: text
       regex: '(?i)\.(attributes|modifydate)\s*=\s*(\d|[A-Za-z_]\w*(\.(attributes|modifydate))?)'
-  - id: fso-vbs-set-hidden-system-attributes
-    desc: VBScript sets hidden system attributes
-    crit: notable
-    conf: 0.95
-    for: [vbs]
-    if:
-      type: text
-      regex: '(?i)\.attributes\s*=\s*(2\s*\+\s*4|4\s*\+\s*2|6)\b'
   - id: attrib-hidden
     desc: Windows attrib +h sets file hidden
     crit: suspicious
     conf: 0.9
     unless:
+      - id: metadata/file/format/log::windows-event-csv-records
+      # The hidden-plus-system command is recorded by the more specific
+      # attrib-hidden-system trait; do not emit the overlapping hidden-only
+      # finding for the same operation.
+      - id: attrib-hidden-system
       - type: text
         substr: PlugIn.ico
       - type: text
@@ -74,7 +71,10 @@ traits:
     if:
       type: text
       # Require the cmd.exe token (attrib +h), not "attribute" prose in minified JS.
-      regex: '(?i)\batrib\s+\+h'
+      # The file operand may sit between the command and its flags
+      # (`attrib file.txt +h` is the same invocation as `attrib +h file.txt`),
+      # so allow one same-line operand span before the flag.
+      regex: '(?i)\battrib\b[^\r\n&|]{0,160}?\+h\b'
     downgrade:
       any:
         - id: well-known/tool/development/cli/batch-scripts::undeletable-dir-example-path
@@ -83,6 +83,10 @@ traits:
     desc: Windows attrib sets hidden and system
     crit: notable
     conf: 0.93
+    # Batch expansion produces script views where the self-path is resolved;
+    # keep the more specific +h/+s behavior available there too, so the broad
+    # hidden-only text trait does not report the same command a second time.
+    for: [batch, shell, scripts]
     unless:
       - type: text
         substr: PlugIn.ico
@@ -91,7 +95,9 @@ traits:
       - id: well-known/app/infrastructure/virtualbox::unattended-template
     if:
       type: text
-      regex: '(?i)\battrib\s+(\+h\s+\+s|\+s\s+\+h)\b'
+      # Allow the file operand and unrelated flags (e.g. +a/+r) between the
+      # command and the +h/+s pair: `attrib f +a +s +r +h` hides as system.
+      regex: '(?i)\battrib\b[^\r\n&|]{0,160}?(\+h\b[^\r\n&|]{0,40}?\+s\b|\+s\b[^\r\n&|]{0,40}?\+h\b)'
     downgrade:
       any:
         - id: well-known/tool/development/cli/batch-scripts::undeletable-dir-example-path
@@ -104,7 +110,7 @@ traits:
     for: [batch, shell]
     if:
       type: text
-      regex: '(?i)\battrib\s+\+r\b'
+      regex: '(?i)\battrib\b[^\r\n&|]{0,160}?\+r\b'
 
   - id: attrib-current-batch-hidden-system
     desc: ATTRIB hides current batch as system file

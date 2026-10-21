@@ -19,15 +19,6 @@ traits:
       type: text
       exact: main.elevateFodhelper
 
-  - id: delegateexecute-value
-    desc: DelegateExecute registry value
-    crit: suspicious
-    conf: 0.92
-    if:
-      type: text
-      regex: '(?i)(HKCU|Classes).{0,80}DelegateExecute'
-    unless:
-      - id: well-known/app/utility/eraigosa-dotfiles/
   - id: launcher-systemsettings-command
     desc: Launcher.SystemSettings Shell Open command key
     crit: suspicious
@@ -49,19 +40,6 @@ traits:
     if:
       type: text
       regex: '(?i)HKCU\\\\?Software\\\\?Classes\\\\?mscfile\\\\?CurVer'
-  - id: computerdefaults-exe
-    desc: computerdefaults.exe (UAC bypass binary)
-    crit: suspicious
-    conf: 0.7
-    if:
-      type: text
-      regex: '(?i)computerdefaults\.exe'
-    unless:
-      - id: micro-behaviors/fs/path/system::winsxs-assembly-path
-      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-    downgrade:
-      any:
-        - id: metadata/binary/resource/
   - id: wsreset-exe
     desc: WSReset.exe auto-elevated binary reference
     crit: suspicious
@@ -70,6 +48,7 @@ traits:
       type: text
       regex: '(?i)\bwsreset\.exe\b'
     unless:
+      - id: metadata/file/format/log::windows-event-csv-records
       - id: micro-behaviors/fs/path/system::winsxs-assembly-path
       - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
     downgrade:
@@ -128,38 +107,6 @@ traits:
     if:
       type: text
       word: dszqucbtf/eml
-  - id: elevation-moniker-admin
-    desc: COM elevation moniker string
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      exact: Elevation:Administrator!new:%s
-  - id: sdclt-kickoff-elev
-    desc: Launches sdclt.exe with KickOffElev
-    crit: suspicious
-    conf: 0.96
-    if:
-      type: text
-      regex: '(?i)\bsdclt(\.exe)?\b.{0,100}/KickOffElev\b'
-  - id: folder-open-command-hijack
-    desc: Hijacks the per-user Folder open command
-    crit: suspicious
-    conf: 0.96
-    if:
-      type: text
-      substr: 'HKCU:\Software\Classes\Folder\shell\open\command'
-  - id: folder-open-command-escaped
-    desc: Escaped per-user Folder open command path
-    crit: suspicious
-    conf: 0.94
-    if:
-      type: text
-      substr: 'HKCU:\\Software\\Classes\\Folder\\shell\\open\\command'
-
-  # C/C++ and other native source variants expose the same per-user hijack as
-  # a registry API call rather than a PowerShell path.  Keep the two legs
-  # separate so a string mention of either key or value is not a conviction.
   - id: source-uac-class-shell-open-command
     desc: Source writes UAC class shell command key
     crit: suspicious
@@ -212,7 +159,7 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/path/system::fodhelper-exe-reference
       - id: "micro-behaviors/os/registry/keys/execution::shell-association-command-path"
-      - id: delegateexecute-value
+      - id: micro-behaviors/os/registry/association::delegateexecute-qualified-reference
   - id: fodhelper-delegateexecute-hijack
     desc: fodhelper DelegateExecute hijack
     crit: hostile
@@ -238,7 +185,7 @@ composite_rules:
     conf: 0.93
     all:
       - id: "micro-behaviors/os/registry/keys/execution::shell-association-command-path"
-      - id: delegateexecute-value
+      - id: micro-behaviors/os/registry/association::delegateexecute-qualified-reference
   - id: protocol-hijack-mscfile
     desc: mscfile protocol UAC bypass
     crit: suspicious
@@ -287,7 +234,7 @@ composite_rules:
       - id: micro-behaviors/fs/path/application/executable::eventvwr-exe-reference
       - id: mscfile-curver
   - id: computerdefaults-uac-bypass
-    desc: ComputerDefaults.exe UAC bypass technique
+    desc: ComputerDefaults hijack writes and executes
     crit: hostile
     conf: 0.98
     mbc: "E1548"
@@ -295,8 +242,25 @@ composite_rules:
       - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
       - id: well-known/app/ai/coding-agent/yana-ai::yana-ai-security-audit-product-context
     all:
-      - id: computerdefaults-exe
+      - id: micro-behaviors/process/create
+      - id: micro-behaviors/os/registry/write
+      - id: micro-behaviors/fs/path/system::computerdefaults-exe-reference
       - id: micro-behaviors/os/registry/association::shell-open-command-key
+
+  - id: computerdefaults-delegateexecute-payload-launch
+    desc: ComputerDefaults DelegateExecute payload launch
+    crit: hostile
+    conf: 0.98
+    for: [powershell]
+    mbc: "E1548"
+    unless:
+      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+      - id: well-known/app/ai/coding-agent/yana-ai::yana-ai-security-audit-product-context
+    all:
+      - id: micro-behaviors/fs/path/system::computerdefaults-exe-reference
+      - id: micro-behaviors/os/registry/association::shell-open-command-key
+      - id: micro-behaviors/os/registry/keys/execution::delegateexecute-value-name
+      - id: micro-behaviors/process/create/exec::start-process-call
   - id: sysprep-wusa-uac-bypass
     desc: sysprep cryptbase WUSA UAC bypass
     crit: hostile
@@ -318,7 +282,7 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     all:
-      - id: elevation-moniker-admin
+      - id: micro-behaviors/os/com/elevate::elevation-moniker-format
       - id: micro-behaviors/os/com/invoke::co-get-object
     any:
       - id: micro-behaviors/os/com/invoke::co-initialize-security
@@ -350,17 +314,27 @@ composite_rules:
       - id: micro-behaviors/os/autorun/scheduled::silentcleanup-task-path
       - id: "micro-behaviors/os/registry/keys/path::user-environment-registry-key"
       - id: micro-behaviors/os/registry/access::powershell-windir-property-access
-      - id: micro-behaviors/os/registry/write/
+      - id: micro-behaviors/os/registry/access::registry-write-or-dumpfilter-delete
   - id: sdclt-folder-uac-bypass
+    for: [batch, vbs, pe, python, rust]
     desc: sdclt.exe UAC bypass through a per-user Folder open-command hijack
     crit: hostile
     conf: 0.98
     mbc: "E1548"
     all:
-      - id: sdclt-kickoff-elev
-    any:
-      - id: folder-open-command-hijack
-      - id: folder-open-command-escaped
+      - id: micro-behaviors/os/privilege/elevation::sdclt-kickoff-elev-command
+      - id: micro-behaviors/os/registry/keys/execution::user-folder-open-command-path
+
+  - id: powershell-sdclt-folder-uac-bypass
+    for: [powershell]
+    desc: Folder override with sdclt elevation attempt
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/os/privilege/elevation::sdclt-kickoff-elev-command
+      - id: micro-behaviors/process/create/exec::powershell-start-sdclt
+      - id: micro-behaviors/os/registry/write::powershell-folder-command-variable-write
+    near_lines: 6
 
   - id: source-user-class-uac-hijack
     desc: Source combines per-user class and DelegateExecute hijacking
@@ -386,31 +360,34 @@ composite_rules:
     near_bytes: 4096
 
   - id: eventvwr-mscfile-command-hijack
-    desc: Event Viewer launch with mscfile command override and registry writes
+    desc: Event Viewer mscfile hijack and registry writes
     crit: hostile
     conf: 0.98
     for: [pe]
     all:
       - id: micro-behaviors/fs/path/application/executable::eventvwr-exe-reference
       - id: micro-behaviors/os/registry/keys/execution::mscfile-open-command-path
-      - id: micro-behaviors/os/registry/write::reg-set-value-ex-a
       - id: micro-behaviors/process/create/shellexec::shell-execute-call
-    near_bytes: 16384
-
-  - id: exefile-isolated-command-hijack
-    desc: Executable file-association IsolatedCommand hijack
-    crit: hostile
-    conf: 0.98
-    attack: "T1546.001, T1548.002"
-    mbc: "E1548"
-    for: [pe]
-    all:
-      - id: micro-behaviors/os/registry/association::exefile-open-command-key
-      - id: micro-behaviors/os/registry/keys/execution::isolatedcommand-value-name
+    # Native agents can use either registry character width. The Remcos
+    # Event Viewer branch uses RegCreateKeyW / RegSetValueExW directly.
     any:
       - id: micro-behaviors/os/registry/write::reg-set-value-ex-a
       - id: micro-behaviors/os/registry/write::reg-set-value-ex-w
-      - id: micro-behaviors/os/registry/access::registry-write-api-chain
-      - id: micro-behaviors/os/registry/manipulate::reg-create-key-ex-a
+    near_bytes: 16384
+
+  - id: exefile-isolated-command-hijack
+    desc: sdclt elevation with IsolatedCommand registry writes
+    crit: hostile
+    conf: 0.98
+    mbc: "E1548"
+    for: [pe]
+    all:
+      - id: micro-behaviors/os/registry/keys/execution::exefile-open-command-key
+      - id: micro-behaviors/os/registry/value-name::isolatedcommand-value-name
+      - id: micro-behaviors/os/privilege/elevation::sdclt-kickoff-elev-command
+    any:
+      - id: micro-behaviors/os/registry/write::reg-set-value-ex-a
+      - id: micro-behaviors/os/registry/write::reg-set-value-ex-w
     unless:
       - id: metadata/signed/platform/
+      - id: well-known/tool/detection/rkill::repair-tool-identity

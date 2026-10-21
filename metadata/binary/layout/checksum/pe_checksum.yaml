@@ -106,7 +106,7 @@ traits:
       min: 1
 
   - id: security-dir-out-of-bounds
-    desc: PE security directory RVA out of bounds
+    desc: PE security-directory file offset exceeds bounds
     crit: notable
     conf: 0.95
     if:
@@ -124,6 +124,27 @@ traits:
       min: 1
 
 composite_rules:
+  # Native runtimes collected by PyInstaller can retain stale security
+  # directory entries after the Authenticode blob has been removed.
+  - id: bundled-native-runtime-signature-context
+    desc: Native runtimes subject to signature stripping
+    crit: exception
+    conf: 0.98
+    any:
+      - id: well-known/lib/runtime/native-platform/tcl-tk::tcl-tk-runtime-library
+      - id: well-known/lib/runtime/scripted/cpython::python-core-native-component
+
+  # Packaged applications where build pipelines leave dangling security
+  # directory entries after stripping or post-processing.
+  - id: packaged-app-signature-anomaly
+    desc: Packaged app with detached certificate table
+    crit: exception
+    conf: 0.98
+    any:
+      - id: well-known/app/productivity/axglyph/
+      - id: well-known/app/infrastructure/podman-desktop/
+      - id: well-known/app/communication/freedv/
+
   # Populated-but-wrong CheckSum: the linker wrote a value and the bytes have
   # changed since. Widely referenced as a "binary was modified after link"
   # building block.
@@ -203,7 +224,7 @@ composite_rules:
       # binary that was UPX-packed after signing carries this pair by
       # construction (e.g. the AKApplications-signed Stp2.dll installer helper
       # in YARA's tests/data). Generalizes the Cygwin-specific carve-out above.
-      # Real cert transplants are still caught by cert-transplant-indicators,
+      # Real cert transplants are still caught by invalid-cert-directory-checksum,
       # which additionally requires an out-of-bounds security directory.
       - id: metadata/binary/section/label::upx-section-pair
       # The signed DesktopMania client was built with an unset PE checksum;
@@ -221,11 +242,10 @@ composite_rules:
   # already carries the specificity those carve-outs were protecting, so pair
   # it with the raw measurement (`checksum_valid` false, which a zeroed
   # CheckSum also produces) and let the conjunction do the work.
-  - id: cert-transplant-indicators
-    desc: Cert transplant - out-of-bounds dir, bad checksum
-    crit: suspicious
+  - id: invalid-cert-directory-checksum
+    desc: Out-of-bounds certificate directory with checksum mismatch
+    crit: notable
     conf: 0.95
-    attack: T1553.002
     all:
       - id: cert-table-present
       - id: security-dir-out-of-bounds
@@ -245,7 +265,10 @@ composite_rules:
       # they collect but leave the security directory entry pointing at the
       # old offset, now end-of-file, and zero the checksum. That is a stripped
       # signature on an unmodified runtime library, not a transplanted cert.
-      - id: well-known/lib/runtime/native-platform/tcl-tk::tcl-tk-runtime-library
+      - id: bundled-native-runtime-signature-context
+      # CAPE sandbox reconstructed memory dumps drop the disk overlay where
+      # the certificate table lived, leaving the security directory dangling.
+      - id: metadata/binary/section/label::cape-sandbox-dump-section
   - id: cert-table-truncated
     desc: Claimed PE certificate table is truncated
     crit: suspicious
@@ -254,18 +277,22 @@ composite_rules:
       - id: cert-table-present
       - id: security-dir-out-of-bounds
     unless:
-      # Go's debug/pe parser test suite includes real EFI images (e.g. a Linux
-      # vmlinuz) whose PE certificate directory is legitimately unusual.
-      - id: well-known/tool/development/toolchain/go-toolchain::go-toolchain-source-path
-      - id: well-known/tool/development/toolchain/go-toolchain::go-module-source-path
-      - id: well-known/app/productivity/axglyph::axglyph-nsis-installer
-      - id: well-known/app/infrastructure/podman-desktop::podman-desktop-nsis-installer-context
+      # A file whose section headers run past its own end is truncated, and a
+      # security directory pointing outside a truncated file says nothing about
+      # a transplanted certificate -- the bytes it addresses were simply never
+      # shipped.
+      - id: metadata/binary/section/ratio::pe-section-overflow-present
+      # Toolchain test suites (Go, .NET, etc.) carry unusual PE test fixtures.
+      - id: well-known/tool/development/toolchain/
+      - id: packaged-app-signature-anomaly
       - id: "metadata/file/naming::test-directory-component"
-      - id: well-known/tool/development/toolchain/dotnet-arcade::dotnet-arcade-source-context
       - id: objectives/anti-static/pack/upack::dos-stub-kernel32-marker
       - id: metadata/binary/layout/embedded::embedded-pe-child
       # Bundlers (PyInstaller) strip the Authenticode blob from the Tcl/Tk DLLs
       # they collect but leave the security directory entry pointing at the
       # old offset, now end-of-file, and zero the checksum. That is a stripped
       # signature on an unmodified runtime library, not a transplanted cert.
-      - id: well-known/lib/runtime/native-platform/tcl-tk::tcl-tk-runtime-library
+      - id: bundled-native-runtime-signature-context
+      # CAPE sandbox reconstructed memory dumps drop the disk overlay where
+      # the certificate table lived, leaving the security directory dangling.
+      - id: metadata/binary/section/label::cape-sandbox-dump-section

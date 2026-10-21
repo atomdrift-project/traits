@@ -1,0 +1,107 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript, powershell]
+traits:
+  - id: powershell-curl-temp-batch-invocation
+    desc: Downloads and invokes identical TEMP batch path
+    crit: notable
+    conf: 0.98
+    if:
+      type: yara
+      source: |
+        rule powershell_curl_same_temp_batch {
+          strings:
+            $download = /\bcurl(\.exe)?[^\r\n;]{0,180}-o[ \t]+\$env:TEMP\\{1,2}[\w.-]{1,64}\.(cmd|bat)/ nocase
+            $invoke = /;[ \t]*&[ \t]+\$env:TEMP\\{1,2}[\w.-]{1,64}\.(cmd|bat)/ nocase
+            $path = /\$env:TEMP\\{1,2}[\w.-]{1,64}\.(cmd|bat)/ nocase
+          condition:
+            $download and $invoke and
+            for any d in (1..#download) : (
+              for any e in (1..#invoke) : (
+                @invoke[e] == @download[d]+!download[d] and
+                for any a in (1..#path) : (
+                  @path[a] >= @download[d] and @path[a]+!path[a] == @invoke[e] and
+                  for any b in (1..#path) : (
+                    @path[b] >= @invoke[e] and @path[b]+!path[b] == @invoke[e]+!invoke[e] and
+                    !path[a] == !path[b] and
+                    for all k in (0..!path[a]-1) : (
+                      (uint8(@path[a]+k) | 32) == (uint8(@path[b]+k) | 32)
+                    )
+                  )
+                )
+              )
+            )
+        }
+
+  - id: cmd-curl-temp-batch-invocation
+    desc: Downloads and invokes quoted TEMP batch path
+    crit: notable
+    conf: 0.99
+    for: [javascript, typescript, batch]
+    size_max: 262144
+    if:
+      type: yara
+      source: |
+        rule cmd_curl_same_temp_batch {
+          strings:
+            $download = /\bcurl(\.exe)?[^\r\n;&]{0,220}-o[ \t]+"%TEMP%\\{1,2}[\w.-]{1,64}\.(cmd|bat)"/ nocase
+            $invoke = /[ \t]*&&[ \t]*"%TEMP%\\{1,2}[\w.-]{1,64}\.(cmd|bat)"/ nocase
+            $path = /%TEMP%\\{1,2}[\w.-]{1,64}\.(cmd|bat)/ nocase
+          condition:
+            filesize <= 262144 and $download and $invoke and
+            for any d in (1..#download) : (
+              for any e in (1..#invoke) : (
+                @invoke[e] == @download[d]+!download[d] and
+                for any a in (1..#path) : (
+                  @path[a] >= @download[d] and @path[a]+!path[a]+1 == @invoke[e] and
+                  for any b in (1..#path) : (
+                    @path[b] >= @invoke[e] and @path[b]+!path[b]+1 == @invoke[e]+!invoke[e] and
+                    !path[a] == !path[b] and
+                    for all k in (0..!path[a]-1) : (
+                      (uint8(@path[a]+k) | 32) == (uint8(@path[b]+k) | 32)
+                    )
+                  )
+                )
+              )
+            )
+        }
+  - id: powershell-temp-batch-variable-invocation
+    desc: Curl output variable invokes TEMP batch
+    crit: notable
+    conf: 0.99
+    size_max: 262144
+    if:
+      type: yara
+      source: |
+        rule powershell_same_temp_batch_variable {
+          strings:
+            $command = /\$[a-zA-Z_]\w{0,31}="\$env:TEMP\\{1,2}[\w.-]{1,64}\.(cmd|bat)";[ \t]*&[ \t]+curl(\.exe)?[^\r\n;]{0,220}-o[ \t]+\$[a-zA-Z_]\w{0,31};[ \t]*&[ \t]+\$[a-zA-Z_]\w{0,31}/ nocase
+            $out = /-o[ \t]+\$[a-zA-Z_]\w{0,31}/ nocase
+            $run = /;[ \t]*&[ \t]+\$[a-zA-Z_]\w{0,31}/
+            $variable = /\$[a-zA-Z_]\w{0,31}/
+          condition:
+            filesize <= 262144 and $command and $out and $run and
+            for any c in (1..#command) : (
+              for any o in (1..#out) : (
+                @out[o] > @command[c] and
+                for any r in (1..#run) : (
+                  @run[r] == @out[o]+!out[o] and
+                  @run[r]+!run[r] == @command[c]+!command[c] and
+                  for any a in (1..#variable) : (
+                    @variable[a] == @command[c] and
+                    for any b in (1..#variable) : (
+                      @variable[b] > @out[o] and @variable[b]+!variable[b] == @run[r] and
+                      for any d in (1..#variable) : (
+                        @variable[d] > @run[r] and @variable[d]+!variable[d] == @run[r]+!run[r] and
+                        !variable[a] == !variable[b] and !variable[b] == !variable[d] and
+                        for all k in (0..!variable[a]-1) : (
+                          (uint8(@variable[a]+k) | 32) == (uint8(@variable[b]+k) | 32) and
+                          (uint8(@variable[b]+k) | 32) == (uint8(@variable[d]+k) | 32)
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+        }

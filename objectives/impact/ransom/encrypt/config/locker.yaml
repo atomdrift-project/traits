@@ -16,14 +16,6 @@ traits:
   downgrade:
     any:
     - id: metadata/signed/platform::apple
-- id: ransomware-source-path-1a
-  desc: 'Ransomware source file path'
-  crit: suspicious
-  conf: 0.95
-  if:
-    type: text
-    regex: (ransomware|ransom)\.(c|cpp)$
-    case_insensitive: true
 - id: ransomware-source-path-1c
   desc: Ransomware source file path (locker .c/.cpp)
   crit: suspicious
@@ -32,6 +24,18 @@ traits:
     type: text
     regex: '[/\\]locker\.(c|cpp)$'
     case_insensitive: true
+  unless:
+    # Bot process lockers name the module locker.c and bind ports.
+    # That filename is not a ransomware source path.
+    - id: port-locker-bind-hold
+- id: port-locker-bind-hold
+  desc: Port locker binds and holds sockets
+  crit: notable
+  conf: 0.96
+  for: [elf, c, cpp]
+  if:
+    type: text
+    substr: locker_bind_ports
 - id: ransomware-source-path-go-rs
   desc: Ransom source file path (.rs/.go)
   crit: suspicious
@@ -182,6 +186,7 @@ traits:
   - id: well-known/app/system/dvt::benign-process-control-context
   - id: well-known/lib/native/systemd::systemd-native-library-context
   - id: well-known/app/infrastructure/systemd::systemd-native-control-component
+  - id: metadata/signed/leaf::zecurit-technologies-private-limited
 - id: ransom-extension-1
   desc: Compound filename with ransomware suffix
   crit: component
@@ -200,6 +205,12 @@ traits:
   # (`bx2.4x16.encrypted`, `b3c.8x32.encrypted` in the IBM Cloud provider);
   # a victim file's real extension is never a machine size.
   - regex: '\.[0-9]+x[0-9]+\.(crypt|encrypted|locked)$'
+  # Web Streams API interop names read the same way: BitButil.streams.locked
+  # is the qualified name of a wrapper around the standard
+  # ReadableStream.locked / WritableStream.locked boolean property, not a
+  # renamed victim file. A real locked marker is name.locked or
+  # name.ext.locked, never object.stream(s).locked.
+  - regex: '\.streams?\.locked$'
   unless:
   - type: text
     regex: ^matplotlib$
@@ -354,15 +365,15 @@ traits:
     regex: '(^|[^A-Za-z0-9_.-])your\s+(files|data)\b.{0,40}\blocked\b'
   unless:
     - id: well-known/lib/crypto/nss/
-- id: ransom-note-decrypt-word
-  desc: Mentions the word 'decrypt'
-  crit: component
+- id: ransom-note-paid-decryption-phrase
+  desc: Victim decryption tied to payment
+  crit: notable
   conf: 0.85
   for: [elf, macho, pe, c, cpp]
   if:
     type: text
     case_insensitive: true
-    word: decrypt
+    regex: '\bdecrypt\s+your\s+(files?|data)\b[^\r\n]{0,80}\b(pay|ransom|bitcoin)\b'
   unless:
     - id: well-known/lib/crypto/nss/
 - id: ransom-note-recover-word
@@ -453,19 +464,60 @@ traits:
   if:
     type: text
     regex: '(?i)<enable_shutdown_system>\s*(true|1|yes)\s*</enable_shutdown_system>'
-- id: encoded-ransom-note-content
-  desc: Base64-encoded ransomware note content
-  crit: suspicious
-  conf: 0.95
+- id: encoded-possessive-files-encrypted-claim
+  desc: Possessive files-encrypted ransom claim
+  crit: notable
+  conf: 0.9
   for: [pe, dll, elf, c, cpp, go, rust, python]
   if:
     type: encoded
     encoding: base64
-    regex: '(?i)(files?.{0,24}encrypt|backups?.{0,24}delet|data.{0,24}leak)'
+    # A ransom claim addresses the victim's files (`your`/`all`/`the`).
+    # Feature prose ("regular files are read; encrypted key files",
+    # "`@file.json` credentials - encrypted at rest") has no possessive
+    # subject. Verb forms only: `encryption` (as in "uses AES encryption"
+    # docs) is feature language, not a claim. The at-rest qualifier
+    # ("all your files are encrypted at rest" in cloud/KMS docs) is
+    # excluded via the at-rest-encryption suppressor below.
+    regex: '(?i)(your|all|the).{0,16}files?.{0,24}encrypt(ed|ing)?\b'
   unless:
-  - id: well-known/tool/detection/
-  - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: objectives/impact/ransom/encrypt/config::encoded-at-rest-encryption-statement
+- id: encoded-backups-deleted-claim
+  desc: Backups-deleted ransom claim
+  crit: notable
+  conf: 0.9
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  if:
+    type: encoded
+    encoding: base64
+    # Verb forms only (`deleted`, `deleting`): the nominalization
+    # (`deletion`, as in "authorize old-key deletion" in backup/KMS docs)
+    # is permission prose, not a ransom claim.
+    regex: '(?i)backups?.{0,24}delet(ed|ing)\b'
+- id: encoded-data-leak-claim
+  desc: Data-leak ransom claim
+  crit: notable
+  conf: 0.9
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  if:
+    type: encoded
+    encoding: base64
+    # Verb forms only (`leaked`, `leaking`): the noun compounds
+    # (`data leak prevention`, `data leakage` in DLP/security docs)
+    # are defensive prose, not a ransom threat.
+    regex: '(?i)data.{0,24}leak(ed|ing)\b'
+- id: encoded-at-rest-encryption-statement
+  desc: At-rest encryption feature statement
+  crit: notable
+  conf: 0.9
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  if:
+    type: encoded
+    encoding: base64
+    # Cloud/KMS feature promise ("encrypted at rest"), not a ransom
+    # claim; suppresses the possessive-files-encrypted atom when docs
+    # phrase the promise with a possessive subject.
+    regex: '(?i)encrypt(ed)?\s+at\s+rest'
 - id: ransomware-encrypted-extension-status
   desc: Ransomware file-encryption status string
   crit: suspicious
@@ -576,7 +628,7 @@ traits:
     substr: sMasterPublicKey
   unless:
   - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-- id: payment-status-check-1--gethaspayed
+- id: payment-status-check-1
   desc: Payment status check method (getHasPayed)
   crit: notable
   conf: 0.9
@@ -585,16 +637,20 @@ traits:
     type: text
     case_insensitive: true
     word: getHasPayed
-- id: payment-status-check-1--checkpayment
-  desc: Payment status check method (checkPayment)
-  crit: notable
-  conf: 0.9
-  for: [scripts, binaries]
-  if:
-    type: text
-    case_insensitive: true
-    word: checkPayment
 composite_rules:
+- id: encoded-ransom-note-content
+  desc: Base64-encoded ransomware note content
+  crit: suspicious
+  conf: 0.95
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  any:
+  - id: encoded-possessive-files-encrypted-claim
+  - id: encoded-backups-deleted-claim
+  - id: encoded-data-leak-claim
+  unless:
+  - id: well-known/tool/detection/
+  - id: metadata/package/testing/
+  - id: "metadata/file/naming::test-directory-component"
 - id: ransom-note-encrypted-state
   desc: Ransom-note encryption or lock state phrase
   crit: component
@@ -603,13 +659,14 @@ composite_rules:
   any:
   - id: ransom-note-files-encrypted-state
   - id: ransom-note-locked-state
+  - id: objectives/impact/ransom/note::attacked-by-ransomware-claim
 - id: ransom-note-recovery-request
   desc: Ransom-note decryption or payment request phrase
   crit: component
   conf: 0.85
   for: [elf, macho, pe, c, cpp]
   any:
-  - id: ransom-note-decrypt-word
+  - id: ransom-note-paid-decryption-phrase
   - id: ransom-note-recover-word
   - id: ransom-note-payment-word
 - id: ransom-note-subject
@@ -659,20 +716,11 @@ composite_rules:
   - id: locker-file-extensions-field
   - id: locker-enable-extension-field
   - id: locker-shutdown-enable-field
-- id: payment-status-check-1
-  desc: Payment status check method
-  crit: component
-  conf: 0.9
-  for: [scripts, binaries]
-  any:
-  - id: payment-status-check-1--gethaspayed
-  - id: payment-status-check-1--checkpayment
 - id: ransomware-source-path
   desc: Ransomware source file path
   crit: suspicious
   conf: 0.95
   any:
-  - id: ransomware-source-path-1a
   - id: ransomware-source-path-go-rs
   - id: ransomware-module-path-go-rs
   - id: locker-module-path-go-rs

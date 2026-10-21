@@ -1,10 +1,12 @@
-# An all-site extension that takes over WebAuthn registration through
+# An all-site extension that answers WebAuthn creation through
 # chrome.webAuthenticationProxy, mints the credential itself, exports the
-# private key as JWK and POSTs it to a network service. Every passkey the user
-# "creates" on any site is then a key the remote service holds. Remote-desktop
-# clients (the API's intended user) forward the request instead of minting
-# and exporting keys; vault-style managers inject navigator.credentials rather
-# than attaching the proxy.
+# private key as JWK and can POST it to a network service. That is a
+# security-boundary crossing: the extension becomes the browser's sole
+# authenticator and the minted keys are extractable by design. A software
+# passkey vault can use the same proxy, so the hostile finding requires
+# evidence that the item returned by the credential constructor itself is
+# serialized into an outbound request. Remote-desktop forwarders, the API's
+# other intended user, relay requests instead of minting keys.
 defaults:
   platforms: [windows, unix]
   for: [javascript, typescript, chrome-manifest, crx, xpi, zip, npm]
@@ -14,13 +16,31 @@ composite_rules:
   - id: extension-webauthn-proxy-private-key-upload
     desc: Extension uploads proxied passkey private keys
     crit: hostile
-    conf: 0.95
+    conf: 0.9
     scope: archive
     all:
       - id: metadata/permission/manifest::host-permission-all-urls
       - id: micro-behaviors/os/security/auth/passkey::webauthn-proxy-create-request-listener
       - id: micro-behaviors/crypto/key/representation::webcrypto-private-key-jwk-export
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-created-item-post
     any:
       - id: micro-behaviors/communications/http/post::fetch-post-call
       - id: micro-behaviors/communications/http/post::fetch-flow-json-post-body
       - id: micro-behaviors/communications/http/request/json::fetch-json-stringify-body
+  # The login half of the same technique: while the proxy is attached the
+  # extension answers every origin's navigator.credentials.get() itself,
+  # building the assertion client data locally and signing it with imported
+  # key material. User presence and verification are asserted by the signing
+  # code, not verified; the user is never in the path. Co-occurrence of the
+  # get listener with local client-data construction and JWK import signing
+  # is the proxy-as-authenticator shape regardless of which host the keys
+  # came from.
+  - id: extension-webauthn-proxy-local-assertion-forgery
+    desc: Proxy answers logins with locally signed assertions
+    crit: hostile
+    conf: 0.9
+    scope: archive
+    all:
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-proxy-get-request-listener
+      - id: micro-behaviors/os/security/auth/passkey::webauthn-get-clientdata-type
+      - id: micro-behaviors/crypto/key/representation::webcrypto-jwk-key-import-signing

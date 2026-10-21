@@ -20,11 +20,14 @@ composite_rules:
       - id: well-known/tool/sysadmin/syslinux/
       - id: well-known/tool/development/toolchain/patchelf::patchelf-test-fixture
       - id: well-known/app/infrastructure/xen::xen-hypervisor-context
+      - id: well-known/app/infrastructure/xen::xen-hvmloader-firmware
       - id: well-known/lib/platform/luafilesystem/
       - id: well-known/dual-use/packaging/midgetpack/
       # Bootable Linux kernels commonly map their early entry code writable
       # and executable; their version banner identifies the legitimate image.
       - id: metadata/lang/compiled::linux-kernel-banner
+      # avr32-gcc links the reset vector and .text into one W+X load.
+      - id: metadata/arch/iot::avr32-raw-header
       # Coprocessor firmware managed by Linux remoteproc framework
       - id: metadata/binary/section/name::remoteproc-resource-table-section
       # Legacy Linux libc5 binaries using ld-linux.so.1 map PLT in writable text segment
@@ -41,19 +44,6 @@ composite_rules:
   # it (suppressed by basename there), so the tool needs its own
   # content-anchored carve-out: basename *plus* UPX stub markers, so a
   # hand-rolled loader merely renamed to `upx` keeps scoring.
-  - id: upx-tool-context
-    desc: UPX packer tool binary with UPX markers
-    crit: exception
-    all:
-      - id: objectives/anti-static/pack/detect::upx-tool-basename
-    any:
-      - id: objectives/anti-static/pack/detect::upx-banner
-      - id: objectives/anti-static/pack/detect::upx-packer-string
-
-  # A failed ELF parse is ambiguous on its own: interrupted transfers and
-  # parser-fuzzing inputs are common benign causes.  Pair it with the
-  # authentication/session and identity-transition API cluster instead of
-  # treating the structural defect as malware by itself.
   - id: malformed-elf-pam-identity-apis
     desc: Malformed ELF combines PAM authentication and UID/GID APIs
     crit: suspicious
@@ -63,26 +53,13 @@ composite_rules:
       - id: micro-behaviors/os/pam/auth::pam-auth-api-raw-reference
       - id: micro-behaviors/process/identity/setuid::uid-gid-cgo-api-reference
 
-  # A malformed ARM image that requests both an executable stack and an
-  # executable load segment is suspicious, but layout alone does not establish
-  # hostile intent when section parsing has failed.
-  - id: malformed-arm-executable-stack-image
-    desc: Malformed ARM ELF with executable stack request
-    crit: suspicious
-    conf: 0.96
-    mbc: B0001
-    all:
-      - id: metadata/arch/iot::arm
-      - id: metadata/binary/header/malformed::elf-parse-failure
-      - id: metadata/binary/header/program::elf-executable-stack-raw-header
-
   - id: malformed-arm-obfuscated-iot-loader
     desc: Malformed ARM static IoT obfuscated loader image
     crit: hostile
     conf: 0.98
     mbc: B0030
     all:
-      - id: metadata/arch/iot::arm
+      - id: metadata/arch/arm::arm
       - id: metadata/binary/header/malformed::elf-parse-failure
       - id: metadata/binary/header/program::elf-executable-stack
       - id: metadata/binary/code/complexity::extreme-max-complexity
@@ -136,7 +113,6 @@ composite_rules:
   # is a deliberate flag-tampering signal that pefile-style validators
   # catch. Either alone is a `consistency.*` `suspicious`-tier signal;
   # together they are an unambiguous tampering fingerprint.
-      - id: "metadata/file/naming::test-directory-component"
   - id: elf-section-flag-tampering
     desc: ELF .text and .rodata both carry SHF_WRITE
     crit: hostile
@@ -146,6 +122,7 @@ composite_rules:
       - id: metadata/build/artifact::elf-rodata-writable
     unless:
       - id: well-known/tool/development/toolchain/patchelf::patchelf-test-fixture
+      - id: metadata/binary/vendor::edk2-module-entry-symbol
 
   # Header-tampering signal — any one of these alone is rare enough
   # in legitimate binaries to warrant elevation. Section-count
@@ -174,57 +151,6 @@ composite_rules:
       # guest ROMs.
       - id: writable-entry-layout-exceptions
       - id: metadata/arch/iot::elf-machine-broadcom-videocore3
-
-  # A sectionless, stripped ELF that uses raw mmap/mprotect syscalls is not
-  # merely difficult to inspect: it has the characteristic memory-unpacking
-  # substrate of a loader. The direct-syscall atoms are sectionless-safe and
-  # avoid relying on imports that a nolibc stub intentionally omits.
-  - id: elf-sectionless-direct-syscall-unpacker
-    desc: Sectionless ELF direct-syscall memory unpacker
-    crit: hostile
-    conf: 0.97
-    attack: "T1027.002,T1620"
-    all:
-      - id: metadata/binary/section/header::no-section-headers
-      - id: "metadata/binary/symbols/table::full-symbol-table-absent-or-empty"
-      - id: micro-behaviors/os/syscall/raw::x64-mmap-syscall-sectionless
-    any:
-      - id: micro-behaviors/os/syscall/raw::x64-mprotect-syscall-sectionless
-      - id: micro-behaviors/mem/anonymous/create::syscall-memfd-create
-    unless:
-      - id: metadata/binary/installer/family/
-      - id: well-known/tool/sysadmin/unix-benign/
-      - id: well-known/app/utility/nnn::nnn-musl-static-release-context
-      # A stock UPX stub IS a sectionless, stripped, nolibc mmap/mprotect
-      # loader -- every UPX-packed ELF satisfies these legs, so without this
-      # carve-out the rule convicts the packer rather than a hand-rolled one.
-      # The packing itself is still reported, by upx-packed-elf at notable.
-      - id: objectives/anti-static/pack/detect::upx-packed-elf
-      # The UPX compressor tool itself (self-packed release binary): covered
-      # by upx-tool-context rather than upx-packed-elf.
-      - id: upx-tool-context
-
-  - id: elf-sectionless-memory-loader
-    desc: Sectionless ELF maps memory, changes it executable, and transfers control
-    crit: hostile
-    conf: 0.98
-    attack: "T1027.002,T1620"
-    all:
-      - id: metadata/binary/section/header::no-section-headers
-      - id: micro-behaviors/os/syscall/raw::x64-mmap-syscall-sectionless
-      - id: metadata/binary/code/complexity::few-functions
-    unless:
-      - id: metadata/binary/installer/family/
-      - id: well-known/tool/sysadmin/unix-benign/
-      - id: well-known/app/utility/nnn::nnn-musl-static-release-context
-      # A stock UPX stub IS a sectionless, stripped, nolibc mmap/mprotect
-      # loader -- every UPX-packed ELF satisfies these legs, so without this
-      # carve-out the rule convicts the packer rather than a hand-rolled one.
-      # The packing itself is still reported, by upx-packed-elf at notable.
-      - id: objectives/anti-static/pack/detect::upx-packed-elf
-      # The UPX compressor tool itself (self-packed release binary): covered
-      # by upx-tool-context rather than upx-packed-elf.
-      - id: upx-tool-context
 
   - id: malformed-elf-kernel-control-loader
     desc: Malformed ELF combines module control with process execution and networking

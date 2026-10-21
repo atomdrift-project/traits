@@ -22,8 +22,11 @@ composite_rules:
   - id: well-known/app/productivity/eqnedit64/
   - id: well-known/dual-use/transfer/winscp/
   - id: well-known/lib/platform/clipboard-rs::clipboard-rs-listener-constructor
-  # Godot game engine exposes clipboard read/write APIs as part of its windowing/GUI runtime.
-  - id: well-known/app/media/godot::godot-native-runtime
+  # Godot game engine exposes clipboard read/write APIs as part of its
+  # windowing/GUI runtime. Windows builds carry the same surface with PE
+  # markers, recognized by the Windows twin (the shared exception only
+  # covers ELF markers).
+  - id: well-known/app/media/godot::godot-windows-runtime-context
   # Bun implements navigator.clipboard in the runtime, so every
   # `bun build --compile` binary imports GetClipboardData and
   # GetClipboardSequenceNumber whether the bundled app watches the clipboard
@@ -35,7 +38,7 @@ composite_rules:
   # Its binaries use SDL3 for windowing and clipboard interaction.
   - id: well-known/lib/runtime/scripted/solidrt::solidrt-windows-runtime-binary
   # Desktop applications below were carve-outs of
-  # windows-clipboard-capture-with-user-monitoring only.
+  # the clipboard read with input-theft rule only.
   # mpv's Windows media-player UI exposes clipboard and input APIs as part of
   # normal playback/control functionality; it is not a clipboard collector.
   - id: well-known/app/media/mpv::windows-build-provenance
@@ -50,9 +53,9 @@ composite_rules:
   - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-windows-package-context
   # GitHub Copilot Computer Use desktop automation helper
   - id: well-known/app/ai/coding-agent/github-copilot-runtime::copilot-computer-use-binary-context
-  # The verified TightVNC Viewer is a remote-control client: clipboard
-  # monitoring supports its actual remote desktop session.
-  - id: well-known/dual-use/remote-admin/tightvnc::tightvnc-viewer-verified-identity
+  # Remote administration and remote control tools read and synchronize clipboard
+  # as part of their interactive remote session.
+  - id: well-known/dual-use/remote-admin/
 # Slim twin of the exception above, minus the scripted-runtime and
 # desktop-application carve-outs.
 # Surveillance-grade rules (keyboard AND screen AND clipboard) additionally
@@ -75,28 +78,16 @@ composite_rules:
   - id: well-known/app/system/
   - id: well-known/app/productivity/wetype/
   - id: well-known/lib/platform/clipboard-rs::clipboard-rs-listener-constructor
-# `RegisterClipboardFormat` was the second `all:` leg and is not monitoring at
-# all -- it registers a custom format NAME, which is what any program that puts
-# its own data type on the clipboard does. Watching the clipboard means asking
-# to be told when it changes: `AddClipboardFormatListener`, or polling
-# `GetClipboardSequenceNumber`. Those now carry the monitoring half.
-#
-# The `any:` legs were directory references wide enough to be satisfied by the
-# clipboard access itself: `objectives/collection/clipboard/monitor/` includes
-# a `component` that matches the substring "WndProc" (in every Windows GUI
-# binary), and `objectives/credential-access/` includes `clipboard/crypto::
-# clipboard-rw`, which is a clipboard read plus a clipboard write. IObit
-# Unlocker and filename-lister's `flister.exe` are ordinary GUI tools that copy
-# a path to the clipboard; nothing in either watches it.
-- id: windows-clipboard-capture-with-user-monitoring
-  desc: Clipboard read with monitoring or theft context
+  # Godot Windows builds (see the full context above).
+  - id: well-known/app/media/godot::godot-windows-runtime-context
+# Monitoring alone is a clipboard capability; input theft needs its own evidence.
+- id: windows-clipboard-read-with-input-theft
+  desc: Clipboard read with keylogging or exfiltration evidence
   crit: suspicious
   conf: 0.9
   all:
   - id: micro-behaviors/os/clipboard/read::get-clipboard-data
   any:
-  - id: micro-behaviors/os/clipboard/monitor::clipboard-sequence-number
-  - id: micro-behaviors/os/clipboard/monitor::dotnet-add-clipboard-listener
   # Named directly rather than as a directory reference: the directory also
   # holds `windows-surveillance-known-benign-context`, a `crit: exception` composite
   # meant to be consumed only from unless:/downgrade: elsewhere in its own
@@ -110,6 +101,7 @@ composite_rules:
   - id: objectives/exfiltration/stealer/input::js-clipboard-exfil-external-ip
   - id: objectives/exfiltration/stealer/input::python-clipboard-exfil
   unless:
+  - id: well-known/lib/ui/sciter::sciter-api-export
   - id: well-known/tool/offensive/mimikatz::mimikatz
   # A compiled AutoIt script carries the whole AutoIt runtime, and that runtime
   # is a Windows automation library: clipboard read/write, keyboard and mouse
@@ -178,7 +170,7 @@ composite_rules:
   mbc: "B0047,B0015,B0033"
   all:
   - id: windows-clipboard-screen-hook-surveillance
-  - id: micro-behaviors/process/inject/runtime/call::remote-alloc-write-thread-api-set
+  - id: micro-behaviors/process/inject/remote-thread::remote-alloc-write-thread-api-set
   unless:
   - id: metadata/signed/platform/
   - id: metadata/binary/installer/family::inno-delphi-installer-foundation
@@ -246,7 +238,7 @@ composite_rules:
   - id: windows-clipboard-screen-hook-surveillance
   - id: micro-behaviors/hardware/input/keyboard/poll::polling-keyboard-api-cluster
   any:
-  - id: objectives/anti-static/pack/detect::upx-marker
+  - id: metadata/build/protector::upx-packing-token-reference
   - id: metadata/hardening/memory::extreme-wx-section-count-10
   - id: metadata/binary/section/layout::large-low-entropy-rwx-section
   unless:
@@ -288,3 +280,35 @@ composite_rules:
   - id: well-known/app/
   - id: well-known/lib/
   - id: well-known/tool/
+# Packed x86 droppers (Flystudio-class protectors) use Heaven's Gate while
+# resolving clipboard and Winsock APIs for session spyware.
+- id: x86-heavens-gate-clipboard-winsock
+  desc: Heaven's Gate with clipboard and Winsock
+  crit: suspicious
+  conf: 0.92
+  attack: T1115,T1071,T1027
+  arch: [x86]
+  all:
+  - id: micro-behaviors/os/compat/wow64::x86-heavens-gate-transition
+  - id: micro-behaviors/os/clipboard/read::get-clipboard-data
+  - id: micro-behaviors/communications/socket/init::ws2-startup-api-string
+  unless:
+  - id: metadata/signed/platform/
+  - id: clipboard-runtime-known-benign-context
+  - id: well-known/tool/reverse-engineering/
+- id: clipboard-winsock-mutex-surveillance
+  desc: Clipboard APIs with Winsock and mutex
+  crit: suspicious
+  conf: 0.91
+  attack: T1115,T1071
+  all:
+  - id: micro-behaviors/os/clipboard/reference::open-clipboard
+  - id: micro-behaviors/os/clipboard/read::get-clipboard-data
+  - id: micro-behaviors/communications/socket/init::ws2-startup-api-string
+  - id: micro-behaviors/process/sync/mutex::create-mutex
+  unless:
+  - id: metadata/signed/platform/
+  - id: clipboard-runtime-known-benign-context
+  - id: metadata/binary/installer/family/
+  - id: well-known/tool/reverse-engineering/
+  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member

@@ -26,7 +26,7 @@ composite_rules:
     all:
       - id: metadata/binary/layout/size::tiny-pe
       - id: micro-behaviors/communications/http/url/scheme::cleartext-http-url
-      - id: micro-behaviors/process/create/system::shell-execute-ex-a
+      - id: micro-behaviors/process/create/shellexec::shell-execute-ex-a
     unless:
       - id: metadata/signed/platform/
       - id: metadata/binary/installer/family/
@@ -50,7 +50,7 @@ composite_rules:
     all:
       - id: metadata/binary/layout/size::tiny-pe
       - id: metadata/binary/layout/overlay::overlay-over-30pct
-      - id: metadata/binary/layout/overlay::noncertificate-overlay-512
+      - id: metadata/binary/layout/size::noncertificate-unclaimed-bytes-512
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/
@@ -60,21 +60,6 @@ composite_rules:
       # A stub with no executable code stages nothing: carved slices of an
       # inert bundle match the shape without any stager behavior.
       - id: metadata/binary/code/entropy::code-entropy-near-zero
-
-  - id: tiny-pe-single-export
-    desc: Tiny PE exposes a single export
-    crit: notable
-    all:
-      - id: metadata/binary/layout/size::tiny-pe
-      - id: metadata/binary/symbols/exports::single-export
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/lib/
-      # Minimal fixture DLLs shipped under a package's own tests/ tree (the
-      # libloading crate's nagisa32/64.dll load targets) are single-export by
-      # design; the path proves the test tree, not a filename convention.
-      - id: "metadata/file/naming::test-directory-component"
-      - id: metadata/binary/installer/plugin::nsis-plugin-dir-member
 
   - id: tiny-pe-com-register
     desc: Tiny PE exports DllRegisterServer
@@ -95,7 +80,7 @@ composite_rules:
     crit: suspicious
     all:
       - id: metadata/binary/layout/size::tiny-pe
-      - id: metadata/binary/section/label::blank-named-section
+      - id: metadata/binary/section/label::empty-or-undecodable-section-name
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/
@@ -125,6 +110,29 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/
+      # The stock NSIS nsExec plugin spawns its command line via
+      # CreateProcess by design; the plugin identity carries the verdict.
+      - id: well-known/tool/packaging/nsis-nsexec::nsis-nsexec-plugin
+
+  # Relocated from objectives/command-and-control/channel/irc/bot: the matcher
+  # (tiny PE plus CopyFileA) evidences no IRC protocol, so the irc/bot home
+  # misdescribed every match. The stock NSIS nsExec plugin self-copies to TEMP
+  # by design; the plugin identity carries that verdict.
+  - id: tiny-pe-copyfile-stager
+    desc: Tiny PE copies files to spread
+    crit: hostile
+    conf: 0.93
+    attack: T1105
+    all:
+      - id: metadata/binary/layout/size::tiny-pe
+      - id: micro-behaviors/fs/file/copy::copyfile-a
+    unless:
+      - id: metadata/signed/platform/
+      - id: well-known/lib/
+      - id: well-known/tool/packaging/nsis-nsexec::nsis-nsexec-plugin
+      # CopyFileA in the import table is not a copy. A tiny .text that
+      # begins with RET returns before any imported call.
+      - id: metadata/binary/code/control-transfer::pe-text-immediate-return
 
   - id: tiny-pe-rot13-path
     desc: Tiny PE hides Windows paths with ROT13
@@ -188,17 +196,6 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: well-known/lib/
 
-  - id: opaque-mscorlib-stub
-    desc: Opaque-named PE is a tiny mscorlib stub
-    crit: notable
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: metadata/lang/compiler/managed::mscorlib
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/lib/
-      - id: metadata/lang/compiler/generated::dotnet-generated-xmlserializer
-
   - id: tiny-pe-minimal-shell
     desc: Tiny PE has a minimal ShellExecute import set
     crit: suspicious
@@ -208,6 +205,7 @@ composite_rules:
     unless:
       - id: metadata/signed/platform/
       - id: well-known/lib/
+      - id: well-known/tool/development/build/buck::dotslash-windows-shim
 
   - id: opaque-single-import
     desc: Opaque-named PE has a single import
@@ -221,16 +219,6 @@ composite_rules:
       - id: metadata/binary/framework::dotnet-metadata
       - id: metadata/binary/framework::dotnet-assembly
 
-  - id: tiny-pe-winexec
-    desc: Tiny PE launches a payload via WinExec
-    crit: suspicious
-    all:
-      - id: metadata/binary/layout/size::tiny-pe
-      - id: micro-behaviors/process/create/exec::winexec
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/lib/
-
   - id: tiny-pe-wsock32
     desc: Tiny PE talks over WSOCK32
     crit: suspicious
@@ -241,61 +229,12 @@ composite_rules:
       - id: metadata/signed/platform/
       - id: well-known/lib/
 
-  - id: opaque-vb-runtime
-    desc: Opaque-named PE is a VB.NET runtime stub
-    crit: notable
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: metadata/lang/compiler/managed::visual-basic-runtime
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/lib/
-      - id: metadata/lang/compiler/generated::dotnet-generated-xmlserializer
-
-  - id: opaque-suppress-ildasm
-    desc: Opaque-named PE suppresses ILDASM
-    crit: suspicious
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: objectives/anti-static/obfuscation/anti-decompile::suppress-ildasm-managed-pe-string
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/lib/
-
-  - id: opaque-appdomain-stub
-    desc: Opaque-named PE reflects into the AppDomain
-    crit: notable
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
-    unless:
-      - id: metadata/signed/platform/
-
   - id: opaque-fnv-stub
     desc: Opaque-named PE embeds an FNV-1a prime
     crit: notable
     all:
       - id: metadata/file/naming::opaque-identifier-pe-basename
       - id: micro-behaviors/data/checksum::fnv1a-prime-32bit-literal
-    unless:
-      - id: metadata/signed/platform/
-
-  - id: opaque-assemblyresolve-stub
-    desc: Opaque PE hooks AssemblyResolve
-    crit: suspicious
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: micro-behaviors/process/interpreter/reflection/runtime::assembly-resolve-event-api
-    unless:
-      - id: metadata/signed/platform/
-
-  - id: opaque-rijndael-appdomain-stub
-    desc: Opaque PE decrypts via AppDomain
-    crit: suspicious
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: micro-behaviors/crypto/symmetric/aes/library::dotnet-rijndael-decryptor
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-currentdomain
     unless:
       - id: metadata/signed/platform/
 
@@ -312,17 +251,8 @@ composite_rules:
     desc: Opaque PE hides a bitmap-stego payload
     all:
       - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: micro-behaviors/data/embedded/payload/image::dotnet-resource-bitmap-pixel-readback
+      - id: micro-behaviors/ui/graphics/image::dotnet-bitmap-resource-pixel-api-references
       - id: metadata/build/manifest::pe-manifest-myapplication-template
-    unless:
-      - id: metadata/signed/platform/
-
-  - id: opaque-appdomain-class-stub
-    desc: Opaque PE names the AppDomain class
-    crit: notable
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: micro-behaviors/process/interpreter/reflection/runtime::appdomain-class-token
     unless:
       - id: metadata/signed/platform/
 
@@ -331,19 +261,10 @@ composite_rules:
     crit: suspicious
     all:
       - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: metadata/binary/resource/size::dotnet-large-high-entropy-managed-resource
+      - id: metadata/binary/resource/entropy::clr-resource-size-and-entropy
     unless:
       - id: metadata/signed/platform/
       - id: micro-behaviors/data/embedded/payload/resource::costura-bundle-marker
-
-  - id: opaque-dotnet-decryptor-stub
-    desc: Opaque PE constructs a .NET decryptor
-    crit: suspicious
-    all:
-      - id: metadata/file/naming::opaque-identifier-pe-basename
-      - id: micro-behaviors/crypto/symmetric/decrypt::dotnet-create-decryptor
-    unless:
-      - id: metadata/signed/platform/
 
   - id: opaque-dominant-overlay-stub
     desc: Opaque PE is almost entirely overlay
@@ -390,6 +311,6 @@ composite_rules:
     all:
       - id: metadata/file/naming::opaque-identifier-pe-basename
       - id: metadata/binary/section/header::pe-entry-in-writable-section
-      - id: metadata/hardening/memory::wx-section
+      - id: metadata/binary/section/permission::wx-section
     unless:
       - id: metadata/signed/platform/

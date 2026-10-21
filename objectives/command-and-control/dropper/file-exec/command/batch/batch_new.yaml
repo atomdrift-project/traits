@@ -179,16 +179,6 @@ traits:
   if:
     type: text
     regex: (?i)r\^?e\^?m\s+(wjiwkghu|cqtljtup)
-- id: nuget-flatcontainer-fragment
-  desc: Obfuscated NuGet flatcontainer URL
-  crit: notable
-  conf: 0.93
-  for:
-  - batch
-  - powershell
-  if:
-    type: text
-    regex: (?i)v3-fl.{0,16}at.{0,16}co.{0,24}(nta|#E-f#Enta)
 - id: globalcdn-nuget-fragment
   desc: Obfuscated NuGet package CDN URL
   crit: notable
@@ -291,10 +281,17 @@ composite_rules:
   crit: hostile
   conf: 0.96
   attack: T1070.004
+  # Own-path capture and `>nul` are not deletion. Require a command that
+  # deletes this script; padding plus `%0` alone is not indicator removal.
   all:
   - id: objectives/anti-static/obfuscation/string/fragmentation::batch-fragmentation-metrics
   - id: micro-behaviors/process/info/selfpath::self-path-fragment
   - id: micro-behaviors/os/console/io::output-suppression
+  any:
+  - id: micro-behaviors/fs/delete/file/self::batch-self-delete
+  - id: micro-behaviors/fs/delete/file/self::powershell-batch-self-delete-text
+  - id: objectives/evasion/self-delete/scripts::batch-percent-zero-self-delete
+  needs: 1
 - id: batch-obfuscated-cleanup-dropper
   desc: Obfuscated batch dropper with staged cleanup pattern
   crit: hostile
@@ -304,40 +301,6 @@ composite_rules:
   - id: micro-behaviors/process/info/selfpath::self-path-fragment
   - id: micro-behaviors/os/console/io::output-suppression
   - id: micro-behaviors/fs/delete/file/command::del-command
-# curl writes an EXE into TEMP and the next lines `start` an EXE from TEMP:
-# the download target and the launch target are the same per-user temp
-# directory, within a few lines, so the fetched program is what runs.
-- id: batch-curl-temp-exe-dropper
-  desc: Batch curl stages and starts a TEMP EXE
-  crit: hostile
-  conf: 0.98
-  attack: T1105,T1204.002,T1059.003
-  for:
-  - batch
-  near_lines: 6
-  all:
-  - id: micro-behaviors/communications/http/download/curl::curl-output-to-temp-exe
-  - id: micro-behaviors/process/create/shell/tmp-exec::batch-start-temp-exe
-- id: batch-download-execute
-  desc: Download and execute pattern (batch)
-  crit: suspicious
-  conf: 0.95
-  for:
-  - batch
-  near_lines: 30
-  all:
-  - id: micro-behaviors/communications/http/download/cli::batch-download-tool-group
-  - id: micro-behaviors/process/create/shell/batch::batch-program-launch-group
-  - id: micro-behaviors/communications/http/download/curl::batch-curl-output-flag
-  unless:
-  - id: well-known/tool/development/cli/batch-scripts::pytorch-ci-sevenzip-installer
-  - id: well-known/tool/development/cli/batch-scripts::intel-dle-official-installer
-  - id: well-known/tool/development/cli/batch-scripts::protobuf-kokoro-wheel-builder
-  - id: well-known/tool/development/cli/batch-scripts::appveyor-pypy-ci-installer
-  - id: well-known/tool/development/cli/batch-scripts::appveyor-ci-batch-script
-  # Empty-machine front door fetching its own bootstrap from the vendor repo
-  # plus its companion service helper: the vendor's installer, not a dropper.
-  - id: well-known/tool/development/cli/batch-scripts::mill-official-installer
 - id: batch-disguised-vnc-dropper
   desc: Batch stages disguised VNC payloads
   crit: hostile
@@ -387,7 +350,7 @@ composite_rules:
   for:
   - batch
   all:
-  - id: micro-behaviors/communications/http/lib/invoke-webrequest::embedded-irm-iex-pipeline
+  - id: micro-behaviors/process/deploy/script-eval::embedded-irm-iex-pipeline
   - id: objectives/command-and-control/dropper/script-eval/response-eval/batch::batch-powershell-long-irm-iex
   unless:
   - id: well-known/tool/packaging/uv::uv-powershell-piped-installer-command
@@ -395,6 +358,7 @@ composite_rules:
   - id: well-known/tool/sysadmin/scoop::scoop-powershell-piped-installer-command
   - id: well-known/app/ai/coding-agent/anthropic-claude-code::claude-code-powershell-piped-installer-command
   - id: well-known/app/media/spotatui::spotatui-powershell-piped-installer-command
+  - id: well-known/tool/development/cli/buildercode::builder-io-powershell-piped-installer-command
 - id: batch-public-python-remote-base64-exec
   desc: Batch runs masqueraded Python remote base64 payload
   crit: hostile
@@ -491,7 +455,7 @@ composite_rules:
   any:
   - id: micro-behaviors/fs/path/temp::batch-script-path-reference
   - id: micro-behaviors/fs/write/file/binary::embedded-powershell-base64-write-all-bytes
-  - id: micro-behaviors/process/create/flags::powershell-policy-bypass-argument
+  - id: micro-behaviors/process/argument/option::powershell-policy-bypass-argument
   needs: 2
 - id: batch-certutil-expand-script
   desc: certutil decode expanded then run
@@ -515,7 +479,7 @@ composite_rules:
   - batch
   all:
   - id: micro-behaviors/data/decode/command::certutil-decode-command
-  - id: micro-behaviors/process/create/shell/batch::run-from-temp
+  - id: micro-behaviors/process/create/shell/tmp-exec::batch-start-temp-exe
   any:
   - id: micro-behaviors/fs/write/file/redirect::batch-echo-redirect
   - id: micro-behaviors/fs/write/file/redirect::batch-repeated-base64-alphabet-writes
@@ -547,7 +511,7 @@ composite_rules:
   - batch
   all:
   - id: batch-base64-pe-prefix
-  - id: micro-behaviors/process/create/shell/lang::powershell-executable-reference
+  - id: micro-behaviors/fs/path/application/executable::powershell-executable-token
   - id: micro-behaviors/fs/read/file/target::powershell-reads-batch-source
   - id: micro-behaviors/fs/path/temp::windows-temp-percent-executable-path
 - id: batch-certutil-pe-loader
@@ -559,12 +523,13 @@ composite_rules:
   - batch
   all:
   - id: micro-behaviors/data/decode/command::certutil-decode-command
-  - id: micro-behaviors/process/create/shell/batch::run-from-temp
+  - id: micro-behaviors/process/create/shell/batch::batch-launches-staged-executable
   - id: batch-base64-pe-payload
   any:
   - id: micro-behaviors/fs/path/temp::temp-dat-path-reference
   - id: micro-behaviors/fs/path/temp::temp-tmp-path-reference
   - id: micro-behaviors/fs/path/temp::batch-temp-file-assignment
+  - id: micro-behaviors/fs/path/application/executable::appdata-exe-path
   - id: micro-behaviors/fs/write/file/redirect::batch-echo-redirect
   - id: micro-behaviors/os/console/io::output-suppression
   needs: 2
@@ -579,7 +544,7 @@ composite_rules:
   - id: micro-behaviors/fs/directory/cwd::webdav-ip-unc-pushd
   - id: micro-behaviors/fs/file/copy::copy-exe-to-temp
   - id: micro-behaviors/fs/file/copy::copy-bin-to-temp-dat
-  - id: micro-behaviors/process/create/shell/batch::run-from-temp
+  - id: micro-behaviors/process/create/shell/tmp-exec::batch-start-temp-exe
 - id: batch-keyed-webdav-payload-loader
   desc: Keyed WebDAV payload loader chain
   crit: hostile
@@ -677,7 +642,7 @@ composite_rules:
   - batch
   all:
   - id: rem-marker-hidden-payload
-  - id: micro-behaviors/process/interpreter/eval/compile::ast-scriptblock-constructor
+  - id: micro-behaviors/metaprogramming/ast::ast-scriptblock-constructor
   - id: objectives/execution/interpreter/eval/invoke::ast-getscriptblock-reference
   - id: objectives/anti-static/obfuscation/string/fragmentation::batch-fragmentation-metrics
 - id: batch-fragmented-powershell-reflective-loader
@@ -691,7 +656,7 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/string/concat::batch-fragmented-env-loader
   - id: micro-behaviors/process/create/shell/lang::powershell-invocation
-  - id: micro-behaviors/process/create/hidden::powershell-hidden-command-text
+  - id: micro-behaviors/process/argument/option::powershell-hidden-command-text
   - id: micro-behaviors/process/interpreter/eval/direct::powershell-expression-command-text
   - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
   - id: ps-regex-repaired-base64
@@ -705,7 +670,7 @@ composite_rules:
   - batch
   all:
   - id: rem-marker-hidden-payload
-  - id: nuget-flatcontainer-fragment
+  - id: objectives/anti-static/obfuscation/string/fragmentation::nuget-flatcontainer-fragment
   - id: globalcdn-nuget-fragment
   - id: roslyn-csharp-package-fragment
   - id: objectives/execution/compile/runtime::in-memory-roslyn-emit
@@ -724,7 +689,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/download/cli::certutil-urlcache
   - id: micro-behaviors/communications/http/download/cli::bitsadmin-transfer-invocation
   - id: micro-behaviors/communications/http/download/cli::curl-wget-near-temp-path
-  - id: batch-download-execute
+  - id: micro-behaviors/communications/http/download/cli::batch-curl-output-launch-profile
   - id: objectives/anti-static/obfuscation/string/delimiter::rundll32-obfuscated-env-var
 - id: batch-comhijack-temp-powershell-loader
   desc: Batch COM hijack temp PowerShell loader
@@ -796,7 +761,7 @@ composite_rules:
   near_bytes: 2048
   all:
   - id: micro-behaviors/communications/http/download/webclient::webclient-downloadfile-call
-  - id: micro-behaviors/process/interpreter/powershell/command::embedded-powershell-command
+  - id: micro-behaviors/process/create/shell/command-flag::powershell-command-text
   - id: micro-behaviors/fs/delete/file/command::powershell-remove-item-force
   - id: micro-behaviors/fs/path/temp::temporary-batch-path-reference
 - id: batch-self-read-hex-syswow64-powershell-stager
@@ -808,4 +773,4 @@ composite_rules:
   all:
   - id: objectives/anti-static/obfuscation/eval/powershell-loader::batch-self-read-hex-powershell-dropper
   - id: objectives/command-and-control/dropper/file-exec/command/shell::syswow64-powershell-path
-  - id: micro-behaviors/process/create/flags::powershell-no-profile-flag
+  - id: micro-behaviors/process/argument/option::powershell-no-profile-flag

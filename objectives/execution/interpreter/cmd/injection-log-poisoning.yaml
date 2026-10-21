@@ -1,0 +1,58 @@
+# The diagnostic record is attacker input, not a crash. The maintenance parser
+# reuses the NSPPE suffix as shell syntax. No attacker-selected output path,
+# endpoint, CVE number, or implementation language is required.
+defaults:
+  platforms: [unix, windows]
+  for: [scripts, source]
+  attack: T1059.004
+
+traits:
+  - id: shell-substitution-comment-payload
+    desc: Shell substitution with separators and comment
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: string_literal
+      regex: ';[ \t]*:?[ \t]*(`[^`\r\n]{1,200}`|\$\([^\r\n)]{1,200}\))[ \t]*;[ \t]*#'
+    unless:
+      # Quoting/neutralization tests embed the payload as a probe string and
+      # assert it is inert (e.g. LiteralPath tests); the file tests the sink,
+      # it is not an injected log line.
+      - id: metadata/package/testing/presence/fixture::test-filename-pattern
+
+  - id: ppe-core-name-shell-delimiter
+    desc: Shell delimiter after NetScaler core prefix
+    # A delimiter alone does not establish an injected command.
+    crit: component
+    conf: 0.95
+    if:
+      type: string_literal
+      regex: 'NSPPE(-[0-9]{2})?[;|&]'
+
+composite_rules:
+  - id: core-log-ifs-command
+    desc: Core-log delimiter near IFS-obfuscated command
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: ppe-core-name-shell-delimiter
+      - id: objectives/anti-static/obfuscation/encoding/shell::ifs-network-command-arguments
+    near_bytes: 256
+
+  - id: core-log-shell-substitution
+    desc: NetScaler core-log shell-substitution payload
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: shell-substitution-comment-payload
+      - id: ppe-core-name-shell-delimiter
+    near_bytes: 256
+
+  - id: core-log-ifs-shell-execution
+    desc: Core-log IFS command injected into shell execution
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: core-log-ifs-command
+      - id: objectives/lateral-movement/exploit/network-device/netscaler::shell-payload-pipeline
+    near_bytes: 256

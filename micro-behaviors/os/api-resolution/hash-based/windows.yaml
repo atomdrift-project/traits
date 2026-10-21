@@ -4,8 +4,6 @@ defaults:
     - dll
   platforms:
     - windows
-  attack: T1027.002
-  mbc: F0004
 traits:
   - id: in-memory-order
     desc: InMemoryOrderModuleList traversal
@@ -114,19 +112,6 @@ traits:
     if:
       type: text
       regex: (?i)resolve.?by.?hash
-  # imul+shr+xor is common in ordinary hash tables (e.g. Steam/Valve), not
-  # only PE export API hashing — suppress when Steam client identity is known.
-  - id: multiplicative-hash-loop
-    desc: "Multiplicative hash inner loop"
-    crit: notable
-    conf: 0.8
-    arch: [x86, x86-64]
-    if:
-      type: hex
-      section: .text
-      pattern: 69 ?? ?? ?? ?? ?? 8B ?? C1 ?? ?? 33 ??
-    unless:
-      - id: well-known/game/steam::steam-client-identity
   - id: custom-mul-xor-rol-api-hash-loop-x86
     desc: Custom x86 multiply-XOR-rotate API hash loop
     crit: notable
@@ -181,6 +166,27 @@ traits:
       type: value
       path: pe.api_hash_resolver_requests[*].resolved_library
       regex: '(?i)^(winhttp|wininet|ws2_32)\.dll$'
+  - id: ror13-byte-hash-loop-x64
+    desc: x64 ROR13 byte hash loop
+    crit: notable
+    conf: 0.92
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      # movsx of one name byte, then ror by 13: the block_api name fold.
+      pattern: '0F BE ?? [0-8] C1 C? 0D'
+  - id: ror13-recv-hash-request-x64
+    desc: ROR13 ws2_32 recv hash request
+    crit: notable
+    conf: 0.95
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      # mov ecx, 0x5FC8D902: the block_api ROR13 hash for ws2_32!recv,
+      # passed to a PEB export resolver instead of importing recv.
+      pattern: 'B9 02 D9 C8 5F'
   - id: multiplicative-hash-loop-x64
     desc: 'Multiplicative hash inner loop'
     crit: notable
@@ -190,7 +196,9 @@ traits:
     if:
       type: hex
       section: .text
-      pattern: (45|44|41) 69 ?? ?? ?? ?? ?? [0-12] C1 ?? ?? [0-12] (44|45|41|31|33) (31|33) ??
+      # The closing short branch is what makes this a loop. Straight-line
+      # imul/shift/xor mixers are arithmetic, not an export-name hash.
+      pattern: (45|44|41) 69 ?? ?? ?? ?? ?? [0-12] C1 ?? ?? [0-12] (44|45|41|31|33) (31|33) ?? [0-40] (74|75|EB|E2) ??
   - id: multiply-by-129-api-hash-loop-x64
     desc: x64 API hash loop, multiply by 129
     crit: notable
@@ -256,6 +264,19 @@ traits:
         - id: metadata/lang/upstream::windows-system-implementer-dll
         - id: well-known/lib/platform/wine/
 composite_rules:
+  # Integer mixing alone is not API resolution. The old byte pattern even
+  # started inside a LEA displacement in the MSVC locale lookup routine.
+  - id: multiply-shift-xor-export-walk
+    desc: PE export walk near multiply/shift/XOR mixing
+    crit: notable
+    conf: 0.9
+    arch: [x86, x86-64]
+    near_bytes: 256
+    all:
+      - id: metadata/binary/instruction/sequence::multiply-shift-xor-register-sequence
+      - id: micro-behaviors/os/api-resolution/manual::pe-export-table-walk
+    unless:
+      - id: well-known/game/steam::steam-client-identity
   - id: peb-traversal
     desc: PEB module list traversal
     crit: notable

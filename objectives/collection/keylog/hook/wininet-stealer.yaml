@@ -1,6 +1,5 @@
-# Game-thief / banker PEs that install a WH_KEYBOARD hook and also speak
-# WinInet are not accessibility helpers: the hook harvests keystrokes while
-# the HTTP client ships them.
+# Recording status supplies keylogging context. Hook and network APIs alone
+# do not establish that captured keys are sent over that transport.
 #
 # Wine's builtin DLLs (user32.dll, user.exe16, ...) are the Win32 API
 # *implementation*: they export SetWindowsHookEx/CallNextHookEx/ToAscii and
@@ -14,6 +13,26 @@ defaults:
   conf: 0.94
 
 composite_rules:
+- id: keyboard-hook-form-post
+  desc: Recording keylogger with form POST template
+  crit: suspicious
+  all:
+  - id: keylogger-recording-start-status
+  - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
+  - id: micro-behaviors/ui/window/hook::call-next-hook-ex
+  - id: micro-behaviors/communications/http/post::form-urlencoded-post-template
+  unless:
+  - id: metadata/signed/platform/
+- id: keyboard-hook-http-post
+  desc: Recording keylogger with HTTP POST template
+  crit: suspicious
+  all:
+  - id: keylogger-recording-start-status
+  - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
+  - id: micro-behaviors/ui/window/hook::call-next-hook-ex
+  - id: micro-behaviors/communications/http/post::post-request-line
+  unless:
+  - id: metadata/signed/platform/
 - id: wininet-keyboard-hook-enum-windows
   desc: Keylogger recording status with hook and WinInet APIs
   crit: suspicious
@@ -27,10 +46,11 @@ composite_rules:
   - id: metadata/signed/platform/
   - id: well-known/lib/platform/wine/
 - id: keyboard-hook-create-thread
-  desc: Keyboard hook starts from a new thread
+  desc: Keylogger recording status with hook and thread-creation APIs
   crit: suspicious
   conf: 0.86
   all:
+  - id: keylogger-recording-start-status
       # A generic Windows event hook may be WH_GETMESSAGE or a mouse hook.
       # CallNextHookEx plus a worker thread does not establish key capture.
   - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
@@ -54,28 +74,18 @@ composite_rules:
   - id: keyboard-hook-toolkit-runtime
   - id: well-known/lib/platform/browser-automation/drivers/selenium::selenium-ie-driver-embedded-context
 
-- id: keyboard-hook-http-post
-  desc: Keyboard hook posts harvested data over HTTP
-  all:
-  - id: micro-behaviors/ui/window/hook::call-next-hook-ex
-  - id: micro-behaviors/communications/http/post::post-request-line
-  unless:
-  - id: metadata/signed/platform/
-- id: keyboard-hook-form-post
-  desc: Keyboard hook posts form-urlencoded data
-  all:
-  - id: micro-behaviors/ui/window/hook::call-next-hook-ex
-  - id: micro-behaviors/communications/http/post::form-urlencoded-post-template
-  unless:
-  - id: metadata/signed/platform/
 - id: keyboard-hook-winsock-client
   attack: T1056.001
   desc: Keylogger recording status with hook-chain and Winsock APIs
   all:
   - id: keylogger-recording-start-status
+  - id: micro-behaviors/ui/window/hook::set-windows-hook
   - id: micro-behaviors/hardware/input/keyboard/label::keylogger-identity-label
   - id: micro-behaviors/ui/window/hook::call-next-hook-ex
-  - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+  - id: micro-behaviors/communications/socket/connect::winsock-client-lifecycle
+  any:
+  - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
+  - id: micro-behaviors/hardware/input/keyboard/hook::x64-zero-thread-keyboard-hook-call-setup
   unless:
   - id: metadata/signed/platform/
   - id: well-known/lib/platform/mfc::mfc-runtime-basename
@@ -105,12 +115,16 @@ composite_rules:
   - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
   - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-gup-updater
 - id: keyboard-hook-hidden-thread
-  desc: Keyboard hook starts a hidden-window thread
+  desc: Keyboard hook runs on a no-window thread
     # CREATE_NO_WINDOW is the immediate push 0x08000000, which appears all
     # over a large x86 image. The hook string has to sit with that push.
+    # A keyboard hook type is required here: WH_CALLWNDPROC, WH_GETMESSAGE
+    # and other message hooks are ordinary GUI plumbing, so CallNextHookEx
+    # plus a worker thread does not establish key capture without one.
   near_bytes: 1048576
   all:
   - id: micro-behaviors/ui/window/hook::call-next-hook-ex
+  - id: micro-behaviors/hardware/input/keyboard/hook::windows-keyboard-hook-install
   - id: micro-behaviors/process/create/flags::x86-create-no-window-immediate
   unless:
   - id: metadata/signed/platform/
@@ -129,7 +143,7 @@ composite_rules:
   desc: Keyboard-hook DLL talks over a Winsock client
   all:
   - id: objectives/collection/keylog/hook::global-keyboard-hook-ipc-capture
-  - id: micro-behaviors/communications/socket/init::winsock-client-lifecycle
+  - id: micro-behaviors/communications/socket/connect::winsock-client-lifecycle
   unless:
   - id: metadata/signed/platform/
 - id: winsta-keyboard-hook-keystate
@@ -140,11 +154,15 @@ composite_rules:
   - id: micro-behaviors/ui/window/station::open-window-station
   unless:
   - id: metadata/signed/platform/
+  # Zecurit's signed endpoint agent uses these APIs for authorized remote
+  # support and monitoring, rather than covert keyboard collection.
+  - id: well-known/dual-use/remote-admin/zecurit::zecurit-agent-installer
+  - id: metadata/signed/leaf::zecurit-technologies-private-limited
 - id: winsta-keyboard-hook-toascii
   desc: Window-station hook translates keystrokes
   all:
   - id: micro-behaviors/ui/window/hook::call-next-hook-ex
-  - id: micro-behaviors/hardware/input/keyboard/layout::to-ascii-str
+  - id: micro-behaviors/hardware/input/keyboard/layout::to-ascii-import
   - id: micro-behaviors/ui/window/station::open-window-station
   unless:
   - id: metadata/signed/platform/
@@ -217,10 +235,11 @@ composite_rules:
   any:
   - id: well-known/tool/packaging/inno-setup/
 - id: hook-keyboard-state
-  desc: Keyboard hook also samples GetKeyboardState
+  desc: Keylogger recording status with hook and keyboard-state APIs
   crit: suspicious
   conf: 0.9
   all:
+  - id: keylogger-recording-start-status
   - id: micro-behaviors/ui/window/hook::set-windows-hook
       # GUI message hooks often coexist with ordinary keyboard-state reads;
       # require evidence that the installed hook is actually a keyboard hook.
@@ -233,16 +252,3 @@ composite_rules:
   - id: metadata/package/tooling::everything-binary
   - id: metadata/package/tooling::lite-xl-binary
   - id: inno-setup-vcl-runtime
-
-- id: hook-to-ascii
-  desc: Keyboard hook translates keys via ToAscii
-  all:
-  - id: micro-behaviors/ui/window/hook::set-windows-hook
-  - id: micro-behaviors/hardware/input/keyboard/layout::to-ascii-str
-  unless:
-  - id: metadata/signed/platform/
-  - id: well-known/lib/platform/wine/
-  - id: well-known/app/development/pyscripter::official-binary
-  - id: well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-main-binary
-  - id: well-known/lib/media/videolan/
-  - id: well-known/lib/ui/qt/

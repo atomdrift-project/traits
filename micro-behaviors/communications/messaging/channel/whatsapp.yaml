@@ -95,7 +95,7 @@ traits:
       # fork campaigns decode their channel JID at the call site
       # (Buffer.from("...", "base64").toString()), and a `)` cannot close
       # the window or every decoded-target follow escapes the matcher.
-      regex: '(newsletterWMexQuery|executeWMexQuery(IgnoreResponse)?)\s*\([^;]{0,240}FOLLOW\b'
+      regex: '(newsletter|execute)WMexQuery(IgnoreResponse)?\s*\([^;]{0,240}\bFOLLOW\b'
 
   # A follow invocation whose failures vanish: the injected connect-path
   # follow awaits newsletterFollow inside try and closes with an empty
@@ -108,7 +108,7 @@ traits:
     conf: 0.85
     if:
       type: text
-      regex: 'newsletterFollow[\s\S]{0,200}catch\s*\{\s*\}'
+      regex: 'newsletterFollow[\s\S]{0,120}catch\s*(\([^)\n]{0,16}\))?\s*\{\s*(//[^\n]{0,20}\n)?\s*\}'
 
   - id: whatsapp-newsletter-mute-query
     desc: Issues a WhatsApp newsletter mute query
@@ -369,13 +369,24 @@ traits:
     conf: 0.9
     if:
       type: text
-      regex: '(\burl\s*:\s*.{0,60}\|\|\s*|content\.url\s*=\s*)[A-Z][A-Z_0-9]{2,}'
+      # The fallback must name a URL field (`offerUrl`, `message.url`).
+      # A tab option such as `url: item?.link || CLOUD` is not a message.
+      regex: '(\burl\s*:\s*.{0,40}[Uu]rl\s*\|\|\s*|content\.url\s*=\s*)[A-Z][A-Z_0-9]{2,}'
+  # `title`/`text` are generic object fields (every dialog and UI widget
+  # sets one), so they count only in the fallback form that actually
+  # defaults (`title: caller.title || DEFAULT_TITLE`); a bare
+  # `title: SOME_CONST` assignment is ordinary configuration. `orderTitle`
+  # is the WhatsApp order-message field itself, so a direct constant
+  # there is already message-specific. The constant must be the whole
+  # value (terminated by `,` or `}`): a value rooted at a capitalised
+  # namespace such as `title: CKEDITOR.env.ie ? ... : ...` is a
+  # member/ternary expression, not a constant default.
   - id: whatsapp-outgoing-message-title-constant-default
     desc: Outgoing message title defaults to a constant
     conf: 0.9
     if:
       type: text
-      regex: '\b(orderTitle|title|text)\s*:\s*(.{0,60}\|\|\s*)?[A-Z][A-Z_0-9]{2,}'
+      regex: '\b(orderTitle\s*:\s*|(title|text)\s*:.{0,60}\|\|\s*)[A-Z][A-Z_0-9]{2,}\s*[,}]'
 
   # Upstream Baileys always randomizes the device-linking secret
   # (`customPairingCode ?? bytesToCrockford(randomBytes(5))`). A literal
@@ -388,7 +399,18 @@ traits:
     conf: 0.93
     if:
       type: text
-      regex: 'pairingCode\s*=\s*["''][A-Za-z0-9]{4,12}["'']'
+      regex: 'pairingCode\s*[=:]\s*["''][A-Za-z0-9]{4,12}["'']'
+
+  # The socket-factory override that supplies an embedded pairingCode when the
+  # caller omits customPairingCode. Neutral alone — wrappers may forward
+  # caller input — the attack reading is composed with a hardcoded config
+  # literal and the link-code registration stanza.
+  - id: whatsapp-socket-pairing-code-config-fallback
+    desc: Pairing request defaults to config pairingCode
+    conf: 0.94
+    if:
+      type: text
+      regex: 'requestPairingCode\s*=[\s\S]{0,200}\.pairingCode'
 
   # The device-linking stanza of the pairing ceremony
   # (`link_code_companion_reg` carrying the wrapped ephemeral key and the
@@ -545,7 +567,32 @@ traits:
     conf: 0.97
     if:
       type: text
-      regex: 'DEFAULT_AUTO_FOLLOW_(CHANNELS\s*=\s*\[\s*|NEWSLETTER_JID\s*=\s*)["'']\d{10,20}@newsletter'
+      # Only an array literal is a list. A single JID constant is
+      # whatsapp-default-auto-follow-newsletter-jid below; matching it
+      # here counted one hardcoded channel as both a list and a JID.
+      regex: 'DEFAULT_AUTO_FOLLOW_CHANNELS\s*=\s*\[\s*["'']\d{10,20}@newsletter'
+
+  - id: whatsapp-auto-follow-newsletter-jids-array
+    desc: AUTO_FOLLOW_NEWSLETTER_JIDS preset channel list
+    conf: 0.97
+    if:
+      type: text
+      regex: 'AUTO_FOLLOW_NEWSLETTER_JIDS\s*=\s*\[\s*["'']\d{10,20}@newsletter'
+
+  - id: whatsapp-newsletter-ids-embedded-array
+    desc: Embeds channel JIDs in a newsletterIds list
+    conf: 0.96
+    if:
+      type: text
+      regex: '\bnewsletterIds\s*:\s*\[\s*["'']\d{10,20}@newsletter'
+
+  - id: whatsapp-auto-follow-channels-invocation
+    desc: Invokes autoFollowChannels on the socket
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '\bautoFollowChannels\s*\(\s*sock\s*\)'
 
   - id: whatsapp-auto-follow-remote-list-url
     desc: Remote URL constant for auto-follow channel list
@@ -576,20 +623,7 @@ traits:
     conf: 0.97
     if:
       type: text
-      regex: '\{\s*newsletter_id\s*:[\s\S]{0,160}FOLLOW\b'
-
-  # The same concealment without the mute query helpers: the follow routine
-  # quiets the channel through the user-setting helper
-  # (`newsletterUserSetting(jid, 'ADMIN_NOTIFICATIONS', false)`) instead of
-  # `newsletterWMexQuery(..., MUTE)`. Neutral on its own: the helper also
-  # serves caller-driven setting changes; only composites infer muting of a
-  # forced follow.
-  - id: whatsapp-newsletter-user-setting-mute
-    desc: Mutes newsletter via user-setting helper
-    conf: 0.95
-    if:
-      type: text
-      regex: 'newsletterUserSetting\s*\([^)]{0,160}(ADMIN_NOTIFICATIONS|MUTE_\w+|["'']MUTE["''])'
+      regex: '\{\s*newsletter_id\s*:[\s\S]{0,160}\bFOLLOW\b'
 
   - id: whatsapp-auto-follow-newsletter-config-key
     desc: Default config sets autoFollowNewsletterJid
@@ -611,6 +645,13 @@ traits:
     if:
       type: text
       regex: 'triggerAutoFollow[\s\S]{0,900}connection\.update'
+
+  - id: whatsapp-newsletter-follow-periodic-timer
+    desc: Schedules a repeated newsletter follow callback
+    conf: 0.96
+    if:
+      type: text
+      regex: 'setInterval[\s\S]{0,500}performNewsletterFollow'
 
   - id: whatsapp-auto-follow-ninety-second-delay
     desc: Auto-follow waits about ninety seconds
@@ -691,18 +732,17 @@ traits:
       type: text
       regex: 'fetchLatestBaileysVersion[\s\S]{0,800}https://github\.com/'
 
-  # Several Base64 blobs in one file decode to newsletter JIDs: an embedded
-  # channel roster rather than a single follow target. The public Baileys
-  # API surface carries no hardcoded channels, so a roster is fork-injected
-  # growth material. Neutral on its own: only composites infer the follow.
-  - id: whatsapp-base64-newsletter-jid-roster
-    desc: Multiple Base64 blobs hide newsletter JIDs
-    conf: 0.97
+  # One Base64 literal inside a nested function is decoded twice, once for
+  # the literal and once when that function body is re-parsed. A decoded
+  # count of two is therefore one channel. Two source literals are the roster.
+  - id: whatsapp-two-long-base64-literals
+    desc: Two long Base64 string literals
+    crit: component
+    conf: 0.8
     count_min: 2
     if:
-      type: encoded
-      encoding: base64
-      substr: '@newsletter'
+      type: text
+      regex: '[''"][A-Za-z0-9+/]{24,}={0,2}[''"]'
 
   # The unconcealed sibling of the Base64 roster above: two or more numeric
   # `@newsletter` JID literals written in the open. The public Baileys API
@@ -761,6 +801,17 @@ composite_rules:
       - id: whatsapp-newsletter-jid-literal-field
     near_bytes: 200
 
+  # Several Base64 literals decode to newsletter JIDs: an embedded channel
+  # roster rather than a single follow target. The decoded-string count is
+  # not the roster, because one nested literal is emitted twice. Neutral on
+  # its own: only composites infer the follow.
+  - id: whatsapp-base64-newsletter-jid-roster
+    desc: Multiple Base64 blobs hide newsletter JIDs
+    conf: 0.97
+    all:
+      - id: whatsapp-newsletter-base64-encoded-suffix
+      - id: whatsapp-two-long-base64-literals
+
   # An embedded channel roster in either form: plaintext `@newsletter`
   # literals or Base64 blobs that decode to them. Lets roster-driven follow
   # composites stay agnostic to the concealment layer.
@@ -813,3 +864,15 @@ composite_rules:
       - id: whatsapp-connection-open-branch
       - id: whatsapp-newsletter-follow-query
     near_bytes: 3500
+
+  # The sidecar-module wiring: connection.update open calls an imported
+  # autoFollowChannels(sock) helper instead of inlining the follow loop.
+  # Worked example: @randev404/baileys 1.0.0 lib/Socket/index.js.
+  - id: whatsapp-connection-open-auto-follow-channels
+    desc: Session open invokes autoFollowChannels helper
+    conf: 0.97
+    all:
+      - id: whatsapp-connection-update-handler
+      - id: whatsapp-connection-open-branch
+      - id: whatsapp-auto-follow-channels-invocation
+    near_bytes: 2500

@@ -18,10 +18,18 @@ traits:
           meta:
             filetypes = "dos_com,data"
           strings:
-            $hook = { B8 21 35 CD 21 [0-16] BA ?? ?? B4 25 CD 21 }
+            $hook = { B8 21 35 CD 21 [0-16] ( BA ?? ?? B4 25 | B4 25 BA ?? ?? ) CD 21 }
           condition:
             $hook in (0..256)
         }
+
+  - id: dos-int13-read-buffer-sabotage
+    desc: Intercepts disk read and overwrites buffer
+    crit: notable
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "80 FC 02 75 ?? CD 30 [0-8] 26 81 [0-24] B9 00 02 F3 A4"
 
   # INT 27h ends the program and keeps the first DX bytes resident.
   - id: dos-tsr-keep-int27
@@ -35,14 +43,113 @@ traits:
           meta:
             filetypes = "dos_com,data"
           strings:
-            $keep = { BA ?? ?? CD 27 }
+            $keep = { ( BA ?? ?? | 92 ) CD 27 }
           condition:
             $keep in (0..256)
         }
 
+  # AH=31h ends the program and keeps DX paragraphs resident (DOS 2.0+ TSR).
+  - id: dos-tsr-keep-int21
+    desc: DOS stays resident via INT 21h AH=31h
+    crit: notable
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "(BA ?? ?? [0-4] B4 31|B4 31 [0-4] BA ?? ??|B8 ?? 31 [0-4] BA ?? ??|BA ?? ?? [0-4] B8 ?? 31) [0-4] CD 21"
+
+  # MOV DL,imm8 then INT 27h: DX was already loaded, and only the low byte
+  # is adjusted to the resident length before the program stays in memory.
+  - id: dos-int27-after-dl-adjust
+    desc: Stays resident after DL tweak
+    crit: notable
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "B2 ?? CD 27"
+
+  # MOV AL,10h / STOSW writes handler offset 0110h into a vector slot,
+  # ADD AX,DX / STOSW writes the segment, then INT 27h stays resident.
+  - id: dos-stosw-0110-int27
+    desc: Stores handler at 0110h and stays
+    crit: notable
+    conf: 0.93
+    if:
+      type: yara
+      source: |
+        rule dos_stosw_0110_int27 {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $t = { B0 10 AB (01 D0|03 C2) AB CD 27 }
+          condition:
+            $t in (0..256)
+        }
+
   # XOR SI,SI / MOV DS,SI / LDS SI,[SI+4] load the INT 01h (single-step)
-  # handler address from the vector table; PUSH [SI] / MOV WORD [SI],imm16 /
-  # POP [SI] save, replace and restore the handler's first word.
+  # handler address from the vector table; PUSH [SI] / MOV [SI],val /
+  # POP [SI] save, replace and restore the handler. A 66h prefix makes
+  # each step 32-bit so the whole vector dword is swapped at once.
+  # Direct vector-table install without the AH=35h/25h pair: the body is
+  # block-copied low (REP MOVSB with a byte count loaded just before) and
+  # the handler word lands in the table with STOSW (Small.63). A plain
+  # block copy alone is data movement; the copy-then-store pairing inside
+  # a small window is what marks a vector patch.
+  - id: dos-low-copy-vector-store
+    desc: DOS low copy then vector store
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule dos_low_copy_vector_store {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $copy = { ( B1 ?? | B9 ?? ?? ) [0-8] F3 A4 [0-32] AB }
+          condition:
+            $copy in (0..512)
+        }
+
+  # Write-service trigger for a resident hook: CMP AX,40E9h fires only
+  # when AH=40h (write) meets a buffer whose first byte is E9h -- the near
+  # jump that starts a COM program being written to disk -- and the
+  # handler then writes a fixed body length over it (Small.63).
+  - id: dos-int21-e9-write-trigger
+    desc: DOS write hook triggers on E9-led buffer
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: yara
+      source: |
+        rule dos_int21_e9_write_trigger {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $hook = { 3D E9 40 [0-20] B9 ?? ?? [0-6] CD 21 }
+          condition:
+            $hook in (0..4096)
+        }
+
+  # Handler exit that chains onward: POP DS / POPA restore the caller's
+  # registers and a far jump continues into the saved original vector
+  # (Small.63). Legitimate TSRs chain the same way, so this only ever
+  # serves as one leg of a hook composite.
+  - id: dos-handler-chain-far-jump
+    desc: DOS handler chains via far jump
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule dos_handler_chain_far_jump {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $chain = { 1F 61 EA }
+          condition:
+            $chain in (0..4096)
+        }
+
   - id: dos-int01-handler-first-word-patch
     desc: DOS patches INT 01h handler first word
     crit: suspicious
@@ -54,7 +161,18 @@ traits:
           meta:
             filetypes = "dos_com,data"
           strings:
-            $patch = { 33 F6 8E DE C5 74 04 FF 34 C7 04 ?? ?? 8F 04 }
+            $patch = { 33 F6 8E DE C5 74 04 ( FF 34 | 66 FF 34 ) ( C7 04 ?? ?? 8F 04 | C6 04 ?? [0-16] 8F 04 | 66 C7 04 ?? ?? ?? ?? 66 8F 04 ) }
           condition:
             $patch in (0..512)
         }
+
+  # Open-service trigger for a resident hook: CMP AH,3Dh filters file open
+  # requests so the resident handler can intercept opens.
+  - id: dos-int21-open-filter-trigger
+    desc: DOS handler checks for file open (AH=3Dh)
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: hex
+      pattern: "80 FC 3D (74|75) ??"
+

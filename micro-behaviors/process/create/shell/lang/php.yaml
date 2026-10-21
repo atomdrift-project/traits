@@ -8,6 +8,20 @@ defaults:
   mbc: "E1059"
   attack: "T1059.004"
 traits:
+- id: php-exec-concatenated-variable-command
+  desc: PHP exec command concatenates a variable
+  conf: 0.93
+  if:
+    type: tree-sitter
+    query: |
+      ((function_call_expression
+        function: (name) @callee
+        arguments: (arguments
+          . (argument (binary_expression
+            left: (variable_name)
+            operator: ".")))) @call
+        (#eq? @callee "exec"))
+
 - id: proc-open-shell-command
   desc: PHP proc_open invokes a shell
   conf: 0.93
@@ -46,7 +60,7 @@ traits:
   # The opaque compiler-halt tail is not PHP syntax. Tree-sitter can expose
   # byte sequences in that tail as shell-command nodes, so do not report those
   # parser artifacts as PHP backtick execution.
-  - id: objectives/anti-static/obfuscation/multi-layer::php-compiler-halt-loader
+  - id: micro-behaviors/fs/read/self::compiler-halt-self-read
   - type: text
     regex: '`\(doom/[A-Za-z0-9_-]+\)`'
   # A Markdown file sniffed as PHP parses its inline code spans as shell
@@ -61,6 +75,7 @@ traits:
     kind: call
     exact: exec
     arg:
+      index: 0
       kind: identifier
   unless:
   - id: well-known/lib/development/php-cs-fixer::php-cs-fixer-source-tree
@@ -73,6 +88,7 @@ traits:
     kind: call
     exact: system
     arg:
+      index: 0
       kind: identifier
   unless:
   - id: well-known/lib/development/php-cs-fixer::php-cs-fixer-source-tree
@@ -85,6 +101,7 @@ traits:
     kind: call
     exact: shell_exec
     arg:
+      index: 0
       kind: identifier
 - id: exec-variable-argument-passthru
   desc: passthru() receives variable argument
@@ -94,6 +111,7 @@ traits:
     kind: call
     exact: passthru
     arg:
+      index: 0
       kind: identifier
 - id: exec-variable-argument-popen
   desc: popen() receives variable argument
@@ -103,6 +121,7 @@ traits:
     kind: call
     exact: popen
     arg:
+      index: 0
       kind: identifier
 # proc_open() with a variable command is the process-pipe analogue of the
 # exec/system/shell_exec/passthru/popen variable forms above. Webshells
@@ -116,6 +135,11 @@ traits:
 # to stay under the alt-chain limit (≤4 alternatives), mirroring the existing
 # `exec-user-input-get-text--rx-*` decomposition. `$_GET` is already covered by
 # the `exec-user-input-get-text` composite below.
+# The pipe-process forms require the request as the first command argument;
+# request data in a descriptor or output argument does not select a command.
+# Every atom in this family suppresses on a documentation basename: a Markdown
+# writeup sniffed as PHP quotes webshell one-liners as data, and the
+# `exec-user-input`/`exec-user-input-get-text` umbrellas already exclude it.
 - id: exec-user-input-post--g1
   desc: $_POST reaches exec/system/shell_exec
   crit: suspicious
@@ -126,6 +150,7 @@ traits:
     regex: \b(exec|system|shell_exec)\s*\([^;]{0,200}\$_POST
   unless:
   - id: well-known/tool/offensive/exploitdb::published-script-wrapper
+  - id: metadata/file/extension/identity::markdown-file-basename
 - id: exec-user-input-post--g2
   desc: $_POST reaches passthru/popen/proc_open
   crit: suspicious
@@ -133,7 +158,9 @@ traits:
   if:
     type: tree-sitter
     kind: call
-    regex: '\b(passthru|popen|proc_open)\s*\([^;]{0,200}\$_POST'
+    regex: '\b(passthru|popen|proc_open)\s*\(\s*\$_POST\s*\['
+  unless:
+  - id: metadata/file/extension/identity::markdown-file-basename
 - id: exec-user-input-request--g1
   desc: $_REQUEST reaches exec/system/shell_exec
   crit: suspicious
@@ -143,10 +170,16 @@ traits:
     kind: call
     regex: \b(exec|system|shell_exec)\s*\([^;]{0,200}\$_REQUEST
   unless:
+  - type: text
+    regex: '\bescapeshell(arg|cmd)\s*\(\s*\$_REQUEST'
   - id: well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
   - id: well-known/tool/offensive/industrialxpl/
   - id: micro-behaviors/metaprogramming/generation::configured-assessment-plugin
   - id: micro-behaviors/metaprogramming/generation::parameterized-shell-command-builder
+  # A detector's own Go test file quoting webshell fixtures for its watcher
+  # to flag: quoted payload, not a shipped execution path.
+  - id: metadata/package/testing/presence/harness::go-test-file
+  - id: metadata/file/extension/identity::markdown-file-basename
 - id: exec-user-input-request--g2
   desc: $_REQUEST reaches passthru/popen/proc_open
   crit: suspicious
@@ -154,7 +187,9 @@ traits:
   if:
     type: tree-sitter
     kind: call
-    regex: '\b(passthru|popen|proc_open)\s*\([^;]{0,200}\$_REQUEST'
+    regex: '\b(passthru|popen|proc_open)\s*\(\s*\$_REQUEST\s*\['
+  unless:
+  - id: metadata/file/extension/identity::markdown-file-basename
 - id: exec-user-input-get-text--rx-1
   desc: $_GET reaches exec/system
   crit: suspicious
@@ -162,8 +197,10 @@ traits:
   if:
     type: tree-sitter
     kind: call
-    regex: \b(exec|system)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]
+    # Match the selected call itself, not PHP source quoted in another call.
+    regex: '^(exec|system)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]'
   unless:
+  - id: metadata/file/encoding::decoded-base64-layer
   - id: micro-behaviors/ui/help::escaped-local-command-reference
   - id: well-known/tool/offensive/
   - id: metadata/file/naming::test-directory-component
@@ -191,6 +228,7 @@ traits:
     # the exclusion so it resolves on the member file itself.
     - id: well-known/tool/detection/react-doctor::react-doctor-tree-path
     - id: well-known/app/system/anthropic-cybersecurity-skills::cybersecurity-skill-template-guide
+    - id: metadata/file/extension/identity::markdown-file-basename
 - id: exec-user-input-get-text--rx-3
   desc: $_GET reaches popen/proc_open
   crit: suspicious
@@ -199,6 +237,8 @@ traits:
     type: tree-sitter
     kind: call
     regex: '\b(popen|proc_open)\s*\(\s*\$_GET\s*\[[^\]]{1,80}\]'
+  unless:
+  - id: metadata/file/extension/identity::markdown-file-basename
 - id: shell-stderr-redirect
   desc: Shell stderr redirected to stdout
   conf: 0.85
@@ -225,13 +265,16 @@ composite_rules:
   - id: exec-user-input-get-text
   unless:
   - id: well-known/tool/offensive/
-  - id: "metadata/lang/source/syntax::yara-rule-source"
+  - id: "metadata/lang/source/shape::yara-rule-source"
   - id: well-known/tool/detection/security-scanner::anteumbra-package-tree-member
   # A webshell fixture embedded in a test corpus is data its detector asserts
   # on, not a shipped execution path.
   - id: "metadata/file/naming::test-directory-component"
   - id: metadata/file/extension/identity::markdown-file-basename
   - id: extension-origin-local-helper
+  # A detector's own Go test file quoting webshell fixtures for its watcher
+  # to flag: quoted payload, not a shipped execution path.
+  - id: metadata/package/testing/presence/harness::go-test-file
   downgrade:
     scope: parent
     any:
@@ -257,6 +300,7 @@ composite_rules:
   - id: exec-user-input-get-text--rx-2
   - id: exec-user-input-get-text--rx-3
   unless:
+  - id: metadata/file/encoding::decoded-base64-layer
   - id: micro-behaviors/ui/help::escaped-local-command-reference
   - id: metadata/build/generated::php-empty-function-declarations
   - id: metadata/build/generated::php-manual-empty-function-stubs

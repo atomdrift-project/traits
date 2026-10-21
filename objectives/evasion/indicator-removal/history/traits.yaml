@@ -15,6 +15,7 @@ traits:
     unless:
       - id: "metadata/file/naming::test-directory-component"
       - id: metadata/package/testing/presence/harness::go-test-file
+      - id: metadata/package/testing/harness/unit::node-test-runner-import
       - id: micro-behaviors/process/tty/pty::shell-prompt-history-entry-cleanup
   - id: fc-null-history
     desc: fc -p redirects Bash history to /dev/null
@@ -48,17 +49,11 @@ traits:
       type: text
       regex: (?i)HISTFILE=/dev/null
     unless:
+      - id: micro-behaviors/process/tty/terminal::framed-shell-history-isolation
       - id: well-known/tool/detection/
-      - id: micro-behaviors/process/tty/pty::terminal-runner-history-isolation
-      - id: micro-behaviors/process/create/shell/interactive::isolated-rcfile-history
-      - id: micro-behaviors/process/create/shell/interactive::login-shell-probe-history-isolation
       - id: history-isolation-before-sudo-password
-      # Shell test suites point HISTFILE at /dev/null so fc/history builtins
-      # do not write the user's real history.
-      - type: path
-        regex: '(^|[\\/])tests[\\/]'
       - id: "metadata/file/naming::test-directory-component"
-      - id: metadata/lang/scripted::dts-declaration-file
+      - id: objectives/evasion/indicator-removal/history::history-isolation-benign-context
     downgrade:
       scope: archive
       any:
@@ -80,16 +75,18 @@ traits:
     conf: 0.85
     mbc: F0005
     attack: T1070.003
+    # The /dev/null spelling belongs to histfile-devnull, which matches a
+    # superset of it; this atom keeps the tmp dot-directory destinations so
+    # one construct is not counted twice.
     if:
       type: text
-      regex: export HISTFILE=(/dev/null|/tmp/.{1,40}|/var/tmp/.{1,40})
+      regex: export HISTFILE=(/tmp/.{1,40}|/var/tmp/.{1,40})
     unless:
-      - id: micro-behaviors/process/create/shell/interactive::isolated-rcfile-history
-      - id: micro-behaviors/process/create/shell/interactive::login-shell-probe-history-isolation
       - id: history-isolation-before-sudo-password
-      - id: well-known/tool/detection/ai-guardrail::command-rule-corpus
+      - id: well-known/tool/detection/ai-guardrail/
       - id: well-known/tool/development/devspace::devspace-dev-container-context
       - id: "metadata/file/naming::test-directory-component"
+      - id: objectives/evasion/indicator-removal/history::history-isolation-benign-context
   - id: mysql-histfile-devnull
     desc: MYSQL_HISTFILE=/dev/null redirection
     crit: suspicious
@@ -116,17 +113,15 @@ traits:
     attack: T1070.003
     if:
       type: text
-      substr: 'set +o history'
+      regex: '(?m)(^|[;&|]\s*)set\s+\+o\s+history\b'
     unless:
-      - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-      - id: well-known/tool/detection/ai-guardrail::command-rule-corpus
+      - id: well-known/tool/detection/
       - id: well-known/tool/sysadmin/alpine-packages/
       - id: well-known/tool/development/lint/linter::swiftlint-release-binary
       - id: metadata/lang/compiler/systems::swift-argument-parser-shell-completion-artifacts
       - id: micro-behaviors/process/tty/pty::shell-history-suppression-context
-      - id: micro-behaviors/process/create/shell/interactive::login-shell-probe-history-isolation
       - id: metadata/lang/scripted::dts-declaration-file
-      - id: metadata/package/testing/harness/fixture::shell-spec-case-file-context
+      - id: metadata/package/testing/
   - id: powershell-psreadline-history-remove
     desc: PowerShell PSReadLine history delete
     crit: suspicious
@@ -146,6 +141,7 @@ traits:
     unless:
     - id: metadata/package/documentation/agent-safety::security-example-documentation
     - id: metadata/package/documentation/agent-safety::authorized-reference-exercise
+    - id: metadata/file/profile/markup::technique-catalog-notes
 composite_rules:
   - id: histfile-null
     desc: Redirects shell history to /dev/null
@@ -164,9 +160,8 @@ composite_rules:
       - id: well-known/tool/sysadmin/unix-benign::emacs-tramp-native-eln
       - id: micro-behaviors/process/tty/pty::terminal-runner-history-isolation
       - id: metadata/build/package/maintainer-scripts::cloud-marketplace-cleanup-path
-      - id: micro-behaviors/process/create/shell/interactive::isolated-rcfile-history
-      - id: micro-behaviors/process/create/shell/interactive::login-shell-probe-history-isolation
       - id: metadata/package/tooling::azure-agentbaker-tree
+      - id: objectives/evasion/indicator-removal/history::history-isolation-benign-context
   - id: mysql-histfile-null
     desc: Clears MySQL command history
     crit: suspicious
@@ -207,7 +202,7 @@ composite_rules:
       - id: native-shell-history-truncate
     unless:
       - id: well-known/tool/sysadmin/unix-benign::emacs-tramp-native-eln
-      - id: micro-behaviors/process/create/shell/interactive::isolated-rcfile-history
+      - id: objectives/evasion/indicator-removal/history::history-isolation-benign-context
   - id: shell-history-entry-delete-and-null
     desc: Shell history entry deletion and redirection
     # History isolation can be legitimate in terminal runners; the combined
@@ -223,14 +218,19 @@ composite_rules:
       - id: shell-history-entry-delete
       - id: fc-null-history
     near_lines: 4
+  # The history path and the O_TRUNC open have to be the same operation.
+  # GNU bash names ~/.bash_history in bash_default_histfile and, dozens of
+  # lines later, creates a missing HISTFILE with O_TRUNC. That is the shell
+  # writing its own history, not a wipe of someone else's.
   - id: native-shell-history-truncate
     desc: Native shell history truncate
     crit: hostile
     conf: 0.96
     for: [c, cpp, objc]
     attack: T1070.003
+    near_lines: 16
     all:
-      - id: objectives/credential-access/shell/history::shell-history
+      - id: micro-behaviors/fs/path/personal::bash-history-path-literal
       - id: micro-behaviors/fs/file/truncate::open-o-trunc-flag
   - id: combined-history-prompt-suppression
     desc: Shell history and prompt logging disabled
@@ -243,3 +243,4 @@ composite_rules:
     unless:
       - id: well-known/tool/sysadmin/unix-benign::emacs-tramp-native-eln
       - id: micro-behaviors/process/create/shell/interactive::isolated-rcfile-history
+      - id: objectives/evasion/indicator-removal/history::history-isolation-benign-context

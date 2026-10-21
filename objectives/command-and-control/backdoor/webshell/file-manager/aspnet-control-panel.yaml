@@ -8,6 +8,30 @@ defaults:
   mbc: B0030
 
 traits:
+  - id: aspnet-control-panel-querystring-file-param
+    desc: Request parameter supplies file path
+    crit: notable
+    conf: 0.97
+    if:
+      type: text
+      exclude_html_comments: true
+      regex: '(?i)Request\.Params\[\s*["'']file["'']\s*\]'
+  - id: aspnet-control-panel-logical-drives
+    desc: ASP.NET enumerates logical drives
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      exclude_html_comments: true
+      regex: '(?i)GetLogicalDrives\s*\(\s*\)'
+  - id: aspnet-control-panel-directory-listing-call
+    desc: ASP.NET lists directory entries
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      exclude_html_comments: true
+      regex: '(?i)\.(GetDirectories|GetFiles)\s*\('
   - id: aspnet-control-panel-cmd-process
     desc: ASP.NET starts cmd.exe
     crit: notable
@@ -16,14 +40,6 @@ traits:
       type: text
       exclude_html_comments: true
       regex: '(?i)ProcessStartInfo\s*\(\s*["'']cmd\.exe["'']\s*\)'
-  - id: aspnet-control-panel-shell-stdin
-    desc: ASP.NET writes commands to shell input
-    crit: notable
-    conf: 0.97
-    if:
-      type: text
-      exclude_html_comments: true
-      regex: '(?i)RedirectStandardInput\s*=\s*true|\bsIn\.WriteLine\s*\('
   - id: aspnet-control-panel-command-input
     desc: ASP.NET command field reaches its shell runner
     crit: notable
@@ -32,14 +48,6 @@ traits:
       type: text
       exclude_html_comments: true
       regex: '(?i)command\s*\(\s*Command\.Text\s*\)'
-  - id: aspnet-control-panel-startinfo-cmd-exe
-    desc: ASP.NET process runs cmd.exe
-    crit: notable
-    conf: 0.97
-    if:
-      type: text
-      exclude_html_comments: true
-      regex: '(?i)StartInfo\.FileName\s*=\s*["'']cmd\.exe["'']'
   - id: aspnet-control-panel-text-startinfo-arguments
     desc: ASP.NET text enters shell arguments
     crit: notable
@@ -96,14 +104,6 @@ traits:
       type: text
       exclude_html_comments: true
       regex: '(?is)\.HasFile[\s\S]{0,700}\w+\.SaveAs\s*\(\s*\w+\s*\+\s*["'']/["'']\s*\+\s*\w+'
-  - id: aspnet-control-panel-request-file-download
-    desc: ASP.NET returns a request-selected file
-    crit: notable
-    conf: 0.97
-    if:
-      type: text
-      exclude_html_comments: true
-      regex: '(?i)Response\s*\.\s*WriteFile\s*\('
   - id: aspnet-control-panel-request-get-value
     desc: ASP.NET reads the requested download path
     crit: notable
@@ -170,14 +170,36 @@ traits:
       regex: '(?is)new\s+SqlCommand\s*\(\s*command\s*,\s*myconn\s*\)[\s\S]{0,180}ExecuteReader\s*\('
 
 composite_rules:
+  # Read-only sibling of the file-manager panels: no upload, delete, or
+  # password gate, but any HTTP caller can enumerate every drive and
+  # directory and download any file whose path they supply. Whole-
+  # filesystem read exposure is the hostile claim on its own.
+  - id: aspnet-unauthenticated-file-browser
+    desc: ASP.NET endpoint browses drives and downloads any file
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
+      - id: aspnet-control-panel-directory-listing-call
+      - id: aspnet-control-panel-logical-drives
+      - id: aspnet-control-panel-querystring-file-param
+      - id: micro-behaviors/communications/http/response::aspnet-response-writefile
+  - id: aspnet-request-file-download
+    desc: ASP.NET serves any requested file for download
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
+      - id: aspnet-control-panel-querystring-file-param
+      - id: micro-behaviors/communications/http/response::aspnet-response-writefile
   - id: aspnet-control-panel-command-loop
     desc: ASP.NET form runs commands through cmd.exe and returns output
     crit: hostile
     conf: 0.99
     all:
-      - id: "metadata/lang/source/syntax::aspnet-page-directive"
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-cmd-process
-      - id: aspnet-control-panel-shell-stdin
+      - id: micro-behaviors/process/io/stream::aspnet-input-redirect-or-line-write
       - id: micro-behaviors/process/io/stream::aspnet-output-redirect-or-read
       - id: aspnet-control-panel-command-input
 
@@ -186,7 +208,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     all:
-      - id: "metadata/lang/source/syntax::aspnet-page-directive"
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-file-listing
       - id: aspnet-control-panel-upload-saveas
       - id: aspnet-control-panel-directoryinfo
@@ -199,8 +221,8 @@ composite_rules:
     crit: hostile
     conf: 0.99
     all:
-      - id: "metadata/lang/source/syntax::aspnet-page-directive"
-      - id: aspnet-control-panel-startinfo-cmd-exe
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
+      - id: micro-behaviors/process/create/shell/spawn::aspnet-startinfo-cmd-exe
       - id: aspnet-control-panel-text-startinfo-arguments
       - id: micro-behaviors/process/io/stream::aspnet-output-redirect-or-read
 
@@ -209,12 +231,12 @@ composite_rules:
     crit: hostile
     conf: 0.99
     all:
-      - id: "metadata/lang/source/syntax::aspnet-page-directive"
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-directoryinfo
       - id: aspnet-control-panel-directoryinfo-getdirectories
       - id: aspnet-control-panel-directoryinfo-getfiles
       - id: aspnet-control-panel-request-upload-saveas
-      - id: aspnet-control-panel-request-file-download
+      - id: micro-behaviors/communications/http/response::aspnet-response-writefile
       - id: aspnet-control-panel-request-get-value
       - id: aspnet-control-panel-request-file-delete
 
@@ -223,7 +245,7 @@ composite_rules:
     crit: hostile
     conf: 0.99
     all:
-      - id: "metadata/lang/source/syntax::aspnet-page-directive"
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-file-listing
       - id: aspnet-control-panel-directory-getdirectories
       - id: aspnet-control-panel-upload-saveas
@@ -234,7 +256,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     all:
-      - id: "metadata/lang/source/syntax::aspnet-page-directive"
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-user-supplied-sql
       - id: aspnet-control-panel-query-executes
       - id: aspnet-control-panel-hardcoded-password
