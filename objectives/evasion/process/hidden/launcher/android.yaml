@@ -47,7 +47,46 @@ traits:
       type: text
       word: setComponentEnabledSetting
 
+  - id: android-dex-hide-icon-operation
+    desc: DEX defines an app icon hiding operation
+    for: [dex]
+    conf: 0.94
+    if:
+      type: text
+      exact: hideIcon
+
+  - id: android-dex-foreground-service
+    desc: DEX starts an Android foreground service
+    for: [dex]
+    conf: 0.94
+    if:
+      type: text
+      exact: startForeground
+
+  - id: android-dex-service-restart-watchdog
+    desc: DEX restarts a service after task removal
+    for: [dex]
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: text
+      regex: '(scheduleWatchdogWork|enqueueRestart)'
+
 composite_rules:
+  - id: android-hidden-persistent-fcm-surveillance-agent
+    desc: Android command agent hides its icon and restarts its service
+    crit: hostile
+    conf: 0.99
+    for: [android_apk, zip, dex]
+    scope: archive
+    attack: T1628.001,T1624.001
+    all:
+      - id: objectives/command-and-control/channel/messaging::android-fcm-banking-surveillance-rat
+      - id: android-dex-hide-icon-operation
+      - id: android-set-component-enabled-setting-reference
+      - id: android-dex-foreground-service
+      - id: android-dex-service-restart-watchdog
+
   # Both states set side by side is a toggle (a receiver switched by a flag) or
   # a swap (one launcher alias disabled as another is enabled), so a launcher
   # entry remains. Suppressing the icon only ever disables.
@@ -62,12 +101,16 @@ composite_rules:
   # The stager shape of Android Meterpreter-style payloads, whatever the
   # package is renamed to: hide the launcher icon, open a client or listening
   # socket for the operator, and load the code it receives with DexClassLoader.
+  # A file manager co-locates the same names for other reasons: a home-chooser
+  # toggle, an FTP ServerSocket, and an ads SDK that loads an embedded jar.
+  # Those sit in one multidex blob. The stager claim is the compact dex.
   - id: android-hidden-launcher-socket-dex-stager
     desc: Hides its launcher, opens sockets, loads received DEX code
     crit: hostile
     conf: 0.95
     attack: T1406,T1628.001,T1624.001
     for: [dex]
+    size_max: 4000000
     all:
       - id: android-set-component-enabled-setting-reference
       - id: micro-behaviors/process/create/loader::dex-class-loader
@@ -87,3 +130,27 @@ composite_rules:
       # Swaps MainActivityAlias with MainActivityStatic. The launcher stays.
       - id: metadata/package/tooling::metrolist-source-tree
       - id: well-known/app/communication/fairemail::fairemail-email-client-context
+
+  - id: android-dex-hide-launcher-icon
+    desc: DEX hideIcon method modifies component enable state
+    crit: suspicious
+    conf: 0.94
+    for: [dex]
+    all:
+      - id: android-dex-hide-icon-operation
+      - id: android-set-component-enabled-setting-reference
+
+  # Stealth Trojan persistence: withdraws the application from the launcher
+  # by disabling its component while maintaining persistence via boot receivers.
+  - id: android-hidden-launcher-boot-persistence
+    desc: Hides application launcher icon with boot persistence
+    crit: hostile
+    conf: 0.97
+    attack: T1628.001,T1624.001
+    for: [android_apk, zip, dex, xml]
+    scope: archive
+    all:
+      - id: android-dex-hide-icon-operation
+      - id: android-set-component-enabled-setting-reference
+      - id: metadata/permission/activation::android-receive-boot-completed-request
+      - id: metadata/package/entrypoint::android-boot-completed-action-axml

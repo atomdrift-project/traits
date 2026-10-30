@@ -3,25 +3,6 @@ defaults:
   platforms: [unix, windows, android, ios]
 
 composite_rules:
-- id: suspected-publisher-takeover
-  desc: Fresh release from unlisted publisher
-  # Publisher/maintainer drift on a new package is a provenance signal, not
-  # proof of takeover. Hostile supply-chain conclusions require stronger
-  # registry evidence or additional package behavior.
-  crit: notable
-  conf: 0.72
-  attack: "T1195.002"
-  all:
-  - id: metadata/registry::publisher-not-maintainer
-  - id: metadata/registry::freshly-published
-  any:
-  - id: metadata/registry::recent-package
-  - id: metadata/registry::low-adoption
-  - id: metadata/registry::dormant-package-reawakened
-  - id: metadata/registry::brand-new-package
-  unless:
-  - id: metadata/registry::many-releases
-
 - id: dormant-package-revived
   desc: Dormant package suddenly published again
   crit: notable
@@ -45,7 +26,7 @@ composite_rules:
   scope: outer
   unless:
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
   all:
   - id: metadata/registry::registry-security-hold-record
   - id: metadata/registry::version-removed
@@ -71,7 +52,7 @@ composite_rules:
   scope: outer
   unless:
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
   all:
   - id: metadata/registry::version-removed
   - id: metadata/registry::no-maintainers
@@ -87,7 +68,7 @@ composite_rules:
   - id: "metadata/package/versioning/scheme::package-version-shape-profile"
 
 - id: removed-package-with-node-postinstall
-  for: [registry, package.json]
+  for: [registry, package.json, npm]
   desc: Removed package retains a Node postinstall hook
   # A local Node lifecycle hook is common package behavior in isolation. A
   # release removed from the registry is a different context: the hook is
@@ -97,6 +78,10 @@ composite_rules:
   # would have executed.
   crit: suspicious
   conf: 0.86
+  # Correlate the registry removal with this same fetched package's manifest.
+  # Restrict evaluation to a package archive. Pooling across an arbitrary
+  # source archive can pair a removed fixture dependency with an unrelated
+  # postinstall hook elsewhere in the tree.
   scope: outer
   attack: "T1195.002"
   unless:
@@ -110,14 +95,6 @@ composite_rules:
   - id: metadata/registry::version-removed
   - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
 
-
-- id: freshly-published-deprecated-install
-  desc: Fresh release of deprecated package
-  crit: notable
-  conf: 0.65
-  all:
-  - id: metadata/registry::deprecated
-  - id: metadata/registry::freshly-published
 
 - id: fresh-unestablished-throwaway
   desc: Brand-new low-adoption package
@@ -151,3 +128,37 @@ composite_rules:
   all:
   - id: metadata/registry::version-removed
   - id: objectives/supply-chain/recon-exfil/oast/host-profile::npm-postinstall-fingerprint-post-to-tunnel
+
+- id: removed-dominated-char-obfuscation
+  desc: Removed npm release ships dominated-character obfuscation
+  crit: suspicious
+  conf: 0.93
+  attack: "T1195.002,T1027"
+  mbc: B0032
+  scope: outer
+  for: [registry, npm, package.json, javascript, typescript]
+  all:
+  - id: metadata/registry::version-removed
+  - id: objectives/anti-static/obfuscation/string/reconstruct::js-dominant-char-ratio
+  unless:
+  - id: metadata/package/publishing::is-private
+  - id: metadata/package/testing/
+  - id: metadata/path::test-directory-component
+
+# The publication/stub observations live in metadata. This remaining rule
+# requires dominated-character source in addition to the naming observation.
+- id: npm-testmetest-char-pad-stub
+  desc: -testmetest campaign package pads entry with one character
+  crit: suspicious
+  conf: 0.93
+  attack: "T1195.002,T1027"
+  mbc: B0032
+  scope: archive
+  for: [npm, package.json, javascript]
+  all:
+  - id: metadata/package/name/vocabulary::npm-testmetest-suffix
+  - id: objectives/anti-static/obfuscation/string/reconstruct::js-dominant-char-ratio
+  unless:
+  - id: metadata/package/publishing::is-private
+  - id: metadata/package/testing/
+  - id: metadata/path::test-directory-component

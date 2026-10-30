@@ -16,9 +16,11 @@ traits:
         import "elf"
         rule x86_64_framed_attack_task_code {
           strings:
-            // Function entry, then duration, vector, target count and masks.
+            // A 32-bit or REX.W 64-bit first save precedes the same parser.
+            // Entering after REX.W still executes the parser, although the
+            // caller's saved RBX upper half is then not preserved.
             $parser = {
-              48 89 5C 24 ?? [75]
+              89 5C 24 ?? [75]
               44 8B 37 41 0F CE 83 FE 04 74 ??
               0F B6 47 04 83 FE 05 88 44 24 ?? 74 ??
               44 0F B6 6F 05 45 84 ED 74 ?? 44 8D 7B FA
@@ -35,6 +37,19 @@ traits:
               0F B7 D2 E8 [4] 0F B7 84 24 [4] 66 85 C0 0F 84 [4]
               48 89 E7 0F B7 F0 E8 ?? ?? ?? ??
             }
+            // Equivalent build with the body at rsp+disp8 rather than rsp.
+            // Check all three receive targets and the shared body displacement.
+            $dispatch_stack = {
+              66 C1 C8 08 66 3D 00 04 66 89 84 24 [4] 0F 87 [4]
+              0F B7 94 24 [4] C7 03 00 00 00 00 48 8D 74 24 ??
+              8B 3D [4] B9 02 40 00 00 E8 [4] 83 F8 FF 0F 84 [4]
+              85 C0 74 ?? 8B 3D [4] B9 00 40 00 00 BA 02 00 00 00
+              48 89 EE E8 [4] 8B 3D [4] 48 8D 74 24 ??
+              0F B7 94 24 [4] B9 00 40 00 00 66 C1 CA 08
+              66 89 94 24 [4] 0F B7 D2 E8 [4]
+              0F B7 84 24 [4] 66 85 C0 0F 84 [4]
+              48 8D 7C 24 ?? 0F B7 F0 E8 ?? ?? ?? ??
+            }
             $recv = {
               45 31 C9 45 31 C0 E9 01 00 00 00 90 53
               4C 63 D1 48 63 FF B8 2D 00 00 00 0F 05
@@ -49,13 +64,52 @@ traits:
                 for any p in (1..#parser) : (
                   @parser[p] >= elf.sections[s].offset and
                   @parser[p]+!parser[p] <= elf.sections[s].offset+elf.sections[s].size and
-                  @dispatch[d]+162+int32(@dispatch[d]+158) == @parser[p]
+                  (
+                    @dispatch[d]+162+int32(@dispatch[d]+158) == @parser[p] or
+                    @parser[p] > elf.sections[s].offset and
+                    uint8(@parser[p]-1) == 0x48 and
+                    @dispatch[d]+162+int32(@dispatch[d]+158) == @parser[p]-1
+                  )
                 ) and
                 for any r in (1..#recv) : (
                   @recv[r] >= elf.sections[s].offset and
                   @recv[r]+!recv[r] <= elf.sections[s].offset+elf.sections[s].size and
-                  @dispatch[d]+55+int32(@dispatch[d]+51) == @recv[r] and
+                  (
+                    @dispatch[d]+55+int32(@dispatch[d]+51) == @recv[r] or
+                    // The optional body peek may return immediately: EAX
+                    // still holds the nonzero frame length. The subsequent
+                    // body recv and parser handoff remain mandatory.
+                    (
+                      @dispatch[d]+55+int32(@dispatch[d]+51) >= elf.sections[s].offset and
+                      @dispatch[d]+55+int32(@dispatch[d]+51) < elf.sections[s].offset+elf.sections[s].size and
+                      uint8(@dispatch[d]+55+int32(@dispatch[d]+51)) == 0xc3
+                    )
+                  ) and
                   @dispatch[d]+134+int32(@dispatch[d]+130) == @recv[r]
+                )
+              ) or
+              elf.sections[s].name == ".text" and
+              for any d in (1..#dispatch_stack) : (
+                @dispatch_stack[d] >= elf.sections[s].offset and
+                @dispatch_stack[d]+!dispatch_stack[d] <= elf.sections[s].offset+elf.sections[s].size and
+                uint8(@dispatch_stack[d]+40) == uint8(@dispatch_stack[d]+104) and
+                uint8(@dispatch_stack[d]+40) == uint8(@dispatch_stack[d]+159) and
+                for any p in (1..#parser) : (
+                  @parser[p] >= elf.sections[s].offset and
+                  @parser[p]+!parser[p] <= elf.sections[s].offset+elf.sections[s].size and
+                  (
+                    @dispatch_stack[d]+168+int32(@dispatch_stack[d]+164) == @parser[p] or
+                    @parser[p] > elf.sections[s].offset and
+                    uint8(@parser[p]-1) == 0x48 and
+                    @dispatch_stack[d]+168+int32(@dispatch_stack[d]+164) == @parser[p]-1
+                  )
+                ) and
+                for any r in (1..#recv) : (
+                  @recv[r] >= elf.sections[s].offset and
+                  @recv[r]+!recv[r] <= elf.sections[s].offset+elf.sections[s].size and
+                  @dispatch_stack[d]+57+int32(@dispatch_stack[d]+53) == @recv[r] and
+                  @dispatch_stack[d]+94+int32(@dispatch_stack[d]+90) == @recv[r] and
+                  @dispatch_stack[d]+138+int32(@dispatch_stack[d]+134) == @recv[r]
                 )
               )
             )

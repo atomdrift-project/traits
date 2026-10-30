@@ -59,64 +59,6 @@ traits:
   if:
     type: text
     regex: chmod\s+-R\s+go=\s+~?/?\.ssh
-- id: js-authorized-keys-write
-  desc: Node.js writes to SSH authorized_keys
-  crit: suspicious
-  conf: 0.9
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: (appendFile|writeFile|appendFileSync|writeFileSync)\s*\(.{0,200}authorized_keys
-  unless:
-  # Test harnesses spin up throwaway sshd instances against temp directories;
-  # writing a fixture authorized_keys there is test setup, not persistence.
-  - id: metadata/package/testing/
-  - id: well-known/tool/development/ci/vmactions-freebsd/
-  - id: well-known/tool/development/ci/cross-platform-actions::cross-platform-actions-context
-  - id: well-known/app/infrastructure/xcelsior::xcelsior-onboarding-context
-  - type: text
-    substr: tmate-io/tmate/releases
-  # GitHub Actions that install the triggering user's published SSH keys use
-  # Octokit's explicit public-key endpoint; this is user-authorized runner
-  # setup, not an attacker-supplied authorized_keys backdoor.
-  - type: text
-    substr: listPublicKeysForUser
-  - id: "metadata/file/naming::test-directory-component"
-- id: js-authorized-keys-short-variable-append
-  desc: Node writes short authorized_keys var
-  crit: suspicious
-  conf: 0.9
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: "(appendFile|writeFile)(Sync)?\\s*\\(\\s*(authKeys|authorizedKeys)\\w*"
-  unless:
-  - id: well-known/tool/development/ci/vmactions-freebsd/
-  - id: well-known/tool/development/ci/cross-platform-actions::cross-platform-actions-context
-  - id: well-known/app/infrastructure/xcelsior::xcelsior-onboarding-context
-  - type: text
-    substr: tmate-io/tmate/releases
-  - type: text
-    substr: listPublicKeysForUser
-  # Creating or touching an empty authorized_keys file (e.g. writeFileSync(authKeys, ""))
-  - type: text
-    regex: '(appendFile|writeFile)(Sync)?\s*\(\s*(authKeys|authorizedKeys)\w*\s*,\s*["'']\s*["'']'
-- id: js-authorized-keys-resolve-path
-  desc: Node resolve/join of authorized_keys path
-  crit: notable
-  conf: 0.9
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: '(resolve|join)\s*\([^\n;]{0,80}authorized_keys'
-- id: js-authorized-keys-binder
-  desc: Node binds an authorizedKeys path variable
-  crit: notable
-  conf: 0.9
-  for: [javascript, typescript]
-  if:
-    type: text
-    regex: '(const|let|var)\s+authorizedKeys\w*\s*='
 - id: js-authorized-keys-join-variable
   desc: Node builds authorized_keys path variable
   crit: notable
@@ -135,7 +77,7 @@ traits:
     regex: '/api/ssh-key([/?#"''`]|$)'
   unless:
   - id: well-known/app/security/bitwarden::bitwarden-app
-  - id: well-known/app/security/bitwarden::bitwarden-text-marker
+  - id: metadata/file/catalog/service::bitwarden-text-marker
 - id: js-public-key-variable
   desc: JavaScript public key variable
   crit: notable
@@ -222,7 +164,7 @@ composite_rules:
   - id: well-known/app/system/kiwi::kiwi-appliance-builder-package
   - id: well-known/app/system/kiwi::kiwi-build-helper-context
   - id: metadata/build/recognized-contexts::development-ssh-provisioning
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: ssh-trust-store-reset
   for: [shell]
   desc: SSH trust store reset with key
@@ -243,7 +185,7 @@ composite_rules:
   - id: well-known/app/system/kiwi::kiwi-build-helper-context
   - id: well-known/tool/development/editor/qtcreator/
   - id: well-known/tool/development/editor/vscode/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: js-ssh-backdoor
   desc: JavaScript SSH key backdoor
   crit: hostile
@@ -251,8 +193,8 @@ composite_rules:
   all:
   - id: micro-behaviors/crypto/asymmetric/ssh::hardcoded-public-key
   any:
-  - id: js-authorized-keys-write
-  - id: js-authorized-keys-short-variable-append
+  - id: micro-behaviors/fs/write/file/target::node-writes-authorized-keys
+  - id: micro-behaviors/communications/ssh/keys::node-authorized-keys-variable-write
   # Prefer the more specific resolved-path finding for the same key install.
   unless:
   - id: js-authorized-key-literal-backdoor
@@ -268,8 +210,8 @@ composite_rules:
   - id: micro-behaviors/fs/path/secret-config::js-ssh-config-path-reference
   any:
   - id: micro-behaviors/fs/path/public-key::js-authorized-keys-path-variable
-  - id: js-authorized-keys-resolve-path
-  - id: js-authorized-keys-binder
+  - id: micro-behaviors/fs/path/public-key::js-authorized-keys-resolve-path
+  - id: metadata/lang/source/declaration::js-authorized-keys-binder
   # Key literals are often declared at module top; path helpers and the write
   # sit hundreds of lines below in postinstall droppers.
   near_bytes: 4800
@@ -296,7 +238,7 @@ composite_rules:
   all:
   - id: js-fetch-ssh-key-task
   - id: js-authorized-keys-join-variable
-  - id: js-authorized-keys-short-variable-append
+  - id: micro-behaviors/communications/ssh/keys::node-authorized-keys-variable-write
   any:
   - id: micro-behaviors/os/firewall/ufw::javascript-ssh-allow-command
   - id: micro-behaviors/fs/chmod/modify::js-ssh-chmod-owner-only-mode-cooccurrence
@@ -314,14 +256,14 @@ composite_rules:
   - id: micro-behaviors/communications/http/get::axios-get-call
   - id: micro-behaviors/communications/http/response::axios-response-data-access
   - id: micro-behaviors/fs/write/file/append::append-file-sync
-  - id: js-authorized-keys-resolve-path
+  - id: micro-behaviors/fs/path/public-key::js-authorized-keys-resolve-path
   - id: micro-behaviors/fs/path/secret-config::js-ssh-config-path-reference
   unless:
   - id: metadata/package/testing/
   - id: metadata/build/recognized-contexts::benign-build-tooling-context
   - id: well-known/tool/development/editor/vscode/
   - id: well-known/tool/development/editor/qtcreator/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: js-cross-platform-ssh-backdoor
   for: [javascript]
   desc: Cross-platform JavaScript SSH backdoor
@@ -365,7 +307,7 @@ composite_rules:
   - id: well-known/tool/development/editor/qtcreator/
   - id: well-known/tool/development/editor/vscode/
 
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: ssh-key-install-with-operator-lockout
   desc: Installs an SSH key and revokes the operator's own access
   crit: hostile

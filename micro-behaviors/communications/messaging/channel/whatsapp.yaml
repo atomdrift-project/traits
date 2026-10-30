@@ -64,17 +64,6 @@ traits:
   # speaks, not credential access; only objective composites infer theft.
   # CDP and service-worker typings use the same property name for a
   # registration handle. That file is not a WhatsApp session store.
-  - id: whatsapp-registration-id-field
-    desc: registrationId protocol field identifier
-    conf: 0.98
-    unless:
-      - id: metadata/lang/scripted::dts-declaration-file
-      - type: text
-        substr: ServiceWorker.RegistrationID
-    if:
-      type: text
-      word: registrationId
-
   - id: whatsapp-newsletter-follow-api-call
     desc: Calls the Baileys newsletterFollow API
     conf: 0.97
@@ -83,39 +72,26 @@ traits:
       kind: call
       regex: '\.newsletterFollow$'
 
+  # Retain source-text matching: runtime-patch consumers also inspect full
+  # replacement modules embedded in string literals. Require FOLLOW as an
+  # argument selector after a comma, rather than anywhere in the target.
+  # Compiled imports may qualify it as Types_1.QueryIds.FOLLOW; preserve
+  # the selector boundary while accepting bounded namespace chains.
+  # Both the raw WMex helper and a local wrapper such as mexQuery can carry
+  # this selector. Bundlers append numeric suffixes to imported helper names.
   - id: whatsapp-newsletter-follow-query
-    desc: Issues a WhatsApp newsletter follow query
+    desc: Newsletter query call uses FOLLOW selector
     conf: 0.97
     if:
       type: text
-      # Baileys exposes both the older newsletterWMexQuery helper and the
-      # lower-level executeWMexQuery path used by library forks. The latter
-      # commonly passes QueryIds.FOLLOW rather than a bare FOLLOW token.
-      # The window allows one level of nested call in the target argument --
-      # fork campaigns decode their channel JID at the call site
-      # (Buffer.from("...", "base64").toString()), and a `)` cannot close
-      # the window or every decoded-target follow escapes the matcher.
-      regex: '(newsletter|execute)WMexQuery(IgnoreResponse)?\s*\([^;]{0,240}\bFOLLOW\b'
-
-  # A follow invocation whose failures vanish: the injected connect-path
-  # follow awaits newsletterFollow inside try and closes with an empty
-  # catch, so a revoked session or a deleted channel never surfaces.
-  # Neutral alone — best-effort fire-and-forget uses the same shape —
-  # the attack reading is composed where a connect trigger drives it.
-  - id: whatsapp-follow-call-error-swallowed
-    desc: Follow call hides its errors
-    crit: component
-    conf: 0.85
-    if:
-      type: text
-      regex: 'newsletterFollow[\s\S]{0,120}catch\s*(\([^)\n]{0,16}\))?\s*\{\s*(//[^\n]{0,20}\n)?\s*\}'
+      regex: '\b(\w*WMexQuery(IgnoreResponse)?\d*|\w*Query)\s*\([^;]{0,240},\s*(\w+\.){0,3}FOLLOW\b'
 
   - id: whatsapp-newsletter-mute-query
     desc: Issues a WhatsApp newsletter mute query
     conf: 0.97
     if:
       type: text
-      regex: '(newsletterWMexQuery|executeWMexQueryIgnoreResponse)\s*\([^)]{0,120}MUTE\b'
+      regex: '(\b\w*WMexQuery(IgnoreResponse)?\d*|\bqueryId\s*:|\bquery_id\b)[^;]{0,240}\b(\w+\.)?MUTE\b'
 
   - id: whatsapp-newsletter-mute-api-call
     desc: Calls the Baileys newsletterMute API
@@ -124,6 +100,14 @@ traits:
       type: symbol
       kind: call
       regex: '\.newsletterMute$'
+
+  - id: whatsapp-newsletter-disable-admin-notifications
+    desc: Disables newsletter admin notifications
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: 'newsletterUserSetting.{0,160}ADMIN_NOTIFICATIONS.{0,50}false'
 
   - id: whatsapp-newsletter-react-api-call
     desc: Calls the Baileys newsletterReactMessage API
@@ -235,27 +219,8 @@ traits:
       type: text
       regex: '\bjid\s*:\s*["'']\d{10,25}@newsletter["'']'
 
-  # The official channel's own display name written as a literal value of
-  # `newsletterName` (quoted or template). A real "forwarded from WhatsApp"
-  # attribution is applied server-side from an actual forward; a client that
-  # stamps the platform's name into this field is forging the badge,
-  # whatever JID accompanies it. Neutral on its own -- a standalone constant
-  # could carry the name -- the forgery claim is composed in
-  # objectives/impact/ui/manipulation/social/.
-  - id: whatsapp-official-newsletter-name-literal
-    desc: Sets newsletterName to WhatsApp literal
-    conf: 0.96
-    if:
-      type: text
-      regex: 'newsletterName\s*:\s*["''`]WhatsApp["''`]'
-
-  # The same official-name stamp with the literal moved behind a caller
-  # override (`newsletterName: opts.name || `WhatsApp``). Forks dress
-  # outgoing messages in the platform's name while keeping a parameter for
-  # the moments a caller supplies one; the on-disk default is still the
-  # platform badge on every message sent without an explicit name. Neutral
-  # on its own -- a standalone constant could carry the name -- the forgery
-  # claim is composed in objectives/impact/ui/manipulation/social/.
+  # Source-level fallback for the display name. This alone establishes no
+  # protocol-valid attribution; ContextInfo placement is checked separately.
   - id: whatsapp-official-newsletter-name-fallback
     desc: newsletterName defaults to WhatsApp literal
     conf: 0.96
@@ -309,19 +274,8 @@ traits:
       type: text
       regex: '\bnoSelfSync\s*:\s*true\b'
 
-  # A large literal records client-authored forwarding metadata. It does not
-  # establish a server-rendered badge, spam, or an unauthorized send.
-  - id: whatsapp-large-forwarding-score
-    desc: Sets extreme WhatsApp forwarding-score literal
-    conf: 0.95
-    if:
-      type: text
-      regex: 'forwardingScore\s*:\s*\d{5,}'
-
-  # A channel subscription written into the code rather than chosen by whoever
-  # is running the bot. `newsletterFollow(jid)` taking a variable is the
-  # library's own API surface; a literal JID at the call site means one
-  # specific channel gains a follower from every session that opens.
+  # A literal channel target at a follow call site. Whether that call is
+  # autonomous or invoked explicitly by a consumer requires separate evidence.
   - id: whatsapp-newsletter-follow-hardcoded-jid
     desc: Follows a hardcoded WhatsApp channel
     conf: 0.96
@@ -388,12 +342,8 @@ traits:
       type: text
       regex: '\b(orderTitle\s*:\s*|(title|text)\s*:.{0,60}\|\|\s*)[A-Z][A-Z_0-9]{2,}\s*[,}]'
 
-  # Upstream Baileys always randomizes the device-linking secret
-  # (`customPairingCode ?? bytesToCrockford(randomBytes(5))`). A literal
-  # assignment pins every session to one predictable code, so anyone who
-  # reads the dependency knows the secret before pairing starts. Neutral on
-  # its own -- fixtures and documentation quote example codes -- the attack
-  # reading is composed where a socket client carries it.
+  # Upstream accepts customPairingCode as an explicit API parameter.
+  # This observes a literal; it does not establish theft or an auth bypass.
   - id: whatsapp-hardcoded-pairing-code
     desc: Hardcoded WhatsApp pairing code
     conf: 0.93
@@ -401,10 +351,7 @@ traits:
       type: text
       regex: 'pairingCode\s*[=:]\s*["''][A-Za-z0-9]{4,12}["'']'
 
-  # The socket-factory override that supplies an embedded pairingCode when the
-  # caller omits customPairingCode. Neutral alone — wrappers may forward
-  # caller input — the attack reading is composed with a hardcoded config
-  # literal and the link-code registration stanza.
+  # Socket-factory wrapper forwards a config default when no code is supplied.
   - id: whatsapp-socket-pairing-code-config-fallback
     desc: Pairing request defaults to config pairingCode
     conf: 0.94
@@ -446,12 +393,14 @@ traits:
   # QueryIds.FOLLOW)`.  Keep this as a protocol capability; the autonomous
   # delayed invocation and supply-chain interpretation are composed below in
   # their respective objective directories.
+  # Stop at semicolons so a wrapper call cannot borrow a later decoder.
+  # Require FOLLOW in the selector argument, not inside the target data.
   - id: whatsapp-newsletter-follow-base64-target
-    desc: Follow query decodes a Base64 target
+    desc: Newsletter FOLLOW query with Base64 target
     conf: 0.98
     if:
       type: text
-      regex: '(?is)newsletterWMexQuery\s*\([\s\S]{0,300}?base64[\s\S]{0,80}?FOLLOW\b'
+      regex: '(?i)(WMex|mex)Query\w*\s*\([^;]{0,240}base64[^;]{0,80},\s*(\w+\.){0,3}FOLLOW\b'
 
   # Decode the target independently so a non-JID Base64 argument cannot make
   # the follow-call shape above look like fixed WhatsApp channel targeting.
@@ -467,7 +416,7 @@ traits:
   # XOR or character-code rebuild hides the suffix. Forks use this to keep the
   # follow target off disk while leaving one recoverable layer for static scans.
   - id: whatsapp-newsletter-base64-encoded-suffix
-    desc: Base64 layer hides newsletter JID suffix
+    desc: Base64-encoded newsletter JID suffix
     conf: 0.96
     if:
       type: encoded
@@ -480,11 +429,38 @@ traits:
   # owner sends. Distinct from `whatsapp-forwarded-newsletter-attribution`,
   # which keys on the `forwardedNewsletterMessageInfo` wrapper.
   - id: whatsapp-newsletter-attribution-jid-literal
-    desc: Hardcoded channel JID in message metadata
+    desc: Literal newsletter JID in message attribution
     conf: 0.95
     if:
       type: text
-      regex: 'newsletterJid\s*:\s*([^|"''\n]{0,80}\|\|\s*)?["'']\d{10,20}@newsletter'
+      regex: 'newsletterJid\s*:\s*([^|"''\n]{0,80}\|\|\s*)?["''](\d{10,20}|0)@newsletter'
+
+  # Hex-hidden channel ids are matched as decoded data, then joined to a
+  # newsletterJid field by the composite below.
+  - id: whatsapp-newsletter-attribution-hex-field
+    desc: Hex decoder used for channel metadata
+    conf: 0.94
+    if:
+      type: text
+      regex: 'newsletterJid[\s\S]{0,160}Buffer\.from'
+
+  - id: whatsapp-newsletter-attribution-hex-value
+    desc: Hex-encoded WhatsApp newsletter JID
+    conf: 0.96
+    if:
+      type: encoded
+      encoding: hex
+      regex: '^\d{10,20}@newsletter$'
+
+  # Some forks replace the caller's image/video annotations directly instead
+  # of using a caller-omission fallback. This atom describes that assignment;
+  # the channel block and its fixed target are composed at the objective tier.
+  - id: whatsapp-media-annotation-image-video-assignment
+    desc: Assigns annotations to image/video uploads
+    conf: 0.92
+    if:
+      type: text
+      regex: 'if\s*\([^)]{0,100}(image|video)[^)]{0,100}\)[\s\S]{0,100}\.annotations\s*=\s*\w+'
 
   # The media builder keeps caller annotations when given (`annotations ?
   # { annotations: <same expression> } : { annotations: [ ... ] }`) and
@@ -522,6 +498,13 @@ traits:
     if:
       type: text
       regex: 'annotations\s*:\s*\[\s*\{[\s\S]{0,800}?\bnewsletter\s*:\s*\{'
+
+  - id: whatsapp-newsletter-annotation-array-constant
+    desc: Array constant contains newsletter annotation
+    conf: 0.92
+    if:
+      type: text
+      regex: '(const|let|var)\s+\w+\s*=\s*\[\s*\{[\s\S]{0,800}?\bnewsletter\s*:\s*\{'
 
   # Forks stash the follow target in a local before calling newsletterWMexQuery
   # with QueryIds.FOLLOW, instead of the public newsletterFollow(jid) API.
@@ -563,14 +546,16 @@ traits:
       regex: '\.add\(\s*(this\.)?DEFAULT_[A-Z_]*CHANNEL[A-Z_]*\s*\)'
 
   - id: whatsapp-default-auto-follow-channel-list
-    desc: Default auto-follow channel JID list constant
+    desc: Default auto-follow channel JID list
     conf: 0.97
     if:
       type: text
       # Only an array literal is a list. A single JID constant is
       # whatsapp-default-auto-follow-newsletter-jid below; matching it
       # here counted one hardcoded channel as both a list and a JID.
-      regex: 'DEFAULT_AUTO_FOLLOW_CHANNELS\s*=\s*\[\s*["'']\d{10,20}@newsletter'
+      # Forks may name the default field `autoFollow` instead of using a
+      # DEFAULT_AUTO_FOLLOW_CHANNELS constant.
+      regex: '(DEFAULT_AUTO_FOLLOW_CHANNELS\s*=|\bautoFollow\s*:)\s*\[\s*["'']\d{10,20}@newsletter'
 
   - id: whatsapp-auto-follow-newsletter-jids-array
     desc: AUTO_FOLLOW_NEWSLETTER_JIDS preset channel list
@@ -619,11 +604,11 @@ traits:
   # `newsletterFollow(jid)` wrapper, so this stays a neutral capability;
   # objective composites pair it with autonomous triggers.
   - id: whatsapp-newsletter-follow-token-target
-    desc: Follow token call carries newsletter target
+    desc: Newsletter target beside FOLLOW selector
     conf: 0.97
     if:
       type: text
-      regex: '\{\s*newsletter_id\s*:[\s\S]{0,160}\bFOLLOW\b'
+      regex: '\{\s*newsletter_id\s*:[^;]{0,160}\}\s*,\s*(\w+\.)?FOLLOW\b'
 
   - id: whatsapp-auto-follow-newsletter-config-key
     desc: Default config sets autoFollowNewsletterJid
@@ -762,6 +747,14 @@ traits:
       regex: '["''`]\d{10,20}@newsletter["''`]'
 
 composite_rules:
+  - id: whatsapp-newsletter-attribution-hex-jid
+    desc: Hex-decodes channel JID in message metadata
+    conf: 0.96
+    all:
+      - id: whatsapp-newsletter-attribution-hex-field
+      - id: whatsapp-newsletter-attribution-hex-value
+    near_bytes: 500
+
   - id: whatsapp-newsletter-follow-invocation
     desc: Invokes a WhatsApp newsletter follow
     conf: 0.97

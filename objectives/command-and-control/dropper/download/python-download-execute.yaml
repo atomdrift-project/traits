@@ -87,7 +87,7 @@ composite_rules:
   scope: file
   all:
   - id: micro-behaviors/communications/url/encoded::python-b64decode-https-url
-  - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-call
+  - id: micro-behaviors/communications/http/client/exchange::urllib-urlopen-call
   - id: micro-behaviors/process/interpreter/python::python-getattr-builtins
   - id: micro-behaviors/data/decode/base64::b64decode-call
 - id: python-urllib-alias-download-execute
@@ -105,24 +105,14 @@ composite_rules:
   - id: micro-behaviors/process/create/subprocess::python-subprocess-string-command
   - id: micro-behaviors/process/create/shell/command-mode::python-os-system
   - id: micro-behaviors/process/create/shell/command-mode::python-os-system-string-command
-- id: python-urllib-shell-script-execute
-  desc: Python urllib fetches and launches a script
-  crit: hostile
-  conf: 0.96
-  attack: T1105,T1059.006
-  scope: file
-  all:
-  - id: metadata/import/python/urllib/request
-  - id: micro-behaviors/process/create/shell/target::shell-exec-script-path
-  - id: micro-behaviors/process/create/subprocess::process-execution
-  - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
-  any:
-  - id: micro-behaviors/process/create/subprocess::python-subprocess-string-command
-  - id: micro-behaviors/process/create/subprocess::call-ast
+# Do not infer a fetch-and-execute chain from file-wide co-occurrence of a
+# urllib import, any shell script path, and any process call. Those facts must
+# be connected by a data/control-flow matcher before supporting this objective.
 - id: python-url-shortener-download-exec
   desc: Downloads from URL shortener and executes payload
   crit: hostile
   conf: 0.95
+  near_lines: 30
   all:
   - id: micro-behaviors/communications/url/shortener::tinyurl
   any:
@@ -144,7 +134,7 @@ composite_rules:
   - id: micro-behaviors/process/create/flags::powershell-hidden-window-flag
   - id: micro-behaviors/process/create/flags::powershell-hidden-window-value
   - id: micro-behaviors/process/argument/option::powershell-policy-bypass-flag
-  - id: micro-behaviors/process/create/flags::powershell-policy-bypass-value
+  - id: micro-behaviors/process/argument/option::powershell-policy-bypass-option-alternatives
   unless:
   - id: well-known/tool/development/agent/ai-cli/shibaclaw::shibaclaw-official-release-updater-context
 - id: python-hidden-remote-powershell-installer
@@ -164,7 +154,7 @@ composite_rules:
   attack: T1105,T1059.006
   near_lines: 30
   all:
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/communications/http/get::requests-get
   - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
   any:
   - id: micro-behaviors/process/create/subprocess::popen-content
@@ -175,7 +165,7 @@ composite_rules:
   conf: 0.96
   attack: T1105,T1059.001,T1564.003
   all:
-  - id: micro-behaviors/data/source/import::alias-subprocess
+  - id: metadata/import/builtin::alias-subprocess
   - id: micro-behaviors/process/create/hidden::python-powershell-w-hidden
   - id: micro-behaviors/communications/http/download/webclient::webclient-downloadfile-call
 - id: python-hidden-ps-zip-stage
@@ -202,7 +192,7 @@ composite_rules:
   conf: 0.96
   near_lines: 20
   all:
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/communications/http/get::requests-get
   - id: micro-behaviors/fs/file/open::binary-write-mode
   - id: micro-behaviors/fs/temp/directory::python-tempdir-exe
 - id: python-temp-exe-popen-shell
@@ -257,8 +247,8 @@ composite_rules:
   - id: metadata/file/size::init-py-file
   - id: micro-behaviors/communications/http/url/github::github-raw-executable-url
   - id: micro-behaviors/communications/http/url/path::mutable-branch-ref-path
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
-  - id: micro-behaviors/communications/http/client/response-body::requests-response-body-access
+  - id: micro-behaviors/communications/http/get::requests-get
+  - id: micro-behaviors/communications/http/client/response-body::python-client-response-body-cooccurrence
   - id: micro-behaviors/fs/file/open::binary-write-mode
   - id: micro-behaviors/process/create/launch::os-startfile-call
   - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
@@ -278,7 +268,7 @@ composite_rules:
   conf: 0.97
   all:
   - id: metadata/build/pip::root-setup-py
-  - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-raw
+  - id: metadata/lang/source/syntax/command::powershell-encoded-payload-command-text
   - id: encoded-powershell-download-exec
   - id: micro-behaviors/process/create/subprocess::popen-content
 - id: encoded-powershell-download-exec
@@ -305,7 +295,7 @@ composite_rules:
   crit: hostile
   conf: 0.98
   all:
-  - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-raw
+  - id: metadata/lang/source/syntax/command::powershell-encoded-payload-command-text
   - id: encoded-powershell-expand-archive-utf16le
   - id: micro-behaviors/process/argument/option::powershell-hidden-command-text
   any:
@@ -316,7 +306,7 @@ composite_rules:
   crit: hostile
   conf: 0.98
   all:
-  - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-raw
+  - id: metadata/lang/source/syntax/command::powershell-encoded-payload-command-text
   - id: micro-behaviors/process/argument/option::powershell-hidden-command-text
   any:
   - id: micro-behaviors/process/create/shell/command-mode::python-os-system
@@ -364,10 +354,13 @@ composite_rules:
   all:
   - id: micro-behaviors/process/interpreter/eval/direct::python-exec-base64-result
   any:
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/communications/http/get::requests-get
   - id: micro-behaviors/process/deploy/script-eval::urlopen-before-exec
   unless:
   - id: metadata/package/testing/presence/harness::verified-python-test-file
+  # Rust integration tests may embed Python snippets as planted search
+  # fixtures; those strings are test input, not a remote payload loader.
+  - id: metadata/package/testing/presence/harness::rust-tests-directory-path
 - id: python-c-base64-decoded-exec-at-import
   desc: Decoded blob run through python -c at import
   crit: hostile
@@ -376,7 +369,7 @@ composite_rules:
   mbc: B0032,E1059.006
   near_lines: 12
   all:
-  - id: micro-behaviors/process/create/subprocess::python-interpreter-variable-code-argument
+  - id: metadata/lang/source/literal::python-variable-minus-c-argument-array
   - id: micro-behaviors/data/decode/base64::b64decode-call
   - id: micro-behaviors/data/control-flow/module-exec::module-level-execution
   unless:
@@ -403,7 +396,7 @@ composite_rules:
   - id: metadata/package/tooling::cargo-dist-installer-oneliner-text
 - id: python-urlretrieve-chmod-run
   desc: urlretrieve then chmod and run
-  crit: hostile
+  crit: suspicious
   conf: 0.96
   attack: T1105,T1059.006
   scope: file
@@ -423,36 +416,11 @@ composite_rules:
   - id: metadata/build/recognized-contexts::python-release-binary-cli-shim
   - id: micro-behaviors/crypto/hash/file::hash-pinned-download-context
   - id: micro-behaviors/crypto/hash/file::manifest-field-digest-compare
-- id: setup-install-urlretrieve-exec
-  desc: Install hook downloads and runs a file
-  crit: hostile
-  conf: 0.96
-  for: [python, makefile]
-  attack: T1195.002,T1105
-  scope: file
-  unless:
-  # Opt-in precompiled-wheel repackaging: the urlretrieve fetches the
-  # project's own wheel and zipfile extracts its libraries; the file is
-  # never run by the setup script, and the exec leg is the CMake build.
-  - id: metadata/build/recognized-contexts::setup-precompiled-wheel-repackage-context
-  - id: metadata/build/recognized-contexts::setup-cached-wheel-rename
-  # Checksum-verified native-library fetch: the urlretrieve downloads a
-  # release tarball plus its .sha256 sidecar, verifies the digest, and
-  # extracts only shared-library members; nothing downloaded is run.
-  - id: micro-behaviors/crypto/hash/file::python-sha256-sidecar-verified-download
-  # Precompiled release asset download: the setup script downloads a prebuilt
-  # release archive from a forge release, extracts it, and delegates the native
-  # build to setuptools build_ext.
-  - id: metadata/build/recognized-contexts::setup-precompiled-release-asset-download
-  all:
-  # File-level urllib context. Proximity lives on the call-site composite:
-  # this dup also matches the import line, which is not a download.
-  - id: micro-behaviors/communications/http/lib/urllib::urllib-urlretrieve-dup
-  - id: micro-behaviors/communications/http/download/helper::urlretrieve-call-near-process-launch
-  any:
-  - id: metadata/build/package/recipe/setup-hooks::setuptools-run-override
-  - id: metadata/build/pip::root-setup-py
-  needs: 1
+  # Release scripts fetch the AppImageKit project's appimagetool to package
+  # the distribution image — the documented AppImage packaging step.
+  # Release scripts fetch the AppImageKit project's appimagetool to package
+  # the distribution image — the documented AppImage packaging step.
+  - id: metadata/build/recognized-contexts::appimagetool-packaging-download-url
 - id: pyproject-url-table-setup-exec
   desc: Setup runs URLs from the project table
   crit: hostile
@@ -481,7 +449,7 @@ composite_rules:
   # The write leg is what makes this a dropper: requests.get plus a pythonw
   # relaunch alone is any Windows-aware Python app that calls an API.
   all:
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/communications/http/get::requests-get
   - id: micro-behaviors/fs/path/basename::pythonw-executable-reference
   - id: micro-behaviors/process/create/subprocess::popen-ast
   any:
@@ -519,7 +487,7 @@ composite_rules:
   scope: file
   near_lines: 12
   all:
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/communications/http/get::requests-get
   - id: micro-behaviors/process/create/thread::python-thread-target-exec
   - id: micro-behaviors/process/create/thread::python-thread-create
 - id: python-import-hidden-iwr-start
@@ -560,5 +528,3 @@ composite_rules:
   - id: micro-behaviors/process/create/subprocess::popen-ast
   - id: micro-behaviors/process/create/thread::python-daemon-thread
   - id: micro-behaviors/process/create/flags::python-create-no-window-hex
-
-

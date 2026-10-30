@@ -86,13 +86,13 @@ traits:
   if:
     type: text
     substr: aHR0cDov
-- id: hexdigest-int-modulo-bucket
-  desc: Hex digest reduced to an integer modulo
+- id: python-hexdigest-decimal-modulus-compaction
+  desc: Hexdigest int mod power of ten
   crit: notable
-  conf: 0.9
+  conf: 0.92
   if:
     type: text
-    regex: '\bint\([^\n]{0,80}\bhexdigest\(\)\s*,\s*16\s*\)[^\n]{0,24}%'
+    substr: hexdigest(), 16) % 10**
 - id: setup-py-bin-env-dump
   desc: setup.py dumps env via /bin/env
   crit: suspicious
@@ -135,7 +135,7 @@ composite_rules:
   all:
   - id: metadata/build/pip::root-setup-py
   - id: metadata/build/package/recipe/setup-hooks::setuptools-egg-info-run-override
-  - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+  - id: micro-behaviors/communications/http/client/exchange::urllib-urlopen
   - id: micro-behaviors/communications/http/lib/urllib::urllib-urlencode
   - id: micro-behaviors/communications/url/host/oob::oob-endpoint-any
   - id: micro-behaviors/os/sysinfo/hostname::python-socket-gethostname
@@ -194,7 +194,7 @@ composite_rules:
   - id: micro-behaviors/data/string/concat::hash-delimited-string-concat
   - id: metadata/package/files/included::setup-py-basename
   any:
-  - id: objectives/discovery/system/
+  - id: objectives/discovery/system
   unless:
   - id: well-known/lib/data/market-data::dartlab-finance-context
 - id: install-scripts-exec-hook
@@ -211,14 +211,6 @@ composite_rules:
   all:
   - id: pip3-console-script
   - id: metadata/package/scripts/entrypoint::setup-entry-points-field
-- id: setup-py-domain-http-fallback
-  desc: setup.py DNS plus HTTP fallback
-  crit: suspicious
-  conf: 0.92
-  all:
-  - id: metadata/package/files/included::setup-py-basename
-  - id: micro-behaviors/communications/dns/resolver::dns-lookup-capability
-  - id: micro-behaviors/communications/http/request/client::request-python
 - id: username-hex-header-exfil
   desc: Username hex exfil over HTTP header
   crit: suspicious
@@ -228,23 +220,6 @@ composite_rules:
   - id: micro-behaviors/data/encode/hex::string-encode-hex
   - id: micro-behaviors/communications/http/header/implant-id::x-header-single-letter
   - id: micro-behaviors/communications/http/request/client::request-python
-- id: pypi-install-exfil
-  desc: PyPI install-time system exfiltration
-  crit: hostile
-  conf: 0.95
-  mbc: E1041
-  attack: T1020
-  all:
-  - id: metadata/build/pip::root-setup-py
-  - id: micro-behaviors/os/sysinfo/profile::python-host-information-query-combination
-  - id: micro-behaviors/data/encode/base64::b64encode-call
-  - id: micro-behaviors/communications/http/request/client::request-python
-  # pip runs a build script that imports setuptools or distutils. A module
-  # merely named setup.py inside a wheel (a first-run setup helper) imports
-  # neither and is never executed at install time.
-  any:
-  - id: metadata/package/files/wheel-sdist::setuptools
-  - id: metadata/package/files/wheel-sdist::distutils-command-import-content
 - id: pypi-install-host-cwd-exfil
   desc: PyPI install host/cwd exfiltration
   crit: hostile
@@ -276,30 +251,22 @@ composite_rules:
   conf: 0.95
   attack: T1041,T1082
   scope: file
-  # One bundled flow, not file-level co-occurrence: the discovery GET, the
-  # public IP reference, and the base64 send must share a compact region.
-  # Without proximity, a GPU worker that discovers its IP for pool
-  # registration while base64-encoding generated images elsewhere in the
-  # file reads as exfiltration. Same bar as the sibling sysinfo rule below.
   near_bytes: 4096
   all:
   - id: micro-behaviors/data/encode/base64::b64encode-call
-  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/communications/http/get::requests-get
   - id: micro-behaviors/communications/http/ip-discovery::ipify-api
 - id: python-sysinfo-exfil
-  desc: Python system info exfiltration
+  desc: Python install hook sends the current login name to an HTTP server
   crit: hostile
   conf: 0.92
   mbc: E1041
   attack: T1020
   all:
   - id: metadata/package/files/included::setup-py-basename
-  - id: micro-behaviors/os/sysinfo/profile::python-host-information-query-combination
-  - id: micro-behaviors/data/encode/base64::b64encode-call
-  - id: micro-behaviors/communications/http/request/client::request-python
-  near_bytes: 4096
-  unless:
-  - id: metadata/build/pip/
+  - id: metadata/build/package/recipe/setup-hooks::setup-cmdclass-install
+  - id: micro-behaviors/communications/http/request/params::urllib-urlopen-b64-login-query
+  near_bytes: 1024
 - id: python-envvar-exfil
   desc: Python environment variable exfiltration
   crit: hostile
@@ -410,7 +377,7 @@ composite_rules:
   - id: metadata/build/package/recipe/setup-hooks::setup-cmdclass-install
   - id: objectives/discovery/account/enum::whoami-via-rot13-subprocess
   - id: micro-behaviors/data/encode/hex::string-encode-hex
-  - id: setup-py-domain-http-fallback
+  - id: micro-behaviors/communications/http/client/library::setup-py-dns-http-cooccurrence
   any:
   - id: username-hex-header-exfil
 - id: pypi-install-obfuscated-network-exfil
@@ -448,7 +415,7 @@ composite_rules:
   - id: metadata/package/files/included::setup-py-basename
   - id: metadata/build/package/recipe/setup-hooks::setup-cmdclass-install
   - id: micro-behaviors/os/env/enumeration::python-environ-dict
-  - id: objectives/exfiltration/stealer/env::python-full-environment-http-exfil
+  - id: objectives/exfiltration/stealer/configuration/environment::python-full-environment-http-exfil
 - id: pypi-env-fs-snapshot-exfil
   desc: PyPI setup exfiltrates env and directory snapshots
   crit: hostile
@@ -548,7 +515,7 @@ composite_rules:
   all:
   - id: micro-behaviors/crypto/hash/digest::source-digest-call
   - id: metadata/build/pip::pip-index-url-option
-  - id: hexdigest-int-modulo-bucket
+  - id: metadata/lang/source/syntax/call/relationship::hexdigest-int-modulo-expression
 - id: pypi-install-obfuscated-host-profile-exfil
   desc: PyPI install hook exfils host profile via decoded URL
   crit: hostile

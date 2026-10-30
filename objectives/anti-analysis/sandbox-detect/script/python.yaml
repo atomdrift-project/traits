@@ -54,14 +54,6 @@ traits:
   if:
     type: text
     regex: '(?i)(getcwd|\.cwd)\(\)[^\n]{0,60}(==|!=|in\b|find\(|startswith)[^\n]{0,40}sandbox'
-- id: cuckoo-analysis-marker
-  desc: Cuckoo sandbox marker string
-  crit: notable
-  if:
-    type: literal
-    kind: string
-    case_insensitive: true
-    exact: cuckoo
 - id: virus-analysis-marker
   desc: Virus analysis marker string
   crit: component
@@ -164,7 +156,10 @@ traits:
   crit: baseline
   if:
     type: text
-    regex: '(os\.path\.exists|os\.path\.isfile|Path[^\n]{0,40}is_file)\s*\([^)\n]{0,200}vmtools'
+    # The checked path must be a string literal. Identifier-built roots
+    # (`self.root_dir + '/usr/bin/vmtoolsd'`) are image-build packaging code
+    # inspecting the tree it just produced, not host sandbox probing.
+    regex: '(os\.path\.exists|os\.path\.isfile|Path[^\n]{0,40}is_file)\s*\(\s*["''][^)\n]{0,200}vmtools'
 - id: vm-artifact-vmware-file-check--rx-38
   desc: VMware mouse driver file check
   crit: baseline
@@ -182,6 +177,16 @@ traits:
   if:
     type: text
     regex: '(open|Path)\s*\(\s*["'']/proc/scsi/scsi["'']'
+- id: user-profile-personal-folders-check
+  desc: User profile personal folders checked
+  crit: notable
+  conf: 0.92
+  if:
+    type: text
+    regex: '(?i)os\.path\.(isdir|exists)\s*\([^)\n]{0,80}["''](Documents|Downloads)["'']'
+  unless:
+    - id: metadata/package/testing/
+    - id: metadata/path::test-directory-component
 
 composite_rules:
 - id: python-platform-node-sandbox-gate
@@ -199,7 +204,7 @@ composite_rules:
   - id: malware-analysis-marker
   - id: cwd-sandbox-keyword-check--rx-21
   - id: cwd-sandbox-keyword-check--rx-22
-  - id: cuckoo-analysis-marker
+  - id: metadata/lang/source/literal::python-cuckoo-string
   - id: virus-analysis-marker
 - id: pre-exec-long-sleep
   desc: Long sleep (>=60s) before subsequent execution
@@ -221,7 +226,7 @@ composite_rules:
   - id: micro-behaviors/os/package-manager/installer-script/
   - id: well-known/app/infrastructure/walinuxagent::source-tree
   - id: well-known/tool/detection/stackrox::stackrox-cluster-ci-context
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 # Idling past a sandbox's run window is only evasion if something follows it.
 # Here the follow-on is a spawned shell that pipes a download into `sh`.
 - id: python-sleep-evasion-curl-pipe-dropper
@@ -234,7 +239,7 @@ composite_rules:
   - id: micro-behaviors/process/create/shell/pipeline::spawned-curl-shell-pipeline
   unless:
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: python-script-sandbox-check
   desc: Python script performs sandbox detection
   crit: suspicious
@@ -250,13 +255,14 @@ composite_rules:
   - id: recent-files-empty-check
   - id: python-cpu-count-exit-gate
   - id: vm-artifact-proc-scsi-check
+  - id: user-profile-personal-folders-check
   unless:
   - id: well-known/tool/detection/skill-scanner::source-context
   - id: metadata/package/testing/presence/harness/
   - id: metadata/package/scripts/develop::jupyter-notebook-file
   - id: well-known/app/system/home-assistant::home-assistant-identity
   - id: well-known/app/system/home-assistant::components-tree-path
-  - id: metadata/file/naming::test-directory-component
+  - id: metadata/path::test-directory-component
   - id: micro-behaviors/metaprogramming/generation::source-template-transformer
 - id: python-host-user-analysis-marker-check
   desc: Python checks host and user identities for analysis markers
@@ -272,7 +278,7 @@ composite_rules:
   - id: anubis-analysis-marker
   - id: joebox-analysis-marker
   - id: malware-analysis-marker
-  - id: cuckoo-analysis-marker
+  - id: metadata/lang/source/literal::python-cuckoo-string
   - id: virus-analysis-marker
 - id: python-sandbox-gated-env-http-exfil
   desc: Sandbox check gates Python environment exfiltration
@@ -285,7 +291,23 @@ composite_rules:
   all:
   - id: python-host-user-analysis-marker-check
   - id: micro-behaviors/data/control-flow/analysis::python-early-return-call-gate
-  - id: objectives/exfiltration/stealer/env::python-env-json-urllib-exfil
+  - id: objectives/exfiltration/stealer/credential/value::python-env-json-urllib-exfil
+- id: python-sandbox-gated-code-execution
+  desc: Sandbox check gates dynamic code execution
+  crit: hostile
+  conf: 0.98
+  attack: T1497.001,T1059.006
+  mbc: B0007,E1059
+  all:
+    - id: python-script-sandbox-check
+  any:
+    - id: micro-behaviors/process/interpreter/python::python-getattr-builtins
+    - id: micro-behaviors/process/interpreter/eval/direct::exec-builtin
+    - id: micro-behaviors/process/interpreter/eval/indirect::python-getattr-builtin-call
+    - id: micro-behaviors/process/interpreter/eval/direct::python-dynamic-code-evaluation
+  unless:
+    - id: metadata/package/testing/presence/harness/
+    - id: metadata/path::test-directory-component
 - id: hostname-sandbox-keyword-check
   desc: Hostname compared to sandbox-keyword
   crit: baseline
@@ -297,7 +319,7 @@ composite_rules:
   - id: cwd-sandbox-keyword-check--rx-21
   - id: cwd-sandbox-keyword-check--rx-22
   - id: anubis-analysis-marker
-  - id: cuckoo-analysis-marker
+  - id: metadata/lang/source/literal::python-cuckoo-string
   - id: joebox-analysis-marker
   - id: micro-behaviors/os/virtualization/hypervisor::vmware-name-literal
   near_bytes: 256
@@ -312,7 +334,7 @@ composite_rules:
   - id: cwd-sandbox-keyword-check--rx-21
   - id: cwd-sandbox-keyword-check--rx-22
   - id: anubis-analysis-marker
-  - id: cuckoo-analysis-marker
+  - id: metadata/lang/source/literal::python-cuckoo-string
   - id: joebox-analysis-marker
   - id: virus-analysis-marker
   near_bytes: 256
@@ -326,7 +348,7 @@ composite_rules:
   - id: malware-analysis-marker
   - id: cwd-sandbox-keyword-check--rx-21
   - id: cwd-sandbox-keyword-check--rx-22
-  - id: cuckoo-analysis-marker
+  - id: metadata/lang/source/literal::python-cuckoo-string
   - id: virus-analysis-marker
   near_bytes: 256
 - id: physical-mem-low-check

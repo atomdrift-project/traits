@@ -53,15 +53,55 @@ traits:
     if:
       type: text
       regex: (?is)\[autorun\].{0,160}\bShellExecute\s*=
-  # Compiled programs often store each autorun.inf line as an independent
-  # string, so the section header is not necessarily adjacent in the binary.
-  - id: autorun-shellexecute-executable
-    desc: Autorun ShellExecute executable target
+  # Open= is the launch directive Windows honors on media insert (the twin of
+  # ShellExecute=); requiring an executable target excludes icon/label fields.
+  - id: autorun-open-executable
+    desc: Autorun Open directive names executable
     crit: notable
     conf: 0.94
+    for: [pe, batch, powershell, vbs, text]
     if:
       type: text
-      regex: '(?i)^ShellExecute\s*=\s*[\w.$ -]{1,96}\.exe(\s|$)'
+      regex: '(?i)^Open\s*=\s*[\w.$ \\-]{1,96}\.(exe|com|scr|pif)(\s|$)'
+  # A directive whose target is a .PIF: the format exists to launch a program
+  # under a chosen icon, and PIF-era worms shipped their dropper as one. No
+  # software distribution this century ships .pif installers.
+  - id: autorun-directive-targets-pif
+    desc: Autorun directive targets a PIF program
+    crit: suspicious
+    conf: 0.94
+    for: [pe, batch, powershell, vbs, text]
+    if:
+      type: text
+      regex: '(?im)^\s*(open|shellexecute)\s*=\s*[\w.$ \\-]{1,60}\.pif\b'
+  # A directive whose target is named after the recycle-bin folder artifact
+  # (`Recycler.exe`): the worm names its payload so the drive's contents look
+  # like system recycling data. Only the bare name directly after the
+  # directive is matched.
+  - id: autorun-directive-targets-recycler-name
+    desc: Autorun directive targets Recycler-named payload
+    crit: suspicious
+    conf: 0.93
+    for: [pe, batch, powershell, vbs, text]
+    if:
+      type: text
+      regex: '(?im)^\s*(open|shellexecute|shell\\[a-z]+\\command)\s*=\s*["'']?recycler\.exe\b'
+  - id: autorun-directive-targets-vbs
+    desc: Autorun directive targets a VBScript file
+    crit: suspicious
+    conf: 0.94
+    for: [pe, batch, powershell, vbs, text]
+    if:
+      type: text
+      regex: '(?im)^\s*(open|shellexecute)\s*=\s*["'']?[\w.:$ \\-]{1,60}\.(vbs|vbe)\b'
+  - id: autorun-directive-targets-windows-directory
+    desc: Autorun directive targets Windows directory path
+    crit: suspicious
+    conf: 0.95
+    for: [pe, batch, powershell, vbs, text]
+    if:
+      type: text
+      regex: '(?im)^\s*(open|shellexecute)\s*=\s*["'']?[a-z]:\\windows\\'
   # Worms that fill the target path at runtime keep a printf template in the
   # directive instead of a literal executable name, so the compiled-line atom
   # above never sees them. The %s placeholder has no place in a real
@@ -105,16 +145,6 @@ traits:
       type: hex
       section: data
       pattern: 4F 00 70 00 65 00 6E 00 3D 00
-  - id: autorun-action
-    desc: Contains Autorun Action command directive
-    crit: notable
-    conf: 0.9
-    if:
-      type: text
-      # `Action = ` is also a generated Kubernetes API property's ToString()
-      # label. Require the Autorun section in the same text block so an API
-      # field name cannot stand in for an autorun.inf directive.
-      regex: '(?is)\[autorun\].{0,200}?\bAction\s*='
   - id: autorun-useautoplay
     desc: Contains Autorun UseAutoPlay directive
     crit: notable
@@ -172,13 +202,32 @@ traits:
       type: text
       exact: Shell\Explore\Command=FOUND.006.exe
   - id: autorun-shell-verb-command
-    desc: Autorun shell verb command invokes executable
+    desc: Autorun shell verb command directive reference
     crit: suspicious
     conf: 0.94
     for: [pe, batch, powershell, vbs, text]
     if:
       type: text
       regex: '(?im)^\s*shell\\[a-z0-9_.-]+\\command\s*='
+  # Open and Explore are the built-in drive navigation verbs. A custom verb
+  # such as shell\install\command adds a menu item; these two replace the
+  # actions a person uses to look at the drive.
+  - id: autorun-shell-open-verb
+    desc: Autorun Open drive-verb command directive
+    crit: suspicious
+    conf: 0.95
+    for: [pe, batch, powershell, vbs, text]
+    if:
+      type: text
+      regex: '(?im)^\s*shell\\open\\command\s*='
+  - id: autorun-shell-explore-verb
+    desc: Autorun Explore drive-verb command directive
+    crit: suspicious
+    conf: 0.95
+    for: [pe, batch, powershell, vbs, text]
+    if:
+      type: text
+      regex: '(?im)^\s*shell\\explore\\command\s*='
   - id: autorun-open-found007
     desc: Autorun Open targets FOUND.007.exe
     crit: suspicious
@@ -265,7 +314,7 @@ composite_rules:
       - id: autorun-shellexecute-wide
       - id: autorun-open
       - id: autorun-open-wide
-      - id: autorun-action
+      - id: micro-behaviors/os/autorun/media::autorun-action-label
       - id: autorun-useautoplay
       - id: autorun-shell-directive
       - id: autorun-shell-directive-alt

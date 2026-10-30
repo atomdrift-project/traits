@@ -29,40 +29,6 @@ traits:
   if:
     type: text
     regex: '(grep|awk|sed).{0,50}CRED'
-- id: curl-data-token-var
-  desc: "Matches 'GITHUB'"
-  crit: suspicious
-  conf: 0.95
-  if:
-    type: text
-    regex: '\bcurl\b.{0,80}(-d|--data\S*)\s+["'']?\$[A-Z_]*(TOKEN|SECRET|PASS)'
-  unless:
-  - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
-  - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
-- id: curl-data-credential-var
-  desc: curl posts credential variable
-  crit: suspicious
-  conf: 0.95
-  if:
-    type: text
-    regex: '\bcurl\b.{0,80}(-d|--data\S*)\s+["'']?\$[A-Z_]*(KEY|CRED|AUTH)'
-  unless:
-  - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
-  - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
-- id: curl-data-package-var
-  desc: curl posts package token variable
-  crit: suspicious
-  conf: 0.95
-  if:
-    type: text
-    regex: '\bcurl\b.{0,80}(-d|--data\S*)\s+["'']?\$[A-Z_]*(AWS|GITHUB|NPM)'
-  unless:
-  - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
-  - id: metadata/package/testing/
-  # Atomic traits for shell uploader pattern (decomposed to avoid overlaps)
-  - id: "metadata/file/naming::test-directory-component"
 - id: sh-curl-process-sub-env
   desc: "Shell downloads code while reading environment"
   crit: suspicious
@@ -114,26 +80,6 @@ traits:
     regex: '\$\{\{\s*github\.head_ref\s*\}\}'
   unless:
   - id: metadata/build/ci/github-actions::action-testdata-path
-- id: gha-run-curl-pipe-shell
-  desc: GitHub Actions curl pipe shell
-  crit: notable
-  conf: 0.95
-  for: [github-actions]
-  if:
-    type: value
-    path: jobs.*.steps[*].run
-    regex: '\bcurl\b[^\n|]{0,160}\|\s*(bash|sh)\b'
-  unless:
-  - id: objectives/command-and-control/dropper/delivery/pipe/
-  - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-zsh
-  downgrade:
-    any:
-    - id: micro-behaviors/os/package-manager/installer-script::gha-anchore-grype-pipe-installer
-    # A conventionally-named install script piped to a shell is an installer, not
-    # a tamper attempt. Downgrade keeps the untrusted-input stager composites
-    # (gha-comment/issue/pr/head_ref-shell-stager) intact — those still fire.
-    - id: micro-behaviors/os/package-manager/installer-script::install-script-pipe
-    - id: micro-behaviors/os/package-manager/installer-script::getter-script-pipe
 - id: jenkins-shared-library-load
   desc: Jenkins shared library load
   crit: notable
@@ -195,7 +141,7 @@ traits:
   # An archive, native package, or data/schema input fetched into dist/ or build/
   # is a pinned third-party input (such as OpenAPI specs, schemas, or toolchain zips),
   # not an executable build output being replaced.
-  - regex: '(?i)(\s-o\s*|\s--output\s+)(dist|build)/\S+\.(zip|tgz|tar\.[gx]z|7z|msi|deb|rpm|json|ya?ml)\b'
+  - regex: '(?i)(\s-o\s*|\s--output\s+)(dist|build)/\S+\.(zip|tgz|tar\.[gx]z|tar\.bz2?|tbz2?|tar\.zst|7z|msi|deb|rpm|json|ya?ml)\b'
   # Staging an installer script into dist/ or build/ for distribution or release
   # packaging is standard release assembly, not artifact replacement.
   - regex: '(?i)(\s-o\s*|\s--output\s+)(dist|build)/\S*(install|installer)\.sh\b'
@@ -229,7 +175,7 @@ traits:
     # build/ stays a dependency input, matching the -o form above.
     regex: 'curl\b.{0,160}(\s-O\s+|>\s*)(dist|build)/\S.{0,80}'
   not:
-  - regex: '(?i)(>\s*|\s-O\s+)(dist|build)/\S+\.(zip|tgz|tar\.[gx]z|7z|msi|deb|rpm|json|ya?ml)\b'
+  - regex: '(?i)(>\s*|\s-O\s+)(dist|build)/\S+\.(zip|tgz|tar\.[gx]z|tar\.bz2?|tbz2?|tar\.zst|7z|msi|deb|rpm|json|ya?ml)\b'
   - regex: '(?i)(>\s*|\s-O\s+)(dist|build)/\S*(install|installer)\.sh\b'
   unless:
   - id: registry-artifact-staging-context
@@ -313,15 +259,6 @@ composite_rules:
   any:
   - id: micro-behaviors/communications/http/request/credentials::curl-process-substitution-secret-argument
   - id: micro-behaviors/communications/http/request/credentials::curl-process-substitution-credential-argument
-  # === Curl sensitive variable post ===
-- id: curl-with-env-data
-  desc: curl posts sensitive variable
-  crit: suspicious
-  conf: 0.95
-  any:
-  - id: curl-data-token-var
-  - id: curl-data-credential-var
-  - id: curl-data-package-var
   # === Codecov-style Attack ===
 - id: codecov-style-attack
   desc: Codecov-style CI secret exfiltration
@@ -332,7 +269,7 @@ composite_rules:
   needs: 2
   any:
   - id: micro-behaviors/communications/http/request/credentials::shell-filtered-env-stdin-http-upload
-  - id: curl-with-env-data
+  - id: metadata/lang/source/syntax/command::curl-sensitive-variable-data-syntax
   - id: shell-uploader-pattern
   unless:
   - id: well-known/app/publishing/freefem::freefem-release-script-path
@@ -393,7 +330,7 @@ composite_rules:
   near_bytes: 200
   all:
   - id: objectives/execution/exploit/command-injection::gha-comment-body-run
-  - id: gha-run-curl-pipe-shell
+  - id: micro-behaviors/process/deploy/interpreter-stdin::gha-run-curl-pipe-shell
 - id: gha-comment-body-repository-write
   # Tag-from-comment bots are a common maintainer workflow (e.g. /create tag).
   # Untrusted comment text in the shell remains suspicious via gha-comment-body-run;
@@ -416,7 +353,7 @@ composite_rules:
   near_bytes: 200
   all:
   - id: objectives/execution/exploit/command-injection::gha-issue-field-run
-  - id: gha-run-curl-pipe-shell
+  - id: micro-behaviors/process/deploy/interpreter-stdin::gha-run-curl-pipe-shell
 - id: gha-pr-shell-stager
   desc: PR field executes shell stager
   crit: hostile
@@ -426,7 +363,7 @@ composite_rules:
   near_bytes: 200
   all:
   - id: gha-pr-field-run
-  - id: gha-run-curl-pipe-shell
+  - id: micro-behaviors/process/deploy/interpreter-stdin::gha-run-curl-pipe-shell
 - id: gha-head-ref-shell-stager
   desc: head_ref field executes shell stager
   crit: hostile
@@ -436,7 +373,7 @@ composite_rules:
   near_bytes: 200
   all:
   - id: gha-head-ref-run
-  - id: gha-run-curl-pipe-shell
+  - id: micro-behaviors/process/deploy/interpreter-stdin::gha-run-curl-pipe-shell
 - id: gha-injected-release-pipeline
   desc: Injected GitHub release publishing pipeline
   crit: hostile
@@ -446,7 +383,7 @@ composite_rules:
   - id: well-known/tool/detection/cert-x-gen::scanner-source-member-context
   all:
   - id: objectives/execution/exploit/command-injection::gha-comment-body-run
-  - id: gha-run-curl-pipe-shell
+  - id: micro-behaviors/process/deploy/interpreter-stdin::gha-run-curl-pipe-shell
   - id: metadata/build/ci/step::gha-pypi-action-or-ghcr-reference
   # === CI Config Injection ===
 - id: ci-config-injection
@@ -526,7 +463,7 @@ composite_rules:
   # gha-secret-python-download-exec/-push intentionally excluded: opaque
   # secret-URL RCE alone is suspicious, not a confirmed supply-chain attack.
   - id: codecov-style-attack
-  - id: objectives/exfiltration/stealer/dev-secret::github-actions-secret-theft
+  - id: objectives/exfiltration/stealer::github-actions-secret-theft
   - id: gha-untrusted-shell-injection
   - id: gha-injected-release-pipeline
   - id: ci-config-injection

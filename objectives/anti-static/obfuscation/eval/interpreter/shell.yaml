@@ -17,20 +17,25 @@ traits:
 # Non-base64 self-decoding shell sinks. The base64 chains are covered by the
 # composites below; these catch the hex/xxd, tr-rotation, and command-
 # substitution decoders future variants pivot to when base64 detection bites.
+# Inline literal input establishes concealed code; decoder transport alone
+# remains a notable pipeline capability in micro-behaviors.
 - id: xxd-hexdecode-pipe-shell
-  desc: xxd hex-decode piped to shell
+  desc: Embedded hex literal decoded into shell input
   crit: suspicious
   conf: 0.92
   if:
     type: text
-    regex: 'xxd\s+-r[^|\n]{0,16}\|\s*(ba)?sh\b'
+    case_insensitive: true
+    regex: '(echo|printf)\s+[''"]?[0-9a-f]{2,}[''"]?\s*\|\s*xxd\s+-r[^|\n]{0,16}\|\s*(ba)?sh\b'
 - id: tr-rotate-pipe-shell
   desc: tr byte-rotation piped to shell
   crit: suspicious
   conf: 0.85
+  # Both sets must contain a letter range (A-Za-z, N-ZA-M). tr -d / tr -s
+  # delete or squeeze; stripping CR before sh is not a rotation decoder.
   if:
     type: text
-    regex: '\|\s*tr\s+\S+\s+\S+\s*\|\s*(ba)?sh\b'
+    regex: '\|\s*tr\s+\S*[A-Za-z]-[A-Za-z]\S*\s+\S*[A-Za-z]-[A-Za-z]\S*\s*\|\s*(ba)?sh\b'
   unless:
     - id: metadata/package/testing/
     - id: well-known/tool/detection/
@@ -49,12 +54,11 @@ traits:
     type: text
     regex: '(?m)(^|[;&|`\(\)]\s*)eval\s+["'']?\$\([^)]{0,80}(base64|xxd|openssl)\b'
   unless:
-  - id: github-uploads-shell-url
-  - id: well-known/tool/detection/security-scanner::skilltotal-scanner-module-path
-  - id: well-known/tool/detection/security-scanner::skilltotal-package-import-marker
+  - id: micro-behaviors/communications/http/upload::github-release-asset-publisher
+  - id: well-known/tool/detection/
   - id: well-known/app/ai/coding-agent/
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
   - id: metadata/build/recognized-contexts::libreelec-distribution-build-marker
 - id: shell-base64-variable-decode
   desc: Shell decodes base64 variable
@@ -70,21 +74,7 @@ traits:
   if:
     type: text
     regex: 'eval "\$(DECODED_PAYLOAD|_DECODED|_CLEAN)"'
-- id: github-uploads-shell-url
-  desc: Shell references GitHub release asset upload URL
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    substr: uploads.github.com/repos
 composite_rules:
-- id: github-release-asset-upload-helper
-  desc: GitHub release asset upload helper
-  crit: component
-  conf: 0.9
-  all:
-  - id: micro-behaviors/communications/http/curl::curl-data-binary
-  - id: github-uploads-shell-url
 # Lone-file obfuscated self-decoding shell dropper: a script that decodes an
 # embedded blob (hex/xxd, tr rotation, or a decode inside eval "$(...)") and
 # executes it — no package/install-hook context required. The shell analog of
@@ -106,8 +96,7 @@ composite_rules:
   - id: rev-reverse-pipe-shell
   unless:
   - id: metadata/lang/upstream::linux-kernel-header-source-path
-  - id: github-release-asset-upload-helper
-  - id: github-uploads-shell-url
+  - id: micro-behaviors/communications/http/upload::github-release-asset-publisher
   - id: metadata/package/testing/
   - id: well-known/tool/detection/
   - id: metadata/build/recognized-contexts::libreelec-distribution-build-marker

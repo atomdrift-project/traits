@@ -12,10 +12,13 @@ defaults:
 traits:
   - id: xor-decoded-createprocess-api
     desc: XOR-decoded CreateProcess API
+    # Evidence spans may merge neighboring table entries (NUL-separated names
+    # decode into one run), so the API name is matched unanchored; the
+    # XOR-decoded layer itself is the concealment evidence.
     if:
       type: encoded
       encoding: xor
-      regex: (?i)^CreateProcess(A|W|InternalW)?$
+      regex: '(?i)CreateProcess(A|W|InternalW)?'
 
   - id: xor-decoded-shellexec-api
     desc: XOR-decoded ShellExecute API
@@ -98,6 +101,30 @@ traits:
       encoding: xor
       regex: (?i)^(Socket|Connect|WSAConnect)$
 
+  - id: xor-decoded-wts-session-token-api
+    desc: XOR-decoded session user-token query API
+    platforms: [windows]
+    if:
+      type: encoded
+      encoding: xor
+      exact: WTSQueryUserToken
+
+  - id: xor-decoded-wts-console-session-api
+    desc: XOR-decoded console session lookup API
+    platforms: [windows]
+    if:
+      type: encoded
+      encoding: xor
+      exact: WTSGetActiveConsoleSessionId
+
+  - id: xor-decoded-duplicate-token-api
+    desc: XOR-decoded token duplication API
+    platforms: [windows]
+    if:
+      type: encoded
+      encoding: xor
+      exact: DuplicateTokenEx
+
   - id: xor-decoded-rundll32-host
     desc: XOR-decoded rundll32 host process name
     crit: suspicious
@@ -163,6 +190,9 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/decoders::xor-decoded-proc-lookup-api
       - id: objectives/anti-static/obfuscation/decoders::xor-decoded-shellexec-api
       - id: objectives/anti-static/obfuscation/decoders::xor-decoded-socket-api
+      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-wts-session-token-api
+      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-wts-console-session-api
+      - id: objectives/anti-static/obfuscation/decoders::xor-decoded-duplicate-token-api
       - id: micro-behaviors/mem/alloc/virtual::xor-decoded-virtual-alloc-api
       - id: objectives/anti-static/obfuscation/decoders::xor-decoded-memory-write-or-protect-api
       - id: objectives/anti-static/obfuscation/decoders::xor-decoded-rundll32-host
@@ -171,8 +201,8 @@ composite_rules:
   # The encoding observation excludes the host PE's plaintext DOS stub.
   # The API table supplies concealment context; the decoded message alone
   # establishes neither packing nor a complete, executable PE image.
-  - id: xor-api-table-encoded-pe-image
-    desc: XOR API table accompanies an XOR-encoded PE image
+  - id: xor-api-table-accompanies-xor-decoded-pe-dos-stub
+    desc: XOR-obfuscated API table accompanies an XOR-decoded PE DOS stub
     crit: hostile
     conf: 0.97
     attack: T1027.002,T1027.013
@@ -195,3 +225,21 @@ composite_rules:
       - id: micro-behaviors/process/create/exec::create-process-a
       - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present-symbol
       - id: metadata/binary/layout/overlay::large-overlay-1mb
+
+  # Merged XOR tables emit WinINet, WinHTTP, and CreateProcess as separate
+  # decoded tokens. Requiring both HTTP families plus process creation
+  # keeps a single obfuscated client API from establishing the objective.
+  - id: xor-decoded-dual-http-process-stack
+    desc: XOR-decoded dual HTTP stack with process-launch APIs
+    crit: hostile
+    conf: 0.96
+    platforms: [windows]
+    attack: T1027.002,T1071.001
+    for: [pe, dll]
+    near_bytes: 8192
+    all:
+      - id: xor-decoded-http-api
+      - id: micro-behaviors/communications/http/client/winhttp::xor-decoded-winhttp-open-request
+      - id: micro-behaviors/communications/http/client/winhttp::xor-decoded-winhttp-send-request
+      - id: micro-behaviors/communications/http/client/winhttp::xor-decoded-winhttp-receive-response
+      - id: xor-decoded-createprocess-api

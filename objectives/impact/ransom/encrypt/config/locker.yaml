@@ -187,54 +187,6 @@ traits:
   - id: well-known/lib/native/systemd::systemd-native-library-context
   - id: well-known/app/infrastructure/systemd::systemd-native-control-component
   - id: metadata/signed/leaf::zecurit-technologies-private-limited
-- id: ransom-extension-1
-  desc: Compound filename with ransomware suffix
-  crit: component
-  conf: 0.85
-  if:
-    type: text
-    regex: '(^|[^\w.-])[\w-]+\.[A-Za-z0-9]{1,8}\.(crypt|encrypted|locked)$'
-  not:
-  # Dotted code identifiers are not filenames: Go-qualified field names such
-  # as main.loginPBE.encrypted (Firefox NSS PBE structs in credential
-  # stealers) read as name.ext.suffix to the matcher above. File extensions
-  # in genuine double-extension markers are lowercase, so the veto only fires
-  # when the middle segment carries uppercase.
-  - regex: '(^|[^\w.-])[\w-]+\.[A-Za-z0-9]*[A-Z][A-Za-z0-9]*\.(crypt|encrypted|locked)$'
-  # Cloud instance-profile names put a vCPUxGiB size in the middle
-  # (`bx2.4x16.encrypted`, `b3c.8x32.encrypted` in the IBM Cloud provider);
-  # a victim file's real extension is never a machine size.
-  - regex: '\.[0-9]+x[0-9]+\.(crypt|encrypted|locked)$'
-  # Web Streams API interop names read the same way: BitButil.streams.locked
-  # is the qualified name of a wrapper around the standard
-  # ReadableStream.locked / WritableStream.locked boolean property, not a
-  # renamed victim file. A real locked marker is name.locked or
-  # name.ext.locked, never object.stream(s).locked.
-  - regex: '\.streams?\.locked$'
-  unless:
-  - type: text
-    regex: ^matplotlib$
-  - type: text
-    regex: ^tex$
-- id: ransom-extension-2
-  desc: Compound filename with ransomware suffix
-  crit: component
-  conf: 0.85
-  if:
-    type: text
-    regex: '(^|[^\w.-])[\w-]+\.[A-Za-z0-9]{1,8}\.(enc|crypted|cry)$'
-  not:
-  # OCaml-qualified function names are not filenames (Tls__Engine.encrypt.enc).
-  - regex: '^[A-Z][A-Za-z0-9_]*__'
-  # Emoji / symbol shortcodes are not filenames (cat.face.cry).
-  - regex: 'cat\.face\.cry'
-  unless:
-  - type: text
-    regex: '^payload\.enc$'
-  - type: text
-    regex: ^matplotlib$
-  - type: text
-    regex: ^tex$
 - id: readme-extension-placeholder-note
   desc: ReadMe note with extension placeholder
   crit: suspicious
@@ -494,6 +446,34 @@ traits:
     # (`deletion`, as in "authorize old-key deletion" in backup/KMS docs)
     # is permission prose, not a ransom claim.
     regex: '(?i)backups?.{0,24}delet(ed|ing)\b'
+# "Your/your data is stolen and encrypted" inside a longer literal, so
+# decoded-string search never sees it. Each atom stays under the regex
+# length cap: align 0 for both cases, the shared shift-1 form with the
+# capital align-2 form, and the lowercase align-2 form.
+- id: base64-stolen-encrypted-claim-align0
+  desc: Base64 stolen-encrypted claim, align 0
+  crit: notable
+  conf: 0.93
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  if:
+    type: text
+    regex: 'WW91ciBkYXRhIGlzIHN0b2xlbiBhbmQgZW5jcnlwdGVk|eW91ciBkYXRhIGlzIHN0b2xlbiBhbmQgZW5jcnlwdGVk'
+- id: base64-stolen-encrypted-claim-shift1
+  desc: Base64 stolen-encrypted claim, shift 1
+  crit: notable
+  conf: 0.93
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  if:
+    type: text
+    regex: 'lvdXIgZGF0YSBpcyBzdG9sZW4gYW5kIGVuY3J5cHRlZA|Zb3VyIGRhdGEgaXMgc3RvbGVuIGFuZCBlbmNyeXB0ZWQ'
+- id: base64-stolen-encrypted-claim-align2
+  desc: Base64 stolen-encrypted claim, align 2
+  crit: notable
+  conf: 0.93
+  for: [pe, dll, elf, c, cpp, go, rust, python]
+  if:
+    type: text
+    substr: '5b3VyIGRhdGEgaXMgc3RvbGVuIGFuZCBlbmNyeXB0ZWQ'
 - id: encoded-data-leak-claim
   desc: Data-leak ransom claim
   crit: notable
@@ -647,10 +627,13 @@ composite_rules:
   - id: encoded-possessive-files-encrypted-claim
   - id: encoded-backups-deleted-claim
   - id: encoded-data-leak-claim
+  - id: base64-stolen-encrypted-claim-align0
+  - id: base64-stolen-encrypted-claim-shift1
+  - id: base64-stolen-encrypted-claim-align2
   unless:
   - id: well-known/tool/detection/
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: ransom-note-encrypted-state
   desc: Ransom-note encryption or lock state phrase
   crit: component
@@ -756,14 +739,6 @@ composite_rules:
   any:
   - id: kill-services-config-1
   - id: kill-services-config-2
-- id: ransom-extension
-  desc: Ransomware file extension markers
-  crit: notable
-  conf: 0.85
-  for: [elf, macho, pe, c, cpp]
-  any:
-  - id: ransom-extension-1
-  - id: ransom-extension-2
 - id: payment-status-check
   desc: Ransomware payment verification
   crit: suspicious
@@ -821,7 +796,7 @@ composite_rules:
   - id: ransom-note-text
   any:
   - id: ransom-note-filename
-  - id: ransom-extension
+  - id: micro-behaviors/fs/path/reference::compound-encrypted-filename-reference
   - id: crypted-counter
   - id: file-locked-message
 - id: ransomware-with-note
@@ -831,7 +806,7 @@ composite_rules:
   for: [elf, macho, pe, c, cpp]
   all:
   - id: ransom-note-text
-  - id: ransom-extension
+  - id: micro-behaviors/fs/path/reference::compound-encrypted-filename-reference
   any:
   - id: micro-behaviors/crypto/library/keyword::openssl-evp-encrypt
   - id: micro-behaviors/crypto/asymmetric/rsa::rsa-public-encrypt

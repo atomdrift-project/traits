@@ -3,14 +3,53 @@ defaults:
   for: [elf]
   attack: T1499
   mbc: B0042
+traits:
+  # Mirai-style flood menus store the method names as C strings in order.
+  # Alignment inserts a few NUL bytes between them; eight bytes still cannot
+  # reach a verb that lives in another string. RANDOM is not a registered
+  # method; it marks the generator that picks among the preceding verbs.
+  # The list alone is the menu, not the send.
+  - id: native-random-http-method-menu
+    desc: HTTP method list ends with RANDOM
+    crit: suspicious
+    conf: 0.96
+    attack: T1498.001
+    if:
+      type: raw
+      regex: 'POST.{0,8}GET.{0,8}HEAD.{0,8}OPTIONS.{0,8}PUT.{0,8}DELETE.{0,8}RANDOM'
 composite_rules:
+  # The menu and the printf request line sit in one builder. Proximity keeps
+  # a RANDOM method list in an unrelated string table from convicting a
+  # separate HTTP client in the same file.
+  - id: random-method-menu-http-flood
+    desc: RANDOM method menu builds an HTTP/1.1 request
+    crit: hostile
+    conf: 0.98
+    attack: T1498.001
+    all:
+      - id: native-random-http-method-menu
+      - id: micro-behaviors/communications/http/message::templated-dual-field-http11-line
+    near_bytes: 768
   - id: maxint-random-body-http-post-flood
     desc: Max-length random-body HTTP POST flood
     crit: hostile
     conf: 0.98
     all:
-      - id: micro-behaviors/communications/http/header/custom::maxint-http-content-length-header
+      - id: micro-behaviors/communications/http/header/content-length::maxint-http-content-length-header
       - id: micro-behaviors/communications/flood::http-flood
       - id: micro-behaviors/communications/http/request/body::fixed-random-data-form-body
     any:
       - id: micro-behaviors/communications/http/post::post-request-line
+  # Bots ship the flood as a request template. They do not have to contain
+  # the words "http flood" or a named random-body helper.
+  - id: maxint-post-content-length-flood
+    desc: POST line uses a max-integer Content-Length
+    crit: hostile
+    conf: 0.98
+    attack: T1498.001
+    near_bytes: 512
+    all:
+      - id: micro-behaviors/communications/http/header/content-length::maxint-http-content-length-header
+      - id: micro-behaviors/communications/http/post::post-request-line
+    unless:
+      - id: well-known/tool/detection/

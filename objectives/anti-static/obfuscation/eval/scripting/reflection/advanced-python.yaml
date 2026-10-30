@@ -30,24 +30,6 @@ traits:
       type: text
       regex: '\beval\s*\(\s*[''"](\\(x[0-9a-fA-F]{2}|[0-7]{1,3})){3,30}'
 
-  - id: objectives/anti-static/obfuscation/eval/scripting/reflection::arithmetic-expression-chains
-    desc: Complex arithmetic chains
-    crit: suspicious
-    conf: 0.75
-    unless:
-      - type: text
-        substr: //|==|!=|>=|<=|<<|>>|\+=|-=|\*=|/=|//=|<<=|>>=
-      - type: text
-        regex: '<<\s*\|\s*>>'
-      - type: basename
-        regex: '(?i)\.(y|yy|yacc)$'
-    if:
-      type: text
-      # The gaps may not cross a quote or a newline. A symbol table
-      # ({'+', '-', '*', '/', '//', '|', '<<', '>>'}) enumerates the glyphs
-      # as literals, and a parser suite lists one operator per statement.
-      # A chain applies several operators to operands on one line.
-      regex: '[*][^''"\r\n]{0,30}//[^''"\r\n]{0,30}[|][^''"\r\n]{0,30}<<[^''"\r\n]{0,30}>>'
   - id: objectives/anti-static/obfuscation/eval/scripting/reflection::loop-large-numeric-branch
     desc: Loop branch compares large numeric literal
     # A single numeric branch is only an obfuscation indicator; the
@@ -75,15 +57,6 @@ traits:
     if:
       type: text
       substr: join(map(getattr(__builtins__
-  - id: objectives/anti-static/obfuscation/eval/scripting/reflection::is-admin-flag
-    desc: IsAdmin flag check (Python)
-    # Building block for the admin-check-ctypes composite only. A bare IsAdmin
-    # identifier (e.g. an API-model bool field) is not standalone obfuscation.
-    crit: notable
-    conf: 0.75
-    if:
-      type: text
-      word: IsAdmin
   - id: objectives/anti-static/obfuscation/eval/scripting/reflection::getattr-builtins-obfuscation
     desc: Constructed builtin lookup
     crit: suspicious
@@ -176,13 +149,23 @@ composite_rules:
     any:
       - id: micro-behaviors/data/encode/base64::embedded-base64-blob
       - id: metadata/file/encoded::large-base64-like-literal
+  - id: objectives/anti-static/obfuscation/eval/scripting/reflection::python-chr-constructed-builtin-exec
+    desc: Reconstructed builtin invoked via reflection
+    crit: suspicious
+    conf: 0.97
+    attack: "T1027,T1059.006"
+    mbc: "B0032,E1014"
+    all:
+      - id: micro-behaviors/data/string/conversion::python-join-chr-generator
+      - id: micro-behaviors/process/interpreter/python::python-getattr-builtins
+      - id: micro-behaviors/metaprogramming/reflection::python-getattr-call
   - id: objectives/anti-static/obfuscation/eval/scripting/reflection::advanced-python-obfuscation
     desc: Advanced Python obfuscation
     crit: suspicious
     conf: 0.9
     needs: 3
     any:
-      - id: "metadata/lang/source/shape::unicode-variable-names"
+      - id: "metadata/lang/source/syntax/assignment::unicode-variable-names"
       - id: micro-behaviors/data/arithmetic::repeated-numeric-bitshift
       - id: objectives/anti-static/obfuscation/eval/scripting/reflection::getattr-builtins-obfuscation
   - id: objectives/anti-static/obfuscation/eval/scripting/reflection::state-machine-obfuscation
@@ -192,27 +175,6 @@ composite_rules:
     all:
       - id: objectives/anti-static/obfuscation/eval/scripting/reflection::loop-large-numeric-branch
       - id: objectives/anti-static/obfuscation/eval/scripting/reflection::obfuscated-state-variable
-  - id: objectives/anti-static/obfuscation/eval/scripting/reflection::admin-check-ctypes
-    desc: Admin privilege check via ctypes (composite)
-    crit: notable
-    conf: 0.85
-    any:
-      - id: micro-behaviors/os/privilege/check::ctypes-is-admin
-      - id: objectives/anti-static/obfuscation/eval/scripting/reflection::is-admin-flag
-      - id: micro-behaviors/os/privilege/check::check-token-membership
-    unless:
-      - id: well-known/tool/detection/
-  - id: objectives/anti-static/obfuscation/eval/scripting/reflection::windows-com-elevation
-    desc: Windows COM elevation attempt
-    crit: suspicious
-    conf: 0.95
-    attack: T1078
-    mbc: E1059
-    platforms:
-      - windows
-    all:
-      - id: micro-behaviors/communications/ipc/win32com::dispatch-call
-      - id: objectives/anti-static/obfuscation/eval/scripting/reflection::admin-check-ctypes
   - id: objectives/anti-static/obfuscation/eval/scripting/reflection::obfuscated-setup-py-trojan
     desc: Heavily obfuscated setup.py trojan
     crit: hostile
@@ -223,3 +185,29 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/eval/scripting/reflection::advanced-python-obfuscation
       - id: objectives/anti-static/obfuscation/eval/scripting/reflection::state-machine-obfuscation
       - id: micro-behaviors/communications/ipc/win32com::import-win32com
+  - id: objectives/anti-static/obfuscation/eval/scripting/reflection::obfuscated-builtin-execution
+    desc: Obfuscated builtin lookup and execution
+    crit: suspicious
+    conf: 0.97
+    attack: T1027,T1059.006
+    mbc: B0032,E1059
+    all:
+      - id: micro-behaviors/process/interpreter/python::python-getattr-builtins
+      - id: objectives/anti-static/obfuscation/string/encoding::join-chr-comprehension
+    any:
+      - id: micro-behaviors/metaprogramming/reflection::python-getattr-call
+      - id: micro-behaviors/process/interpreter/eval/indirect::python-getattr-builtin-call
+    unless:
+      - id: metadata/path::test-directory-component
+      - id: metadata/package/testing/
+  - id: python-compressed-source-obfuscated-execution
+    desc: Compressed source decoded and executed through an obfuscated builtin
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1059.006
+    mbc: B0032,E1027,E1059
+    all:
+      - id: micro-behaviors/process/interpreter/eval/indirect::python-getattr-builtin-call
+      - id: micro-behaviors/data/decode/base85::b85decode-script
+      - id: micro-behaviors/data/decompress/zlib::zlib-decompress-symbol
+      - id: micro-behaviors/metaprogramming/generation::compile-source-exec-mode

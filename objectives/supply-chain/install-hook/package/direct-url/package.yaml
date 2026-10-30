@@ -19,6 +19,22 @@ traits:
       type: value
       path: dependencies.*
       regex: '^http://npm[.]jpartifacts[.]com(/|$)'
+  - id: storeartifact-runtime-dependency
+    desc: Runtime URL dependency uses storeartifact host
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: value
+      path: dependencies.*
+      regex: '^http://packages[.]storeartifact[.]com(/|$)'
+  - id: storageartifact-development-dependency
+    desc: Dev dependency uses storageartifact host
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: value
+      path: devDependencies.*
+      regex: '^http://registry[.]storageartifact[.]com(/|$)'
 composite_rules:
   # PhantomRaven's Remote Dynamic Dependency carriers delegate installation to
   # this attacker-controlled HTTP service. Pair the family-owned host anchor
@@ -30,6 +46,26 @@ composite_rules:
     all:
       - id: jpartifacts-runtime-dependency
       - id: metadata/package/dependencies/direct-url::devdep-plaintext-http
+  - id: phantomraven-storeartifact-rdd-install-hook
+    desc: PhantomRaven URL dependency with install hook
+    crit: hostile
+    conf: 0.99
+    for: [package.json, npm, tar]
+    scope: package
+    all:
+      - id: storeartifact-runtime-dependency
+      - id: metadata/package/dependencies/direct-url::runtime-direct-url-dependency
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
+  - id: phantomraven-storageartifact-rdd-install-hook
+    desc: PhantomRaven development URL dependency with install hook
+    crit: hostile
+    conf: 0.99
+    for: [package.json, npm, tar]
+    scope: package
+    all:
+      - id: storageartifact-development-dependency
+      - id: metadata/package/dependencies/direct-url::dev-url-dependency
+      - id: metadata/package/scripts/lifecycle::filtered-preinstall-hook
   - id: public-package-remote-dependency-side-effect-import
     for: [package.json, javascript, npm]
     desc: Public package loads a direct-URL runtime dependency for side effects
@@ -37,7 +73,7 @@ composite_rules:
     conf: 0.98
     scope: package
     all:
-      - id: metadata/package/dependencies/manifest/source::npm-https-runtime-dependency
+      - id: metadata/package/dependencies/source::npm-https-runtime-dependency
       - id: metadata/package/publishing::npm-public-publish-access
       - id: micro-behaviors/os/module/require::esm-side-effect-package-import
     unless:
@@ -52,9 +88,9 @@ composite_rules:
       # composite on ordinary published packages that include index.d.ts.
       - id: metadata/package/testing/presence/manifest::package-test-or-template-path
       # A tagged GitHub release tarball is a pinned UI asset, not a mutable drop host.
-      - id: metadata/package/dependencies/manifest/source::npm-github-release-tarball-dependency
+      - id: metadata/package/dependencies/source::npm-github-release-tarball-dependency
       # A GitHub repository URL is a public VCS repository, not a direct drop host.
-      - id: metadata/package/dependencies/manifest/source::npm-github-repository-dependency
+      - id: metadata/package/dependencies/source::npm-github-repository-dependency
   - id: dynamic-dns-plaintext-tarball-dependency
     desc: Dynamic-DNS plaintext tarball dependency
     crit: hostile
@@ -76,10 +112,10 @@ composite_rules:
     for: [npm, tar, package.json, javascript]
     scope: outer
     all:
-      - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
+      - id: metadata/package/dependencies/reconciliation::npm-phantom-runtime-dependency
       - id: metadata/package/dependencies/direct-url::runtime-direct-url-dependency
       - id: metadata/package/scripts/lifecycle::postinstall-hook-declaration
-      - id: objectives/execution/payload/file-exec::node-windows-wsh-persistence-remote-dropper
+      - id: objectives/persistence/login/startup/shortcut::node-windows-wsh-persistence-remote-dropper
   - id: mutable-url-dependency-install-activation
     desc: Postinstall activates mutable URL dependency
     crit: hostile
@@ -89,8 +125,8 @@ composite_rules:
     scope: archive
     all:
       - id: metadata/package/dependencies/direct-url::dep-github-mutable-branch-archive
-      - id: metadata/package/dependencies/manifest/source::npm-single-https-runtime-dependency
-      - id: objectives/supply-chain/install-hook/scripts/import-chain::scripts-postinstall-external-require
+      - id: metadata/package/dependencies/source::npm-single-https-runtime-dependency
+      - id: micro-behaviors/os/module/require::postinstall-bare-module-require
       - id: micro-behaviors/os/module/require::node-bracket-module-require-call
   - id: npm-gcs-tarball-hex-identity-preinstall-payload
     desc: GCS tarball dependency runs hex identity OAST preinstall
@@ -101,49 +137,6 @@ composite_rules:
     all:
       - id: metadata/package/dependencies/direct-url::gcs-bucket-runtime-dependency-kv
       - id: objectives/exfiltration/stealer/system-info/identity::npm-preinstall-hex-identity-oob-benchmark-exfil
-  - id: url-dependency-with-hooks
-    desc: Runtime direct URL dependency with install hooks
-    crit: hostile
-    conf: 0.98
-    all:
-      - id: metadata/package/dependencies/direct-url::runtime-direct-url-dependency
-      - id: metadata/package/scripts/lifecycle::install-hooks
-    unless:
-      - id: metadata/package/dependencies/direct-url::package-dependencies-field
-      - id: metadata/package/repository::has-repository-evidence
-      - id: metadata/package/testing/presence/manifest::package-test-or-template-path
-      - id: well-known/app/publishing/wordpress-plugins/marketing::wordpress-plugin-path-thirstyaffiliates
-      - id: well-known/app/security/bitwarden::bitwarden-browser-manifest
-      # Private workspace packages are not published to the registry. Their
-      # pinned VCS dependencies plus prepare/build hook are source-tree build
-      # plumbing, not a hostile package-install delivery path.
-      - id: metadata/package/publishing::is-private
-      # A hook that only runs `bower install` hands off to a second manifest
-      # the same tooling already reads; it delivers nothing itself.
-      - id: metadata/package/scripts/lifecycle::package-manager-bootstrap-hook
-      # preinstall that only checks the Node major version does not fetch or
-      # run the URL dependency. The git dependency stays a notable reference.
-      - id: metadata/package/scripts/lifecycle::preinstall-engine-requirements-script
-  - id: duplicated-plaintext-http-dependency
-    desc: Plain HTTP dependency in runtime and dev scopes
-    # Duplicating one URL across development and runtime scopes is risky but
-    # does not establish attacker control. Campaign infrastructure or payload
-    # behavior must supply the conviction.
-    crit: suspicious
-    conf: 0.95
-    all:
-      - id: metadata/package/dependencies/direct-url::dep-plaintext-http
-      - id: metadata/package/dependencies/direct-url::devdep-plaintext-http
-    unless:
-      - id: metadata/package/publishing::is-private
-  - id: duplicated-plaintext-http-minimal
-    desc: Minimal package duplicates plain HTTP dependency
-    crit: suspicious
-    conf: 0.97
-    all:
-      - id: duplicated-plaintext-http-dependency
-      - id: metadata/package/dependencies/direct-url::inflated-version-anomaly
-      - id: metadata/package/description/presence::short-description
   - id: url-dep-minimal-metadata
     for: [package.json, npm]
     desc: URL dependency with minimal package metadata
@@ -153,14 +146,14 @@ composite_rules:
     all:
       - id: metadata/package/dependencies/direct-url::direct-url-dependency
       # Import reconciliation is supporting context, not proof of disuse.
-      - id: metadata/package/dependencies/manifest/reconciliation::npm-phantom-runtime-dependency
+      - id: metadata/package/dependencies/reconciliation::npm-phantom-runtime-dependency
     # "Minimal metadata" was pinned to a <=15-character description, one narrow
     # proxy for it. A tiny manifest overall is the same claim and the canonical
     # trait for it, so a stub whose description happens to run to 19 characters
     # ("Placeholder package") no longer slips the rule its own name describes.
     any:
       - id: metadata/package/description/presence::short-description
-      - id: metadata/package/freeform::pkg-skeleton-small
+      - id: metadata/file/size::small-versioned-npm-manifest
     unless:
       # A stub manifest under a `test/`/`template/` tree is linter-corpus
       # input, not a shipped package: dependency-confusion scanners keep
@@ -172,7 +165,6 @@ composite_rules:
       - id: metadata/package/publishing::is-private
       - id: metadata/package/repository::has-repository-evidence
       - id: well-known/lib/runtime/scripted/electron::electron-app-bundle-exception
-      - id: well-known/lib/runtime/scripted/electron::electron-webpack-main-entrypoint
       - id: well-known/app/infrastructure/argo-cd::argo-cd-source-tree
       - id: well-known/app/security/securityctrl::defensive-placeholder-context
       # `pkg-skeleton-small` is a byte-size proxy (<=2 KB) and a compact
@@ -180,4 +172,4 @@ composite_rules:
       # 800-byte package.json with nineteen build dependencies, one of them a
       # tag-pinned GitHub shorthand. A manifest that resolves eight or more
       # runtime dependencies is not "minimal metadata" whatever its size.
-      - id: metadata/package/dependencies/manifest/count::npm-dependency-fanout
+      - id: metadata/package/dependencies/count::npm-dependency-fanout

@@ -4,15 +4,6 @@ defaults:
   mbc: C0002
   attack: T1071.001
 traits:
-  - id: python-request-add-header
-    desc: Python HTTP request adds header
-    crit: notable
-    conf: 0.9
-    for: [python]
-    if:
-      type: symbol
-      kind: call
-      exact: req.add_header
   - id: request-spec-headers-lookup
     desc: Reads headers from HTTP request specification
     crit: notable
@@ -40,21 +31,6 @@ traits:
       # matched sibling keys of any dict that merely has a `headers` entry
       # (distutils install schemes: 'headers': ..., 'data': ...).
       regex: '(?i)headers["'']?\s*[=:]\s?\{[^{}]{0,300}["''](x.)?(archive|payload|data|filename)["'']\s*:'
-  - id: csp-response-header-read
-    desc: Reads Content-Security-Policy response header
-    crit: notable
-    conf: 0.95
-    for: [javascript, typescript]
-    if:
-      type: symbol
-      kind: call
-      substr: headers.get
-      arg:
-        kind: string
-        exact: content-security-policy
-  # Co-occurrence of Content-Length and chunked Transfer-Encoding headers. Present
-  # in any HTTP stack that handles both (node, proxies); the request-smuggling
-  # (CL.TE desync) intent is supplied by composites that add an exploit target.
   - id: http-content-length-te-chunked
     desc: Content-Length + chunked Transfer-Encoding
     crit: notable
@@ -62,15 +38,8 @@ traits:
     if:
       type: text
       regex: 'Content-Length:[\s\S]{0,120}Transfer-Encoding: chunked'
-  - id: json-content-type-charset
-    desc: JSON content type charset
-    crit: baseline
-    conf: 0.75
-    if:
-      type: string_literal
-      regex: application/json.{0,50}charset=utf-8
-  - id: dense-request-header-set
-    desc: Dense HTTP request headers in small binary
+  - id: request-header-token-density
+    desc: HTTP header-token density in small binary
     crit: notable
     conf: 0.88
     for: [pe, elf, macho]
@@ -87,13 +56,6 @@ traits:
     if:
       type: text
       regex: '(?i)(User-Agent:\s|Host:\s)'
-  - id: headers-encoding
-    desc: Accept-Encoding header
-    crit: baseline
-    conf: 0.66
-    if:
-      type: text
-      substr: Accept-Encoding
   - id: host-header-override
     desc: Explicit HTTP Host header override
     crit: notable
@@ -115,7 +77,7 @@ traits:
       regex: 'host\s*:\s*[''"][0-9]{1,3}(\.[0-9]{1,3}){3}[''"].{0,120}headers\s*:\s*\{.{0,60}Host\s*:'
     unless:
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
   - id: referer-header
     desc: HTTP Referer header
     crit: notable
@@ -123,7 +85,11 @@ traits:
     for: [scripts, binaries]
     if:
       type: text
-      regex: '(?i)\bReferer\s*:'
+      regex: '(?i)\bReferer\s*:(\s*[A-Za-z]+)?'
+    not:
+      - regex: 'referer\s*:\s*(string|boolean|number|any)\b'
+    unless:
+      - id: metadata/lang/scripted::dts-declaration-file
   - id: sec-fetch-request-header
     desc: Sec-Fetch request header literal
     crit: notable
@@ -187,13 +153,6 @@ traits:
     if:
       type: text
       substr: "X-Real-IP"
-  - id: content-length-template
-    desc: Content-Length printf template
-    crit: baseline
-    conf: 0.55
-    if:
-      type: text
-      exact: 'Content-Length: %d'
   - id: content-disposition-filename
     desc: File-download response (Content-Disposition)
     crit: baseline
@@ -202,14 +161,6 @@ traits:
     if:
       type: text
       regex: Content-Disposition.{0,40}filename
-  - id: form-data-header
-    desc: HTTP multipart form-data header
-    crit: notable
-    conf: 0.5
-    for: [binaries, c, cpp, csharp, rust, go, python, php]
-    if:
-      type: text
-      substr: 'Content-Disposition: form-data'
   # Setting the anti-CSRF header from the page's own meta tag is how a
   # same-origin XHR/fetch proves it is calling its own app's backend with the
   # current session's credentials, not an attacker-controlled endpoint: a
@@ -238,11 +189,13 @@ composite_rules:
     any:
     - id: referer-header
     - id: utf16-referer-header-pe
-  - id: bot-headers
-    desc: Bot identification HTTP headers
+  - id: identity-or-x-prefixed-headers
+    desc: Custom identity or X-prefixed header syntax
     crit: notable
     conf: 0.7
     any:
       - id: micro-behaviors/communications/http/header/implant-id
+      - id: micro-behaviors/communications/http/header/custom::header-user
+      - id: micro-behaviors/communications/http/header/value::x-header-hex-value
     unless:
       - id: well-known/dual-use/transfer/aria2::aria2-downloader-context

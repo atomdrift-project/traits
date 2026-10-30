@@ -1,118 +1,48 @@
-# A PE that names Microsoft as its author and carries no signature.
-#
-# Microsoft Authenticode-signs what it ships. A file whose version resource says
-# `CompanyName: Microsoft` while its security directory is empty is therefore
-# making a claim its own structure contradicts — and it is a claim aimed at a
-# person reading the file's Properties dialog, which is why it belongs under
-# masquerade rather than anti-static.
-#
-# The vendor claim alone is not enough: unsigned builds of Microsoft-authored
-# open source and internal rebuilds of SDK samples both exist and are honest.
-# The corroborating leg is a build artefact no Microsoft release process
-# produces — a developer's own PDB path, or the `MyApplication.app` identity
-# that Visual Studio's default manifest template leaves behind when nobody
-# edited it. A file with both is a personal project wearing a vendor's name.
 defaults:
-  platforms: [windows]
-  for: [pe, dll]
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
   attack: T1036.001
   mbc: E1036
-
 composite_rules:
-  - id: xor-obfuscated-mingw-microsoft-masquerade
-    desc: XOR-obfuscated MinGW PE claims Microsoft authorship
-    crit: hostile
-    conf: 0.99
-    all:
-      - id: metadata/binary/vendor::microsoft-prefixed-company
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-      - id: metadata/lang/compiler/native::mingw-built-pe
-      - id: micro-behaviors/data/encode/xor::x64-key-index-dual-xor-copy-loop
-      - id: micro-behaviors/communications/socket/connect::winsock-client-lifecycle
-      - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
-    unless:
-      - id: metadata/signed/platform/
-
-  - id: unsigned-microsoft-vendor-claim
-    desc: Unsigned PE claims Microsoft authorship
-    crit: suspicious
-    conf: 0.93
-    scope: file
-    all:
-      - id: metadata/binary/vendor::microsoft-prefixed-company
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-    any:
-      - id: metadata/build/manifest::pe-manifest-myapplication-template
-      - id: metadata/binary/debug::pdb-debug-release-layout
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/package/testing/
-      # Microsoft shipped unsigned legacy VC6 runtimes with the same source
-      # PDB paths used by this rule as a personal-project clue. Their complete
-      # Microsoft version resource and broad import surface identify them as
-      # stock runtime components.
-      - id: objectives/anti-static/obfuscation/binary-metrics/shape::legitimate-microsoft-versioned-pe
-      # The unsigned VC6 ATL 3.0 runtime is identified by its Microsoft
-      # version-resource strings and the matching VC98 ATL PDB path; its 75
-      # imports fall just below the generic runtime's many-import threshold.
-      - id: well-known/lib/platform/mfc::atl-vc6-runtime-identity
-      # Microsoft's own NuGet CLI is one of the honest unsigned-rebuild cases
-      # the note above anticipates: it carries CompanyName "Microsoft
-      # Corporation" and the stock Visual Studio MyApplication manifest, and
-      # ships vendored (electron-winstaller's package/vendor/nuget.exe) with
-      # no signature record of its own.
-      - id: well-known/tool/packaging/nuget-cli::nuget-cli-tool
-      # The claim has to be a claim. An SDK-style .NET project that never sets
-      # <Company> ships CompanyName = AssemblyName, so PSReadLine's assemblies
-      # (VS Code / VSCodium bundle them for terminal shell integration) carry
-      # "Microsoft.PowerShell.PSReadLine" in the field this rule reads, next to
-      # the C:\projects\...\obj\Release\ PDB path every C# Release build
-      # writes. Company and PDB then say nothing beyond "unsigned .NET assembly
-      # in a Microsoft namespace" -- neither leg is the personal-project tell.
-      - id: metadata/binary/vendor::microsoft-dotted-assembly-company
-      # pdb-debug-release-layout only requires a `\Release\...pdb` / `\Debug\...pdb`
-      # tail -- true of nearly every Windows MSBuild output, official or not.
-      # A CI runner's build-agent path (GitHub Actions `D:\a\_work\...`,
-      # TeamCity `C:\BuildAgent\work\...`, or the POSIX `/_/artifacts/`
-      # convention used by dotnet/runtime-style repos) is not the personal
-      # dev-machine tell this composite is after -- it's how Microsoft's own
-      # OSS repos (ASP.NET Core HttpAbstractions, PowerShell MarkdownRender)
-      # build on Windows/Linux CI.
-      # A local rebuild of those repos (HandheldCompanion's PresentationCore.dll
-      # is dotnet/wpf rebuilt from source, still strong-name signed) leaves the
-      # Arcade artifacts\obj\ path: Microsoft's own code, honestly claimed.
-      - id: metadata/binary/debug::pdb-ci-or-repo-build-layout-path
-      # The copyright itself is the unedited old-VS-template placeholder
-      # (bare "Copyright (c) Microsoft <year>", never "Corporation" or
-      # "All rights reserved"), not an authorship claim -- see
-      # stale-vs-template-copyright's own comment for the worked example.
-      - id: metadata/binary/vendor::stale-vs-template-copyright
-      - id: "metadata/file/naming::test-directory-component"
-
+- id: xor-obfuscated-mingw-microsoft-masquerade
+  desc: XOR-obfuscated MinGW PE claims Microsoft authorship
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: metadata/binary/vendor::microsoft-prefixed-company
+  - id: metadata/signed/trust-level::unsigned-missing-signature-record
+  - id: metadata/lang/compiler/native::mingw-built-pe
+  - id: micro-behaviors/data/encode/xor::x64-key-index-dual-xor-copy-loop
+  - id: micro-behaviors/communications/socket/connect::winsock-client-lifecycle
+  - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
+  unless:
+  - id: metadata/signed/platform/
+- id: unsigned-microsoft-embedded-pe-benign-context
+  desc: Recognized benign embedded PE context
+  crit: exception
+  conf: 0.99
+  any:
+  - id: metadata/signed/platform/
+  - id: metadata/signed/certificate/identity/
+  - id: metadata/binary/installer/family/
+  - id: metadata/binary/installer/sfx/
+  - id: well-known/app/storage/peazip/
+  - id: well-known/tool/sysadmin/oscdimg::oscdimg-utility
+  - id: well-known/app/system/stresstimulus/
+  - id: well-known/tool/sysadmin/virtualization::microsoft-appv-mavinject
+  - id: well-known/app/system/windows-migration::mighost-binary-identity
+  - id: well-known/lib/platform/microsoft-system::media-foundation-protected-pipeline
+- id: unsigned-microsoft-embedded-pe
+  desc: Microsoft-branded PE with embedded RunPE loader
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: metadata/signed/trust-level::unsigned-pe-microsoft-version-fields
+  - id: metadata/binary/layout/embedded::pe-embedded
+  - id: objectives/evasion/process/injection/hollowing/process::token-embedded-image-hollowing
+  unless:
   - id: unsigned-microsoft-embedded-pe-benign-context
-    desc: Recognized benign embedded PE context
-    crit: exception
-    conf: 0.99
-    any:
-      - id: metadata/signed/platform/
-      - id: metadata/signed/certificate/identity/
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/sfx/
-      - id: well-known/lib/platform/
-      - id: well-known/app/storage/peazip/
-      - id: well-known/tool/sysadmin/oscdimg::oscdimg-utility
-      - id: well-known/app/system/stresstimulus/
-      - id: well-known/tool/sysadmin/virtualization::microsoft-appv-mavinject
-      - id: well-known/app/system/windows-migration::mighost-binary-identity
-      - id: well-known/lib/platform/microsoft-system::media-foundation-protected-pipeline
-  - id: unsigned-microsoft-embedded-pe
-    desc: Microsoft-branded PE with embedded RunPE loader
-    crit: hostile
-    conf: 0.97
-    all:
-      - id: metadata/signed/trust-level::unsigned-pe-microsoft-version-fields
-      - id: metadata/binary/layout/embedded::pe-embedded
-      - id: objectives/evasion/process/injection/hollowing/process::token-embedded-image-hollowing
-    unless:
-      - id: unsigned-microsoft-embedded-pe-benign-context
-      - id: metadata/binary/framework::dotnet-assembly
+  - id: metadata/binary/framework::dotnet-assembly

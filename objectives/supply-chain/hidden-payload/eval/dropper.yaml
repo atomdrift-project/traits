@@ -1,12 +1,10 @@
-# File-Read-Eval Dropper Detection
-# Detects the pattern of reading a file, transforming its content, and eval'ing the result
-# This is a common supply-chain attack technique where encrypted/encoded payloads are
-# stored in innocuous-looking files (LICENSE, README, data files) and decrypted at runtime
-# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
-# MBC: B0024 (Execution Guardrails)
 defaults:
-  platforms: [unix, windows]
-  for: [javascript, typescript]
+  platforms:
+  - unix
+  - windows
+  for:
+  - javascript
+  - typescript
   attack: T1195.002
 traits:
 - id: js-delayed-eval-timeout
@@ -16,41 +14,21 @@ traits:
   attack: T1059.007
   if:
     type: text
-    regex: 'setTimeout\s*\(\s*function\s*\(\s*\)\s*\{[^}]{0,160}\beval\s*\('
-# Require direct data flow from readFileSync through a transform into eval.
-# A plain eval(require('fs').readFileSync(...)) is a local source loader, not
-# evidence that an encoded payload was transformed.
+    regex: setTimeout\s*\(\s*function\s*\(\s*\)\s*\{[^}]{0,160}\beval\s*\(
 - id: eval-transformed-readfilesync
   desc: eval executes transformed readFileSync content
   crit: suspicious
   conf: 0.96
   if:
     type: text
-    regex: 'eval\s*\(\s*[A-Za-z_$]\w{0,30}\s*\(\s*(\w+\.)?readFileSync\s*\('
+    regex: eval\s*\(\s*[A-Za-z_$]\w{0,30}\s*\(\s*(\w+\.)?readFileSync\s*\(
 - id: eval-transformed-inline-fs-read
   desc: eval transforms inline fs file content
   crit: suspicious
   conf: 0.96
   if:
     type: text
-    regex: 'eval\s*\(\s*[A-Za-z_$]\w{0,30}\s*\(\s*require\(["'']fs["'']\)\.readFileSync\s*\('
-  # Inline decoder functions are common in legacy JS packers, so keep this
-  # as packed-payload component evidence instead of a standalone eval finding.
-- id: eval-inline-function-transform
-  desc: eval wraps inline transform function
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    substr: 'eval(function'
-  unless:
-  - id: well-known/tool/packaging/dean-edwards-packer::dean-edwards
-  - id: metadata/package/testing/
-  # Function-constructor use is a neutral dynamic-execution capability. The
-  # canonical atom lives in micro-behaviors; supply-chain intent comes from
-  # the surrounding payload/decoder composites below.
-  # Core dropper pattern: small JS file that reads a file and eval's transformed content
-  - id: "metadata/file/naming::test-directory-component"
+    regex: eval\s*\(\s*[A-Za-z_$]\w{0,30}\s*\(\s*require\(["']fs["']\)\.readFileSync\s*\(
 - id: thenify-create-wrapper-eval
   desc: thenify eval createWrapper helper
   crit: baseline
@@ -67,20 +45,16 @@ traits:
   size_max: 2097152
   if:
     type: text
-    regex: "Buffer\\.from\\(['\"][0-9a-fA-F]{32,}['\"]\\s*,\\s*['\"]hex['\"]\\)"
+    regex: Buffer\.from\(['"][0-9a-fA-F]{32,}['"]\s*,\s*['"]hex['"]\)
   unless:
   - id: metadata/package/testing/harness/runtime/
-- id: decipher-update-from-hex-ast
-  desc: Decipher update from hex Buffer
-  crit: notable
-  conf: 0.82
-  mbc: C0027
-  if:
-    type: text
-    regex: "\\.update\\(\\s*Buffer\\.from\\([^)]{1,200}['\"]hex['\"]\\s*\\)\\s*\\)"
 composite_rules:
 - id: npm-published-packed-function-loader
-  for: [npm, package.json, javascript, typescript]
+  for:
+  - npm
+  - package.json
+  - javascript
+  - typescript
   desc: NPM package carries a packed dynamic-code loader
   crit: hostile
   conf: 0.98
@@ -91,21 +65,21 @@ composite_rules:
   - id: metadata/package/files/included::npm-publish-root-manifest
   - id: objectives/anti-static/obfuscation/eval/function::packed-function-constructor-decoder
   - id: metadata/build/minifier::js-large-minified-bundle
-
-# An npm archive is a meaningful supply-chain boundary even when it has no
-# install hook: this shape activates when browser code shipped in the archive
-# fetches a module and evaluates it through an obfuscated Function sink.
 - id: public-npm-obfuscated-fetch-loader
   desc: Public npm archive carries an obfuscated fetch-and-Function loader
   crit: hostile
   conf: 0.99
-  for: [npm, package.json, javascript, typescript]
+  for:
+  - npm
+  - package.json
+  - javascript
+  - typescript
   attack: T1195.002,T1027,T1059.007,T1105
   mbc: E1195.016
   scope: archive
   all:
   - id: metadata/package/publishing::npm-public-publish-access
-  - id: metadata/package/freeform::pkg-skeleton-small
+  - id: metadata/file/size::small-versioned-npm-manifest
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
   - id: micro-behaviors/metaprogramming/generation::js-new-function-variable-argument
   - id: objectives/anti-static/obfuscation/eval/loader::obfuscated-function-constructor-payload
@@ -116,23 +90,21 @@ composite_rules:
   attack: T1027,T1059.007
   mbc: B0032
   all:
-  - id: metadata/build/minifier::js-large-minified-bundle
+  - id: metadata/file/profile/text-shape::numeric-or-long-line-source
   - id: micro-behaviors/data/decode/xor::fromcharcode-xor-rebuild
   - id: micro-behaviors/process/interpreter/eval/indirect::js-indirect-eval-variable
   unless:
   - id: well-known/app/browser/google-web::google-recaptcha-runtime
 - id: self-defending-string-table-function-loader
   desc: Self-defending string-array feeds Function loader
-  # Keyv/math_init-class payloads wrap a string-table Function constructor
-  # behind js-obfuscator's self-defending control flow — packers alone rarely
-  # combine both at this density without a follow-on credential harvest.
   crit: hostile
   conf: 0.97
   attack: T1027,T1059.007
   mbc: B0032
   all:
   - id: objectives/anti-static/obfuscation/string/array::self-defending-string-array
-  - id: objectives/anti-static/obfuscation/eval/function::string-table-function-constructor
+  - id: metadata/lang/source/syntax/call/arguments::js-constructor-hex-indexed-arguments
+  - id: micro-behaviors/metaprogramming/generation::function-ctor-call-expr-arg
 - id: file-read-eval-dropper
   desc: Reads file and eval()s transformed content
   crit: hostile
@@ -146,7 +118,7 @@ composite_rules:
   - id: eval-transformed-inline-fs-read
   unless:
   - id: well-known/lib/data/duckdb/
-  - id: metadata/build/
+  - id: metadata/build
   - id: metadata/package/testing/presence/path::test-spec-path-benign-context
 - id: local-payload-transform-eval
   desc: Local payload file transformed then eval
@@ -162,18 +134,6 @@ composite_rules:
   - id: well-known/tool/packaging/dean-edwards-packer::dean-edwards
   - id: metadata/package/testing/presence/fixture::test-filename-pattern
   - id: micro-behaviors/process/interpreter/eval/indirect::emscripten-run-script-reference
-- id: blockchain-remote-payload-eval
-  desc: Blockchain dead-drop payload eval
-  crit: hostile
-  conf: 0.98
-  mbc: B0024
-  attack: T1102
-  all:
-  - id: objectives/command-and-control/infrastructure/blockchain/multi-chain::blockchain-c2-fetch
-  - id: micro-behaviors/process/interpreter/eval/direct::js-eval-raw
-  # Small module that exports a decryption function with hardcoded crypto keys.
-  # Common in supply-chain attacks where a separate utility module handles
-  # payload decryption (e.g., AES decrypt with embedded key/IV).
 - id: supply-chain-crypto-decryptor
   desc: Exported decryptor module with embedded keys
   crit: hostile
@@ -190,7 +150,7 @@ composite_rules:
   all:
   - id: micro-behaviors/crypto/decrypt::createDecipheriv
   - id: hardcoded-hex-buffer-from-ast
-  - id: decipher-update-from-hex-ast
+  - id: micro-behaviors/data/decode/hex::node-update-with-hex-buffer
   - id: metadata/file/size::javascript-small-file-5k
   any:
   - id: objectives/anti-static/obfuscation/payload/encoded/exec::exported-decryptor
@@ -206,35 +166,19 @@ composite_rules:
   - id: metadata/file/size::javascript-small-file-5k
   unless:
   - id: metadata/package/testing/
-# Self-contained packed eval dropper: a megabyte-plus single line that carries
-# a self-decoder (Caesar/char-code) and feeds the result straight into eval().
-# File-scoped, metric-driven, and filename-agnostic — fires on any single JS
-# file of this shape, no package.json or archive context required. The megabyte
-# single-line atom already excludes source maps, vscode webviews, tiktoken, and
-# many-module bundles, so legit minified output does not reach here; a 1 MB line
-# that self-decodes into eval has no benign explanation.
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: packed-payload-exec-sink
   desc: Dynamic execution sink for a packed payload
   crit: component
   conf: 0.95
   any:
   - id: micro-behaviors/process/interpreter/eval/direct::js-eval-call-expression-arg
-  - id: eval-inline-function-transform
+  - id: metadata/lang/source/syntax/call/arguments::eval-inline-transform-call-syntax
   - id: micro-behaviors/metaprogramming/generation::function-ctor-call-expr-arg
   - id: micro-behaviors/process/interpreter/eval/indirect::js-indirect-eval-variable
   - id: micro-behaviors/process/interpreter/eval/indirect::js-indirect-eval-text
   - id: objectives/anti-static/obfuscation/eval/loader::indirect-ctor-transform-iife
-  # Text-mode sink: the AST-anchored legs above cannot fire on a payload large
-  # enough to defeat the JavaScript parser, which is precisely this shape.
   - id: objectives/anti-static/obfuscation/eval/function::function-ctor-wraps-inline-function
-- id: packed-single-line-payload-shape
-  desc: Megabyte single-line packed payload shape
-  crit: component
-  conf: 0.94
-  any:
-  - id: metadata/file/line::js-single-line-over-1mb
-  - id: metadata/file/arithmetic::js-extreme-digit-ratio-large-source
 - id: packed-charcode-decoder
   desc: Char-code decoder reconstructs payload data
   crit: component
@@ -260,57 +204,7 @@ composite_rules:
   - id: metadata/file/format/source-map::sourcemap
   - id: metadata/file/format/source-map::sourcemap-sources-content
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
-- id: megabyte-charcode-packed-payload
-  desc: Megabyte charcode-packed JavaScript payload
-  crit: hostile
-  conf: 0.96
-  mbc: B0032
-  attack: T1027
-  all:
-  - id: metadata/file/arithmetic::js-extreme-digit-ratio-large-source
-  - id: micro-behaviors/data/encode/charcode::charcodeat-arithmetic
-  - id: micro-behaviors/data/decode/custom::fromcharcode-map-array
-- id: megabyte-charcode-direct-eval-loader
-  desc: Megabyte charcode-packed payload feeds direct eval
-  crit: hostile
-  conf: 0.97
-  mbc: B0032
-  attack: T1027,T1059.007
-  all:
-  - id: megabyte-charcode-packed-payload
-  - id: eval-inline-function-transform
-- id: packed-single-line-eval-dropper
-  desc: Megabyte single-line self-decoding eval dropper
-  crit: hostile
-  conf: 0.96
-  mbc: B0032
-  attack: T1027
-  all:
-  - id: packed-payload-exec-sink
-  - id: packed-single-line-payload-shape
-  - id: packed-charcode-decoder
-  unless:
-  # Never exclude on the whole `structure/` directory: its long-line shape
-  # atoms hold for every single-line file, which made this composite
-  # unreachable for the exact payload shape it describes. Only the two benign
-  # long-line contexts belong here — genuine minifier output (thousands of
-  # source lines) and an inline source map.
-  - id: objectives/anti-static/obfuscation/code-metrics/structure::minification-pattern
-  - id: objectives/anti-static/obfuscation/code-metrics/structure::source-map-inline
-  # minification-pattern's line-count atoms are size-capped at 1 MB, so a
-  # larger bundle (a VS Code webview with thousands of lines and one huge
-  # chunk) never qualifies. The line count itself is the benign context.
-  - id: metadata/file/line::javascript-over-1000-lines
-  # Pyodide's Emscripten-generated runtime is intentionally a megabyte-scale
-  # single line and uses eval() for EM_ASM/EM_JS wrappers and async script
-  # loading. Its independent path + content identity distinguishes that runtime
-  # machinery from an anonymous self-decoding package payload.
-  - id: well-known/lib/runtime/scripted/pyodide::pyodide-runtime-bundle
-  # Bundled / minified application graphs often compact modules onto a single
-  # line while vendoring libraries that contain Function constructors and
-  # character-code decoding utilities.
-  - id: metadata/build/bundler/
+  - id: metadata/path::test-directory-component
 - id: js-delayed-hex-eval-stage
   desc: Delayed eval of a hex-decoded JavaScript payload
   crit: hostile
@@ -334,25 +228,62 @@ composite_rules:
   any:
   - id: micro-behaviors/metaprogramming/generation::function-ctor-call-expr-arg
   - id: micro-behaviors/metaprogramming/generation::js-function-call-commonjs-wrapper
-# The install-hook sibling of the packed loaders above: the declared
-# postinstall hook runs a shipped Node module whose body is a packed eval
-# stage (single-line generated concatenation feeding eval; see the
-# eval-loader packed-eval-module composites). npm executes the hook on every
-# install, so whatever the packed blob builds is attacker-chosen code with
-# install-time reach, and the module usually exports the same loader for
-# runtime use. Worked example: baileys-mbuilder 4.5.0-lts / 4.5.3-cjs, whose
-# postinstall runs a 5 MB single-line JSFuck eval blob exporting auto-update
-# hooks.
 - id: postinstall-runs-packed-eval-module
   desc: postinstall hook runs a packed eval module
   crit: hostile
   conf: 0.97
   attack: T1195.002,T1059.007
   mbc: B0024
-  for: [javascript, typescript, package.json, npm]
+  for:
+  - javascript
+  - typescript
+  - package.json
+  - npm
   scope: archive
   all:
   - id: metadata/package/scripts/lifecycle::postinstall-runs-node-script
   - id: objectives/anti-static/obfuscation/eval/loader::single-line-packed-eval-module
   unless:
   - id: well-known/lib/runtime/scripted/electron::electron-app-resources-path
+- id: npm-empty-export-hex-stuffed-main
+  desc: Skeleton package main hides megabyte hex blob
+  crit: hostile
+  conf: 0.97
+  attack: T1027,T1195.002
+  mbc: B0032
+  for:
+  - javascript
+  - typescript
+  - package.json
+  - npm
+  scope: archive
+  all:
+  - id: metadata/file/size::small-versioned-npm-manifest
+  - id: metadata/package/entrypoint::pkg-main-field
+  - id: metadata/file/line::js-large-at-most-two-lines
+  - id: metadata/lang/javascript-features::module-exports-object
+  - id: micro-behaviors/data/encode/hex::js-hex-string-stash-literal
+  unless:
+  - id: metadata/package/repository::has-repository-evidence
+  - id: metadata/package/testing/presence/fixture/
+  - id: metadata/package/testing/presence/harness/
+- id: npm-stub-decompressed-embedded-payload
+  desc: Skeleton package main conceals decompressed payload
+  crit: hostile
+  conf: 0.98
+  attack: T1027,T1195.002
+  mbc: B0032
+  for:
+  - javascript
+  - typescript
+  - package.json
+  - npm
+  scope: archive
+  all:
+  - id: metadata/file/size::small-versioned-npm-manifest
+  - id: metadata/package/entrypoint::main-root-javascript-entry
+  - id: micro-behaviors/data/decode/hex::buffer-from-hex-call
+  - id: micro-behaviors/data/decompress/brotli::node-brotli-decompress-function
+  unless:
+  - id: metadata/package/repository::has-repository-evidence
+  - id: metadata/package/testing/

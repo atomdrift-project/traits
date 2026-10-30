@@ -182595,7 +182595,7 @@ rule DITEKSHEN_INDICATOR_SUSPICIOUS_Finger_Download_Pattern
 		importance = 20
 
 	strings:
-		$pat1 = /finger(\.exe)?\s.{1,50}@.{7,10}\|/ ascii wide
+		$pat1 = /finger(\.exe)?\s.{1,50}@[A-Za-z0-9.-]{7,10}\s*\|/ ascii wide
 		$pat2 = "-Command \"finger" ascii wide
 		$ne1 = "Nmap service detection probe list" ascii
 
@@ -185060,7 +185060,7 @@ rule DITEKSHEN_INDICATOR_TOOL_PET_Botb : FILE
 rule DITEKSHEN_INDICATOR_TOOL_PWS_LSASS_Createminidump : FILE
 {
 	meta:
-		description = "Detects CreateMiniDump tool"
+		description = "LSASS minidump tool strings"
 		author = "ditekSHen"
 		id = "0d8642d1-2ed9-5270-a54a-6ba788026f5f"
 		date = "2020-11-06"
@@ -316437,11 +316437,10 @@ rule SIGNATURE_BASE_IMPLANT_3_V3 : FILE
 	strings:
 		$STR1 = ".?AVAgentKernel@@"
 		$STR2 = ".?AVIAgentModule@@"
-		$STR3 = "AgentKernel"
 		$fp1 = "Panda Security S.L." wide
 
 	condition:
-		( uint16( 0 ) == 0x5A4D or uint16( 0 ) == 0xCFD0 or uint16( 0 ) == 0xC3D4 or uint32( 0 ) == 0x46445025 or uint32( 1 ) == 0x6674725C ) and 1 of ( $STR* ) and not 1 of ( $fp* )
+		( uint16( 0 ) == 0x5A4D or uint16( 0 ) == 0xCFD0 or uint16( 0 ) == 0xC3D4 or uint32( 0 ) == 0x46445025 or uint32( 1 ) == 0x6674725C ) and any of ( $STR1, $STR2 ) and not 1 of ( $fp* )
 }
 rule SIGNATURE_BASE_IMPLANT_4_V1 : FILE
 {

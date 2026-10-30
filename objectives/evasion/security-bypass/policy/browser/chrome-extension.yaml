@@ -3,10 +3,12 @@ defaults:
   for: [scripts, javascript, typescript, chrome-manifest, binaries]
   attack: "T1562"
 traits:
-  - id: js-extension-probe-fetch-hang
-    desc: Hangs fetch probes for extension URLs
-    crit: suspicious
-    conf: 0.98
+  # The never-resolving promise is the hang. Extension-URL context is a
+  # separate fact; a UI preview that stalls its own API is not a probe.
+  - id: js-fetch-never-resolving-promise
+    desc: Fetch wrapper returns a never-resolving promise
+    crit: notable
+    conf: 0.9
     for: [javascript, typescript]
     if:
       type: text
@@ -82,6 +84,16 @@ traits:
       substr: correct_reason
 
 composite_rules:
+  - id: js-extension-probe-fetch-hang
+    desc: Hangs fetch probes for extension URLs
+    crit: suspicious
+    conf: 0.98
+    for: [javascript, typescript]
+    near_lines: 30
+    all:
+      - id: js-fetch-never-resolving-promise
+      - id: micro-behaviors/communications/url/scheme::chrome-extension-url-prefix-check
+
   - id: dnr-security-header-strip-http-script-redirect
     desc: DNR strips response security and redirects scripts remotely
     crit: suspicious
@@ -107,7 +119,7 @@ composite_rules:
       - id: micro-behaviors/communications/http/header/security::dnr-document-isolation-credentialless
 
   - id: broad-host-dnr-security-script-redirect
-    desc: Broad-host extension strips web security before remote script replacement
+    desc: Security-header removal and script redirection
     crit: suspicious
     conf: 0.99
     # Declares the members it mixes as well as the container it reports on:
@@ -124,7 +136,7 @@ composite_rules:
       - id: dnr-security-header-strip-http-script-redirect
 
   - id: broad-host-dnr-browser-agent-hijack
-    desc: Broad-host extension injects remote code to drive a privileged browser agent
+    desc: Script substitution with GLIC context commands
     crit: hostile
     conf: 0.995
     # Declares the members it mixes as well as the container it reports on:
@@ -163,11 +175,11 @@ composite_rules:
       - id: micro-behaviors/process/hook/webextension::dnr-location-remove-before-header
     needs: 1
 
-  # Edge's private marketing-page bridge can receive a prompt only while agent
-  # tools are off. Flipping them back on before its deferred check turns the
-  # prompt into browser actions; debugger authority supplies the gesture token.
-  - id: debugger-assisted-browser-agent-mode-race
-    desc: Broad-host extension races a forced browser-agent prompt into action mode
+  # The private Edge bridge receives a prompt while agent tools are disabled,
+  # then tools are re-enabled. This detects the mode-toggle sequence itself;
+  # a declared debugger permission alone does not establish debugger use.
+  - id: edge-agent-tools-toggle-prompt
+    desc: Edge tool-mode toggles around Copilot prompt
     crit: hostile
     conf: 0.995
     for: [crx, xpi, zip, chrome-manifest, javascript, typescript]
@@ -176,9 +188,8 @@ composite_rules:
     all:
       - id: metadata/permission/manifest::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
-      - id: metadata/permission/debugger::permission-debugger
       - id: "metadata/permission/host::content-script-url-match-pattern"
-      - id: micro-behaviors/browser-extension/tabs::edge-agent-tools-race-sequence
+      - id: micro-behaviors/browser-extension/tabs::edge-agent-tools-query-toggle-sequence
 
   - id: extension-presence-probe-evasion
     desc: Hides extension from page presence probes

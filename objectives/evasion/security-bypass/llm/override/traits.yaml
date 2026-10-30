@@ -2,6 +2,16 @@ defaults:
   platforms: [unix, windows]
   for: [scripts, documents, markdown, text, html, pdf, javascript, typescript]
 traits:
+# Raw uppercase form retained from a product-specific suppressor. Unlike the
+# literal and line-start observations, this also covers comments and mid-line
+# plaintext. The phrase itself identifies no product or runtime use.
+- id: llm-uppercase-ignore-prior-phrase
+  desc: Uppercase ignore-prior instruction phrase
+  crit: notable
+  for: [python, javascript, typescript, text]
+  if:
+    type: text
+    substr: IGNORE ALL PREVIOUS INSTRUCTIONS
 - id: llm-ignore-prior-instructions-line
   desc: Line-start ignore-prior instruction
   crit: notable
@@ -54,11 +64,38 @@ traits:
   # ("e.g., Ignore previous instructions"), not as an instruction to the model.
   - type: text
     regex: '(?i)(manipulative|e\.g\.|directives? aimed at).{0,40}ignore (previous|prior)'
+  # The same quoting idiom written as "text like ..." (agent-safety notes:
+  # "an issue body may contain text like 'Ignore previous instructions and ...'").
   - type: text
-    regex: '(?i)phrases like.{0,40}ignore (previous|prior)'
-  # A regex that tests inbound text for the phrase is a filter, not a prompt.
+    regex: '(?i)(text|phrases) like.{0,40}ignore (previous|prior)'
+  # A regex that tests inbound text for the phrase is a filter, not a prompt,
+  # including when the same literal also names other rejected lines
+  # (/Ignore prior instructions|END UNTRUSTED/i.test(line)).
   - type: text
-    regex: '(?i)/ignore (all )?(previous|prior) (instructions|rules)/[gimsuy]*\.(test|match)\('
+    case_insensitive: true
+    regex: '/[^/\n]*ignore (?:all )?(?:prior|previous) instructions[^/\n]*/[gimsuy]*\.test'
+- id: llm-override-quoted-guidance-prose
+  desc: Guidance prose quotes an override phrase
+  crit: notable
+  conf: 0.9
+  # Agent-safety guidance teaches that hostile issue/comment text may read
+  # "text like `Ignore previous instructions and ...`" — the quotation of
+  # the attack, not a live directive.
+  for: [shell, markdown, text, documents, javascript, typescript]
+  if:
+    type: text
+    regex: '(?i)\btext like.{0,40}ignore (previous|prior)'
+- id: llm-injection-phrase-array-constant
+  desc: Injection-phrase blocklist array constant
+  crit: notable
+  conf: 0.9
+  # Guardrail runtimes keep their blocklist as an INJECTION_PHRASES array
+  # whose hits block or quarantine a message — a signature table, not a
+  # prompt.
+  for: [javascript, typescript]
+  if:
+    type: text
+    substr: INJECTION_PHRASES
 # Text-form override phrase: captured payloads — chat transcripts, request
 # bodies, retrieved documents — carry the instruction outside any string
 # literal, mid-sentence rather than line-anchored. Deliberately free of the
@@ -108,7 +145,7 @@ traits:
   - id: well-known/tool/detection/security-scanner/
   - id: metadata/package/testing/presence/fixture::litellm-llm-safety-fixture-context
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: llm-system-wide-autonomous-scan
   desc: Autonomous system-wide scan instruction
   crit: suspicious
@@ -121,7 +158,7 @@ traits:
   - id: well-known/tool/detection/security-scanner/
   - id: metadata/package/testing/presence/fixture::litellm-llm-safety-fixture-context
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: llm-sensitive-user-data-scan-target
   desc: "Matches 'guardrail'"
   crit: suspicious
@@ -134,7 +171,16 @@ traits:
   - id: well-known/tool/detection/security-scanner/
   - id: metadata/package/testing/presence/fixture::litellm-llm-safety-fixture-context
   - id: metadata/package/testing/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
+- id: user-agent-context-reset-advice
+  desc: User told to reset agent context
+  crit: notable
+  conf: 0.9
+  if:
+    type: text
+    # Troubleshooting tells the person to ask for a fresh session. The
+    # quoted phrase is the user's line, not a directive to the model.
+    regex: '(?i)ask the agent to ["'']forget previous instructions["'']'
 - id: llm-disregard-prior-instructions
   desc: Disregard prior instructions prompt
   crit: notable
@@ -150,6 +196,7 @@ traits:
   - id: metadata/package/testing/presence/fixture::litellm-llm-safety-fixture-context
   - id: well-known/app/ai/coding-agent/localcode::localcode-ai-coding-assistant
   - id: metadata/file/policy/security-doc::untrusted-content-boundary-context
+  - id: user-agent-context-reset-advice
 - id: llm-do-not-follow-prior-instructions
   desc: Do-not-follow prior instructions prompt
   crit: notable
@@ -247,6 +294,8 @@ traits:
   - id: well-known/lib/ai/kudoai-ai-personas::persona-library-context
   - id: well-known/app/system/vsmux/
   - id: well-known/tool/development/agent/anthropic-claude-agent/
+  - type: text
+    regex: '(?i)this flag disables[^.\n]{0,80}without (human|user) approval'
   # A glossary defines autonomy as how far the agent acts without approval.
   - type: text
     regex: '(?i)degree to which the agent acts without (human|user) approval'
@@ -269,7 +318,7 @@ traits:
   - id: well-known/tool/offensive/promptfoo::redteam-eval-corpus-context
   - id: objectives/evasion/security-bypass/llm/override::prompt-injection-documentation-known-benign-context
   - id: well-known/tool/offensive/mcpsec/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: llm-safety-bypass--rx-33
   desc: Safety or content filter bypass instruction
   crit: notable
@@ -280,12 +329,17 @@ traits:
     # ("bypass every safety filter", "override all content guardrails").
     # The leading window lets the `not:` clauses see CVE-style prose
     # ("allows remote attackers to bypass content filters").
-    regex: '.{0,40}\b(bypass|override) (your |every |all |the )?(safety|content) (filter|guardrail)s?'
+    regex: '.{0,40}\b(bypass|override) ((your|every|all|the) )?(safety|content) (filter|guardrail)s?\b'
     case_insensitive: true
   not:
   - regex: (?i)\b(will not|cannot|can't|won't|do not|don't|not|never)\b.{0,48}\b(bypass|override)\b
   - regex: '(?i)\b(allows?|enables?|uses?|personas?|frames?)\b.{0,48}\b(to\s+)?(bypass|override)\b'
-  - regex: '(?i)\b(messages?|emails?|senders?|domains?)\b.{0,48}\bbypass\b'
+  - regex: '(?i)\b(messages?|emails?|senders?|domains?|posts?|accounts?|users?)\b.{0,48}\bbypass\b'
+  - regex: '(?i)\battempts?\s+to\s+(bypass|override)\b'
+  # A category table cell ("| 12 | Bypass safety guardrails") or a code
+  # comment label describes a test group. It is not an instruction.
+  - regex: '(?i)\|\s*\d+\s*\|\s*(bypass|override)\b'
+  - regex: '(?i)//.{0,30}\b(bypass|override)\b'
   unless:
   - id: recognized-llm-defense-context
 - id: llm-safety-bypass--rx-34
@@ -346,7 +400,7 @@ traits:
   - id: well-known/tool/detection/
   - id: metadata/package/testing/
   - id: metadata/package/agent-skill::agent-skill-user-priority-declaration
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
   if:
     type: text
     regex: '\bskills?[^A-Za-z]{1,4}override default system prompt behavior\b'
@@ -386,6 +440,16 @@ traits:
     - id: well-known/tool/development/toolchain/go-toolchain::go-buildinfo-testdata-base64
     - id: well-known/tool/development/toolchain/go-toolchain::go-toolchain-source-path
 composite_rules:
+- id: destructive-agent-override-bundle
+  desc: Encoded agent override accompanies wipe and lookalike install directives
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: llm-base64-override-directive
+  - id: objectives/impact/destroy/shell-out::quoted-root-delete-request
+  - id: objectives/supply-chain/impersonation/typosquat::pip-install-requests-lookalike
+  scope: file
+  near_bytes: 1024
 - id: llm-summary-content-replacement-directive
   for: [html, markdown, text, rtf, oledoc, ooxml, odf, pdf]
   desc: Prompt substitutes summary source
@@ -417,6 +481,12 @@ composite_rules:
   desc: Ignore prior instructions prompt
   crit: notable
   conf: 0.88
+  unless:
+  # Guidance prose quotes the attack ("text like `Ignore previous
+  # instructions ...`"); guardrail runtimes declare an INJECTION_PHRASES
+  # blocklist array — defense or teaching contexts, not live directives.
+  - id: llm-override-quoted-guidance-prose
+  - id: llm-injection-phrase-array-constant
   any:
   - id: llm-ignore-prior-instructions-line
   - id: llm-ignore-prior-instructions-literal
@@ -469,28 +539,27 @@ composite_rules:
   - id: llm-base64-override-directive
   - id: llm-base64-agent-action-directive
 - id: llm-system-prompt-extraction
-  desc: System prompt extraction behavior
+  desc: Prompt requests internal instruction disclosure
   crit: suspicious
   conf: 0.93
-  # The AEGIS package's own red-team corpora and agent test scenarios quote
-  # the phrases its shield exists to block; archive scope reaches members that
-  # carry no test-framework markers of their own.
   downgrade:
     scope: archive
     any:
-    - id: well-known/tool/detection/aegis::package-context
+    - id: well-known/tool/detection/
+    - id: metadata/package/documentation/security-testing::prompt-classification-sdk-overview
   any:
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-system-prompt-query
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-initial-instructions-query
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-instruction-encoding-request
+  - id: objectives/evasion/security-bypass/llm/prompt/override::llm-system-prompt-disclosure-verb
   unless:
   - id: metadata/file/format/classified-prompt-record::labeled-prompt-security-classification-examples
   - id: objectives/evasion/security-bypass/llm/override::llm-system-prompt-extraction-known-benign-context
   - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-  - id: well-known/tool/detection/
   - id: well-known/tool/offensive/
   - id: metadata/package/testing/
   - id: well-known/app/ai/coding-agent/
+
 - id: llm-system-prompt-extraction-known-benign-context
   desc: Reviewed documentation contexts for prompt-extraction examples
   crit: exception
@@ -503,15 +572,19 @@ composite_rules:
   desc: Encoded instruction following behavior
   crit: suspicious
   conf: 0.93
+  downgrade:
+    scope: archive
+    any:
+    - id: well-known/tool/detection/
   any:
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-decode-follow-instructions
   - id: objectives/evasion/security-bypass/llm/prompt/override::llm-translate-follow-instructions
   unless:
   - id: metadata/package/documentation/source::changelog-document-basename
   - id: well-known/tool/offensive/
-  - id: well-known/tool/detection/llm-scanner/
-  - id: well-known/tool/detection/security-scanner/
-  - id: well-known/tool/detection/pipelock/
+  # Detector packages store encoded prompts as fixtures and rules, not as
+  # instructions being executed by the scanner.
+  - id: well-known/tool/detection/
   - id: metadata/package/documentation/agent-safety::security-example-documentation
   - id: metadata/package/testing/corpus::rule-test-case-detection-verdicts
   - id: metadata/package/testing/corpus::bundled-llm-attack-corpus
@@ -528,39 +601,44 @@ composite_rules:
   desc: Prompt-injection documentation or rejection evaluations
   crit: exception
   conf: 0.9
-  for: [scripts, python, documents, markdown, text, json]
+  for:
+  - scripts
+  - python
+  - documents
+  - markdown
+  - text
+  - json
   any:
   - id: metadata/package/testing/corpus::command-injection-rejection-evaluation
   - id: metadata/package/documentation/agent-safety::extracted-reference-documentation
   - id: objectives/evasion/security-bypass/llm/override::prompt-injection-documentation-known-benign-context
+  - id: micro-behaviors/data/string/search::injection-phrase-catalog-array
+  - id: well-known/lib/ai/astrbot::repair-prompt-context
+  - id: micro-behaviors/data/string/search::typed-threat-signature-table
+  - id: micro-behaviors/data/string/search::scored-threat-signature-table
+
 - id: llm-prior-instruction-override
   desc: LLM prior instruction override prompt
   crit: suspicious
   conf: 0.88
-  # The AEGIS package's own red-team corpora and agent test scenarios quote
-  # the phrases its shield exists to block; archive scope reaches members that
-  # carry no test-framework markers of their own. The sofagent audit package
-  # likewise lists the phrases as rules for its diff scanner. Python security
-  # tooling ships the same benign shape: threat-payload fixture tables and
-  # detector verdict tables quote these phrases as fixtures. That suppressor
-  # is the fixture-table exception, not the whole corpus directory: corpus
-  # also matches runtime names such as evaluate_intent.
   downgrade:
     scope: archive
     any:
-    - id: well-known/tool/detection/defensive-scanner-context::agent-governance-package-context
+    - id: well-known/tool/detection/
     - id: metadata/package/testing/corpus::prompt-override-fixture-tables
+    - id: metadata/package/documentation/security-testing::prompt-classification-sdk-overview
   any:
   - id: llm-ignore-prior-instructions
   - id: llm-disregard-prior-instructions
   - id: llm-do-not-follow-prior-instructions
   unless:
-  - id: metadata/package/testing/corpus/
-  - id: well-known/app/
+  # An evaluation returns failure when the output contains its marker.
+  # Keep the embedded prompt observations; they are useful dual-use evidence.
+  - id: micro-behaviors/data/llm/evaluation::python-injection-marker-rejection-result
+  - id: metadata/package/testing/
   - id: well-known/tool/offensive/
-  - id: well-known/tool/detection/
-  - id: well-known/lib/ai/astrbot::repair-prompt-context
   - id: prompt-injection-reference-contexts
+
 - id: llm-uncensoring-output-limit-jailbreak
   desc: Ignore-prior jailbreak that strips all output limits
   crit: hostile
@@ -571,7 +649,7 @@ composite_rules:
   unless:
   - id: well-known/tool/detection/
   - id: metadata/package/testing/presence/harness/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: llm-always-respond
   for: [python, javascript, ruby, markdown]
   desc: LLM coercive response instruction
@@ -587,13 +665,11 @@ composite_rules:
   desc: LLM safety bypass prompt
   crit: suspicious
   conf: 0.9
-  # The AEGIS package's own red-team corpora and agent test scenarios quote
-  # the phrases its shield exists to block; archive scope reaches members that
-  # carry no test-framework markers of their own.
   downgrade:
     scope: archive
     any:
     - id: well-known/tool/detection/aegis::package-context
+    - id: metadata/package/documentation/security-testing::prompt-classification-sdk-overview
   any:
   - id: llm-safety-bypass--rx-33
   - id: llm-safety-bypass--rx-34
@@ -601,14 +677,12 @@ composite_rules:
   - id: llm-safety-bypass--rx-36
   - id: llm-safety-bypass--rx-37
   unless:
-  - id: metadata/package/documentation/agent-safety::ctf-technique-reference-documentation
-  - id: metadata/package/documentation/agent-safety::scoped-security-test-documentation
   - id: metadata/package/testing/corpus::js-guardrail-corpus-context
-  - id: well-known/lib/ai/openai::llm-provider-safety-setting-api
+  - id: micro-behaviors/data/llm/wire-marker::google-safety-threshold-api-reference
   - id: well-known/tool/detection/
   - id: well-known/tool/offensive/
-  - id: metadata/package/documentation/agent-safety::untrusted-input-data-guardrail
-  - id: metadata/file/profile/markup::assessment-playbook-examples
+  - id: metadata/package/documentation/security-testing::safety-bypass-example-context
+
 - id: llm-jailbreak-payload
   desc: LLM unrestricted persona jailbreak
   crit: notable
@@ -620,23 +694,8 @@ composite_rules:
   unless:
     - id: well-known/tool/detection/llm-scanner/
     - id: well-known/tool/detection/security-scanner/
+    - id: metadata/lang/source/shape::js-regex-rule-catalog
     - id: metadata/package/testing/presence/path::test-fixture-directory-path
-- id: llm-jailbreak-system-extraction
-  desc: Jailbreak payload paired with system-prompt extraction
-  crit: hostile
-  conf: 0.97
-  all:
-  - id: llm-jailbreak-payload
-  - id: llm-system-prompt-extraction
-  unless:
-  - id: metadata/package/testing/corpus/
-  - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-  - id: well-known/tool/detection/
-  - id: well-known/tool/offensive/ctf-skills/
-  - id: metadata/package/testing/presence/path::test-fixture-directory-path
-  - id: well-known/tool/offensive/bingo/
-  - id: metadata/package/testing/scripted::defensive-adversarial-fuzz-corpus
-  - id: metadata/package/documentation/agent-safety::security-example-documentation
 - id: llm-hide-ai-identity
   desc: AI identity concealment prompt
   crit: notable
@@ -646,7 +705,7 @@ composite_rules:
   - id: objectives/evasion/security-bypass/llm/persona::llm-hide-ai-identity--rx-39
   unless:
   - id: well-known/tool/detection/llm-scanner/
-  - id: "metadata/file/naming::firefox-directory-path"
+  - id: metadata/path::firefox-directory-path
   - id: well-known/app/browser/mozilla-firefox::firefox-known-source-module-context
 - id: llm-human-impersonation
   for:
@@ -723,7 +782,7 @@ composite_rules:
   all:
   - id: micro-behaviors/data/llm/agent::system-prompt-encoded-assignment
   - id: llm-base64-override-directive
-  - id: objectives/supply-chain/trojanized/app/command::hidden-comment-remote-shell-command
+  - id: metadata/lang/source/syntax/command::html-comment-remote-shell-pipeline
   near_bytes: 800
   unless:
   - id: metadata/package/testing/

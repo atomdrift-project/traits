@@ -58,6 +58,7 @@ traits:
       # not the user's home root.
       - type: text
         regex: 'Some\(home\)\s{0,3}=\s{0,3}&?(codex|app|sandbox)\w{0,12}_home\b'
+      - id: rust-temp-home-cleanup
 
   # `os.RemoveAll(os.UserHomeDir())` and the two-step form that binds the
   # result first (`home, _ := os.UserHomeDir(); os.RemoveAll(home)`).
@@ -84,6 +85,13 @@ traits:
       # Ephemeral/isolated home directory created in sandbox/tempdir:
       - type: text
         regex: 'Isolated\w*Home'
+      # Application home directory returned by a `.Home()` accessor, not the
+      # user's home root: `home, err := c.Home()` in Ignite's chain InitChain
+      # is the blockchain node's data dir (`~/.<app>` or a configured chain
+      # home), removed as documented pre-init cleanup. `os.UserHomeDir()`
+      # has no `.Home()` call and still matches.
+      - type: text
+        regex: '\bhome\s*(,\s*\w+\s*)?:?=\s*\w+\.Home\(\)'
 
 
 
@@ -132,9 +140,14 @@ traits:
       - substr: DANGEROUS_COMMAND_BLOCKED
       - regex: '^\s*(#|//|\*|--)'
     unless:
+      # `for: [shell]` still evaluates text extracted from a PE. A command in
+      # a compiled binary's read-only string table is only a reference; this
+      # line matcher cannot establish that the program invokes it. Keep shell
+      # script detections, and require call-shaped evidence for binary cases.
+      - id: metadata/file/magic/identity::pe-dos-stub
       - id: micro-behaviors/process/create/shell/guard/
       - id: metadata/package/testing/
-      - id: metadata/file/naming::test-directory-component
+      - id: metadata/path::test-directory-component
       - id: metadata/file/encoding::go-test-base64-layer
       - id: well-known/tool/offensive/dalfox::dalfox-scanner-context
       - type: path
@@ -161,7 +174,35 @@ traits:
       type: text
       regex: 'Directory\.Delete\s*\([^,\n]{0,40}UserProfile[^)\n]{0,20},\s*true'
 
+  - id: rust-temp-directory-reference
+    desc: Rust references the system temporary directory
+    crit: notable
+    for: [rust]
+    if:
+      type: text
+      substr: 'std::env::temp_dir()'
+
+  - id: rust-home-path-binding
+    desc: Binds helper or temp home path
+    crit: notable
+    for: [rust]
+    if:
+      type: text
+      regex: '\blet\s+home\s*=\s*(\w+\(\)|std::env::temp_dir\(\)\.join\(|env::temp_dir\(\)\.join\()'
+
 composite_rules:
+  # A benchmark or example can call its temporary fixture `home`; the temp
+  # root plus a local home binding are enough to distinguish that cleanup from
+  # handing the user's home root to remove_dir_all.
+  - id: rust-temp-home-cleanup
+    desc: Rust removes a home fixture built under the system temporary directory
+    crit: exception
+    conf: 0.9
+    all:
+      - id: rust-temp-directory-reference
+      - id: rust-home-path-binding
+    near_bytes: 16000
+
   # Language dispatch, not evidence accumulation -- every leg is the same
   # behaviour spelled for a different runtime, so there is no `needs:`. A bare
   # `any:` performs no intent inference and the engine caps it at suspicious
@@ -183,5 +224,6 @@ composite_rules:
       - id: csharp-home-directory-wipe
     unless:
       - id: well-known/tool/detection/
+      - id: well-known/tool/detection/tirith::tirith-embedded-command-corpus-context
       - id: micro-behaviors/process/create/shell/guard/
       - id: well-known/tool/detection/pattern-catalog::dangerous-command-exec-gateway

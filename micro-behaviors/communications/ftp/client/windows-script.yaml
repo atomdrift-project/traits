@@ -17,3 +17,80 @@ traits:
       type: text
       exclude_html_comments: true
       regex: '(?i)\becho\s+m?get\s+[^\r\n>'']{1,120}\.(exe|dll|scr|bat)\s*>>?\s*\S{1,120}'
+  # Windows ftp.exe `-s:` command files say `open host [port]` rather than
+  # invoking ftp.exe themselves. A dotted host keeps prose such as "open source"
+  # out of the match. The optional port is part of the same connect command.
+  - id: ftp-script-open-host
+    desc: FTP script opens a remote host
+    crit: notable
+    conf: 0.92
+    for: [text, batch]
+    if:
+      type: text
+      regex: '(?im)^open[ \t]+\S+\.\S+([ \t]+\d{1,5})?[ \t]*\r?$'
+  # Same open command when the host is a public IPv4 literal. Private and
+  # loopback targets stay on ftp-script-open-host; this atom is the unattributed
+  # external endpoint.
+  - id: ftp-script-open-external-ipv4
+    desc: FTP script opens an external IPv4
+    crit: notable
+    conf: 0.94
+    for: [text, batch]
+    if:
+      type: text
+      regex: '(?im)^open[ \t]+([0-9]{1,3}\.){3}[0-9]{1,3}([ \t]+[0-9]{1,5})?[ \t]*\r?$'
+      is: external_ip
+  # A line that is only an ftp.exe get/mget of a program file. Document fetches
+  # (readme.txt, archives) do not match. The echo-staging sibling above is the
+  # wrapper that writes this line into a command file.
+  - id: ftp-script-get-executable
+    desc: FTP script gets an executable
+    crit: notable
+    conf: 0.93
+    for: [text, batch]
+    if:
+      type: text
+      regex: '(?im)^m?get[ \t]+\S{1,80}\.(exe|dll|scr)([ \t]+\S+)?[ \t]*\r?$'
+  # The local name is the drop location. A bare remote get names the file
+  # the server sends; a Windows-directory destination plants it on the host.
+  - id: ftp-script-save-exe-windows
+    desc: FTP script saves an executable under Windows
+    crit: notable
+    conf: 0.94
+    for: [text, batch]
+    if:
+      type: text
+      regex: '(?im)^get[ \t]+\S+\.exe[ \t]+[a-z]:\\windows\\[^\s]{1,40}\.exe'
+  # The `user <name> <pass>` line of an ftp.exe -s: script. Prose such as
+  # "user name here" shares the shape, so the line is only a fragment;
+  # the composite below binds it to the script's own open command.
+  - id: ftp-script-user-auth-line
+    desc: FTP script user authentication line
+    crit: component
+    conf: 0.9
+    for: [text, batch]
+    if:
+      type: text
+      regex: '(?im)^user[ \t]+\S{1,64}[ \t]+\S{1,64}[ \t]*\r?$'
+  # ftp.exe also accepts the password on the line after `user <name>`. Keep
+  # this separate from the one-line form so the command grammar is explicit.
+  - id: ftp-script-user-password-sequence
+    desc: FTP script sends password on next line
+    crit: notable
+    conf: 0.92
+    for: [text, batch]
+    if:
+      type: text
+      regex: '(?im)^user[ \t]+\S{1,64}[ \t]*\r?\n[^\s\r\n]{1,64}[ \t]*\r?$'
+
+composite_rules:
+  - id: ftp-script-user-auth
+    desc: FTP script authenticates to opened host
+    crit: notable
+    conf: 0.9
+    for: [text, batch]
+    all:
+      - id: ftp-script-open-host
+    any:
+      - id: ftp-script-user-auth-line
+      - id: ftp-script-user-password-sequence

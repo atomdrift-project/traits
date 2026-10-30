@@ -1,36 +1,9 @@
-# Source-level process memory injection patterns
-# Detects C/C++ source code implementing process memory injection techniques
-# ATT&CK: T1055.009 (Proc Memory), T1055.012 (Process Hollowing)
+# Source-level GOT redirection and code-cave writes.
+# Naming and literal references do not identify a process-memory mechanism.
 defaults:
   for: [c, cpp]
   platforms: [unix]
-  attack: T1055.009
-  mbc: B0033
 traits:
-- id: code-cave-reference
-  desc: Code cave technique reference in source
-  crit: suspicious
-  conf: 0.9
-  if:
-    type: string_literal
-    substr: "code cave"
-    case_insensitive: true
-- id: shellcode-write-string
-  desc: Shellcode writing error/debug strings
-  crit: suspicious
-  conf: 0.85
-  if:
-    type: string_literal
-    substr: "writing shellcode"
-    case_insensitive: true
-- id: got-overwrite-string
-  desc: GOT section overwrite reference
-  crit: suspicious
-  conf: 0.9
-  attack: T1055
-  if:
-    type: string_literal
-    substr: "writing at GOT"
 - id: cave-addr-variable
   desc: Code cave address variable in source
   crit: notable
@@ -74,35 +47,6 @@ traits:
   if:
     type: text
     word: "dlopen_addr"
-- id: syscall-addr-inject
-  desc: Syscall address for shellcode injection
-  crit: suspicious
-  conf: 0.85
-  attack: T1106
-  # `syscall_addr` is also the label name ptrace-test helpers give the probe
-  # syscall site they single-step to (rr's src/test/ tree); a bare word in a
-  # test tree is scaffolding, not an injection payload address.
-  if:
-    type: text
-    word: "syscall_addr"
-  unless:
-  - id: micro-behaviors/os/syscall/invoke::linux-kernel-spdx-source-context
-  - id: metadata/file/naming::test-directory-component
-- id: syscall-address-field
-  desc: Syscall target address field
-  crit: suspicious
-  conf: 0.86
-  attack: T1106
-  if:
-    type: text
-    word: "syscall_address"
-  unless:
-  # Xen's HYPERVISOR_set_callbacks takes the guest's syscall entry point as
-  # `syscall_address`; the header that declares it is a hypercall interface.
-  - type: text
-    regex: '__HYPERVISOR_\w+|\bhypercall_page\b'
-  - id: well-known/lib/platform/wine::wine-source-tree
-  - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
 - id: stack-return-address-field
   desc: Stack return address field
   crit: suspicious
@@ -132,15 +76,20 @@ composite_rules:
   desc: Code cave shellcode injection toolkit
   crit: hostile
   conf: 0.95
+  attack: T1055
+  mbc: B0033
   all:
   - id: metadata/lang/source/naming/resource::mem-fd-identifier-repeated
+  - id: micro-behaviors/fs/file/seek::lseek-code-cave-offset
+  - id: micro-behaviors/fs/file/seek::lseek-got-offset
+  - id: micro-behaviors/fs/write/file/descriptor::write-mem-fd-call
   any:
-  - id: code-cave-reference
-  - id: shellcode-write-string
-  - id: got-overwrite-string
+  - id: metadata/lang/source/literal::code-cave-reference
+  - id: metadata/lang/source/literal::shellcode-write-string
+  - id: metadata/lang/source/literal::got-overwrite-string
   - id: cave-addr-variable
   - id: dlopen-addr-inject
-  - id: syscall-addr-inject
+  - id: micro-behaviors/os/kernel/syscall::reads-syscall-table-handler-address
   needs: 2
   unless:
   - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
@@ -150,24 +99,14 @@ composite_rules:
   crit: hostile
   conf: 0.95
   attack: T1055
+  mbc: B0033
   all:
-  - id: got-overwrite-string
-  - id: shellcode-write-string
+  - id: metadata/lang/source/literal::got-overwrite-string
+  - id: metadata/lang/source/literal::shellcode-write-string
+  - id: micro-behaviors/fs/file/seek::lseek-got-offset
+  - id: micro-behaviors/fs/write/file/descriptor::write-mem-fd-call
   any:
   - id: got-addr-variable
-- id: proc-mem-injection-source
-  desc: Process memory injection source code
-  crit: suspicious
-  conf: 0.85
-  any:
-  - id: code-cave-reference
-  - id: shellcode-write-string
-  - id: got-overwrite-string
-  - id: metadata/lang/source/naming/resource::mem-fd-identifier-repeated
-  needs: 2
-  unless:
-  - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
-  - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 - id: got-relro-hijack-telemetry
   desc: GOT and RELRO hijack telemetry
   crit: suspicious
@@ -180,6 +119,5 @@ composite_rules:
   any:
   - id: stack-return-address-field
   - id: libc-dlopen-mode-field
-  - id: syscall-address-field
   needs: 2
 

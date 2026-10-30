@@ -1,0 +1,83 @@
+# Multiple provider references with HTTP request capability; no request flow is inferred.
+defaults:
+  platforms: [unix, windows]
+  for: [python, shell, javascript, typescript, php, go, source]
+
+composite_rules:
+  # Per-provider evidence groups. The sweep counts *providers*, not legs: the
+  # GCP token URL (`.../service-accounts/default/token`) contains the broader
+  # service-accounts path, so one URL satisfies two atoms. Without grouping, a
+  # single-provider file reaches `needs: 2` on its own.
+  - id: azure-metadata-reference
+    desc: Azure instance metadata endpoint reference
+    crit: notable
+    conf: 0.9
+    unless:
+      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+      - id: metadata/package/documentation/agent-safety::security-example-documentation
+    any:
+      - id: micro-behaviors/communications/http/services/azure::azure-metadata-endpoint
+      - id: micro-behaviors/communications/http/services/azure::azure-managed-identity-token-path
+      - id: micro-behaviors/communications/http/services/azure::azure-imds-instance-path
+      - id: micro-behaviors/communications/http/request/configuration::azure-imds-object-header
+  - id: gcp-metadata-reference
+    desc: GCP instance metadata endpoint reference
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/http/services/gcp::gcp-service-accounts-metadata-path
+      - id: micro-behaviors/communications/http/services/gcp::gcp-service-account-token-path
+  # At least one endpoint that actually hands out a credential. Breadth alone
+  # says "several clouds named"; this says what is being asked for.
+  - id: cloud-credential-endpoint-reference
+    desc: Cloud instance credential endpoint reference
+    crit: notable
+    conf: 0.92
+    unless:
+      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+      - id: metadata/package/documentation/agent-safety::security-example-documentation
+    any:
+      - id: micro-behaviors/communications/http/services/aws::ec2-imds-iam-credentials-endpoint
+      # Direct socket clients commonly keep the link-local host and request
+      # path in separate values, so no contiguous URL survives in the file.
+      - id: micro-behaviors/communications/http/services/aws::iam-credentials-path-reference
+      - id: micro-behaviors/communications/http/services/aws::aws-ecs-task-credentials-endpoint
+      - id: micro-behaviors/communications/http/services/aws::aws-ecs-credentials-base-path
+      - id: micro-behaviors/communications/http/services/aws::aws-ecs-iam-metadata-path
+      - id: micro-behaviors/communications/http/services/azure::azure-managed-identity-token-path
+      - id: micro-behaviors/communications/http/services/gcp::gcp-service-accounts-metadata-path
+      - id: micro-behaviors/communications/http/services/gcp::gcp-service-account-token-path
+
+  - id: multi-cloud-credential-endpoint-context
+    for: [shell, python, javascript, typescript, php]
+    desc: References several cloud credential endpoints
+    crit: notable
+    conf: 0.96
+    needs: 2
+    # One credential endpoint, two provider groups, and an HTTP capability.
+    all:
+      - id: cloud-credential-endpoint-reference
+      # Endpoint strings can be emitted as a selected workload-identity
+      # configuration without ever being contacted. A sweep must also contain
+      # code capable of issuing the metadata request it claims to make.
+      - id: micro-behaviors/communications/http/request/client::http-request-capability
+    any:
+      - id: micro-behaviors/communications/http/services/aws::aws-metadata-reference
+      - id: azure-metadata-reference
+      - id: gcp-metadata-reference
+    unless:
+      # Official OpenAI SDK workload-identity module (Python and JS/TS): it
+      # ships one subject-token provider per cloud (Azure IMDS, GCP metadata
+      # server, k8s service-account file) for the caller to select
+      # explicitly. The module names several providers by design but never
+      # sweeps them. The JS/TS build (auth/subject-token-providers.{mjs,js})
+      # carries the same three providers in one file as the Python module.
+      - id: well-known/lib/ai/llm/provider::openai-python-k8s-workload-identity
+      - id: well-known/lib/ai/llm/provider::openai-workload-identity-source
+      # node-mongodb's auth module exports Azure IMDS and GCP identity
+      # callbacks for the caller to select. A webpack bundle of that driver
+      # names both providers without sweeping them.
+      - id: well-known/lib/data/mongodb::mongodb-azure-provider-base-url
+      # lm15 cloud credential chains resolve AWS, Azure, and GCP credentials
+      # per provider policy rather than sweeping clouds.
+      - id: well-known/lib/ai/lm15::lm15-cloud-chains-credential-provider

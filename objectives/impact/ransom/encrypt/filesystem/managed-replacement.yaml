@@ -1,7 +1,23 @@
 defaults:
   platforms: [windows]
   for: [pe, dll]
+  attack: T1486
 composite_rules:
+  # This async .NET family uses operation-level crypto and file I/O metadata
+  # alongside an explicit extortion note. The profile establishes attempted
+  # ransomware behavior, not successful encryption on a victim system.
+  - id: managed-filecrypto-with-wide-btc-demand
+    desc: Managed file encryption operations with a BTC ransom note
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/binary/framework::clr-runtime-header
+      - id: micro-behaviors/crypto/encrypt::dotnet-create-encryptor
+      - id: micro-behaviors/crypto/cipher::dotnet-cryptostream
+      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
+      - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
+      - id: objectives/impact/ransom/keywords::ransom-note-btc-payment-wide
+
   # This is an attempted replacement, not proof of successful encryption.
   # Invalid key/IV sizes, access failures or unreachable helpers can prevent
   # the transform from returning before either output or deletion occurs.
@@ -9,7 +25,6 @@ composite_rules:
     desc: Ransom demands with file-replacement CIL and crypto references
     crit: hostile
     conf: 0.98
-    attack: T1486
     all:
       - id: metadata/binary/framework::dotnet-assembly
       - id: micro-behaviors/data/control-flow/sequence::cil-transform-suffixed-output-call-layout
@@ -21,3 +36,40 @@ composite_rules:
       - id: objectives/impact/ransom/keywords::ransom-note-btc-payment-wide
       - id: objectives/impact/ransom/keywords::pay-bitcoin-phrase
       - id: objectives/impact/ransom/keywords::transfer-bitcoin-phrase
+
+  # Managed async implementations may expose the operations without matching
+  # the older single-method CIL layout above. This operation profile identifies
+  # an attempted transform; it does not validate key/IV sizes or prove that an
+  # encrypted replacement was written. Drive enumeration may support separate
+  # replication and does not show that files on those drives are transformed.
+  - id: managed-file-encryption-attempt-with-ransom-demand
+    desc: Managed code attempts file encryption with ransom payment demand
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/binary/framework::clr-runtime-header
+      - id: micro-behaviors/crypto/encrypt::dotnet-create-encryptor
+      - id: micro-behaviors/crypto/cipher::dotnet-cryptostream
+      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
+      - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
+      - id: metadata/binary/symbols/name/token::dotnet-getfiles-method-name
+      - id: objectives/impact/ransom/keywords::ransom-note-btc-payment-wide
+
+  # Some managed lockers only encode their target text before writing a
+  # suffixed copy. This is not cryptographic encryption, but a file walk,
+  # content read, Base64 transform, .locked output, and explicit ransom demand
+  # in one compiled assembly still establishes a malicious file-locking
+  # attempt. The rule describes the observed copy-and-extort workflow without
+  # claiming that originals are removed or cryptographically encrypted.
+  - id: managed-base64-file-locking-extortion
+    desc: Managed Base64 .locked copies with ransom note
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: metadata/binary/symbols/name/token::dotnet-getfiles-method-name
+      - id: micro-behaviors/fs/read/file/full::dotnet-read-all-text
+      - id: micro-behaviors/data/encode/base64::dotnet-to-base64string-text
+      - id: micro-behaviors/fs/write/file/full::dotnet-writealltext-token
+      - id: micro-behaviors/fs/file/extension::compiled-locked-extension-reference
+      - id: objectives/impact/ransom/keywords::ransom-ui-your-files-encrypted
+    near_bytes: 12000

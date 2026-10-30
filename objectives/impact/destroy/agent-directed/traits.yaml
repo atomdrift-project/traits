@@ -31,6 +31,37 @@ traits:
       regex: '(?i)\bfile[- ]?systems?\b[\s\S]{0,64}\bcloud resources?\b'
 
 composite_rules:
+  # A destructive goal in an encoded system prompt, paired with an explicit
+  # execution-policy bypass, is a staged agent-abuse configuration even before
+  # an agent runtime is present.
+  - id: agent-config-destructive-policy-bypass
+    desc: Agent prompt links deletion and policy bypass
+    crit: suspicious
+    conf: 0.97
+    for: [text, documents]
+    all:
+      - id: objectives/impact/destroy/shell-out::quoted-root-delete-request
+      - id: micro-behaviors/data/llm/agent::system-prompt-encoded-assignment
+      - id: micro-behaviors/os/security/policy::powershell-policy-bypass-assignment
+    scope: file
+    near_bytes: 1024
+
+  # Keep remote staging distinct from the destructive prompt: a lookalike
+  # package command and shell-pipeline URL are both placed in this agent
+  # configuration with its explicit policy-bypass and encoded prompt.
+  - id: agent-config-remote-stage-policy-bypass
+    desc: Agent config pairs stage and policy bypass
+    crit: suspicious
+    conf: 0.96
+    for: [text, documents]
+    all:
+      - id: micro-behaviors/os/package-manager/install::pip-install-cli-text
+      - id: micro-behaviors/communications/http/download/shell::curl-wget-http-url
+      - id: micro-behaviors/os/security/policy::powershell-policy-bypass-assignment
+      - id: micro-behaviors/data/llm/agent::system-prompt-encoded-assignment
+    scope: file
+    near_bytes: 1024
+
   - id: unattended-agent-destructive-goal
     for: [shell, python, javascript]
     desc: Unattended agent receives destructive goal
@@ -66,6 +97,28 @@ composite_rules:
     all:
       - id: micro-behaviors/process/create/unattended-agent::unrestricted-unattended-session
       - id: destructive-agent-goal
+      - id: micro-behaviors/communications/http/services/aws-ec2::aws-cli-ec2-terminate
+      - id: micro-behaviors/communications/http/services/aws-s3::aws-cli-s3-rm
+      - id: micro-behaviors/communications/http/services/aws-iam::aws-cli-iam-delete-user
+    near_bytes: 1800
+    unless:
+      - id: well-known/tool/detection/llm-scanner/
+      - id: well-known/tool/detection/security-scanner/
+
+  # Some clients expose an explicit trust-all-tools permission bypass rather
+  # than the narrower unrestricted-session marker. Require both unattended
+  # execution and a destructive cloud task so ordinary agent setup flags do
+  # not become a hostile finding.
+  - id: trust-all-agent-cloud-destruction
+    desc: Unattended trust-all agent receives destructive cloud task
+    crit: hostile
+    conf: 0.995
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/process/argument/option::noninteractive-flag
+      - id: micro-behaviors/process/create/agent::ai-agent-dangerous-permission-flag
+      - id: destructive-agent-goal
+      - id: local-cloud-resource-target
       - id: micro-behaviors/communications/http/services/aws-ec2::aws-cli-ec2-terminate
       - id: micro-behaviors/communications/http/services/aws-s3::aws-cli-s3-rm
       - id: micro-behaviors/communications/http/services/aws-iam::aws-cli-iam-delete-user

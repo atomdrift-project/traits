@@ -15,6 +15,7 @@ traits:
       type: text
       regex: '(?i)(Browsers[/\\]+Tokens[/\\]+|Discord[/\\]+Google tokens|Discord[/\\]+.{0,32}Tokens)'
 
+
   - id: token-parser-family-1
     desc: Bee, Redline, Vidar token parser
     crit: notable
@@ -188,33 +189,6 @@ traits:
     if:
       type: text
       substr: '"%mfa_enabled"'
-  - id: java-crypt32util-dpapi
-    desc: Java Crypt32Util DPAPI usage
-    crit: notable
-    conf: 0.95
-    for: [class, java_class]
-    size_min: 1000
-    if:
-      type: text
-      substr: "win32/Crypt32Util"
-  - id: java-crypt-unprotect-data
-    desc: Java DPAPI unprotect call
-    crit: notable
-    conf: 0.95
-    for: [class, java_class]
-    size_min: 1000
-    if:
-      type: text
-      substr: "UnprotectData"
-  - id: java-gcm-parameter-spec
-    desc: Java AES-GCM parameter spec
-    crit: notable
-    conf: 0.9
-    for: [class, java_class]
-    size_min: 1000
-    if:
-      type: text
-      substr: "GCMParameterSpec"
   - id: java-okhttp-post-client
     desc: Java OkHttp POST client
     crit: notable
@@ -285,7 +259,53 @@ traits:
     if:
       type: text
       regex: '\.sendall\s*\(\s*token\.encode\s*\(\s*\)\s*\)'
+
+  - id: discord-sqlite-store
+    desc: Discord client sqlite database reference
+    crit: notable
+    conf: 0.9
+    for: [pe]
+    if:
+      type: text
+      regex: '(?i)discord\.sqlite\b'
+    unless:
+      - id: well-known/tool/detection/
+
+  - id: discord-nitro-marker
+    desc: Discord Nitro status field marker
+    crit: notable
+    conf: 0.9
+    for: [pe]
+    if:
+      type: text
+      substr: "`Nitro`"
+    unless:
+      - id: well-known/tool/detection/
+
+  - id: discord-mfa-tag
+    desc: Discord MFA JSON structure tag
+    crit: notable
+    conf: 0.9
+    for: [pe]
+    if:
+      type: text
+      substr: 'json:"mfa_enabled"'
+    unless:
+      - id: well-known/tool/detection/
+
 composite_rules:
+  - id: native-discord-sqlite-account-stealer
+    desc: Targets Discord sqlite database and account profile
+    crit: hostile
+    conf: 0.96
+    for: [pe]
+    all:
+      - id: discord-sqlite-store
+    any:
+      - id: discord-nitro-marker
+      - id: discord-mfa-tag
+    unless:
+      - id: well-known/tool/detection/
   - id: token-log-record-parser
     desc: Named stealer token-log parser
     crit: notable
@@ -356,7 +376,7 @@ composite_rules:
     any:
       - id: micro-behaviors/fs/path/app-data::discord-local-storage-path
       - id: micro-behaviors/communications/http/services/discord::discord-api-users-me-url
-      - id: well-known/app/communication/discord::webpack-runtime-global
+      - id: well-known/app/communication/discord::discord-webpack-chunk-global-context
       - id: micro-behaviors/data/format/credentials::discord-token-search-regex-source
     unless:
       - id: clerk-token-bridge
@@ -403,7 +423,7 @@ composite_rules:
       - id: metadata/file/string/application-name::chrome-browser-name-literal
     unless:
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
   - id: batch-discord-leveldb-token-harvester
     desc: Batch Discord token harvester targets LevelDB
     crit: hostile
@@ -420,7 +440,7 @@ composite_rules:
       - id: micro-behaviors/os/application/target::discord-client-name-reference
     unless:
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
   - id: obfuscated-discord-leveldb-harvester
     desc: Obfuscated Discord token harvester targets LevelDB
     crit: hostile
@@ -441,7 +461,7 @@ composite_rules:
       - id: metadata/file/string/application-name::chrome-browser-name-literal
     unless:
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
   - id: discord-token-exfiltration-chain
     desc: Discord token theft with webhook exfil
     crit: hostile
@@ -508,30 +528,18 @@ composite_rules:
       - id: micro-behaviors/crypto/decrypt::node-aes-gcm-decipher-initialization
       - id: micro-behaviors/fs/path/application/browser::local-state
       - id: micro-behaviors/fs/read/file/full::read-node
-  - id: java-browser-dpapi-gcm
-    desc: Java Chromium DPAPI AES-GCM decryptor
-    crit: suspicious
-    conf: 0.96
-    mbc: B0030
-    for: [jar, class, java_class]
-    all:
-      - id: java-crypt32util-dpapi
-      - id: java-crypt-unprotect-data
-      - id: java-gcm-parameter-spec
-  # Chromium-format token decryption in a single class: DPAPI-unprotect the
-  # Local State key (parsed as JSON) and AES-GCM-decrypt stored tokens. The
-  # API-level legs match even when every string is obfuscator-encrypted.
   - id: java-class-dpapi-gcm-token-decryptor
+    size_min: 1000
     desc: Java class decrypts DPAPI-protected tokens with AES-GCM
     crit: hostile
     conf: 0.97
     mbc: B0030
     for: [jar, class, java_class]
     all:
-      - id: java-crypt32util-dpapi
-      - id: java-crypt-unprotect-data
-      - id: java-gcm-parameter-spec
-      - id: objectives/discovery/system/fingerprint/info::java-json-object
+      - id: micro-behaviors/os/security/dpapi::jna-crypt32util-class
+      - id: micro-behaviors/os/security/dpapi::jvm-crypt-unprotect-data-name
+      - id: micro-behaviors/crypto/cipher::jvm-gcm-parameter-spec
+      - id: metadata/import/framework::jvm-org-json-object-reference
   - id: discord-credential-embed-template
     desc: Discord credential embed template
     crit: suspicious
@@ -543,15 +551,16 @@ composite_rules:
       - id: embed-template-account-fields
       - id: embed-template-mfa-field
   - id: java-discord-dpapi-stealer
+    size_min: 1000
     desc: Java Discord DPAPI token stealer
     crit: hostile
     conf: 0.98
     mbc: B0030
     for: [jar, class]
     all:
-      - id: java-crypt32util-dpapi
-      - id: java-crypt-unprotect-data
-      - id: java-gcm-parameter-spec
+      - id: micro-behaviors/os/security/dpapi::jna-crypt32util-class
+      - id: micro-behaviors/os/security/dpapi::jvm-crypt-unprotect-data-name
+      - id: micro-behaviors/crypto/cipher::jvm-gcm-parameter-spec
     any:
       - id: java-okhttp-post-client
       - id: embed-template-token-field
@@ -598,8 +607,47 @@ composite_rules:
       - id: literal-pattern
       - id: micro-behaviors/fs/path/app-data::discord-local-storage-path
       - id: micro-behaviors/fs/path/config/app::discord-local-state-path
+      - id: micro-behaviors/data/format/credentials::discord-encrypted-token-prefix-source
     unless:
       - id: well-known/tool/detection/security-scanner::titus-defensive-secret-scanner-context
+  # The webpack token-grab-to-clipboard sequence is the infostealer
+  # bookmarklet trick, but the same three facts ship in user-facing self-token
+  # helpers (settings pages that walk the user through grabbing their own
+  # token for local Rich Presence integrations). Without a transfer leg
+  # (webhook, upload, remote fetch) the bytes cannot claim theft, so the
+  # technique stays suspicious; exfil variants are the hostile composites
+  # above and below.
+  - id: discord-webpack-token-clipboard-grab
+    desc: Bookmarklet copies Discord token from webpack to clipboard
+    crit: suspicious
+    conf: 0.96
+    mbc: B0030
+    attack: T1539,T1528
+    for: [javascript, typescript]
+    near_bytes: 8192
+    all:
+      - id: well-known/app/communication/discord::discord-webpack-chunk-global-text
+      - id: micro-behaviors/data/property/access::token-getter-call
+    any:
+      - id: micro-behaviors/os/clipboard/write::browser-clipboard-write
+      - id: micro-behaviors/os/clipboard/write::browser-clipboard-copy-command
+  - id: discord-webpack-token-api-submission
+    desc: Discord webpack token submission
+    crit: hostile
+    conf: 0.96
+    mbc: B0030
+    attack: T1539,T1528
+    for: [javascript, typescript]
+    all:
+      - id: discord-webpack-token-clipboard-grab
+      - id: metadata/lang/source/syntax/call/arguments::js-token-save-mutation-call-text
+    unless:
+      # A self-hosted app's own Discord presence settings walk the user through
+      # extracting their own token (bookmarklet on discord.com) and save it to
+      # the app's local backend, with the Gateway/ToS account risk disclosed
+      # beside the save control. The disclosure is consent evidence a covert
+      # stealer does not carry; the submission target is the app itself.
+      - id: discord-self-token-local-gateway-consent
   - id: discord-electron-token-interception
     desc: Discord Electron token interception
     crit: hostile
@@ -607,7 +655,7 @@ composite_rules:
     mbc: B0030
     for: [javascript, typescript]
     all:
-      - id: well-known/app/communication/discord::webpack-runtime-global
+      - id: well-known/app/communication/discord::discord-webpack-chunk-global-context
     any:
       - id: micro-behaviors/process/attach/debugger::electron-webcontents-debugger-attachment
       - id: micro-behaviors/communications/http/services/discord::discord-api-users-me-url
@@ -732,10 +780,10 @@ composite_rules:
     for: [javascript, typescript]
     all:
       - id: micro-behaviors/communications/http/token-auth::discord-users-me-auth-get
-      - id: discord-user-token-config-field
+      - id: micro-behaviors/data/format/credentials::user-token-config-field
       - id: micro-behaviors/communications/http/get::axios-get-call
     any:
-      - id: objectives/exfiltration/stealer/token::discord-user-token-webhook-exfil
+      - id: objectives/exfiltration/stealer/credential/value/token::discord-user-token-webhook-exfil
       - id: objectives/exfiltration/messaging/discord::discord-token-webhook-payload-field
     needs: 1
   - id: js-discord-token-browser-upload
@@ -748,7 +796,7 @@ composite_rules:
     all:
       - id: micro-behaviors/data/format/credentials::discord-encrypted-token-prefix
       - id: micro-behaviors/data/format/credentials::discord-token-regex-source
-      - id: micro-behaviors/fs/path/application/browser::chrome-windows-profile
+      - id: micro-behaviors/fs/path/application/browser::chrome-google-profile-path
       - id: micro-behaviors/communications/http/url/path::remote-transfer-url-path
     unless:
       - id: well-known/tool/detection/
@@ -786,3 +834,34 @@ composite_rules:
     unless:
       - id: well-known/tool/detection/
 
+  # Benign context for discord-webpack-token-api-submission: a self-hosted
+  # app's own Discord Gateway presence setup. The user extracts their own
+  # token, the save mutation targets the app's local backend, and the
+  # Gateway/ToS account risk is disclosed beside the save control. The
+  # disclosure plus the save mutation is the consent evidence a covert
+  # stealer does not carry.
+  - id: discord-self-token-local-gateway-consent
+    desc: Disclosed self-token setup for local Discord gateway
+    crit: exception
+    conf: 0.9
+    for: [javascript, typescript]
+    near_bytes: 4000
+    all:
+      - id: metadata/lang/natural/phrasing::discord-user-token-tos-disclosure
+      - id: metadata/lang/source/syntax/call/arguments::js-token-save-mutation-call-text
+
+  # Discord stores the session token in Chromium Local Storage LevelDB as
+  # dQw4w9WgXcQ: plus AES-GCM ciphertext. Searching that prefix and decrypting
+  # the record is token theft, whether or not the file also unwraps the key
+  # with DPAPI.
+  - id: native-discord-leveldb-token-decrypt
+    desc: Native code decrypts Discord LevelDB token blobs
+    crit: hostile
+    conf: 0.96
+    mbc: B0030
+    attack: T1539,T1552
+    for: [c, cpp]
+    all:
+      - id: micro-behaviors/data/format/credentials::discord-encrypted-token-prefix
+      - id: micro-behaviors/fs/path/app-data::chromium-leveldb-local-storage
+      - id: micro-behaviors/crypto/decrypt::bcrypt-decrypt-source

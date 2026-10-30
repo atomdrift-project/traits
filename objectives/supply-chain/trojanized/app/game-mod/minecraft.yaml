@@ -47,6 +47,15 @@ traits:
       type: text
       regex: '"entrypoints"[\s\S]{0,400}"net\.client\.'
 
+  - id: jvm-ethereum-contract-address
+    desc: JVM string holds an Ethereum address
+    crit: notable
+    conf: 0.9
+    for: [class, java_class]
+    if:
+      type: text
+      regex: '(?i)\b0x[a-f0-9]{40}\b'
+
   - id: fabric-mod-prelaunch-entrypoint-class
     desc: Fabric mod ships a PreLaunch entrypoint class
     crit: notable
@@ -115,24 +124,6 @@ traits:
       type: text
       regex: '(?i)https?://[a-z0-9][-a-z0-9]{0,62}\.duckdns\.org/'
 
-  - id: fabric-jar-net-fabric-class-member
-    desc: Fabric JAR ships net.fabric classes
-    crit: notable
-    conf: 0.94
-    if:
-      type: value
-      path: archive.members[*].path
-      regex: '(?i)^net/fabric/[^/]+\.class$'
-
-  - id: fabric-jar-net-fabric-main-class
-    desc: Fabric JAR Main-Class uses net.fabric
-    crit: notable
-    conf: 0.95
-    if:
-      type: value
-      path: jar.manifest.main_class
-      regex: '(?i)^net\.fabric\.'
-
 composite_rules:
   # Fabric mod that ships a staged downloader (host beacon, fetch, AES
   # decrypt, write, reflective launch) under an unrelated helper class name.
@@ -154,7 +145,7 @@ composite_rules:
     conf: 0.99
     all:
       - id: metadata/package/config::forge-runnable-mod-archive
-      - id: metadata/file/archive::archive-misplaced-executable-member
+      - id: metadata/archive/layout::archive-misplaced-executable-member
       - id: metadata/package/config::jar-root-key-text-resource
 
   # fabric-example-mod's template package name. A released mod keeps its own
@@ -208,8 +199,8 @@ composite_rules:
     all:
       - id: fabric-entrypoint-template-package
     any:
-      - id: objectives/exfiltration/stealer/token::minecraft-session-http-post-exfil
-      - id: objectives/exfiltration/stealer/token::minecraft-session-obfuscated-http-post
+      - id: objectives/exfiltration/stealer/credential/value/token::minecraft-session-http-post-exfil
+      - id: objectives/exfiltration/stealer/credential/value/token::minecraft-session-obfuscated-http-post
       - id: objectives/command-and-control/backdoor/loader/classloader::java-http-jar-bytecode-stage
       - id: objectives/command-and-control/backdoor/loader/archive::remote-stage-self-relaunch-archive
 
@@ -244,6 +235,8 @@ composite_rules:
     any:
       - id: micro-behaviors/process/lifecycle/respawn::java-obfuscated-self-jar-relaunch
       - id: micro-behaviors/process/lifecycle/respawn::java-obfuscated-process-launch-exit
+      - id: micro-behaviors/process/lifecycle/respawn::java-xor-char-obfuscated-self-jar-relaunch
+      - id: micro-behaviors/process/lifecycle/respawn::java-xor-char-obfuscated-process-launch-exit
 
   # Foreign org.web entrypoint beside an obfuscated self-relaunch Main-Class:
   # correlates the bolted payload package declared to Fabric with the staged
@@ -278,27 +271,8 @@ composite_rules:
       - id: objectives/command-and-control/dropper/staging/disk::java-inetcache-silent-exe-stager
     unless:
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
 
-  # A Fabric mod that reads the named access token and then walks a JAR
-  # held in memory, constructing classes from those entries, is staging a
-  # second payload beside the session. The TLS post of that token is a
-  # separate exfil composite.
-  - id: fabric-mod-named-session-jar-stage
-    desc: Fabric mod stages an in-memory jar beside the session token
-    crit: hostile
-    conf: 0.97
-    attack: T1195.002,T1528,T1620
-    scope: archive
-    for: [jar, zip, class, java_class]
-    all:
-      - id: metadata/package/config::fabric-mod-metadata
-      - id: objectives/credential-access/gaming/minecraft::minecraft-named-user-ref
-      - id: objectives/credential-access/gaming/minecraft::minecraft-named-access-token-getter
-      - id: micro-behaviors/data/archive/library::jarinputstream-entry-iteration
-      - id: micro-behaviors/metaprogramming/reflection::java-constructor-newinstance-bytecode
-    unless:
-      - id: metadata/package/testing/
   # Republished Fabric mod that also ships a class posting Minecraft
   # username/uuid/accessToken JSON — session theft bolted onto a real mod.
   - id: fabric-mod-session-json-exfil
@@ -313,9 +287,9 @@ composite_rules:
     all:
       - id: metadata/package/config::fabric-runnable-mod-archive
     any:
-      - id: objectives/exfiltration/stealer/token::minecraft-profile-json-post-exfil
-      - id: objectives/exfiltration/stealer/token::minecraft-session-http-post-exfil
-      - id: objectives/exfiltration/stealer/token::minecraft-session-obfuscated-http-post
+      - id: objectives/exfiltration/stealer/credential/value/token::minecraft-profile-json-post-exfil
+      - id: objectives/exfiltration/stealer/credential/value/token::minecraft-session-http-post-exfil
+      - id: objectives/exfiltration/stealer/credential/value/token::minecraft-session-obfuscated-http-post
 
   # Template-package Fabric entrypoint plus int-array-hidden signed-config C2
   # and a self-relaunch Main-Class: Meilaa-style republished mods that stage a
@@ -332,7 +306,7 @@ composite_rules:
     all:
       - id: fabric-entrypoint-template-package
       - id: objectives/anti-static/obfuscation/string/encoding::java-int-array-string-decrypt-descriptor
-      - id: micro-behaviors/crypto/asymmetric/signature::java-rsa-public-verify
+      - id: micro-behaviors/crypto/verify::jvm-x509-signature-verification-references
       - id: micro-behaviors/communications/http/lib/httpclient::java-httpclient-send
       - id: micro-behaviors/communications/http/lib/httpclient::java-http-request-post-bytecode
     any:
@@ -446,6 +420,44 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/steganography/image::obfuscated-png-archive-staging
       - id: micro-behaviors/communications/tls/verify/disable::java-tls-client-own-trust-all-manager
 
+  # Same loader shape when the session-getter fragments use an encoding the
+  # getter selectors do not resolve: a string-obfuscated Fabric mod that
+  # trusts every TLS certificate and runs a ZIP inflated out of a PNG.
+  - id: fabric-mod-obfuscated-png-archive-launcher
+    desc: Obfuscated Fabric mod runs PNG-hidden archive
+    crit: hostile
+    conf: 0.96
+    attack: T1195.002,T1105,T1027.003
+    scope: archive
+    for: [jar, zip, class, java_class]
+    all:
+      - id: metadata/package/config::fabric-mod-metadata
+      - id: objectives/anti-static/obfuscation/steganography/image::obfuscated-png-archive-staging
+      - id: micro-behaviors/communications/tls/verify/disable::java-tls-client-own-trust-all-manager
+      - id: micro-behaviors/process/fd/stdio::java-processbuilder-redirected-stdio
+
+  # Some builds conceal account accessor names with arithmetic. Archive scope
+  # captures reflective lookup, Base64 encoding, TLS socket writes, and the
+  # hidden payload as co-occurring behaviors; it does not bind the reflected
+  # values to the socket write.
+  - id: fabric-mod-obfuscated-reflection-tls-cooccurrence
+    desc: Obfuscated Fabric mod combines reflection, TLS, and hidden archive staging
+    crit: hostile
+    conf: 0.98
+    attack: T1195.002,T1528,T1041,T1027
+    mbc: B0006,E1041
+    scope: archive
+    for: [jar, zip, class, java_class]
+    all:
+      - id: metadata/package/config::fabric-mod-metadata
+      - id: objectives/anti-static/obfuscation/steganography/image::obfuscated-png-archive-staging
+      - id: micro-behaviors/metaprogramming/reflection::java-class-forname-bytecode
+      - id: micro-behaviors/metaprogramming/reflection::jvm-get-declared-method
+      - id: micro-behaviors/metaprogramming/reflection::java-method-invoke-bytecode
+      - id: micro-behaviors/data/encode/base64::jvm-base64-encode-bytecode
+      - id: micro-behaviors/communications/socket/send::java-socket-stream-write-references
+      - id: micro-behaviors/communications/tls/verify/disable::java-tls-client-own-trust-all-manager
+
   - id: fabric-mod-jni-native-session-stealer
     desc: Fabric mod embeds native DLL Minecraft session XOR C2 stealer
     crit: hostile
@@ -498,31 +510,20 @@ composite_rules:
       - id: micro-behaviors/communications/http/lib/httpclient::java-http-request-post-bytecode
       - id: micro-behaviors/communications/http/lib/httpclient::java-httpclient-send
 
-  # Republished Fabric clients that keep the real mod entrypoints but add a
-  # foreign net.fabric.* tree, declare Main-Class, and list several main hooks
-  # are SilentNet-style bolt-ons (javaw relaunch plus obfuscated exfil), not
-  # normal loader wiring.
-  - id: fabric-mod-net-fabric-runnable-bolt-on
-    desc: Runnable Fabric mod with foreign net.fabric loader entrypoint
+  # Discord token regexes, the eth_call body, and the fallback host are
+  # AES-wrapped. Clear residue is the template entrypoint, a 20-byte
+  # Ethereum address, JNA DPAPI unprotect, GCM, and ProcessBuilder.
+  - id: fabric-template-ether-dpapi-loader
+    desc: Template Fabric mod DPAPI-decrypts and launches a process
     crit: hostile
     conf: 0.97
-    attack: T1195.002,T1059,T1027,T1528
+    attack: T1195.002,T1555.003,T1102,T1059
     scope: archive
-    for: [jar, zip, class, java_class]
+    for: [jar, zip, json, class, java_class]
     all:
-      - id: metadata/package/config::fabric-mod-metadata
-      - id: fabric-jar-net-fabric-class-member
-      - id: fabric-jar-net-fabric-main-class
-      - id: metadata/package/entrypoint::jar-main-class
-
-  - id: fabric-mod-net-fabric-zip-staging-bolt-on
-    desc: Fabric net.fabric bolt-on extracts embedded ZIP to disk
-    crit: hostile
-    conf: 0.97
-    attack: T1195.002,T1105,T1027
-    scope: archive
-    for: [jar, zip, class, java_class]
-    all:
-      - id: metadata/package/config::fabric-mod-metadata
-      - id: fabric-jar-net-fabric-class-member
-      - id: micro-behaviors/data/archive/extract/zip::jvm-zip-entry-extraction-to-file
+      - id: fabric-entrypoint-template-package
+      - id: jvm-ethereum-contract-address
+      - id: micro-behaviors/os/security/dpapi::jna-crypt32util-class
+      - id: micro-behaviors/os/security/dpapi::jvm-crypt-unprotect-data-name
+      - id: micro-behaviors/crypto/cipher::jvm-gcm-parameter-spec
+      - id: micro-behaviors/process/create/subprocess::java-processbuilder-start-bytecode

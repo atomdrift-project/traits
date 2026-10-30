@@ -9,6 +9,23 @@ defaults:
   attack: T1553.002
   mbc: B0032
 composite_rules:
+  # A genuine vendor certificate remains in the file, but the signed image
+  # digest no longer matches. Requiring a pixel-extracted in-memory .NET stage
+  # separates payload-bearing trust abuse from benign post-signing metadata
+  # edits and reconstructed files.
+  - id: microsoft-signed-bitmap-assembly-loader
+    desc: Tampered Microsoft-signed PE launches a bitmap-hidden .NET assembly
+    crit: hostile
+    conf: 0.99
+    attack: T1553.002,T1027.003,T1620
+    all:
+      - id: metadata/signed/leaf::microsoft-corporation
+      - id: metadata/signed/certificate/signature::pe-signature-digest-mismatch
+      - id: objectives/execution/payload/module-load::dotnet-bitmap-resource-entrypoint-loader
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/section/label::cape-sandbox-dump-section
+
   # Post-signing grafts that add executable sections with nonstandard names
   # (packer stubs, parasite code) break the Authentihash while keeping the
   # vendor PKCS#7 blob intact — the same trust-abuse pairing as above, with
@@ -88,8 +105,8 @@ composite_rules:
       - id: metadata/binary/layout/checksum::certificate-directory-checksum-mismatch
       - id: metadata/binary/layout/overlay::high-entropy-overlay
       - id: metadata/binary/layout/ratio::overlay-over-90pct
-      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206d
-      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206f
+      - id: metadata/file/profile/token-population::managed-pe-format-marker-population-206d
+      - id: metadata/file/profile/token-population::managed-pe-format-marker-population-206f
 
   - id: signed-inno-opaque-marker-carrier
     desc: Signed Inno carrier hides a zero-width opaque payload
@@ -101,8 +118,8 @@ composite_rules:
       - id: metadata/binary/layout/overlay::high-entropy-overlay
       - id: metadata/binary/layout/ratio::overlay-over-90pct
       - id: metadata/binary/installer/family::inno-delphi-installer-foundation
-      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206d
-      - id: objectives/anti-static/obfuscation/anti-decompile::zero-width-managed-pe-marker-206f
+      - id: metadata/file/profile/token-population::managed-pe-format-marker-population-206d
+      - id: metadata/file/profile/token-population::managed-pe-format-marker-population-206f
 
   # Keep identity-based product/runtime exceptions in one context. Each leg is
   # a notable identity; the composite is used only as a benign suppressor.
@@ -168,22 +185,19 @@ composite_rules:
       - id: metadata/binary/header/malformed::malformed-pe-structure
       - id: metadata/binary/section/ratio::oversized-low-entropy-reloc-declaration
 
-  # Signed hosts abused as injection carriers often keep Authenticode metadata
-  # from the donor product while grafting thread-context control and memory
-  # protection changes under a mismatched filename.
-  - id: signed-renamed-overlay-thread-injection
-    desc: Signed renamed PE with large overlay and thread injection
+  # Require an invalid signed-image digest and the full remote allocation,
+  # memory-write, and thread-creation API set. Thread-context inspection and
+  # VirtualProtect alone also occur in legitimate crash-reporting DLLs.
+  - id: signed-renamed-overlay-remote-thread-injection
+    desc: Signed PE with mismatched digest, large overlay and remote-thread injection APIs
     crit: hostile
     conf: 0.97
     attack: T1553.002,T1036.005,T1055.003
     all:
       - id: metadata/binary/provenance/version-info::pe-basename-differs-from-original-filename
       - id: metadata/binary/layout/overlay::signed-pe-large-noncertificate-overlay
-      - id: micro-behaviors/process/info/thread::get-thread-context-import
-      - id: micro-behaviors/mem/protect/modify::virtual-protect
-    any:
-      - id: micro-behaviors/process/info/thread::thread-context-api-pair
-      - id: micro-behaviors/process/enumerate/snapshot::create-toolhelp32-snapshot
+      - id: metadata/signed/certificate/signature::pe-signature-digest-mismatch
+      - id: micro-behaviors/process/inject/remote-thread::remote-alloc-write-thread-api-set
     unless:
       - id: metadata/binary/installer/family/
       - id: metadata/signed/platform/
@@ -223,3 +237,22 @@ composite_rules:
       - id: metadata/binary/installer/
       - id: metadata/signed/platform/
       - id: recognized-signed-component-overlay-known-benign-context
+
+  # A vendor-signed binary with a mismatched image digest that extracts an
+  # oversized high-entropy resource payload and executes a process.
+  - id: tampered-signed-resource-process-dropper
+    desc: Tampered signed PE extracts high-entropy resource and executes process
+    crit: hostile
+    conf: 0.98
+    attack: T1553.002,T1027.009,T1106
+    all:
+      - id: metadata/signed/certificate/signature::vendor-signature-digest-mismatch
+      - id: metadata/binary/resource/entropy::dominant-high-entropy-resources
+      - id: micro-behaviors/data/embedded/payload/resource::pe-resource-full-extraction
+    any:
+      - id: micro-behaviors/process/create/exec::create-process-a
+      - id: micro-behaviors/process/create/spawn::create-process-w
+    unless:
+      - id: metadata/binary/installer/family/
+      - id: metadata/binary/installer/script/
+      - id: metadata/binary/framework/

@@ -10,25 +10,6 @@ defaults:
   mbc: B0024
 
 traits:
-  - id: install-hook-self-targeting-worm-env
-    desc: Hook exports package self-identity env
-    # `WORKFLOW_ID=... REPO_ID_SUFFIX=<owner/repo> TARGET_PACKAGES=<pkg> node|bun x.js`
-    # in a lifecycle script: the hook hands the payload the package's own repo
-    # slug, target package name, and the release workflow to abuse. That is the
-    # self-propagation configuration of a package-republishing worm (Shai-Hulud
-    # / TeamPCP wave), not build configuration — a maintained package never
-    # feeds its own coordinates to an install-time script this way. The matcher
-    # keys on the env-var names, so a renamed loader script on the next wave
-    # still lands here.
-    crit: suspicious
-    conf: 0.95
-    for: [package.json, manifests, pkginfo, javascript, typescript, shell]
-    mbc: F0001
-    if:
-      type: text
-      regex: '(?s)REPO_ID_SUFFIX=.{0,200}TARGET_PACKAGES=|TARGET_PACKAGES=.{0,200}REPO_ID_SUFFIX='
-    unless:
-      - id: metadata/file/catalog/identity::cleave-trait-definition-file
   - id: writable-package-enumeration
     desc: Enumerates writable packages
     crit: suspicious
@@ -47,7 +28,7 @@ traits:
       regex: '(?is)\bpackageJson\b.{0,48}\bscripts\b.{0,24}(\.|\[[''\"]?)(pre|post)install([''\"]?\])?\s*='
     unless:
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
       - type: text
         regex: '\b(simple-git-hooks|husky|lint-staged|vibe-rules)\b'
   - id: python-package-manifest-hook-rewrite
@@ -69,7 +50,7 @@ traits:
   # self-republication composites below, where the version bump is paired with
   # repacking and an actual publish call.
 
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
   - id: repository-branch-update-call
     desc: Updates repository branches programmatically
     crit: notable
@@ -89,17 +70,6 @@ traits:
       regex: '(?i)update[A-Za-z0-9_]*repositories?'
 
 composite_rules:
-  - id: git-history-rewrite-repository-propagation
-    desc: Stages content before a falsified force-push
-    crit: hostile
-    conf: 0.98
-    attack: T1195.002,T1070.003
-    for: [batch]
-    scope: file
-    all:
-      - id: micro-behaviors/process/create/vcs/git::git-stage-all-changes
-      - id: objectives/evasion/indicator-removal/history::git-history-falsification
-
   - id: npm-package-propagation-worm
     desc: Repacks and republishes writable packages with an install hook
     crit: hostile
@@ -195,3 +165,15 @@ composite_rules:
       - id: micro-behaviors/os/package-manager/hook-install::package-install-hook-present
       - id: objectives/collection/file-copy/sensitive::github-private-user-repository-archive-harvest
     near_bytes: 8192
+
+  - id: oidc-self-targeting-ci-publisher-workflow
+    desc: Workflow grants OIDC write to self-publisher
+    crit: hostile
+    conf: 0.98
+    for:
+    - github-actions
+    attack: T1195.002,T1552.001
+    all:
+    - id: micro-behaviors/os/env/cicd::package-target-and-repository-suffix-names
+    - id: metadata/build/ci/permission::id-token-write-permission
+    - id: metadata/build/ci/trigger::workflow-push-trigger

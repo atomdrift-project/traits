@@ -13,7 +13,7 @@ composite_rules:
   for: [github-actions, tgz, zip, javascript, typescript, shell, python, go]
   all:
   - id: metadata/build/ci/step::composite-action-runtime-delegating-wrapper
-  - id: objectives/credential-access/dump/process::github-runner-process-memory-secret-dump
+  - id: objectives/credential-access/memory::github-runner-process-memory-secret-dump
   unless:
   - id: metadata/build/ci/github-actions::nested-action-manifest-path
 
@@ -49,90 +49,32 @@ composite_rules:
       # integration tests (e.g. podman socket activation on an ephemeral
       # runner) plus an unrelated curl in another workflow step scores
       # hostile. Same pooling failure already excluded on the sibling
-      # gha-remote-shell-stage and gha-wrapper-runner-secret-theft rules.
+      # download-shell pipeline and gha-wrapper-runner-secret-theft rules.
   - id: metadata/build/ci/github-actions::nested-action-manifest-path
 
-- id: gha-post-step-repository-exfil
-  desc: Action post step uploads repository identity
+- id: gha-repository-identity-json-post
+  desc: One file serializes GitHub repository identity into an HTTP POST
+  crit: notable
+  conf: 0.96
+  for: [javascript, typescript]
+  all:
+  - id: micro-behaviors/communications/http/post::request-post-option
+  - id: micro-behaviors/os/env/cicd::process-env-github-repository
+  - id: micro-behaviors/data/serialize/json::json-stringify-object-env-token
+
+- id: gha-repository-identity-exfil
+  desc: GitHub Action uploads repository identity over HTTP
   crit: hostile
   conf: 0.99
-  scope: archive
   size_max: 33554432
   for: [github-actions, tgz, zip, scripts, html]
-  all:
-  - id: metadata/build/ci/step::action-post-hook
-  - id: micro-behaviors/os/env/cicd::process-env-github-repository
-  - id: micro-behaviors/communications/http/post::post
-  - id: micro-behaviors/data/serialize/json::js-json-stringify-env-field
-  unless:
-  - id: metadata/build/ci/github-actions::nested-action-manifest-path
-
-- id: gha-remote-shell-stage
-  desc: Action pipes a downloaded stage into a shell
-  crit: hostile
-  conf: 0.99
   scope: archive
-    # A published GitHub Action is a small repo. Unbounded, archive scope let
-    # these three legs come from three unrelated files in a distro source tree:
-    # Ubuntu's rustc 1.75 tarball has composite actions, workflows that curl,
-    # and `curl | sh` in its bootstrap scripts, none of them the same file.
-    # Proximity cannot discipline this -- across archive members the
-    # `near_bytes` bound is skipped, not failed -- so bound the carrier instead.
-  size_max: 33554432
-  # The claimed stage is something an action step executes, so documentation
-  # prose types stay out of scope: a release-notes line quoting a removed
-  # `curl | bash` installer (Camunda's actionlint hardening changelog) is
-  # history about a pipe, not a pipe an action runs. The pipe leg keeps its
-  # own wider scope for its notable fact; this composite only convicts on
-  # pipes in file types that can execute one.
-  for: [source, applescript, github-actions, javascript, lua, perl, php, python, ruby, shell, tgz, zip]
   all:
-  - id: metadata/build/ci/step::composite-action-type
-  - id: micro-behaviors/communications/http/curl::workflow-curl-http-request
-  - id: micro-behaviors/process/create/shell/pipeline::curl-pipe-shell-text
+  - id: metadata/build/ci/step::github-action-manifest
+  - id: gha-repository-identity-json-post
   unless:
-      # The size bound above was not enough: k3s (690KB) and cargo-binstall
-      # (312KB) are project source trees, far under it, whose composite action
-      # sits in `.github/actions/` while the `curl | sh` is their own
-      # installer script. A repo-internal helper action is not the published
-      # action this rule is about.
   - id: metadata/build/ci/github-actions::nested-action-manifest-path
-      # The only pipe-to-shell is a command in a GitLab/Travis/CircleCI job
-      # script list: a sample pipeline for the repo's own CI, not a stage a
-      # published GitHub Action pipes into a shell.
-  - id: metadata/build/ci/step::yaml-script-list-curl-pipe-shell
-  - id: micro-behaviors/os/package-manager/installer-script::rustup-installer-pipe
-  - id: micro-behaviors/os/package-manager/installer-script::jbang-installer-pipe
-  - id: micro-behaviors/os/package-manager/installer-script::pyenv-installer-pipe
-  - id: micro-behaviors/os/package-manager/installer-script::install-script-pipe
-  - id: micro-behaviors/os/package-manager/installer-script::getter-script-pipe
-      # The pipe-to-shell in the archive is a recognized toolchain bootstrap
-      # (pinned golangci-lint install.sh, NodeSource setup, ...) in a CI
-      # workflow, not a stage the published action pipes into a shell.
-  - id: micro-behaviors/os/package-manager/installer-script::gha-recognized-pipe-installer
-      # The pipe text lives in unit-test code: a canary string asserting
-      # that config serialization rejects curl-to-shell stages (or similar
-      # negative fixtures). Tests never execute as action steps.
-  - id: metadata/package/testing/harness/unit/
 
-- id: gha-shell-profile-persistence
-  desc: Action downloads code and appends a shell profile
-  crit: hostile
-  conf: 0.99
-    # Bound to one composite-action step script, not the archive. Under
-    # `scope: archive` a repository was enough: Apache Superset's helm
-    # chart has a composite action somewhere, a curl somewhere and a chmod
-    # somewhere, and scored hostile twice. The step's `run:` body is its
-    # own node, so the capabilities below must be the same script.
-  for: [shell]
-  all:
-  - id: metadata/build/ci/step::composite-action-step-script
-  - id: micro-behaviors/communications/http/curl::curl-command-remote-url
-  - id: micro-behaviors/fs/path/config/shell::bash-rc-path-text
-  - id: micro-behaviors/fs/write/file/redirect::shell-rc-redirect-write
-  unless:
-  - id: micro-behaviors/os/package-manager/installer-script::rustup-installer-pipe
-  - id: well-known/tool/packaging/uv::uv-install-sh-bootstrap-url
 
 - id: gha-registry-credential-upload
   desc: Action uploads package-registry credentials

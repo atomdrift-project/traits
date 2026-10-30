@@ -58,17 +58,6 @@ traits:
       type: text
       regex: '(?i)(framework for|maintainer at|contact.{0,40}at)\s+https?://github\.com/'
 
-  - id: objectives/supply-chain/hidden-payload/exec/archive::readme-extract-and-launch
-    desc: README says extract the download and launch
-    crit: notable
-    conf: 0.94
-    for: [markdown]
-    if:
-      type: text
-      regex: '(?i)extract.{0,48}\blaunch\b'
-
-
-
   - id: objectives/supply-chain/hidden-payload/exec/archive::archive-c-source-member
     desc: Archive contains a C source member
     crit: component
@@ -80,6 +69,19 @@ traits:
       regex: '(^|/)[^/]{1,120}\.c$'
 
 composite_rules:
+  # raw.githubusercontent.com/.../file.zip and github.com/.../raw/refs/heads/
+  # are the two raw-content spellings. A ZIP link alone is not either spelling.
+  - id: objectives/supply-chain/hidden-payload/exec/archive::readme-links-github-raw-zip
+    desc: README ZIP link uses a GitHub raw URL
+    crit: notable
+    conf: 0.93
+    for: [markdown]
+    all:
+      - id: metadata/package/documentation/page::readme-zip-extension-link
+    any:
+      - id: metadata/package/documentation/page::readme-github-raw-refs-link
+      - id: micro-behaviors/communications/http/url/forge::github-raw-zip-link
+
   - id: objectives/supply-chain/hidden-payload/exec/archive::readme-binary-download-lure-language
     desc: README promotes an executable or application download
     crit: component
@@ -89,6 +91,7 @@ composite_rules:
       - id: metadata/package/documentation/claims::executable-download-wording
       - id: metadata/package/documentation/page::readme-run-application-instruction
       - id: metadata/package/documentation/claims::double-click-exe-install-instruction
+      - id: metadata/package/documentation/page::double-click-zip-instruction
 
   - id: objectives/supply-chain/hidden-payload/exec/archive::luajit-archive-launches-obfuscated-source
     desc: LuaJIT archive launches obfuscated source payload
@@ -98,39 +101,54 @@ composite_rules:
     scope: archive
     for: [zip, batch, text]
     all:
-      - id: metadata/file/archive::loader-named-executable-member
-      - id: metadata/package/files/archive-member::archive-lua51-dll-name
+      - id: metadata/archive/member/filename::loader-named-executable-member
+      - id: metadata/archive/member/filename::archive-lua51-dll-name
       - id: objectives/supply-chain/hidden-payload/exec/archive::archive-c-source-member
       - id: micro-behaviors/process/create/shell/command-mode::start-unquoted-executable-command
       - id: objectives/anti-static/obfuscation/string/reconstruct::lua-return-wrapper-indexed-reassembly
     unless:
       - id: metadata/package/testing/presence/harness/
 
-      - id: "metadata/file/naming::test-directory-component"
-  - id: objectives/supply-chain/hidden-payload/exec/archive::lua-obfuscated-string-table-archive-launcher
-    desc: Lua archive launcher uses an obfuscated string-table payload
+      - id: metadata/path::test-directory-component
+  - id: objectives/supply-chain/hidden-payload/exec/archive::archive-obfuscated-lua-launch-with-av-bypass
+    desc: Batch launch beside concealed AV-bypass Lua
+    platforms: [windows]
+    attack: T1027,T1562.001
     crit: hostile
     conf: 0.98
     scope: archive
     for: [zip, batch, text, lua]
     all:
-      - id: metadata/package/files/archive-member::archive-lua-interpreter-exe-name
-      - id: metadata/file/archive::archive-bat-member
-      - id: metadata/package/files/archive-member::archive-member-text-like-name
+      - id: micro-behaviors/process/create/shell/command-mode::start-unquoted-executable-command
+      - id: objectives/evasion/anti-av/platform/defender::obfuscated-lua-defender-exclusion
+      - id: metadata/archive/member/extension::archive-bat-member
+      - id: metadata/archive/member/extension::archive-member-text-like-name
+      - id: micro-behaviors/metaprogramming/reflection::lua-environment-proxy-references
+    any:
       - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-large-encoded-string-table
-      - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-environment-proxy-loader
+      - id: micro-behaviors/data/string/concat::lua-double-indexed-concat-loop
+      # Payloads shipped under a .log/.dat name classify as text, so the
+      # Lua-only table metric cannot fire; the escaped radix-64 decoder
+      # composite already accepts text.
+      - id: objectives/anti-static/obfuscation/encoding/base64::lua-escaped-table-radix64-concealment
+    needs: 1
 
-  - id: objectives/supply-chain/hidden-payload/exec/archive::luajit-archive-launches-indexed-string-dispatch
-    desc: LuaJIT archive launches a large indexed-string dispatch payload
+  # Indexed Lua disguised as data requires malicious Defender exclusions.
+  # Interpreter filenames and obfuscation alone do not establish an attack.
+  - id: objectives/supply-chain/hidden-payload/exec/archive::archive-indexed-lua-defender-bypass
+    desc: Archive hides indexed Lua with Defender bypass
+    platforms: [windows]
+    attack: T1027,T1562.001
     crit: hostile
     conf: 0.98
     scope: archive
     for: [zip, batch, text, lua]
     all:
-      - id: metadata/package/files/archive-member::archive-lua-interpreter-exe-name
-      - id: metadata/file/archive::archive-bat-member
-      - id: metadata/package/files/archive-member::archive-member-text-like-name
-      - id: objectives/anti-static/obfuscation/code-metrics/structure::lua-obfuscated-string-dispatch
+      - id: objectives/evasion/anti-av/platform/defender::obfuscated-lua-defender-exclusion
+      - id: metadata/archive/member/extension::archive-bat-member
+      - id: metadata/archive/member/extension::archive-member-text-like-name
+      - id: micro-behaviors/metaprogramming/reflection::lua-environment-proxy-references
+      - id: micro-behaviors/data/string/concat::lua-double-indexed-concat-loop
 
   - id: objectives/supply-chain/hidden-payload/exec/archive::luajit-archive-embedded-obfuscated-module
     desc: LuaJIT archive carries obfuscated script module
@@ -140,8 +158,8 @@ composite_rules:
     scope: archive
     for: [zip, javascript]
     all:
-      - id: metadata/file/archive::loader-named-executable-member
-      - id: metadata/package/files/archive-member::archive-lua51-dll-name
+      - id: metadata/archive/member/filename::loader-named-executable-member
+      - id: metadata/archive/member/filename::archive-lua51-dll-name
       - id: objectives/anti-static/obfuscation/code-metrics/structure::js-obfuscated-lua-return-loader
 
   - id: objectives/supply-chain/hidden-payload/exec/archive::raw-zip-luajit-sidecar-lure
@@ -151,20 +169,19 @@ composite_rules:
     scope: outer
     for: [zip, markdown, batch, text]
     all:
-      - id: metadata/package/documentation/page::readme-github-raw-refs-link
-      - id: metadata/package/documentation/page::readme-zip-extension-link
+      - id: objectives/supply-chain/hidden-payload/exec/archive::readme-links-github-raw-zip
       - id: objectives/supply-chain/hidden-payload/exec/archive::readme-binary-download-lure-language
-      - id: metadata/package/files/archive-member::archive-nested-zip-member
-      - id: metadata/package/files/archive-member::archive-lua-interpreter-exe-name
+      - id: metadata/archive/member/extension::archive-nested-zip-member
+      - id: metadata/archive/member/filename::archive-lua-interpreter-exe-name
 
-      - id: metadata/file/archive::archive-bat-member
-      - id: metadata/package/files/archive-member::archive-member-text-like-name
+      - id: metadata/archive/member/extension::archive-bat-member
+      - id: metadata/archive/member/extension::archive-member-text-like-name
       - id: micro-behaviors/data/control-flow/return::lua-return-vararg-wrapper
       - id: micro-behaviors/data/string/concat::lua-double-indexed-concat-loop
     unless:
       - id: metadata/package/testing/presence/harness/
 
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
   - id: objectives/supply-chain/hidden-payload/exec/archive::readme-launches-release-asset
     desc: README tells users to launch asset
     crit: notable
@@ -239,7 +256,7 @@ composite_rules:
     for: [markdown]
     all:
       - id: micro-behaviors/communications/url/external/github::github-release-zip-link
-      - id: objectives/supply-chain/hidden-payload/exec/archive::readme-extract-and-launch
+      - id: metadata/lang/natural/phrasing::extract-near-launch-wording
       - id: objectives/supply-chain/hidden-payload/exec/archive::readme-embeds-release-asset-as-image
 
 
@@ -250,14 +267,13 @@ composite_rules:
     scope: outer
     for: [zip, markdown, batch, text]
     all:
-      - id: metadata/package/files/included::github-module-zip-basename
-      - id: metadata/package/documentation/page::readme-github-raw-refs-link
-      - id: metadata/package/documentation/page::readme-zip-extension-link
+      - id: metadata/filename/name-form::github-module-zip-basename
+      - id: objectives/supply-chain/hidden-payload/exec/archive::readme-links-github-raw-zip
       - id: objectives/supply-chain/hidden-payload/exec/archive::readme-binary-download-lure-language
-      - id: metadata/package/files/archive-member::archive-nested-zip-member
-      - id: metadata/package/files/archive-member::archive-lua-interpreter-exe-name
-      - id: metadata/file/archive::archive-bat-member
-      - id: metadata/package/files/archive-member::archive-member-text-like-name
+      - id: metadata/archive/member/extension::archive-nested-zip-member
+      - id: metadata/archive/member/filename::archive-lua-interpreter-exe-name
+      - id: metadata/archive/member/extension::archive-bat-member
+      - id: metadata/archive/member/extension::archive-member-text-like-name
       - id: micro-behaviors/data/control-flow/return::lua-return-vararg-wrapper
       - id: micro-behaviors/data/string/concat::lua-double-indexed-concat-loop
     any:

@@ -44,37 +44,11 @@ traits:
     type: text
     regex: \b(build-agent|repository AI|test-repair agent|agent setup requirement)\b
     case_insensitive: true
-- id: repository-model-addressee
-  desc: Addresses a language model
-  if:
-    type: text
-    regex: '(?i)\b(language-model code generators?|AI maintenance directive)\b|\bLLM\b'
-- id: repository-agent-directive-marker
-  desc: Marks text as an agent directive
-  if:
-    type: text
-    regex: \b(instruction|directive|message|note|TODO|task|notice|requirement|attention)s?\b
-    case_insensitive: true
-- id: repository-agent-command-directive
-  desc: Marks command word as an agent directive
-  if:
-    type: text
-    # A CLI flag such as `powershell -Command` or `/command` is an interpreter
-    # option, not a natural-language directive. The engine has no lookaround,
-    # so the flag prefix is consumed per-match instead of via `(?<![-/])`.
-    regex: '(^|[^-/])\bcommands?\b'
-    case_insensitive: true
 - id: repository-agent-role-label
   desc: Labels an addressed agent role
   if:
     type: text
     regex: '\b(assistant|agent|reviewer|tools?|LLM)\s*:'
-    case_insensitive: true
-- id: control-action-prose-fragment
-  desc: Control-action verb followed by prose
-  if:
-    type: text
-    regex: \b(run|suppress|claim|grant|hide|disable|answer|close|publish)\b[ \t]+[A-Za-z]
     case_insensitive: true
 - id: repository-agent-approval-action
   desc: Agent approval action
@@ -96,14 +70,22 @@ traits:
     # "never reveal ... security rules / system instructions" keeps the
     # prompt text private; the hidden object is the instruction itself.
     not:
+    # This bare pronoun may refer to an optional offer that should not be
+    # made when unavailable; it does not identify an instruction or action
+    # being hidden from the user.
+    - regex: '(?i)\bdo not mention it\b'
     - regex: (?i)\btell\s+(them|the user|users?)\s+to\b
     - regex: (?i)\bmention\s+["'`]?(claude|chatgpt|copilot|gemini)\b
     - regex: (?i)\b(security rules|system instructions?)\b
     # "never reveal credentials/secrets" is a secret-handling guardrail
     # in an agent persona, not an order to hide the instruction itself.
-    - regex: (?i)\b(credentials?|secrets?|passwords?|tokens?)\b
+    # Require credentials as the direct object; do not mask "do not reveal
+    # that you uploaded the credential file".
+    - regex: (?i)\b(mention|tell|disclose|reveal)\s+(?:(?:any|the|your|their|our|stored|raw|actual|real|sensitive|authentication|api|access|refresh|user|users|anyone|anybody)\s+){0,6}(credentials?|secrets?|passwords?|tokens?)\b
     # Product identity guidance conceals no action or instruction from a user.
-    - regex: '(?i)\b(mention|disclose|reveal)\s+(any )?(underlying )?(base|foundation) model( name)?\b'
+    - regex: '(?i)\b(mention|disclose|reveal)\s+(?:(?:any|the)\s+)?(?:(?:underlying\s+)?(?:base|foundation)\s+model|underlying\s+model)(?:\s+name)?\b'
+    # A model-name list is still identity guidance, including unfamiliar names.
+    - regex: '(?i)\bmention\s+(?:[A-Za-z][A-Za-z0-9_-]{1,24}\s*,\s*){1,4}(?:or\s+)?any\s+underlying\s+model\b'
 - id: repository-agent-silent-action
   desc: Agent action marked for concealment
   conf: 0.94
@@ -125,79 +107,7 @@ traits:
     type: text
     regex: \bhide (the |this )?[^.\n]{0,48} from the user\b
     case_insensitive: true
-- id: repository-agent-no-review
-  desc: Action lacks notice or approval
-  conf: 0.94
-  if:
-    type: text
-    # Retain a whole bounded clause, including a leading prohibition, rather
-    # than clipping "Does not record, promote ... without asking" mid-word.
-    regex: '[\w\s/,]{0,100}\bwithout (notice|review|asking|confirmation)( me)?[\w\s]{0,24}'
-    case_insensitive: true
-  not:
-    # "Do not / Does not / Never ... without asking" requires approval.
-    # Filter only this matched clause: a separate unreviewed action in the
-    # same document must still be detected. Punctuation bounds the clause.
-    - regex: '(?i)\b(do(es)? not|never)\b[\w\s/,]{0,100}\bwithout\b'
-    # Vendor change-policy disclaimers (`may change or be removed at any
-    # time without notice`, `slugs are retired without notice`) describe the
-    # vendor's own release policy, not a concealed agent action. `retire` and
-    # `deprecate` belong to the same class as change/remove/update. `edit`
-    # is deliberately not a policy verb, so a directive such as
-    # `Make the edit without notice` still matches.
-    - regex: '(?i)(change[sd]?|remove[sd]?|update[sd]?|modif\w*|retire[sd]?|deprecat\w*|subject to change)[^.]{0,48}without (prior )?notice'
-    # CLI --force documentation (`Overwrite existing config without
-    # confirmation`) describes a user-invoked flag: the user passing the
-    # flag is the approval. It directs no agent around review. Kept to
-    # confirmation/prompting wording so `without asking` directives still
-    # match.
-    - regex: '(?i)\boverwrit\w* [^.]{0,48}without (confirmation|prompting)\b'
-    # First person: the user's own request to their assistant ("ask ... without
-    # asking me to reveal it in chat"). Injected text speaks of `the user`.
-    - regex: '(?i)without asking me\b'
-    # Enforcement consequences ("submissions will be closed without review")
-    # penalize non-compliance; they direct nobody around review.
-    - regex: '(?i)(closed|rejected) without review'
-    # Continuing an already authorized loop ("rerun without asking for
-    # another continuation") is not a direction to skip review.
-    - regex: '(?i)\brerun without asking\b'
-    # Spec-quality prose ("implement without asking clarifying questions")
-    # says the document should already answer the reader. It does not tell
-    # the agent to skip review of its own actions.
-    - regex: '(?i)without asking( me)?[\w\s]{0,24}questions\b'
-    # Session or chat recording/logging configuration ("Record each chat
-    # without asking; set true to be asked once per chat") configures replay
-    # prompt gates, not a directive commanding an agent to conceal actions.
-    - regex: '(?i)(record|log|save)\w* [^.\n]{0,48}without asking'
-    - regex: '(?i)\bset true to be asked\b'
-    # Direct CLI/offline mode documentation ("without asking the model to do it",
-    # "without asking the model which protocol to run") describes skipping an
-    # AI model call, not concealing an agent action from the user.
-    - regex: '(?i)\bwithout asking (the |an )?(model|llm)\b'
-    # Avoiding repeated user input is not skipping approval of an action.
-    - regex: '(?i)\bwithout asking (the )?users? to (duplicate|repeat|retype)\b'
-    # Interactive CLI permission prompts ("Allow AI agents to run commands
-    # without confirmation prompts?") ask the user for approval mode preferences;
-    # user prompts and prompt options are not concealed agent directives.
-    - regex: '(?i)\bwithout confirmation prompts?\b'
-    # Restoring a run the user already started ("resumes without
-    # confirmation") continues that session. It does not tell an agent
-    # to skip review of a new action.
-    - regex: '(?i)\b(resume|resumes|resumed|resuming|recover\w*)\b[^.]{0,48}without confirmation\b'
-- id: repository-agent-approval-demand
-  desc: Directive requires user approval first
-  crit: notable
-  conf: 0.9
-  if:
-    type: text
-    # Approval gates ("the client must ask the user first", "asks first",
-    # "must approve", "asks for confirmation"): the text routes the action
-    # through a person rather than around them. The last is the
-    # permission-mode form ("Agent proposes actions and asks for
-    # confirmation", a named confirm mode in agent config). Used as a
-    # suppressor leg, not a detection.
-    regex: '\basks? (the user )?first\b|\bmust ask\b|\basks? for confirmation\b'
-    case_insensitive: true
+
 - id: repository-agent-honesty-demand
   desc: Directive demands disclosure or accessibility
   crit: notable
@@ -254,7 +164,7 @@ traits:
   conf: 0.93
   if:
     type: text
-    regex: \b(already approved|authoritative (instructions?|policy)|as authoritative:)
+    regex: \b((you |or )?already approved|authoritative (instructions?|policy)|as authoritative:)
     case_insensitive: true
   not:
     # User-directed approval documentation ("work you already approved",
@@ -262,12 +172,26 @@ traits:
     # not an attacker claiming false authority to an agent.
     - regex: '(?i)\b(work|tasks?|commands?|actions?|changes?|requests?|runs?) (that )?you already approved\b'
     - regex: '(?i)\byou already approved\b'
+    # A status alternative ("approved (or already approved)") restates a
+    # boolean the caller already holds. It does not claim authority.
+    - regex: '(?i)\bor already approved\b'
 - id: repository-agent-system-label
   desc: Labels text as a system message
   conf: 0.93
   if:
     type: text
-    regex: \b(system (notice|instruction|message)\b[ \t]*:|supersedes the user's request\b)
+    # A label introduces the following text ("system instruction: ignore…",
+    # optionally after a comment or quote marker, or after a sentence break).
+    # Mid-phrase mentions ("the LLM's system instruction:", "Using system
+    # instruction:") name the feature; they do not label a message.
+    regex: '(?m)(^[\t ]*|[.!?]\s)[#>*"''`-]*\s*system (notice|instruction|message)\s*:'
+    case_insensitive: true
+- id: repository-agent-supersedes-user-request
+  desc: Directive supersedes the user request
+  conf: 0.93
+  if:
+    type: text
+    regex: \bsupersedes the user's request\b
     case_insensitive: true
 - id: repository-agent-user-unaware-wording
   desc: Directive keeps the user unaware
@@ -314,14 +238,14 @@ composite_rules:
   - id: repository-automated-agent-addressee
   - id: repository-named-agent-addressee
   - id: repository-special-agent-addressee
-  - id: repository-model-addressee
+  - id: metadata/lang/natural/vocabulary/content-word::model-maintenance-terms
 - id: repository-content-agent-imperative
   desc: Repository content issues an agent action
   any:
   - id: metadata/lang/natural/vocabulary/content-word::data-access-verb-token
   - id: metadata/lang/natural/vocabulary/content-word::data-transfer-verb-token
   - id: metadata/lang/natural/vocabulary/content-word::english-edit-verb-token
-  - id: control-action-prose-fragment
+  - id: metadata/lang/natural/vocabulary/content-word::control-action-prose-fragment
   - id: repository-agent-approval-action
   unless:
   - id: metadata/file/catalog/identity::cleave-trait-definition-file
@@ -329,8 +253,8 @@ composite_rules:
 - id: repository-content-agent-addressing-context
   desc: Repository text marks an agent directive
   any:
-  - id: repository-agent-directive-marker
-  - id: repository-agent-command-directive
+  - id: metadata/lang/natural/vocabulary/content-word::directive-or-message-word-token
+  - id: metadata/lang/natural/vocabulary/content-word::command-word-token
   - id: repository-agent-role-label
   - id: repository-content-agent-false-authority
 - id: repository-content-agent-concealment
@@ -340,7 +264,7 @@ composite_rules:
   - id: repository-agent-silent-action
   - id: repository-agent-suppress-output-directive
   - id: repository-agent-hidden-from-user
-  - id: repository-agent-no-review
+  - id: metadata/lang/natural/phrasing::action-without-notice-or-review-clause
   - id: repository-agent-deceptive-report
   - id: repository-agent-output-only
   - id: repository-agent-user-unaware-wording
@@ -353,9 +277,10 @@ composite_rules:
   - id: repository-agent-priority-claim
   - id: repository-agent-approval-claim
   - id: repository-agent-system-label
+  - id: repository-agent-supersedes-user-request
 - id: repository-agent-audience-demand
   desc: Directive routes action through or reports to the audience
   conf: 0.92
   any:
-  - id: repository-agent-approval-demand
+  - id: metadata/lang/natural/phrasing::user-approval-request-phrase
   - id: repository-agent-honesty-demand

@@ -85,12 +85,16 @@ See [Matcher Defines Identity](TAXONOMY.md#matcher-defines-identity) in TAXONOMY
 
 ## Trait Placement & IDs
 
-- **Rules belong only in leaf directories.** This applies equally to atomic
+- **Rules normally belong only in leaf directories.** This applies equally to atomic
   traits, composites, and aliases: a directory containing rules must not also
   have rule-bearing descendants. Parent directories define categories and can
   be referenced to select descendant rules; they do not hold umbrella rules.
-  This is placement policy; general Cleave validation does not enforce it, so
-  use the taxonomy map to find mixed rule/descendant directories for review.
+  Cleave validates this placement policy, including the exact reviewed ancestor
+  exceptions below.
+  The reviewed exception is `objectives/exfiltration/stealer`: item classifiers
+  stay at the most specific proven node, including a meaningful ancestor when
+  the matcher leaves the subtype open. A broad credential rule is not copied
+  into password/token/key children. See the stolen-item contract in TAXONOMY.md.
   Before splitting a leaf, assign every existing rule one defensible
   destination. See [directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
 - **Content belongs with its supported claim.** Strings are not file metadata.
@@ -293,7 +297,8 @@ does not apply throughout that umbrella.
 | `build` | `makefile`, `cmake`, `pbxproj`, `dockerfile` — executable build logic (a Make recipe, a CMake `execute_process`, an Xcode build phase, a Dockerfile `RUN`), as opposed to the declarative metadata in `manifests`. Overlaps it on `dockerfile`, which is both |
 | `documents` | `pdf`, `rtf`, `html`, `oledoc`, `ooxml` |
 | `media` | `jpeg`, `png` |
-| `data` | `json`, `ipa`, `text`, opaque `data` |
+| `archives` | All concrete container formats marked as archive types by the engine; exclusions such as `-zip` retain ordinary scope semantics |
+| `data` | Opaque `data` |
 
 Use groups instead of listing 9 or more individual types (up to 8 explicit types is accepted — a hand-picked spread across groups that no single named group expresses). `for: [all]` is a soft validation issue — the rule still loads and matches, but authors must name concrete types or combine groups explicitly (e.g., `for: [binaries, scripts]`). Use `for: [msi]`, `for: [iso]`, or `for: [registry]` for those first-class types; do not work around them with `all`.
 
@@ -1665,12 +1670,11 @@ with its decoded named-bit subtree in values (e.g. `pe.dll_characteristics.*`,
 
 ### Directory limits
 
-`make validate` uses **100 atomic traits and composite rules combined** per
-directory as a review trigger, summed across its YAML files and criticalities.
-A leaf may exceed 100 only when its exact path has a reviewed budget in Cleave
-and the evidence shows accurate, correctly leveled, nonduplicative rules. The
-validator fails above that leaf's recorded budget; there is no global increase
-or filename-based budget. See [Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
+`make validate` enforces **100 atomic traits and composite rules combined** per
+directory, summed across its YAML files and criticalities. There are no
+path-specific directory-size exceptions. Review the parent and peer categories,
+remove misplaced or duplicate rules, and define any necessary semantic
+refinement before moving rules. See [Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
 Depth above five directory levels below the tier produces a soft validation
 warning, not a hard limit; count neither the tier nor the filename. Sibling
 groups below 35 combined rules also produce soft warnings under the criteria in

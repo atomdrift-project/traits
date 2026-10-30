@@ -43,6 +43,7 @@ traits:
     case_insensitive: true
   not:
   - regex: '(?i)\b(never|not|nothing|no)\b.{0,20}\bdestroyed\b'
+  - regex: '(?i)\b(files|data|documents)\b.{0,24}\bare kept rather than destroyed\b'
   - regex: (?i)\bdata on the (usb|removable|target|selected) disk will be destroyed\b
   - regex: (?i)\ball data on the (usb|removable|target|selected) disk will be destroyed\b
   - regex: (?i)deleting a team project is an irrecoverable operation
@@ -197,8 +198,10 @@ traits:
     regex: '(?i)(^|[\n;&|]|(^|\s)\(|\$\()\s*(sudo\s+)?rm\s+-[a-z]*(rf|fr)[a-z]*\s+/\*(\s|$|[;&|)"''])'
   unless:
     - id: well-known/lib/native/uclibc::static-uclibc-string-tables
-    - id: metadata/package/testing/harness/unit::rust-test
-    - id: "metadata/file/naming::test-directory-component"
+    # Any unit-test harness fact (rust-test, its attr/cfg-test variants, the
+    # wipe-liner fixtures) marks the command as the pattern under test.
+    - id: metadata/package/testing/harness/unit/
+    - id: metadata/path::test-directory-component
     - id: micro-behaviors/process/create/shell/guard/
     - id: metadata/file/policy/identity::agent-tool-permission-ruleset
 
@@ -286,7 +289,7 @@ traits:
     - regex: '\.copyfile\b'
   unless:
     - id: metadata/package/testing/
-    - id: metadata/file/naming::test-directory-component
+    - id: metadata/path::test-directory-component
 
 composite_rules:
 - id: helpctr-system32-file-deletion
@@ -379,8 +382,8 @@ composite_rules:
   - id: punishment-deserve-threat-harm
   - id: punishment-deserve-threat-wipe
 - id: intentional-file-destruction
-  desc: Intentional file destruction pattern
-  crit: hostile
+  desc: File deletion paired with an explicit destruction warning
+  crit: suspicious
   conf: 0.9
   # delete-files-symbol is a compiled-binary-only symbol match; the script
   # alternatives cover the same "actually deletes files" evidence for
@@ -450,33 +453,6 @@ composite_rules:
   unless:
   - id: metadata/signed/platform/
   - id: metadata/binary/installer/family/
-# A small unsigned PE that enumerates files and deletes them while hiding its
-# real API surface behind hand-rolled export resolution: the import table
-# shows only GUI and file-enumeration APIs, and the names it actually
-# resolves are staged encrypted. Ordinary file tools (cleaners, search
-# utilities) enumerate and delete openly; they do not scan memory backwards
-# for an MZ header to resolve hidden imports. That concealment leg is the
-# precision: without it this would be an everyday file-utility shape.
-- id: concealed-enumerator-file-deleter
-  desc: Concealed file enumerator deletes files
-  crit: hostile
-  conf: 0.93
-  for: [pe]
-  platforms: [windows]
-  size_max: 262144
-  all:
-  - id: micro-behaviors/fs/directory/readdir::find-file-walker
-  - id: micro-behaviors/fs/delete/file/library::deletefile-a
-  - id: micro-behaviors/os/api-resolution/manual::x86-backward-module-export-walk
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
-  - id: metadata/binary/installer/script/
-  - id: well-known/tool/reverse-engineering/
-  # LookFor shows a wait window and opens prev.inf. Find/Delete are imported
-  # but never called; the export walk sits on a command the program never sends.
-  - id: objectives/anti-static/obfuscation/imports/concealment::lookfor-wait-window-opens-inf
-
 # The file-deletion face of a root wipe: an `rm` with a root-path glob. The
 # build-recipe and shell-out rules convict the recipe or the caller; this one
 # states the deletion itself with the recursion marker beside it, whichever
@@ -489,6 +465,12 @@ composite_rules:
   crit: hostile
   conf: 0.96
   for: [shell]
+  unless:
+    # Shell-script linters and their fixtures state the wipe as the pattern
+    # under test; a unit-test harness or test-directory path is detector
+    # content, not an execution path.
+    - id: metadata/package/testing/harness/unit/
+    - id: metadata/path::test-directory-component
   all:
   - id: unix-root-rm-glob
   - id: micro-behaviors/fs/delete/directory::recursive-root
@@ -497,6 +479,8 @@ composite_rules:
   crit: hostile
   conf: 0.95
   for: [text]
+  unless:
+  - id: metadata/package/testing/corpus::labeled-shell-risk-command-data
   all:
   - id: objectives/impact/destroy/shell-out::quoted-root-delete-request
   - id: micro-behaviors/fs/delete/directory::no-preserve-root

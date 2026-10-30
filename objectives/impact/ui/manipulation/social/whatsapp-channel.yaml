@@ -7,6 +7,39 @@ defaults:
   for: [javascript, typescript]
 
 composite_rules:
+  # Charape-style forks put a channel in the shared socket defaults under
+  # `autoFollow`, then merge those defaults into every new socket. The
+  # newsletter module follows that list after the paired session opens. This
+  # archive-level combination is distinct from an application explicitly
+  # calling the public follow API with a user-selected target.
+  - id: archive-default-auto-follow-newsletter
+    desc: Default socket config follows a newsletter on session open
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript, npm, tar, zip]
+    scope: archive
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-default-auto-follow-channel-list
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-default-config-merge
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-session-open-follow-query
+
+  # A newsletter socket factory defers one follow for each member of an
+  # embedded Base64 channel roster. The JIDs are rebuilt at runtime and the
+  # local mexQuery wrapper keeps the FOLLOW invocation out of the public
+  # newsletterFollow helper shape. An application that asks a user to follow
+  # a channel passes the target at the API boundary; this constructor-owned
+  # timer spends the paired session on the embedded roster automatically.
+  - id: factory-timer-base64-roster-newsletter-follow
+    desc: Socket factory timer follows a Base64 newsletter roster
+    crit: hostile
+    conf: 0.98
+    scope: file
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-base64-newsletter-jid-roster
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-base64-target
+      - id: micro-behaviors/time/schedule/delay::settimeout-callback-computed-delay
+    near_bytes: 5000
+
   - id: connect-time-repeating-preset-newsletter-follow
     desc: On connection, repeatedly follows a preset WhatsApp newsletter
     crit: hostile
@@ -37,13 +70,16 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-literal-target
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-jid
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-base64-target
       - id: micro-behaviors/communications/messaging/channel::whatsapp-default-auto-follow-channel-list
       - id: micro-behaviors/communications/messaging/channel::whatsapp-auto-follow-remote-list-url
+      - id: micro-behaviors/communications/http/url/github::raw-github-json-channel-roster
       - id: micro-behaviors/communications/http/request/json::fetch-call-near-json-parse
     near_bytes: 16000
     unless:
       - id: metadata/package/documentation/source::readme-markdown-basename
-      - id: metadata/file/naming::readme-requirements-install-basename
+      - id: metadata/filename/name-form::readme-requirements-install-basename
 
   # Four behavior legs establish the graft itself: the socket's session-open
   # follow loop walks a hardcoded default channel list that the default config
@@ -107,16 +143,19 @@ composite_rules:
     near_bytes: 16000
     unless:
       - id: metadata/package/documentation/source::readme-markdown-basename
-      - id: metadata/file/naming::readme-requirements-install-basename
+      - id: metadata/filename/name-form::readme-requirements-install-basename
 
   - id: remote-whatsapp-newsletter-follow-and-mute
-    desc: Remotely controlled WhatsApp newsletter follow with concealment
+    desc: Remotely controlled WhatsApp newsletter follow
     crit: hostile
     conf: 0.99
     all:
       - id: autonomous-whatsapp-newsletter-follow
-      - id: micro-behaviors/communications/http/request/json::fetch-json-response
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-mute-query
+    any:
+      - id: micro-behaviors/communications/http/request/json::fetch-json-response
+      - id: micro-behaviors/communications/http/request/json::global-fetch-alias-call-near-json-parse
+      - id: micro-behaviors/communications/http/request/json::fetch-call-near-json-parse
     near_bytes: 16000
 
   # npm/tar archives evaluate as Npm; pool fetch evidence with atomic traits
@@ -148,6 +187,20 @@ composite_rules:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-mute-api-call
     near_bytes: 2000
 
+  # This fork follows a fixed newsletter on every connection and then turns
+  # off that newsletter's admin activity notifications. The setting is a
+  # legitimate capability by itself; coupled to the forced subscription it
+  # suppresses notices about the publisher's unsolicited account action.
+  - id: connect-periodic-preset-follow-with-admin-notification-suppression
+    desc: Repeated forced newsletter follow suppresses admin notifications
+    crit: hostile
+    conf: 0.98
+    scope: file
+    all:
+      - id: connect-periodic-preset-newsletter-follow
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-disable-admin-notifications
+    near_bytes: 16000
+
   # A hardcoded channel id spent on session open, then muted: no caller
   # supplies the target and no opt-out exists, so opening a session follows
   # the embedded channel and hides it. A bot that follows on user command
@@ -172,7 +225,7 @@ composite_rules:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-mute-api-call
     unless:
       - id: metadata/package/documentation/source::readme-markdown-basename
-      - id: metadata/file/naming::readme-requirements-install-basename
+      - id: metadata/filename/name-form::readme-requirements-install-basename
 
   # A fork wires a hardcoded target into the session-open lifecycle and
   # repeats the follow on a timer. No caller supplies the target and no
@@ -188,9 +241,11 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-update-handler
       - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-open-branch
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-default-auto-follow-newsletter-jid
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-token-target
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-periodic-timer
+    any:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-default-auto-follow-newsletter-jid
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid-roster
 
   # The same session-open follow-and-mute with every protocol token hidden:
   # hardcoded channel ids arrive as decimal character-code arrays (the
@@ -590,6 +645,22 @@ composite_rules:
     # hardcoded-default follow in another reads as a remotely driven follow.
     near_bytes: 16000
 
+  # Same autonomous remote-list follow when globalThis.fetch is first stored
+  # in a local alias, a shape not covered by the direct-fetch JSON atom.
+  - id: connect-delayed-aliased-fetch-wmex-newsletter-follow
+    desc: On connect, delayed raw follow of fetched newsletter channels
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript, npm, tar, zip]
+    scope: file
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-wmex-newsletter-query
+      - id: micro-behaviors/communications/http/request/json::global-fetch-alias-call-near-json-parse
+      - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-trigger-auto-follow-on-connect
+      - id: micro-behaviors/time/schedule/delay::js-await-sleep-ten-second-plus
+    near_bytes: 16000
+
   - id: connect-delayed-remote-wmex-newsletter-follow
     desc: On connect, delayed follow of fetched newsletter channels
     crit: hostile
@@ -630,6 +701,20 @@ composite_rules:
     needs: 1
     near_bytes: 16000
 
+  # A simpler preset form leaves the Base64-backed target in the FOLLOW query
+  # itself. Require both the operation's Base64 target and decoded newsletter
+  # suffix in the same file, so unrelated Base64 use cannot supply the target.
+  - id: preset-base64-whatsapp-newsletter-follow
+    desc: Follow query targets a Base64-hidden WhatsApp newsletter
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript, npm, tar, zip]
+    scope: file
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-base64-target
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-encoded-suffix
+    near_bytes: 1200
+
   # Baileys forks moved the follow into a helper that Base64-decodes a payload,
   # XOR-rebuilds the channel id, and only calls the low-level follow after a
   # long setTimeout. The public newsletterWMexQuery call shape is gone, so the
@@ -669,26 +754,8 @@ composite_rules:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-api-call
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-encoded-suffix
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator::javascript-obfuscator-string-array-runtime
-      - id: metadata/lang/source/syntax/call::single-fetch-call
+      - id: metadata/lang/source/syntax/call/relationship::single-fetch-call
       - id: micro-behaviors/communications/url/encoded::lower-first-base64-http-url-prefix
-
-  # Outgoing messages dressed in the platform's own voice. The
-  # "forwarded from <newsletter>" attribution a recipient sees is produced by
-  # the server from an actual forward; a client that writes the
-  # forwardedNewsletterMessageInfo block itself and hardcodes the official
-  # `WhatsApp` channel name in it forges platform provenance on what it sends
-  # -- the livery scam blasts use to render as official update cards
-  # (typically alongside a forged senderName, an UPDATE_CARD content type and
-  # a maxed forwardingScore). No client library has a legitimate reason to
-  # stamp the official channel's name into message metadata.
-  - id: forged-official-whatsapp-newsletter-attribution
-    desc: Forges official WhatsApp newsletter attribution on messages
-    crit: hostile
-    conf: 0.95
-    all:
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-forwarded-newsletter-attribution
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-official-newsletter-name-literal
-    near_bytes: 400
 
   # The helper-built sibling of the forgery above: the official identity sits
   # in a reusable preset object and reaches the message through a variable,
@@ -709,49 +776,6 @@ composite_rules:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-forwarded-newsletter-identifier-value
       - id: micro-behaviors/communications/messaging/channel::whatsapp-official-channel-identity-preset
     near_bytes: 4000
-
-  # Outgoing messages stamped as forwarded dozens of thousands of times. The
-  # server derives forwardingScore from genuine forward traffic, so a client
-  # that writes the forwarded-newsletter wrapper itself and pairs it with an
-  # extreme literal score forges the "forwarded many times" virality badge
-  # scam blasts use to manufacture authority. Ordinary forwarders keep the
-  # small counts the server assigned (0, 1, 2), never five-digit literals.
-  # The channel must be a JID literal written into the code: a stamp whose
-  # newsletterJid comes from the caller's options (an opt-in album helper such
-  # as diezyxhao-baileys 1.1.26 clutch-handler.js) is caller-chosen cosmetic
-  # metadata, not a graft onto every consumer's messages.
-  # Worked example: @lekzox/baileys 0.0.1 lib/Socket/dugong.js, luxu.js.
-  - id: forged-viral-whatsapp-forward
-    desc: Forges viral forward count on WhatsApp messages
-    crit: hostile
-    conf: 0.97
-    scope: file
-    all:
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-forwarded-newsletter-attribution
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-large-forwarding-score
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid
-    near_bytes: 2000
-
-  # The attribution stamp without the official livery: a message builder
-  # writes the forwardedNewsletterMessageInfo block itself (the server derives
-  # it from a real forward) and pairs it with a hardcoded @newsletter JID, so
-  # whatever the bot sends — albums, events, polls — renders as forwarded
-  # from that channel. Distinct from the official-name forgery above: the
-  # named channel is the sender's own, not "WhatsApp". Steps down when the
-  # official-name composite already convicts the same stamp.
-  # Worked example: @rennnpm/baileys 1.0.0 lib/Socket/luxu.js.
-  - id: hardcoded-channel-outgoing-attribution
-    desc: Stamps hardcoded channel attribution on outgoing messages
-    crit: hostile
-    conf: 0.97
-    scope: file
-    all:
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-forwarded-newsletter-attribution
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid
-    near_bytes: 4000
-    downgrade:
-      any:
-        - id: forged-official-whatsapp-newsletter-attribution
 
   # Every media message the consumer sends carries a fixed channel
   # attribution. The `annotations` array renders on the recipient's device as
@@ -817,7 +841,28 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-hardcoded-jid
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-jid-constant
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-jid
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-base64-target
     needs: 1
+    near_bytes: 2000
+
+  # Immediate sibling of delayed-base64-hidden-...: on the first connection
+  # open the socket decodes a Base64-hidden @newsletter JID and issues the
+  # follow query before the host application supplies any target. No timer leg
+  # is required; the concealment is the encoded constant, not a deferred
+  # factory callback.
+  # Worked example: @elfhkry666/baileys 0.3.25 lib/Socket/newsletter.js.
+  - id: connect-open-base64-hidden-newsletter-follow
+    desc: Connection open follows Base64-hidden channel
+    crit: hostile
+    conf: 0.99
+    for: [javascript, typescript, npm, tar, zip]
+    scope: file
+    all:
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-update-handler
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-open-branch
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-query
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-encoded-suffix
     near_bytes: 2000
 
   # The stabilization-delay sibling of the raw open follow above: instead of
@@ -918,15 +963,15 @@ composite_rules:
   # wrapper in another module from pooling with it.
   # Worked example: @hanzofc/baileys 7.0.0 / 7.0.1 / 7.2.1,
   # @elfhkry666/baileys 0.3.20.
-  - id: connect-swallowed-roster-newsletter-follow
-    desc: Session open silently follows hardcoded channels
+  - id: connect-swallowed-errors-newsletter-follow
+    desc: Session open silently follows fixed channel targets
     crit: hostile
     conf: 0.97
     scope: file
     all:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-update-handler
       - id: micro-behaviors/communications/messaging/channel::whatsapp-connection-open-branch
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-follow-call-error-swallowed
+      - id: micro-behaviors/data/control-flow/error-handling::whatsapp-follow-empty-catch-guard
     any:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-jid
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-base64-jid
@@ -964,6 +1009,9 @@ composite_rules:
   # the legs instead of a byte window. Upstream Baileys embeds no channel
   # JIDs, so a parameterized newsletterFollow(jid) wrapper stays silent.
   # Worked example: @mivesensei/baileys 0.4.2 lib/Socket/index.js.
+  # README usage docs legitimately show the handler, the open branch and a
+  # follow call beside the author's channel presets (@zachannxd/baileys
+  # 0.6.0 convicted here purely on its README); docs never execute.
   - id: connect-immediate-hardcoded-newsletter-follow
     desc: Session open immediately follows hardcoded channels
     crit: hostile
@@ -979,6 +1027,13 @@ composite_rules:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-default-auto-follow-channel-list
       - id: micro-behaviors/communications/messaging/channel::whatsapp-auto-follow-newsletter-jids-array
     needs: 1
+    unless:
+      - id: metadata/package/documentation/source::readme-markdown-basename
+      - id: metadata/filename/name-form::readme-requirements-install-basename
+      - id: micro-behaviors/data/control-flow/branch::javascript-config-gated-newsletter-follow
+      # A delayed, periodic session-open graft has its own specific rule.
+      # Keep it from also being described as an immediate one-shot follow.
+      - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-periodic-timer
 
   # The grafted sidecar sibling of connect-immediate-hardcoded-newsletter-follow:
   # a separate module exports customConfig.newsletterIds and autoFollowChannels,
@@ -994,7 +1049,7 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-ids-embedded-array
       - id: micro-behaviors/communications/messaging/channel::whatsapp-newsletter-follow-invocation
-      - id: micro-behaviors/communications/messaging/channel::whatsapp-follow-call-error-swallowed
+      - id: micro-behaviors/data/control-flow/error-handling::whatsapp-follow-empty-catch-guard
     near_bytes: 6000
 
   # Archive framing of the sidecar graft above: the socket open hook and the

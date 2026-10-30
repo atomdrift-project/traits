@@ -1,34 +1,31 @@
 # OOXML external-relationship breakdown.
 #
-# Office documents can declare relationships of many `Type:` URIs in
-# their `_rels/*.rels` parts. Most of these are benign (image links,
-# hyperlinks, internal references); a handful — attachedTemplate,
-# oleObject, frame, subDocument — are template-injection vectors that
-# fetch and execute content from a remote server when the document is
-# opened.
-#
-# cleave's office analyzer tallies these into per-rel-type counts on
-# `office.external_*_count`. The atomics below let traits and
-# composites distinguish "external image" (notable, sometimes used
-# for tracking pixels) from "external attached template" (hostile,
-# the canonical CVE-2017-0199 vector).
+# External relationships declare linked content. Their type and scheme do not
+# establish automatic loading, executable content, or successful exploitation.
+# In particular, an MHTML OLE reference is a CVE-2021-40444 delivery surface;
+# exploitative remote HTML/ActiveX content is separate evidence.
 defaults:
   for: [ooxml]
   platforms: [windows, unix]
 
 traits:
+  - id: ooxml-word-settings-relationship-source
+    desc: Word settings relationship source part
+    crit: notable
+    conf: 0.96
+    if:
+      type: value
+      path: office.external_relationships[*].source
+      regex: '(?i)^word/_rels/settings\.xml\.rels$'
+
   - id: ooxml-external-attached-template
     desc: External attachedTemplate relationship
-    crit: suspicious
+    crit: notable
     conf: 0.97
-    attack: T1221
-    unless:
-      - id: well-known/tool/development/docs/pandoc::package-path
-      - id: metadata/package/testing/presence/resource::test-resources-tree-path
     if:
-      type: metrics
-      field: office.external_template_count
-      min: 1
+      type: value
+      path: office.external_relationships[*].type
+      exact: attachedTemplate
 
   - id: ooxml-external-oleobject
     desc: External oleObject relationship
@@ -38,7 +35,7 @@ traits:
     unless:
       - id: ooxml-linked-chart-workbook-context
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
     if:
       type: metrics
       field: office.external_oleobject_count
@@ -98,19 +95,36 @@ traits:
       path: office.external_relationships[*].type
       exact: oleObject
 
-  # An mhtml: target wraps a second URL inside the MHTML handler
-  # (mhtml:<url>!x-usc:<url>). Word resolves it through the MHTML
-  # protocol handler on open, which is the CVE-2017-0199 load path;
-  # no legitimate template or linked object needs this scheme.
+  # MHTML identifies a protocol handler, not the contents of its response.
   - id: ooxml-mhtml-external-target
     desc: External target uses the mhtml scheme
     crit: notable
     conf: 0.97
-    attack: T1559.001
     if:
       type: value
       path: office.external_relationships[*].target
       regex: '(?i)^mhtml:https?://'
+
+  # Reserved documentation hosts make synthetic MHTML/OLE fixtures non-routable;
+  # retain that fact so exploit-delivery composites can exclude those controls.
+  - id: ooxml-mhtml-reserved-documentation-host
+    desc: MHTML target uses a reserved documentation host
+    crit: notable
+    conf: 0.97
+    if:
+      type: value
+      path: office.external_relationships[*].target
+      regex: '(?i)^mhtml:https?://[^/!]+\.(test|example|invalid)(/|:|!|$)'
+
+  - id: ooxml-single-external-relationship
+    desc: One external OOXML relationship
+    crit: notable
+    conf: 0.98
+    if:
+      type: metrics
+      field: office.external_relationship_count
+      min: 1
+      max: 1
 
   - id: ooxml-external-workbook-link-type
     desc: External workbook link relationship
@@ -248,6 +262,29 @@ traits:
       min: 1
 
 composite_rules:
+  - id: ooxml-local-attached-template-context
+    desc: Attached template targets local file
+    crit: exception
+    conf: 0.97
+    all:
+      - id: ooxml-external-attached-template
+      - id: ooxml-local-file-external-relationship
+      - id: ooxml-word-settings-relationship-source
+
+  # Preserve the complete population of the former delivery/execution rules
+  # without asserting a payload or execution. Array predicates can match
+  # different relationships, so the finding states document-level co-occurrence.
+  # The unusual OLE/protocol-handler combination merits investigation even in
+  # inert fixtures and must not be suppressed by a chosen name or hostname.
+  - id: ooxml-oleobject-with-mhtml-target
+    desc: External OLE relationship and MHTML target coexist
+    crit: suspicious
+    conf: 0.98
+    platforms: [windows]
+    all:
+      - id: ooxml-oleobject-relationship-type
+      - id: ooxml-mhtml-external-target
+
   # A remote image is fetched as document content when rendered and can be
   # used as a tracking pixel. This keeps ordinary Word hyperlinks baseline
   # while retaining a notable finding for the actual content-fetch shape.
@@ -280,9 +317,10 @@ composite_rules:
     conf: 0.98
     attack: T1221
     unless:
+      - id: ooxml-local-attached-template-context
       - id: well-known/tool/development/docs/pandoc::package-path
       - id: metadata/package/testing/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
     any:
       - id: ooxml-external-attached-template
       - id: ooxml-external-oleobject
@@ -327,4 +365,3 @@ composite_rules:
     unless:
       - id: ooxml-template-injection
       - id: ooxml-image-fetch-with-macros
-

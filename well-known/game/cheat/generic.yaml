@@ -28,14 +28,28 @@ traits:
       section: rdata
       regex: '\b(aimbot|aim assist|silent aim|aim[._ -]silent|silent[._ -]aim|magic[._ -]bullet)\b'
       case_insensitive: true
+  - id: aim-lock-control
+    desc: Aim-lock cheat control
+    crit: notable
+    conf: 0.96
+    if:
+      type: raw
+      section: any
+      regex: '\baim[ _-]?lock(_|\b)'
+      case_insensitive: true
   - id: visual-cheat-control
     desc: Wallhack or ESP cheat control
     crit: notable
     conf: 0.95
+    not:
+      - regex: '(?i)^al-chams$'
     if:
       type: text
       section: rdata
-      regex: '\b(wallhack|ghost hack|chams)\b'
+      # Include the Arabic geographic article in the matched span, so not:
+      # rejects al-Chams without suppressing other Chams labels in this file.
+      # Other hyphenated controls (Enemy-Chams), esp.chams and UI copy remain.
+      regex: '\b(wallhack|ghost hack|al-chams|chams)\b'
       case_insensitive: true
   - id: combat-modification-control
     desc: Game combat-modification cheat controls
@@ -111,10 +125,34 @@ traits:
       # NativeAOT images can exceed the extracted-string cap before these
       # late strings; scan the read-only bytes so the target is not lost.
       type: raw
-      section: rdata
+      section: any
       regex: '\b(HD-Player\.exe|BstkVMM\.dll|MapChunkViaBstkVmm|libil2cpp\.so|com\.dts\.freefiremax)\b'
       case_insensitive: true
-
+  - id: gameloop-emulator-target
+    desc: GameLoop Android emulator process target
+    crit: notable
+    conf: 0.94
+    if:
+      type: raw
+      section: any
+      regex: '\b(GameLoop Android Engine|AndroidProcess\.exe)\b'
+      case_insensitive: true
+  - id: emulator-root-image-patcher
+    desc: Applies signature patches to emulator files
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: raw
+      section: rdata
+      regex: '(?i)(Root\.vhd|HD-Player\.exe) signatures to apply'
+  - id: emulator-root-patch-cycle
+    desc: Stops emulator processes before patching
+    crit: notable
+    conf: 0.98
+    if:
+      type: raw
+      section: rdata
+      regex: '(?i)closing HD-Player\s*/\s*BstkSVC before patching'
   # The Vanguard component and gateway names themselves are Riot's, not a
   # cheat's -- game launchers and optimizers reference them too -- so they live
   # in well-known/game/anti-cheat/ and are composed in below. What stays here is
@@ -146,6 +184,15 @@ traits:
       section: rdata
       regex: '(?i)(\boverrid\w*\s+vgc\s+pipe\b|\boriginal\s+pipe\b)'
 
+  - id: vanguard-simulation-marker
+    desc: Identifies an emulated Vanguard service
+    crit: notable
+    conf: 0.97
+    if:
+      type: text
+      section: rdata
+      regex: '(?i)(simulated Vanguard (mutex|shared memory)|DndVanguardSrv)'
+
 composite_rules:
   - id: cheat-control-set
     desc: Generic game-cheat control set
@@ -153,6 +200,7 @@ composite_rules:
     conf: 0.95
     any:
       - id: aim-assist-control
+      - id: aim-lock-control
       - id: visual-cheat-control
       - id: combat-modification-control
     unless:
@@ -167,6 +215,23 @@ composite_rules:
       - id: emulator-game-target
       - id: cheat-control-set
       - id: micro-behaviors/process/inject/remote-thread::remote-alloc-write-thread-api-set
+  - id: evasive-aim-lock-process-injector
+    desc: Aim-lock cheat injects into another process and detects debuggers
+    crit: hostile
+    conf: 0.98
+    attack: T1055,T1622
+    all:
+      - id: aim-lock-control
+      - id: micro-behaviors/process/inject/remote-thread::remote-alloc-write-thread-api-set
+      - id: objectives/anti-analysis/debugger-detect/check::debugger-api
+  - id: emulator-root-patching-cheat
+    desc: Game-cheat tool patches BlueStacks emulator binaries or root image
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: emulator-game-target
+      - id: emulator-root-image-patcher
+      - id: emulator-root-patch-cycle
   - id: traffic-intercepting-game-cheat
     desc: Game-cheat controls combined with WinDivert packet interception
     crit: hostile
@@ -174,7 +239,7 @@ composite_rules:
     attack: T1040
     all:
       - id: emulator-game-target
-      - id: micro-behaviors/communications/capture/windivert::windivert-packet-filter
+      - id: micro-behaviors/communications/capture::windivert-packet-filter
       - id: cheat-control-set
   - id: native-aim-toggle-cheat
     desc: Native SmartAim cheat controlled by key polling
@@ -207,6 +272,23 @@ composite_rules:
       - id: well-known/game/anti-cheat::vanguard-component-name
       - id: valorant-vanguard-tamper-command
       - id: valorant-vanguard-pipe-tamper
+      - id: well-known/lib/ui/dear-imgui::dear-imgui-library
+    any:
+      - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+      - id: micro-behaviors/os/privilege/token::adjust-token-privileges
+      - id: micro-behaviors/communications/http/client/winhttp::winhttp-session-connect-flow
+    needs: 1
+
+  - id: valorant-vanguard-simulated-pipe-server
+    desc: Creates a simulated Vanguard pipe server
+    crit: hostile
+    conf: 0.98
+    attack: T1562.001
+    all:
+      - id: well-known/game/anti-cheat::vanguard-component-name
+      - id: valorant-vanguard-tamper-command
+      - id: vanguard-simulation-marker
+      - id: micro-behaviors/communications/ipc/named-pipe::named-pipe-server
       - id: well-known/lib/ui/dear-imgui::dear-imgui-library
     any:
       - id: micro-behaviors/os/privilege/token::high-risk-privilege-name

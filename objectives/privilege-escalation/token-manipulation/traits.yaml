@@ -58,7 +58,35 @@ traits:
   if:
     type: text
     regex: list Kerberos tickets|purge a Kerberos ticket|import Kerberos ticket into a logon session
+- id: token-impersonation-spawn-diagnostics
+  desc: Token impersonation error strings
+  crit: notable
+  conf: 0.95
+  for: [pe, dll]
+  if:
+    type: text
+    regex: "(?i)(Failed to impersonate token|could not spawn [^\n\r]{0,30}\\(token\\))"
 composite_rules:
+- id: stolen-token-process-spawn
+  desc: Steals, duplicates and impersonates access token to spawn processes
+  crit: hostile
+  conf: 0.98
+  attack: T1134.001,T1134.002
+  mbc: B0028
+  for: [pe, dll]
+  all:
+  - id: micro-behaviors/os/privilege/token::token-spawn-api-chain
+  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
+  - id: token-impersonation-spawn-diagnostics
+  any:
+  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-any
+  - id: micro-behaviors/os/privilege/token::impersonate-named-pipe-client
+  - id: micro-behaviors/process/create/exec::create-process-with-token
+  needs: 1
+  unless:
+  - id: metadata/signed/platform/
+  - id: metadata/binary/vendor::microsoft-corp-versioninfo
+  - id: token-adjustment-benign-tool-context
 - id: debug-privilege-browser-process-stager
   desc: Enables debug privilege and opens encoded browser targets for staging
   crit: hostile
@@ -120,20 +148,9 @@ composite_rules:
   all:
   - id: micro-behaviors/os/privilege/token::duplicate-token-ex
   - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
-  - id: micro-behaviors/os/privilege/manifest::require-administrator
+  - id: metadata/build/manifest::require-administrator
   - id: objectives/anti-analysis/sandbox-detect/suite::named-native-anti-analysis-check-cluster
 
-- id: rust-token-privilege-adjustment
-  desc: Rust token privilege adjustment chain
-  crit: notable
-  conf: 0.9
-  attack: T1134.001
-  for: [rust]
-  all:
-  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
-  - id: micro-behaviors/os/privilege/token::open-process-token-source
-  - id: micro-behaviors/os/privilege/token::lookup-privilege-value-source
-  - id: micro-behaviors/os/privilege/token::adjust-token-privileges-source
 - id: source-token-impersonation-suite
   desc: Source code implements stolen-token impersonation
   crit: suspicious
@@ -156,25 +173,6 @@ composite_rules:
   all:
   - id: source-token-impersonation-suite
   - id: kerberos-ticket-command-source
-- id: system-token-theft-winlogon
-  desc: SYSTEM token theft via winlogon
-  crit: hostile
-  conf: 0.97
-  attack: T1134
-  all:
-  - id: micro-behaviors/os/privilege/token::token-spawn-api-chain
-  - id: micro-behaviors/process/info/name::winlogon-executable-reference
-  - id: micro-behaviors/os/privilege/token::high-risk-privilege-name
-  any:
-  - id: micro-behaviors/os/privilege/token::token-privilege-adjustment-references
-  - id: rust-token-privilege-adjustment
-  needs: 1
-  unless:
-  - id: well-known/tool/sysadmin/sysinternals::process-explorer-build-identity
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
-    - id: metadata/binary/vendor::microsoft-corp-versioninfo
 - id: system-token-theft-lsass
   desc: Steals and impersonates a LocalSystem token obtained from LSASS
   crit: hostile
@@ -229,15 +227,3 @@ composite_rules:
   - id: objectives/evasion/anti-av/driver::antivirus-process-enumeration-routine
   - id: micro-behaviors/os/privilege/check::is-elevated-property
   needs: 1
-
-- id: suspended-thread-token-impersonation-hide-debugger
-  desc: Creates suspended thread, hides from debugger, sets impersonation token
-  crit: hostile
-  conf: 0.98
-  attack: T1134.001,T1622
-  for: [c, cpp]
-  all:
-  - id: micro-behaviors/os/privilege/token::nt-thread-impersonation-token-call
-  - id: objectives/anti-analysis/debugger-detect/native-information::thread-hide-debugger-named-call
-  - id: micro-behaviors/process/create/flags::create-suspended-flag-reference
-  - id: micro-behaviors/os/privilege/token::duplicate-token

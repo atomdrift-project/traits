@@ -114,7 +114,7 @@ traits:
   for: [powershell, batch]
   if:
     type: text
-    regex: '(?i)\birm\b[^''"\n]{0,8}[''"]https?://[^''"]{0,200}/[a-z]{0,12}\d[a-z0-9]{3,18}[''"]'
+    regex: '(?i)\birm\b[^''"\r\n]{0,8}[''"]?(https?://)?[a-z0-9.-]+/[a-z]{0,12}\d[a-z0-9]{3,18}[''"]?'
 - id: ps-encoded-iwr-http-fragment
   desc: Encoded IWR HTTP launcher fragment
   crit: suspicious
@@ -133,26 +133,6 @@ traits:
   if:
     type: text
     substr: QBbAHMAYwByAGkAcAB0AGIAbABvAGMAawBdADoAOg
-- id: ps-network-eval-pipeline
-  desc: PowerShell network response piped to eval
-  crit: suspicious
-  conf: 0.92
-  mbc: "B0030"
-  attack: "T1105"
-  if:
-    type: text
-    regex: "(?im)^[ \\t]*\\biwr\\b[^\\r\\n|]{0,220}\\|\\s*iex\\b"
-  not:
-    # Trusted code-hosting source: `iwr <raw repo URL> | iex` is the canonical
-    # vendor install one-liner (rustup/scoop/this project). Untrusted-source
-    # iwr|iex (raw IP, pastebin, throwaway domain) still fires.
-    - regex: '(?i)githubusercontent\.com'
-    - regex: '(?i)//github\.com/'
-    - regex: '(?i)openclaw\.ai/install\.ps1'
-    - regex: '(?i)octelium\.com/install\.ps1'
-    - regex: '(?i)get\.scoop\.sh'
-    - regex: '(?i)\bcin\.st\b'
-    - regex: '(?i)chocolatey\.org/install\.ps1'
 - id: ps-webrequest-content-iex
   desc: PowerShell evaluates response content
   crit: suspicious
@@ -163,32 +143,6 @@ traits:
   if:
     type: text
     regex: '(?i)(Select-Object\s+-Expand\s+Content|\.Content)\s*\|\s*(IEX|Invoke-Expression)\b'
-- id: ps-iwr-pipeline-eval
-  desc: Remote IWR response piped to IEX
-  crit: suspicious
-  conf: 0.97
-  mbc: "B0030"
-  attack: "T1059.001,T1105"
-  for: [vbs, powershell, batch]
-  if:
-    type: text
-    regex: '(?im)^[ \t]*\b(iwr|Invoke-WebRequest)\b[^\r\n|]{0,240}\|\s*iex\b'
-  not:
-    # Scoop and Chocolatey documented bootstrap: `iwr -useb get.scoop.sh | iex`, `iwr -useb cin.st | iex`.
-    - regex: '(?i)get\.scoop\.sh'
-    - regex: '(?i)octelium\.com/install\.ps1'
-    - regex: '(?i)\bcin\.st\b'
-    - regex: '(?i)chocolatey\.org/install\.ps1'
-  unless:
-    - id: well-known/lib/ai/unsloth::unsloth-package-context
-    - id: well-known/app/productivity/ferronote::ferronote-windows-installer-context
-    - id: well-known/app/ai/gateway/ollama::official-install-ps1-url
-    - id: well-known/app/ai/coding-agent/openclaw::official-install-ps1-url
-    - id: micro-behaviors/os/package-manager/install::bun-powershell-piped-installer-command
-    - id: metadata/package/documentation/powershell-help/
-    - id: well-known/app/communication/slack::official-install-windows-ps1-url
-    - id: well-known/app/ai/coding-agent/skillshare::skillshare-windows-installer-context
-    - id: well-known/lib/testing/approvaltests::approvaltests-dev-setup-context
 - id: curl-zoom-user-agent-piped-iex--rx-4
   desc: 'Matches ''ZoomSDK'''
   crit: notable
@@ -300,20 +254,30 @@ traits:
   attack: T1059.001
   if:
     type: text
-    regex: "(?m)^\\s*&\\s*\\$(download|downloaded|payload)[A-Za-z0-9_]*\\b"
+    # Only path-like variable suffixes qualify. `& $downloadAction` invokes a
+    # callback, not a downloaded payload.
+    regex: "(?im)^\\s*&\\s*\\$(download|downloaded|payload)(path|file|exe|script)?\\b"
   unless:
     # Arcade is the shared .NET build toolset; every dotnet repo vendors
     # eng/common/tools.ps1 verbatim, and downloading the SDK, vswhere and
     # dnceng packages then running them is its whole job.
     - id: metadata/build/recognized-contexts::arcade-build-bootstrapper
 - id: ps-downloadfile-variable-invoke-stage
-  desc: PowerShell invokes staged payload variable
+  desc: PowerShell invokes a drop/stage-named variable
   crit: suspicious
   conf: 0.9
   attack: T1059.001
   if:
     type: text
-    regex: "(?m)^\\s*&\\s*\\$(drop|stage)[A-Za-z0-9_]*\\b"
+    # `$stage.Invoke` is a member call on a build-stage object, not an
+    # invocation of a path stored in `$stage`. Require the variable itself
+    # to be the command (end of line or a following argument).
+    # A quoted literal as the first argument is a message passed to a
+    # progress/stage callback (`& $stage 'Pushes, YAML, permissions'`), not a
+    # staged path being executed: binaries take flags, variables, or splats,
+    # not a lone display string. Member access (`$stage.Invoke`), indexing,
+    # and scriptblock arguments stay excluded as before.
+    regex: "(?m)^\\s*&\\s*\\$(drop|stage)[A-Za-z0-9_]*(\\s*$|\\s+[$@&/(\\-A-Za-z0-9_])"
 # `$cmd` is not a dropper name: `& $cmd.Source` is the canonical way to invoke
 # whatever `Get-Command` resolved, and ordinary setup scripts do it constantly.
 # Keep the executable names closed as well: a prefix such as `$executor` often
@@ -346,7 +310,7 @@ traits:
     type: text
     regex: "(?m)^\\s*&\\s*\\$(runme|file)[A-Za-z0-9_]*\\b"
   unless:
-    - id: "metadata/file/naming::test-directory-component"
+    - id: metadata/path::test-directory-component
 composite_rules:
 - id: ps-irm-public-code-pipeline
   desc: One-line PowerShell fetches public code and runs it via IEX
@@ -380,7 +344,7 @@ composite_rules:
   attack: "T1059.001,T1105"
   for: [powershell, batch]
   all:
-  - id: ps-iwr-pipeline-eval
+  - id: micro-behaviors/process/deploy/script-eval::powershell-web-response-piped-eval-text
   - id: metadata/file/line::file-one-liner
   any:
   - id: micro-behaviors/communications/http/lib/invoke-webrequest::irm-jsdelivr-github-cdn-path
@@ -421,6 +385,17 @@ composite_rules:
   all:
   - id: ps-tiny-hidden-ep-launcher
   - id: micro-behaviors/communications/http/lib/invoke-webrequest::irm-bare-domain
+- id: hidden-encoded-opaque-irm-response-eval
+  desc: Hidden encoded PowerShell evaluates a remote script at an opaque URL path
+  crit: hostile
+  conf: 0.98
+  mbc: "B0030"
+  attack: "T1027,T1059.001,T1105,T1564.003"
+  all:
+  - id: micro-behaviors/process/create/hidden::encodedcommand-invocation-source
+  - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden-option
+  - id: irm-opaque-staging-token
+  - id: micro-behaviors/process/deploy/script-eval::powershell-web-response-piped-eval-text
 - id: tiny-irm-bare-domain-eval
   desc: Tiny IRM fetch-eval of a bare domain
   crit: hostile
@@ -447,23 +422,6 @@ composite_rules:
   not:
     - regex: '(?i)githubusercontent\.com'
     - regex: '(?i)//github\.com/'
-- id: ps-command-wrapper-useb-remote-eval
-  desc: Nested PowerShell uses BasicParsing for IWR-to-IEX execution
-  crit: suspicious
-  conf: 0.97
-  mbc: "B0030"
-  attack: "T1059.001,T1105"
-  all:
-  - id: micro-behaviors/process/deploy/script-eval::powershell-web-response-piped-eval-text
-  - id: micro-behaviors/communications/http/lib/invoke-webrequest::useb-flag
-  near_bytes: 384
-  unless:
-    - id: well-known/tool/sysadmin/chocolatey::official-profile-provisioner
-    - id: well-known/app/ai/coding-agent/openclaw::official-install-ps1-url
-    - id: well-known/app/network/octelium::official-install-ps1-url
-    - id: metadata/package/documentation/powershell-help/
-    - id: well-known/lib/testing/approvaltests::approvaltests-dev-setup-context
-
 - id: ps-http-inprocess-shellcode-loader
   desc: PowerShell network-delivered in-process shellcode loader
   crit: hostile
@@ -530,7 +488,7 @@ composite_rules:
   - id: ps-tiny-irm-eval
   - id: micro-behaviors/process/create/hidden::powershell-hidden-window
   any:
-  - id: micro-behaviors/communications/http/lib/invoke-webrequest::useb-flag
+  - id: micro-behaviors/communications/http/client/library::useb-flag
 
 - id: clickfix-tracked-irm-cradle
   desc: IRM cradle with Verification ID trailer
@@ -608,7 +566,7 @@ composite_rules:
   unless:
   - id: metadata/package/documentation/powershell-help/
   - id: metadata/package/testing/presence/harness/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
   - id: well-known/app/infrastructure/ansible::ansible-powershell-context
   - id: well-known/app/infrastructure/ansible::ansible-powershell-provenance
 - id: ps-hidden-child-irm-eval
@@ -619,13 +577,13 @@ composite_rules:
   attack: "T1059.001,T1105,T1564.003"
   all:
   - id: micro-behaviors/process/deploy/script-eval::embedded-irm-iex-pipeline
-  - id: micro-behaviors/process/create/exec::start-process-call
+  - id: micro-behaviors/process/create/start-process::start-process-powershell
   - id: micro-behaviors/process/argument/option::powershell-windowstyle-hidden-option
-  near_bytes: 1024
+  near_lines: 0
   unless:
   - id: metadata/package/documentation/powershell-help::powershell-comment-help-irm-iex-example
   - id: metadata/package/testing/presence/harness/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 # Self-decoding dropper: decode a base64 blob to a script, write it into TEMP,
 # and re-launch it through a hidden powershell process. Distinct from the
 # download-and-eval composites above — the payload ships inside the script and
@@ -639,11 +597,13 @@ composite_rules:
   mbc: "B0030"
   attack: "T1059.001,T1027,T1564.003"
   all:
-  - id: micro-behaviors/data/decode/base64::dotnet-frombase64string-text
+  - id: metadata/lang/source/naming/resource::dotnet-frombase64string-text
   - id: micro-behaviors/fs/write/file/full::write-all-text
   - id: micro-behaviors/fs/path/temp::env-temp
   - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
   - id: micro-behaviors/fs/path/application/executable::powershell-executable-token
+  unless:
+  - id: metadata/package/testing/presence/ci::powershell-ci-verification-harness
 - id: ps-hidden-compressed-scriptblock-child
   desc: Hidden .NET child runs compressed ScriptBlock
   crit: hostile
@@ -686,17 +646,18 @@ composite_rules:
   for: [vbs]
   all:
   - id: micro-behaviors/process/argument/option::powershell-flagged-command-line
-  - id: micro-behaviors/process/argument/option::execution-policy-bypass
+  - id: micro-behaviors/os/security/policy::execution-policy-bypass
   - id: micro-behaviors/process/deploy/script-eval::powershell-rest-response-piped-eval-line
 - id: ps-network-eval-defender-exclusion
   desc: PowerShell network eval with Defender exclusion
   crit: hostile
   conf: 0.98
-  mbc: "B0030"
-  attack: "T1059.001"
+  mbc: B0030
+  attack: T1059.001
   all:
-  - id: ps-network-eval-pipeline
+  - id: micro-behaviors/process/deploy/script-eval::powershell-web-response-piped-eval-text
   - id: micro-behaviors/os/security/defender::defender-exclusion-command
+
 - id: zoomsdk-curl-iex-loader
   desc: ZoomSDK curl IEX loader
   crit: hostile
@@ -767,7 +728,7 @@ composite_rules:
   conf: 0.98
   attack: T1021.006,T1105,T1041
   all:
-  - id: micro-behaviors/process/interpreter/powershell/command::powershell-invoke-command
+  - id: metadata/lang/source/naming/function::powershell-invoke-command
   - id: micro-behaviors/communications/http/client/managed::downloadfile
   - id: micro-behaviors/communications/http/client/managed::uploadstring
 - id: ps-webclient-temp-exe-invoke
@@ -797,7 +758,7 @@ composite_rules:
   - id: ps-downloadfile-variable-invoke-stage
   - id: ps-downloadfile-variable-invoke-file
   unless:
-    - id: "metadata/file/naming::test-directory-component"
+    - id: metadata/path::test-directory-component
     # Arcade is the shared .NET build toolset; every dotnet repo vendors
     # eng/common/tools.ps1 verbatim, and downloading the SDK, vswhere and
     # dnceng packages then running them is its whole job.
@@ -880,7 +841,7 @@ composite_rules:
   - id: metadata/package/testing/presence/harness/
   - id: well-known/app/media/maester/
   - id: well-known/app/infrastructure/azure-dev-cli/
-  - id: "metadata/file/naming::test-directory-component"
+  - id: metadata/path::test-directory-component
 - id: curl-custom-ua-piped-powershell
   desc: Curl custom UA piped PowerShell
   crit: suspicious
@@ -913,7 +874,7 @@ composite_rules:
   any:
     - id: micro-behaviors/communications/http/client/webclient::webclient-download-data
     - id: micro-behaviors/communications/http/client/managed::getresponsestream
-    - id: micro-behaviors/communications/http/url/path::public-ip-installer-url-reference
+    - id: micro-behaviors/communications/http/url/script::public-ip-installer-url-reference
 
 - id: ps-inmemory-stage-load
   desc: In-memory assembly load in PowerShell
@@ -922,7 +883,7 @@ composite_rules:
   any:
     - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-appdomain-currentdomain-load
     - id: micro-behaviors/process/interpreter/reflection/resolve::clr-internal-nloadimage-call
-    - id: micro-behaviors/process/interpreter/reflection/resolve::assembly-load-buffer
+    - id: micro-behaviors/process/interpreter/reflection/resolve::assembly-load-variable-argument
 
 - id: ps-tcp-stream-staged-script-invoke
   desc: PowerShell streams and executes script from temp path

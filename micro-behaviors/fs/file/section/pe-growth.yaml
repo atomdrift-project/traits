@@ -1,0 +1,172 @@
+# Source-level PE header and section editing. These match assignments and
+# co-occurring edits, not a saved file, a supplied payload, or unauthorized
+# modification. XOR toggles mitigation flags; it does not always disable them.
+defaults:
+  platforms: [windows]
+  for: [scripts, source]
+
+traits:
+  - id: pe-section-count-increment
+    desc: Increments the PE section count
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'NumberOfSections\s*=\s*[\w.]{0,40}NumberOfSections\s*\+|NumberOfSections\s*\+\+'
+
+  - id: pe-section-object-appended
+    desc: Appends a PE section object
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'Sections\s*=\s*append\([^;\n]{0,120}\bnewsection\s*\)'
+
+  - id: pe-shellcode-buffer-assignment
+    desc: Assigns shellcode to a PE insertion buffer
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: '(InsertionBytes|InsertionData|RawData)\s*=\s*(shellcode|[A-Za-z_$][\w.$]*shellcode)\b'
+
+  - id: pe-new-section-code-characteristic
+    desc: Marks PE section as code
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'newsection\.Characteristics\s*=\s*[^\n;]{0,160}IMAGE_SCN_CNT_CODE'
+
+  - id: pe-new-section-executable-characteristic
+    desc: Marks a PE section executable
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      regex: 'newsection\.Characteristics\s*=\s*[^\n;]{0,160}IMAGE_SCN_MEM_EXECUTE'
+
+  - id: pe-relocation-directory-cleared
+    desc: Clears the PE base relocation directory
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'DataDirectory\s*\[\s*5\s*\]\.VirtualAddress\s*=\s*0\b'
+
+  - id: pe-aslr-flag-toggled
+    desc: Toggles the PE dynamic-base flag
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'DllCharacteristics\s*\^=\s*[^\n;]{0,80}IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE'
+
+  - id: pe-dep-flag-toggled
+    desc: Toggles the PE NX compatibility flag
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'DllCharacteristics\s*\^=\s*[^\n;]{0,80}IMAGE_DLLCHARACTERISTICS_NX_COMPAT'
+
+  - id: pe-certificate-directory-cleared
+    desc: Clears the PE certificate table directory
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: text
+      regex: 'DataDirectory\s*\[\s*4\s*\]\.VirtualAddress\s*=\s*0\b'
+
+  - id: pe-size-of-image-growth
+    desc: Grows the PE SizeOfImage field
+    crit: notable
+    conf: 0.93
+    if:
+      type: text
+      regex: 'SizeOfImage\s*=\s*[\w.]{0,40}SizeOfImage\s*\+'
+
+  - id: pe-entrypoint-assignment
+    desc: Assigns the PE entry point RVA
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: '\bAddressOfEntryPoint\s*=\s*[A-Za-z_(]'
+
+  - id: pe-data-directory-zeroed
+    desc: Zeroes PE IAT or bound-import directory
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: text
+      regex: 'DataDirectory\s*[\[(]\s*1[12]\s*[\])][\w.$]{0,24}\s*=\s*0\b'
+
+composite_rules:
+  - id: pe-new-section-executable-code
+    desc: Marks a PE section as executable code
+    crit: notable
+    conf: 0.95
+    near_lines: 0
+    all:
+      - id: pe-new-section-executable-characteristic
+      - id: pe-new-section-code-characteristic
+  - id: pe-section-growth-edits
+    desc: PE section count increment with growth or append
+    crit: notable
+    conf: 0.94
+    near_bytes: 4096
+    all:
+      - id: pe-section-count-increment
+    any:
+      - id: pe-size-of-image-growth
+      - id: micro-behaviors/data/format/pe-parser::io-or-seek-near-nt-header-offset
+      - id: pe-section-object-appended
+  - id: pe-section-growth-directory-clear
+    desc: PE section growth with zeroed import directories
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: pe-section-growth-edits
+      - id: pe-data-directory-zeroed
+
+  - id: pe-section-growth-entrypoint-edit
+    desc: PE section growth with entry point assignment
+    crit: suspicious
+    conf: 0.96
+    near_bytes: 4096
+    all:
+      - id: pe-section-growth-edits
+      - id: pe-entrypoint-assignment
+
+  - id: pe-shellcode-section-entry-edits
+    desc: PE section, shellcode buffer and entry point edits
+    crit: suspicious
+    conf: 0.97
+    near_bytes: 4096
+    all:
+      - id: pe-section-growth-edits
+      - id: pe-new-section-executable-code
+      - id: pe-shellcode-buffer-assignment
+      - id: pe-entrypoint-assignment
+
+  - id: pe-shellcode-mitigation-edits
+    desc: Shellcode section edits with relocation and mitigation changes
+    crit: suspicious
+    conf: 0.96
+    near_bytes: 4096
+    all:
+      - id: pe-shellcode-section-entry-edits
+      - id: pe-relocation-directory-cleared
+      - id: micro-behaviors/data/format/pe-parser::pe-relocations-marked-stripped
+      - id: pe-aslr-flag-toggled
+      - id: pe-dep-flag-toggled
+
+  - id: pe-shellcode-certificate-directory-edits
+    desc: Shellcode section edits with cleared certificate directory
+    crit: suspicious
+    conf: 0.96
+    near_bytes: 4096
+    all:
+      - id: pe-shellcode-section-entry-edits
+      - id: pe-certificate-directory-cleared

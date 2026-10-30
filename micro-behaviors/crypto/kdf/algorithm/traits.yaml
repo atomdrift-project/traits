@@ -61,6 +61,19 @@ traits:
     # data. Standing down there keeps one use from counting twice.
     - id: hkdf-import
 
+  # CLR type names live in the managed metadata heap in .text, rather than
+  # the native read-only data section covered above.
+  - id: hkdf-pe-text
+    desc: PE code section references HKDF
+    crit: notable
+    conf: 0.9
+    for: [pe, dll]
+    platforms: [windows]
+    if:
+      type: text
+      exact: HKDF
+      section: .text
+
   - id: hkdf-macho-cstring
     desc: Mach-O string data references HKDF
     crit: notable
@@ -116,6 +129,18 @@ traits:
     if:
       type: text
       regex: '\.pbkdf2_hmac\s*\('
+  # Chromium on Linux seals cookies and passwords under PBKDF2-HMAC-SHA1 with
+  # the fixed password "peanuts" and salt "saltysalt". Cookie libraries use
+  # the same call, so this stays a capability; login theft is a composite.
+  - id: python-chromium-linux-default-kdf
+    desc: Python derives Chromium Linux default key
+    crit: notable
+    conf: 0.96
+    for: [python]
+    attack: T1555.003
+    if:
+      type: text
+      regex: '\.pbkdf2_hmac\([^)]{0,80}peanuts[^)]{0,40}saltysalt'
   - id: scrypt
     desc: References the scrypt key derivation function
     conf: 0.75
@@ -125,7 +150,8 @@ traits:
       case_insensitive: true
     crit: notable
   - id: argon2
-    desc: Uses Argon2 key derivation
+    desc: References Argon2 key derivation
+    crit: notable
     conf: 0.75
     if:
       type: text
@@ -162,18 +188,31 @@ traits:
   # lowercase module and call forms (`bcrypt.hashpw`, `x/crypto/bcrypt`),
   # `BCrypt::Password` (qualified, not verb-suffixed), and `BCrypt.Net`
   # (dotted library name) all keep firing.
-  - id: bcrypt
-    desc: bcrypt password hashing
+  - id: bcrypt-password-reference
+    desc: References bcrypt password hashing
     crit: notable
     conf: 0.75
+    # Python commonly binds ctypes.windll.bcrypt to a variable named bcrypt.
+    # CNG encryption is distinct from the bcrypt password-hashing algorithm.
+    for: [scripts, binaries, go, wasm, -python]
     if:
       type: text
       regex: '(?i)\bbcrypt\b\S{0,24}'
     not:
       - regex: '(?i)bcrypt\.(dll|h|lib)\b'
       - regex: '(?-i)(^BCrypt$|BCrypt[A-Z]|BCRYPT_)'
+  - id: python-bcrypt-password-api
+    desc: Calls a Python bcrypt password API
+    crit: notable
+    conf: 0.98
+    for: [python]
+    if:
+      type: symbol
+      kind: call
+      regex: '^bcrypt\.(hashpw|checkpw|gensalt)$'
   - id: evp-pkey-derive
-    desc: EVP_PKEY_derive function
+    desc: EVP_PKEY_derive key-derivation API reference
+    crit: notable
     conf: 0.75
     if:
       type: text
@@ -209,6 +248,15 @@ traits:
       type: export
       regex: '^libcperciva_(HMAC_)?SHA256_(Init|Update|Final|Buf)$'
 composite_rules:
+  - id: bcrypt
+    desc: References bcrypt password hashing
+    crit: notable
+    conf: 0.9
+    any:
+      - id: bcrypt-password-reference
+      - id: python-bcrypt-password-api
+      - id: metadata/import/python/bcrypt
+
   - id: hkdf
     desc: HKDF key-derivation reference
     crit: notable
@@ -217,10 +265,12 @@ composite_rules:
       - id: hkdf-source-text
       - id: hkdf-elf-rodata
       - id: hkdf-pe-rdata
+      - id: hkdf-pe-text
       - id: hkdf-macho-cstring
 
   - id: key-derivation
-    desc: Key derivation function usage
+    desc: Key-derivation algorithm or API references
+    crit: notable
     conf: 0.75
     any:
       - id: pbkdf2

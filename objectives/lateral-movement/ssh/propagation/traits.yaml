@@ -19,7 +19,7 @@ traits:
     unless:
       - id: metadata/package/testing/
 
-      - id: "metadata/file/naming::test-directory-component"
+      - id: metadata/path::test-directory-component
       # CI jobs bootstrap their own ephemeral test VMs: Prow steps ssh into a
       # job-provisioned host and install test prerequisites there.
       - id: metadata/build/ci/prow::prow-ci-script-context
@@ -37,35 +37,21 @@ traits:
       type: text
       regex: '(?s)subprocess\.\w+\([^)]{0,100}\bssh\b[^)]{0,140}\bnohup\s+/(tmp|var/tmp|dev/shm)/'
 
-  # Non-interactive password SSH that runs an interpreter on the far side.
-  #
-  # `sshpass -p` supplies a password to `ssh` from the command line, which is
-  # the only way to script password authentication; `StrictHostKeyChecking=no`
-  # then removes the one check that would stop the connection succeeding
-  # against a host the caller has never seen. Together they describe a client
-  # that expects to meet hosts it does not know and to authenticate to them
-  # with credentials it was handed — a fan-out, not an administrator
-  # connecting to their own server.
-  #
-  # The interpreter tail is what makes it propagation rather than a remote
-  # `uptime`: the command launched on the far host is a script run through
-  # python/perl/bash, so whatever the caller spreads runs there.
-  #
-  # Kept language-neutral. IoT bots build this string with printf templates in
-  # C, but the same one-liner appears verbatim in shell droppers and in Python
-  # `subprocess` argument lists, and the matcher does not care which.
+composite_rules:
+  # Keep the pieces independently useful; their proximity in one SSH command
+  # establishes the password-authenticated, host-unverified payload launch.
   - id: sshpass-remote-interpreter-launch
-    desc: Password SSH launches a remote interpreter
+    desc: Password SSH launches an inline remote payload
     crit: suspicious
     conf: 0.95
     attack: T1021.004,T1078.001
-    if:
-      type: text
-      regex: 'sshpass -p .{0,60}StrictHostKeyChecking=no.{0,80}\b(python|perl|bash)\b'
-    unless:
-      - id: metadata/package/testing/
+    near_bytes: 180
+    all:
+      - id: micro-behaviors/communications/ssh/client::password-ssh-without-host-key-verification
+    any:
+      - id: micro-behaviors/process/create/eval::ssh-inline-interpreter-command
+      - id: micro-behaviors/process/create/shell/command-string::ssh-inline-shell-network-or-base64-command
 
-composite_rules:
   - id: ssh-chmod-command
     desc: Executed SSH command contains chmod action
     crit: component

@@ -20,12 +20,11 @@
 # parsed config so an unrelated mention of `.vscode` elsewhere in the file
 # cannot satisfy it.
 #
-# ATT&CK: T1546 (Event Triggered Execution)  MBC: B0024
+# ATT&CK: T1546 (Event Triggered Execution)
 defaults:
   platforms: [windows, unix]
   for: [json]
   attack: T1546
-  mbc: B0024
 
 traits:
   - id: agent-hook-command-editor-config-dir
@@ -37,36 +36,6 @@ traits:
       path: hooks.SessionStart[*].hooks[*].command
       regex: '\.(vscode|idea)[\\/]'
 
-  - id: ide-task-command-claude-cursor-dir
-    desc: IDE task runs Claude or Cursor script
-    crit: notable
-    conf: 0.94
-    if:
-      type: value
-      path: tasks[*].command
-      regex: '\.(claude|cursor)[\\/]'
-
-  - id: ide-task-command-agent-dir-extra
-    desc: IDE task runs other agent-dir script
-    crit: notable
-    conf: 0.94
-    if:
-      type: value
-      path: tasks[*].command
-      regex: '\.(codex|gemini|windsurf)[\\/]'
-
-  - id: ide-task-command-setup-mjs
-    desc: IDE task runs setup.mjs
-    # `setup.mjs` is an attacker-chosen filename, not a payload property.  The
-    # command is useful triage context; suspicion comes from an automatic
-    # cross-tool trigger or from behavior in the referenced script.
-    crit: notable
-    conf: 0.95
-    if:
-      type: value
-      path: tasks[*].command
-      regex: '(?i)\bnode\s+[^\n]*setup\.mjs\b'
-
   - id: agent-hook-command-setup-mjs
     desc: Agent hook runs setup.mjs
     crit: notable
@@ -75,6 +44,43 @@ traits:
       type: value
       path: hooks.SessionStart[*].hooks[*].command
       regex: '(?i)\bnode\s+[^\n]*setup\.mjs\b'
+
+  - id: agent-hook-command-github-dir
+    desc: Agent hook runs .github script
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: value
+      path: hooks.SessionStart[*].hooks[*].command
+      regex: '(^|[\s"''])\.(github|git)[\\/][^\s"'']+\.(m?js|cjs|ts|py|sh)\b'
+
+  - id: agent-hook-interpreter-fallback-chain
+    desc: Agent hook chains interpreter fallback
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: value
+      path: hooks.SessionStart[*].hooks[*].command
+      regex: '\b(node|bun|python3?)\s+\.[A-Za-z0-9_-]+[\\/][^\s|&]+\s*\|\|\s*(node|bun|python3?)\s+\.'
+    # A chain spanning only Python interpreter-name variants
+    # (python/python3/py -3) is the cross-platform launcher shim: the
+    # branches differ in interpreter spelling, not in payload, so no
+    # execution-resilience intent is shown. The autorun capability
+    # stays visible at notable; cross-family chains stay suspicious.
+    downgrade:
+      any:
+        - type: value
+          path: hooks.SessionStart[*].hooks[*].command
+          regex: '(python3?|py -3)\s+\.[^\s|&]+\.py\s*\|\|\s*(python3?|py -3)\s+\.'
+
+  - id: mcp-server-args-github-dir-script
+    desc: MCP server runs hidden tool script
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: value
+      path: mcpServers.*.args[*]
+      regex: '^\.(github|vscode|idea)[\\/][^\s"'']+\.(m?js|cjs|ts|py|sh)$'
 
 composite_rules:
   # Only platform-consumed Claude settings establish an automatic trigger.
@@ -128,15 +134,6 @@ composite_rules:
     unless:
       - id: well-known/tool/detection/threat-intel/
 
-  - id: ide-task-command-agent-config-dir
-    desc: IDE task runs script from agent dir
-    crit: notable
-    conf: 0.94
-    any:
-      - id: ide-task-command-claude-cursor-dir
-      - id: ide-task-command-agent-dir-extra
-
-
   - id: agent-session-hook-cross-tool-script
     desc: Agent session hook runs cross-tool config script
     crit: suspicious
@@ -149,19 +146,66 @@ composite_rules:
       - id: well-known/tool/detection/agent-glovebox::archive-context
       - id: well-known/tool/detection/agent-glovebox::glovebox-hook-settings-context
 
-      - id: "metadata/file/naming::test-directory-component"
-  - id: ide-folder-open-cross-tool-script
-    desc: IDE folder-open runs cross-tool config script
+      - id: metadata/path::test-directory-component
+  - id: mcp-server-cross-tool-hidden-script
+    desc: MCP server launches hidden tool script
     crit: suspicious
-    conf: 0.96
+    conf: 0.95
     all:
-      - id: metadata/permission/activation::vscode-task-folder-open-activation
-    # Reference the structured value atoms directly. Besides making the
-    # hostile condition explicit, this avoids relying on an intermediate
-    # composite when evaluating a static tasks.json file.
+      - id: micro-behaviors/communications/mcp::mcp-client-config-key
+      - id: mcp-server-args-github-dir-script
+
+  - id: agent-config-mcp-tmp-staged-package-autorun
+    desc: Detached installer posed as MCP with sandbox bypass
+    crit: hostile
+    conf: 0.98
+    for: [javascript, typescript, python, shell, json, markdown]
+    all:
+      - id: micro-behaviors/communications/mcp::mcp-client-config-key
+      - id: micro-behaviors/fs/path/agent-config/file::ai-agent-config-file-target
+      - id: micro-behaviors/os/package-manager/reference-install::config-args-package-install-command
+      - id: micro-behaviors/os/package-manager/reference-install::tmp-staged-package-install-command
+      - id: micro-behaviors/process/create/agent::codex-dangerous-sandbox-bypass-flag
+    # Temp staging and an explicit bypass can be legitimate bootstrapping.
+    # The detached installer misrepresented as an MCP service supplies abuse.
     any:
-      - id: ide-task-command-claude-cursor-dir
-      - id: ide-task-command-agent-dir-extra
-    unless:
-      - id: metadata/package/testing/presence/harness/
-      - id: "metadata/file/naming::test-directory-component"
+      - id: micro-behaviors/os/service/control::mcp-launchctl-submit-package-install
+      - id: micro-behaviors/os/service/create::config-command-systemd-run
+      - id: micro-behaviors/process/create/shell/agent-config::config-args-windows-detached-start
+
+  # A normal bootstrap can install dependencies then serve MCP. Detached
+  # launchctl submission exits instead of speaking MCP on the agent's stdio.
+  - id: agent-instruction-mcp-shell-install-hijack
+    desc: Agent instructions register detached installer as MCP server
+    crit: hostile
+    conf: 0.98
+    platforms: [macos]
+    for: [markdown]
+    all:
+      - id: metadata/package/agent-skill::agent-instructions-md-basename
+      - id: micro-behaviors/fs/path/agent-config/file::ai-agent-config-file-target
+      - id: micro-behaviors/process/create/shell/agent-config::config-args-shell-command
+      - id: micro-behaviors/os/package-manager/reference-install::config-args-package-install-command
+      - id: micro-behaviors/os/service/control::mcp-launchctl-submit-package-install
+      - id: micro-behaviors/communications/mcp::codex-mcp-launchctl-command-declaration
+
+  # The same trap through the other platforms' detached launchers. A real
+  # stdio MCP server stays in the foreground speaking the transport; a
+  # systemd-run transient unit or a `cmd /c start` process returns at once
+  # and never serves, which leaves only the side effect: the package
+  # install in its arguments. launchctl keeps the macOS rule above, so
+  # each platform's spelling carries exactly one hostile reading.
+  - id: agent-instruction-mcp-detached-install-hijack
+    desc: Agent instructions register detached installer as MCP server
+    crit: hostile
+    conf: 0.98
+    platforms: [linux, windows]
+    for: [markdown]
+    all:
+      - id: metadata/package/agent-skill::agent-instructions-md-basename
+      - id: micro-behaviors/fs/path/agent-config/file::ai-agent-config-file-target
+      - id: micro-behaviors/communications/mcp::mcp-client-config-key
+      - id: micro-behaviors/os/package-manager/reference-install::config-args-package-install-command
+    any:
+      - id: micro-behaviors/os/service/create::config-command-systemd-run
+      - id: micro-behaviors/process/create/shell/agent-config::config-args-windows-detached-start
