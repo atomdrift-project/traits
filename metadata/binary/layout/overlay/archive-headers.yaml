@@ -1,0 +1,69 @@
+# Signatures in a binary overlay describe its stored bytes, not extraction.
+# Local ZIP headers without an EOCD can also survive in uncompressed chunks
+# of a valid outer 7z stream; they do not prove a truncated ZIP payload.
+defaults:
+  crit: notable
+  conf: 0.9
+  platforms: [linux, macos, windows]
+  for: [pe, dll, elf, macho]
+
+traits:
+  - id: overlay-zip-magic
+    desc: ZIP local-file header bytes in overlay
+    if:
+      type: hex
+      section: overlay
+      pattern: 50 4B 03 04 ?? 00
+  - id: embedded-zip-central-directory
+    desc: ZIP end-of-central-directory bytes in overlay
+    for: [pe]
+    if:
+      type: hex
+      section: overlay
+      pattern: 50 4B 05 06
+  - id: overlay-7z-magic
+    desc: 7-Zip archive header in overlay
+    if:
+      type: hex
+      section: overlay
+      pattern: 37 7A BC AF 27 1C
+  - id: overlay-inverted-7z-magic
+    desc: Bitwise-inverted 7-Zip header in overlay
+    if:
+      type: hex
+      section: overlay
+      pattern: C8 85 43 50 D8 E3 FF FB
+  - id: overlay-bzip2-magic
+    desc: Bzip2 header in overlay
+    if:
+      type: hex
+      section: overlay
+      pattern: 42 5A 68 (31|32|33|34|35|36|37|38|39) 31 41 59 26 53 59
+  - id: overlay-rar-magic
+    desc: RAR archive header in overlay
+    if:
+      type: hex
+      section: overlay
+      # RAR4 ends the signature with 00; RAR5 appends a version byte
+      # (01 00). A RAR5 SFX stub (WinRAR sfxrar) otherwise reads as an
+      # unrecognized high-entropy overlay.
+      pattern: 52 61 72 21 1A 07 (00 | 01 00)
+
+composite_rules:
+  - id: embedded-archive-stream
+    desc: Archive header bytes in binary overlay
+    any:
+      - id: overlay-zip-magic
+      - id: metadata/binary/layout/overlay::gzip-header-prefix
+      - id: overlay-7z-magic
+      - id: overlay-inverted-7z-magic
+      - id: overlay-bzip2-magic
+      - id: overlay-rar-magic
+  # This is a byte-layout observation, not proof of archive validity.
+  - id: zip-local-header-without-eocd
+    desc: Overlay ZIP header bytes without an EOCD
+    for: [pe]
+    all:
+      - id: overlay-zip-magic
+    unless:
+      - id: embedded-zip-central-directory

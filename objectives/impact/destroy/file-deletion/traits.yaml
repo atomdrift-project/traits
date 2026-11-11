@@ -32,62 +32,6 @@ traits:
     any:
         # Large infrastructure binaries (e.g. service mesh) have gRPC internal deleteSelf cleanup methods
     - id: metadata/binary/layout/size::massive-executable
-- id: explicit-file-deletion-warning-destroyed
-  desc: "Explicit warning of file/data deletion"
-  crit: notable
-  conf: 0.95
-  for: [elf, macho, pe, vbs, javascript, powershell, batch]
-  if:
-    type: text
-    regex: '\b(files|data|documents)\b.{0,24}\b(will be|are)\b.{0,20}\bdestroyed\b'
-    case_insensitive: true
-  not:
-  - regex: '(?i)\b(never|not|nothing|no)\b.{0,20}\bdestroyed\b'
-  - regex: '(?i)\b(files|data|documents)\b.{0,24}\bare kept rather than destroyed\b'
-  - regex: (?i)\bdata on the (usb|removable|target|selected) disk will be destroyed\b
-  - regex: (?i)\ball data on the (usb|removable|target|selected) disk will be destroyed\b
-  - regex: (?i)deleting a team project is an irrecoverable operation
-  unless:
-  - id: metadata/binary/resource/
-- id: explicit-file-deletion-warning-wipe
-  desc: Explicit warning of data wiping
-  # A warning string is useful triage context but does not prove destructive
-  # behavior; the hostile composite separately requires a file-delete API.
-  crit: notable
-  conf: 0.95
-  for: [elf, macho, pe, vbs, javascript, powershell, batch]
-  if:
-    type: text
-    # The object is the victim's data as a whole ('all your files'); 'all
-    # preexisting data in the specified table' is a GDAL driver option.
-    regex: \bwipe[a-z]{0,3}\b.{0,60}\b(your|all\s+your)\s+(files|data|documents)\b
-    case_insensitive: true
-  not:
-  - regex: '(?i)\b(session|orphan|cache|cached|temp|temporary|stale|test|fixture|local|sqlite|db|database)\s+data\b'
-  - regex: '(?i)\baggressively\s+wipe\b'
-  - regex: '(?i)\bwipe\s+(out\s+)?(all\s+)?(stale|orphan|old|test|session|cached?|temporary|temp)\b'
-  unless:
-  - id: well-known/app/finance/go-ethereum::go-ethereum-tool
-  - id: well-known/app/productivity/silverbullet::official-silverbullet-context
-- id: explicit-file-deletion-warning-erase
-  desc: Explicit warning of file/data deletion (erase)
-  crit: notable
-  conf: 0.95
-  for: [elf, macho, pe, vbs, javascript, powershell, batch]
-  if:
-    type: text
-    regex: \berase[a-z]{0,3}\b.{0,80}\b(your|all\s+your)\b.{0,20}\b(files|data|documents)\b
-    case_insensitive: true
-  unless:
-  - type: text
-    substr: "you are about to erase all data from the following device"
-    case_insensitive: true
-  - type: text
-    substr: "are you sure you want to erase all data"
-    case_insensitive: true
-  downgrade:
-    any:
-    - id: metadata/binary/linking/static/
 - id: punishment-piracy-message
   desc: Anti-piracy punishment threat message
   crit: suspicious
@@ -156,8 +100,8 @@ traits:
     type: text
     regex: '\brm\s+-rf\s+/\s+--no-preserve-root\b'
   unless:
-  - id: micro-behaviors/process/create/shell/guard/
   - id: well-known/tool/detection/innerwarden::innerwarden-defensive-tool-context
+  - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
 
 - id: unix-root-rm-binary-string
   desc: Native binary root-filesystem rm command
@@ -174,7 +118,8 @@ traits:
     - regex: '(?i)does not match'
   unless:
   - id: well-known/tool/detection/watchmen::watchmen-cli-context
-  - id: micro-behaviors/process/create/shell/guard/
+  - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
+  - id: metadata/package/testing/corpus/security-tests::native-fuzz-injection-payload-table
 
 - id: unix-root-rm-glob
   desc: Root filesystem wipe (rm -rf /*)
@@ -200,10 +145,7 @@ traits:
     - id: well-known/lib/native/uclibc::static-uclibc-string-tables
     # Any unit-test harness fact (rust-test, its attr/cfg-test variants, the
     # wipe-liner fixtures) marks the command as the pattern under test.
-    - id: metadata/package/testing/harness/unit/
-    - id: metadata/path::test-directory-component
-    - id: micro-behaviors/process/create/shell/guard/
-    - id: metadata/file/policy/identity::agent-tool-permission-ruleset
+    - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
 
 - id: encoded-rm-binary-path
   desc: Obfuscated /bin/rm delete path
@@ -274,9 +216,11 @@ traits:
     type: text
     regex: '(?i)\.exe\b[^b\n]{0,128}\.gho\b[^b\n]{0,128}\.bak\b'
 
+# Copying to .txt alone is how diff/patch tools expose files as text; only
+# the paired delete below makes it a destroy-the-original routine.
 - id: wsh-copyfile-txt-suffix
   desc: CopyFile destination ends in txt
-  crit: suspicious
+  crit: notable
   conf: 0.9
   platforms: [windows]
   for: [vbs, javascript, text, static-lib]
@@ -288,8 +232,7 @@ traits:
     - regex: '\.copyFile\b'
     - regex: '\.copyfile\b'
   unless:
-    - id: metadata/package/testing/
-    - id: metadata/path::test-directory-component
+    - id: metadata/path/directory::test-directory-component
 
 composite_rules:
 - id: helpctr-system32-file-deletion
@@ -300,7 +243,7 @@ composite_rules:
   for: [html]
   all:
   - id: micro-behaviors/communications/url/scheme::hcp-uplddrvinfo-file-query
-  - id: micro-behaviors/fs/path/system::windows-system32
+  - id: micro-behaviors/fs/path/system/runtime::windows-system32
 
 - id: wsh-copy-then-delete-as-txt
   desc: Copies a file to txt then deletes it
@@ -308,6 +251,9 @@ composite_rules:
   conf: 0.94
   platforms: [windows]
   for: [vbs, javascript, text, static-lib]
+  # The delete must follow the copy in the same routine; a script that also
+  # cleans up its own temp files elsewhere is not destroying the original.
+  near_lines: 12
   all:
   - id: wsh-copyfile-txt-suffix
   - id: micro-behaviors/fs/delete/file/library::wsh-deletefile-call
@@ -340,14 +286,10 @@ composite_rules:
   - id: kamikaze-wiper-ref
   - id: mount-host-filesystem
   unless:
-  # `Bash(rm -rf /*)` in a coding-agent permission ruleset is the command the
-  # harness refuses, not one it runs. unix-root-rm-binary-string cannot require
-  # a shell-command boundary the way unix-root-rm-glob does, because a binary's
-  # string table has no separators, so suppress on the ruleset context instead.
-  - id: metadata/file/policy/identity::agent-tool-permission-ruleset
-  - id: micro-behaviors/process/create/shell/guard/
-  - id: well-known/app/ai/coding-agent/
+  # Recognized deny-rule and security-tool contexts can explain quoted commands.
+  # An unrelated settings path and tool wildcard do not prove denial.
   - id: well-known/tool/detection/pattern-catalog::dangerous-command-exec-gateway
+  - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
 - id: obfuscated-home-directory-wiper
   desc: Obfuscated command recursively wipes a user home directory
   crit: hostile
@@ -359,24 +301,10 @@ composite_rules:
   all:
   - id: encoded-rm-binary-path
   - id: shell-variable-recursive-home-delete
-- id: explicit-file-deletion-warning-all
-  desc: Explicit warning of file/data deletion
-  crit: notable
-  conf: 0.95
-  for: [elf, macho, pe, vbs, javascript, powershell, batch]
-  any:
-  - id: micro-behaviors/ui/dialog/error::file-deletion-warning
-  - id: micro-behaviors/ui/dialog/error::file-deletion-warning-js-string
-  - id: micro-behaviors/ui/dialog/error::data-destruction-warning
-  - id: explicit-file-deletion-warning-destroyed
-  - id: explicit-file-deletion-warning-wipe
-  - id: explicit-file-deletion-warning-erase
 - id: punishment-threat-any
   desc: Punishment or threatening message
   crit: notable
   conf: 0.9
-  unless:
-  - id: metadata/signed/platform/
   any:
   - id: punishment-piracy-message
   - id: punishment-deserve-threat-harm
@@ -397,42 +325,34 @@ composite_rules:
   near_bytes: 2048
   for: [elf, macho, pe, vbs, javascript, powershell, batch]
   all:
-  - id: explicit-file-deletion-warning-all
+  - id: micro-behaviors/ui/dialog/error::file-data-deletion-warning-profile
   any:
   - id: micro-behaviors/fs/delete/file/library::delete-files-symbol
   - id: micro-behaviors/fs/delete/file/command::cmd-del-command
   - id: micro-behaviors/fs/delete/file/library::fs-unlink
   - id: micro-behaviors/fs/delete/file/library::fs-unlinkSync
-  - id: micro-behaviors/fs/delete/file/library::fs-rm
-  - id: micro-behaviors/fs/delete/file/library::fs-rmSync
-  - id: micro-behaviors/fs/delete/file/library::node-rm-sync
+  - id: micro-behaviors/fs/delete/path::fs-rm
+  - id: micro-behaviors/fs/delete/path::fs-rmSync
+  - id: metadata/lang/source/naming/function/file::node-rm-sync
   unless:
-  - id: well-known/app/storage/restic/
-  - id: well-known/app/utility/kde-partitionmanager/
-  - id: well-known/app/infrastructure/podman-desktop::pe-product-name
   # Mullvad's signed Electron host ships the uninstall copy that calls
   # fs.unlinkSync next to an explicit "this will delete" warning. The leaf
   # signer is the organisation on the Authenticode cert, not a version string.
-  - id: metadata/signed/leaf::mullvad-vpn-ab
-  - id: metadata/file/policy/identity::agent-tool-permission-ruleset
-  - id: micro-behaviors/process/create/shell/guard/
-  - id: well-known/tool/detection/ai-guardrail/
-  - id: well-known/app/ai/gateway/ccs::ccs-benign-context
-  - id: well-known/app/data/postgresql/
+  - id: metadata/signature/verified/signer::mullvad-vpn-ab
 - id: pe-destructive-file-wiper
   desc: Destructive file wiper trojan
   crit: hostile
   conf: 0.95
   for: [pe]
   all:
-  - id: micro-behaviors/fs/directory/readdir::find-file-walker
+  - id: micro-behaviors/fs/directory/readdir/native::find-file-walker
   - id: micro-behaviors/fs/delete/file/library::deletefile-a
   - id: punishment-threat-any
   any:
-  - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run-key-path"
-  - id: micro-behaviors/fs/file/copy::copyfile-a
+  - id: "micro-behaviors/os/registry/autostart/reference::currentversion-run-key-path"
+  - id: micro-behaviors/fs/file/copy/call::copyfile-a
   - id: micro-behaviors/os/sysinfo/directories::get-system-directory
-  - id: "micro-behaviors/os/registry/keys/path::explorer-shell-folders-regpath"
+  - id: "micro-behaviors/os/registry/explorer/reference::explorer-shell-folders-regpath"
 - id: delphi-padding-file-deleter
   desc: Delphi trojan with padding obfuscation and file deletion
   crit: hostile
@@ -445,14 +365,13 @@ composite_rules:
   all:
   - id: metadata/lang/compiler/managed::borland-rtl-regkey
   - id: micro-behaviors/fs/delete/file/library::deletefile-a
-  - id: metadata/file/padding::paddingxxpadding-filler
+  - id: metadata/binary/layout/padding::paddingxxpadding-filler
   any:
-  - id: micro-behaviors/process/create/exec::create-process-a
-  - id: micro-behaviors/fs/path/application/executable::cmd-exe-image-name
+  - id: metadata/binary/symbols/name/process::create-process-a
+  - id: micro-behaviors/fs/path/application/interpreter::cmd-exe-image-name
   - id: micro-behaviors/mem/alloc/virtual::virtual-alloc
   unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
+  - id: metadata/installer/product/
 # The file-deletion face of a root wipe: an `rm` with a root-path glob. The
 # build-recipe and shell-out rules convict the recipe or the caller; this one
 # states the deletion itself with the recursion marker beside it, whichever
@@ -465,12 +384,6 @@ composite_rules:
   crit: hostile
   conf: 0.96
   for: [shell]
-  unless:
-    # Shell-script linters and their fixtures state the wipe as the pattern
-    # under test; a unit-test harness or test-directory path is detector
-    # content, not an execution path.
-    - id: metadata/package/testing/harness/unit/
-    - id: metadata/path::test-directory-component
   all:
   - id: unix-root-rm-glob
   - id: micro-behaviors/fs/delete/directory::recursive-root
@@ -480,7 +393,7 @@ composite_rules:
   conf: 0.95
   for: [text]
   unless:
-  - id: metadata/package/testing/corpus::labeled-shell-risk-command-data
+  - id: metadata/package/testing/corpus/labeled::labeled-shell-risk-command-data
   all:
   - id: objectives/impact/destroy/shell-out::quoted-root-delete-request
-  - id: micro-behaviors/fs/delete/directory::no-preserve-root
+  - id: metadata/lang/source/syntax/command/options::no-preserve-root

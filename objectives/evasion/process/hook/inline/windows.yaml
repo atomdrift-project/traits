@@ -1,20 +1,55 @@
 defaults:
   platforms:
-  - windows
+    - windows
   for:
-  - pe
-  - dll
+    - pe
+    - dll
   attack: T1055
+traits:
+  - id: x86-stack-hotpatch-prologue-self-write
+    desc: Builds 5-byte Win32 hotpatch prologue on stack
+    crit: suspicious
+    conf: 0.97
+    arch: [x86]
+    attack: T1562.001,T1055
+    if:
+      type: hex
+      section: text
+      pattern: 'C6 (45 ?? | 85 ?? ?? ?? ??) 8B (80 4D ?? | 80 8D ?? ?? ?? ?? | C6 45 ?? | C6 85 ?? ?? ?? ??) FF C6 (45 ?? | 85 ?? ?? ?? ??) 55 C6 (45 ?? | 85 ?? ?? ?? ??) 8B C6 (45 ?? | 85 ?? ?? ?? ??) EC [0-16] 6A 05 [0-16] 6A FF FF (55 ?? | 95 ?? ?? ?? ??)'
+
 composite_rules:
-- id: unsigned-windows-inline-jump-hook
-  desc: Unsigned Windows binary installs an inline jump patch
-  crit: hostile
-  conf: 0.98
-  all:
-  - id: micro-behaviors/mem/protect/modify::x64-inline-jump-patch-capability
-  - id: metadata/signed/trust-level::unsigned-missing-signature-record
-  unless:
-  - id: metadata/signed/platform/
-  - id: metadata/binary/installer/family/
-  - id: well-known/lib
-  - id: well-known/app/utility/locale-injection/
+  - id: peb-resolved-hotpatch-prologue-unhook
+    desc: PEB-resolved loader restores 5-byte Win32 API prologue
+    crit: hostile
+    conf: 0.99
+    arch: [x86]
+    attack: T1562.001,T1055
+    all:
+      - id: x86-stack-hotpatch-prologue-self-write
+      - id: micro-behaviors/process/info/query::peb-access-x86
+      - id: micro-behaviors/data/encoding/xor/unspecified-key::x86-indexed-xor-complement-byte-stores
+      - id: objectives/anti-static/pack/manual-map::return-skipping-opaque-dll-entry-loader
+
+  - id: unsigned-windows-inline-jump-hook
+    desc: Unsigned Windows binary installs an inline jump patch
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/mem/write/arbitrary::x64-inline-jump-patch-capability
+      - id: metadata/signature/absent::unsigned-missing-signature-record
+    unless:
+      - id: metadata/installer/product/
+      - id: well-known/app/utility/locale-injection/
+      # WinForms skinning hooks user32 drawing to theme standard controls.
+      - id: well-known/lib/ui/skinsoft-visualstyler::skinsoft-api-hook-library
+
+  - id: node-addon-detours-api-hooking
+    desc: Node native addon bundles Microsoft Detours for inline API hooking
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: well-known/lib/platform/microsoft-detours::detours-section-marker
+    any:
+      - id: metadata/binary/symbols/imports::node-api-symbol-table-families
+      - id: metadata/binary/symbols/exports::node-api-addon-export
+

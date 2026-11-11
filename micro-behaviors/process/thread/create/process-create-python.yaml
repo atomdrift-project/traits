@@ -1,0 +1,147 @@
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  crit: notable
+traits:
+  - id: python-thread-create
+    desc: Creates a thread in Python
+    conf: 0.65
+    if:
+      type: text
+      substr: '.Thread('
+    unless:
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+  - id: python-daemon-thread
+    desc: Creates a daemon thread in Python
+    crit: notable
+    conf: 0.8
+    # Match executable calls, including multiline arguments, not commented code.
+    if:
+      type: tree-sitter
+      query: |
+        ((call
+          function: (_) @constructor
+          arguments: (argument_list
+            (keyword_argument name: (identifier) @flag value: (true)))) @thread
+          (#match? @constructor "(^|\\.)Thread$")
+          (#eq? @flag "daemon"))
+  - id: python-thread-daemon-assignment
+    desc: Sets Python thread daemon flag after creation
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      substr: '.daemon = True'
+  - id: python-nondaemon-thread-explicit
+    desc: Creates an explicitly non-daemon Python thread
+    crit: notable
+    conf: 0.8
+    # `daemon=False` is Python's default, so spelling it out is a deliberate
+    # statement that the worker must keep the process alive until it finishes
+    # -- the opposite of the fire-and-forget `daemon=True` above.
+    if:
+      type: text
+      regex: '\bThread\s*\([^\n]{0,220}?daemon\s*=\s*False'
+
+  - id: python-thread-target-os-system
+    desc: Thread target is os.system
+    crit: notable
+    conf: 0.84
+    if:
+      type: text
+      regex: 'threading\.Thread\([^)\n]{0,180}target\s*=\s*os\.system'
+  - id: python-thread-target-subprocess
+    desc: Thread target is subprocess
+    crit: notable
+    conf: 0.84
+    if:
+      type: text
+      regex: 'threading\.Thread\([^)\n]{0,180}target\s*=\s*subprocess\.(Popen|run|call)'
+  - id: python-thread-target-discord
+    desc: Thread target references Discord
+    crit: notable
+    conf: 0.84
+    # A background thread handed a Discord-named entry point (a bot or agent
+    # starter) is how install-time payloads keep a chat-commanded agent alive
+    # after the installer exits. Legitimate Discord bots thread their runners
+    # too, so this stays a neutral capability; intent comes from the
+    # composites that reference it.
+    if:
+      type: text
+      regex: '\bThread\s*\([^)]{0,200}target\s*=\s*[\w.]*discord[\w.]*'
+      case_insensitive: true
+  - id: python-column0-thread-start
+    desc: Module starts a thread at import
+    crit: notable
+    conf: 0.88
+    if:
+      type: text
+      regex: '(?m)^[A-Za-z_]\w*\.start\(\)\s*$'
+  # A daemon thread started as a direct module statement, not inside a function.
+  - id: python-module-daemon-thread-start
+    desc: Module statement starts a daemon thread
+    crit: notable
+    conf: 0.9
+    if:
+      type: tree-sitter
+      language: python
+      query: |
+        (module
+          (expression_statement
+            (call
+              function: (attribute
+                object: (call
+                  function: (_) @constructor
+                  arguments: (argument_list
+                    (keyword_argument
+                      name: (identifier) @flag
+                      value: (true))))
+                attribute: (identifier) @start)
+              arguments: (argument_list)))
+          (#match? @constructor "(^|\\.)Thread$")
+          (#eq? @flag "daemon")
+          (#eq? @start "start"))
+
+  - id: python-thread-target-exec
+    desc: Thread target is the exec builtin
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      regex: 'target\s*=\s*exec\b'
+
+  - id: python-thread-target-eager-call
+    desc: Thread target expression calls a helper
+    crit: notable
+    conf: 0.94
+    if:
+      type: tree-sitter
+      language: python
+      # Named Python arguments are opaque expressions in the symbol view.
+      # Require the target value itself to be a call, excluding lambdas.
+      query: |
+        ((call
+          function: (_) @constructor
+          arguments: (argument_list
+            (keyword_argument
+              name: (identifier) @target
+              value: (call)))) @thread
+          (#match? @constructor "(^|\\.)Thread$")
+          (#eq? @target "target"))
+
+composite_rules:
+  - id: python-module-scope-daemon-thread
+    desc: Module scope starts a daemon thread
+    crit: notable
+    conf: 0.9
+    any:
+      - id: python-module-daemon-thread-start
+      - id: python-module-try-starts-daemon-thread
+      - id: python-column0-thread-start
+  - id: python-thread-exec-target
+    desc: Thread configuration names execution target
+    crit: notable
+    conf: 0.86
+    any:
+      - id: python-thread-target-os-system
+      - id: python-thread-target-subprocess

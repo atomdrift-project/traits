@@ -4,9 +4,12 @@ defaults:
   attack: T1195.002,T1059.006
 
 composite_rules:
-  # Module-level Popen of sys.executable with discarded output is also the whole
-  # body of a restart or launcher script run from a command line (kill the old
-  # daemon, start a fresh one), and a shebang cannot reliably mark such a script.
+  # Popen of sys.executable with discarded output at the module top level
+  # fires when the module is imported (or run as a conventional script: the
+  # whole body of a restart/launcher script is module-level code, and a
+  # shebang cannot reliably mark such a script). A method-level Popen is not
+  # import-time execution — daemon helpers that detach on demand keep the
+  # neutral detached-child finding instead.
   # Windowless launching is separately recorded as a neutral subprocess capability;
   # this shape alone is a silent relaunch worth reviewing.
   - id: python-import-time-interpreter-relaunch
@@ -15,15 +18,15 @@ composite_rules:
     conf: 0.97
     near_lines: 6
     all:
-      - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
-      - id: micro-behaviors/process/create/subprocess::popen-ast
+      - id: micro-behaviors/process/create/subprocess/launch::python-module-level-popen
+      - id: micro-behaviors/process/create/subprocess/launch::popen-ast
       - id: micro-behaviors/process/fd/stdio::python-subprocess-near-devnull-stdio-assignment
     any:
-      - id: micro-behaviors/process/argument/option::python-module-launch-argv
-      - id: micro-behaviors/process/create/subprocess::sys-executable-popen
+      - id: metadata/lang/source/syntax/argument::python-module-launch-argv
+      - id: micro-behaviors/process/interpreter/python::sys-executable-popen
     unless:
-      - id: metadata/package/testing/
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
+      - id: metadata/package/testing/harness/unit::rust-test-attr
       - id: micro-behaviors/os/package-manager/dependency-probe::pypi-json-api-url
   # Import-time `__init__.py` that detaches a silent `python -c` child is a
   # common PyPI supply-chain escape from dependency probes and sandboxes.
@@ -35,11 +38,12 @@ composite_rules:
     scope: leaf
     all:
       - id: metadata/file/size::init-py-file
-      - id: micro-behaviors/process/create/subprocess::qualified-popen-call
+      - id: micro-behaviors/process/create/subprocess/launch::popen-ast
+      - id: micro-behaviors/process/deploy/interpreter-command::sys-executable-c-subprocess
       - id: micro-behaviors/process/daemonize/detach::python-subprocess-new-session-option
-      - id: micro-behaviors/process/fd/stdio::python-subprocess-near-devnull-text
+      - id: micro-behaviors/process/fd/stdio::python-subprocess-near-devnull-stdio-assignment
     unless:
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
   - id: pypi-init-vault-session-probe
     desc: Package import searches vault sessions and spawns helper
     crit: hostile
@@ -49,6 +53,24 @@ composite_rules:
     all:
       - id: metadata/file/size::init-py-file
       - id: micro-behaviors/fs/path/token::python-vault-session-glob
-      - id: micro-behaviors/process/create/subprocess::qualified-popen-call
+      - id: micro-behaviors/process/create/subprocess/launch::popen-ast
     unless:
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
+
+  # A wheel that copies a bundled, independently functional HTTP command agent
+  # to the user's Desktop during import is staging a disguised payload even if
+  # the copied source has a harmless .txt suffix and is not run immediately.
+  - id: python-wheel-import-drops-text-command-agent
+    desc: Wheel import drops a bundled HTTP command agent as text
+    crit: hostile
+    conf: 0.99
+    attack: T1195.002,T1059.006,T1071.001,T1219
+    scope: archive
+    for: [whl, python-sdist, python, text]
+    all:
+      - id: objectives/command-and-control/backdoor/control/file-manager::python-http-polled-file-manager-shell-agent
+      - id: micro-behaviors/data/control-flow/module-exec::module-level-side-effect-call
+      - id: micro-behaviors/fs/file/copy/source-destination::shutil-copy
+      - id: micro-behaviors/fs/path/user-directory::home-config-documents-reference
+    unless:
+      - id: metadata/path/directory::test-directory-component

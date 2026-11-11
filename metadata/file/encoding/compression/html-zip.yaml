@@ -1,0 +1,82 @@
+defaults:
+  for: [html, javascript]
+  platforms: [windows, unix]
+  crit: notable
+  conf: 0.97
+traits:
+  - id: base64-zip-string-assignment
+    desc: Assigned Base64 string starts with ZIP magic
+    if:
+      type: text
+      regex: '\b(var|let|const)\s+\w+\s*=\s*["'']UEsDB[A-Za-z0-9+/=]{50,}'
+  # A ZIP carried inline as a data: URI (iframe/anchor src) rather than as a
+  # script variable; the browser materialises it without a network fetch.
+  - id: data-uri-zip-archive
+    desc: ZIP archive inlined as Base64 data URI
+    if:
+      type: text
+      regex: '(?i)data:application/(x-)?zip(-compressed)?;base64,UEsDB'
+  # Base64 ZIP carried in markup element content (such as a hidden div, p,
+  # or textarea), read via innerHTML or DOM methods to reconstruct a payload.
+  - id: base64-zip-element-content
+    desc: HTML element body contains Base64 ZIP archive
+    for: [html]
+    if:
+      type: text
+      regex: '>[ \t\r\n]*UEsDB[A-Za-z0-9+/=]{100,}'
+      exclude_html_comments: true
+  # Base64 of a ZIP local header whose general-purpose flag has bit 0 set
+  # (encrypted entry). Chars 4-7 encode 04 plus a version-needed below 0x40
+  # with a zero high byte ("B[A-D]?A"); char 9 carries the low two flag
+  # bits, so an odd flag yields Q-f or w-/.
+  - id: base64-zip-encrypted-entry
+    desc: Base64 ZIP header flags an encrypted entry
+    if:
+      type: text
+      regex: 'UEsDB[A-D][A-Za-z0-9+/]A[A-Za-z0-9+/][Q-Zabcdefw-z0-9+/]'
+  # ".exe" in the first local-header filename, at any of the three Base64
+  # alignments (LmV4Z / 5leG? / uZXhl); the name starts 40 chars in and is
+  # bounded by the 255-byte limit plus header.
+  - id: base64-zip-vbs-entry
+    desc: Base64 ZIP names a VBS entry
+    if:
+      type: text
+      regex: 'UEsDB[A-Za-z0-9+/]{20,200}LnZic'
+  - id: base64-zip-hta-entry
+    desc: Base64 ZIP names an HTA entry
+    if:
+      type: text
+      regex: 'UEsDB[A-Za-z0-9+/]{20,380}?(Lmh0Y|5odGE|uaHRh|LkhUQ|5IVEE|uSFRB)'
+  - id: base64-zip-javascript-name-clues
+    desc: Base64 ZIP near encoded .js suffix
+    if:
+      type: text
+      # A literal can be split into adjacent variables before concatenation;
+      # this records proximity rather than asserting a decoded ZIP entry.
+      regex: 'UEsDB[A-Za-z0-9+/]{20,380}[\s\S]{0,160}(Lmpz|5qc[w-z0-9+/]|uanM)={0,2}["'']'
+  - id: base64-zip-exe-entry
+    desc: Base64 ZIP's first entry is an .exe
+    if:
+      type: text
+      regex: 'UEsDB[A-Za-z0-9+/]{35,380}?(LmV4Z|5leG[U-X]|uZXhl)'
+  # Encoded suffix for a .lnk entry at the three Base64 alignments.
+  - id: base64-lnk-filename-fragment
+    desc: Base64 text contains a .lnk filename suffix
+    crit: component
+    if:
+      type: text
+      regex: '(Lmxua|5sbm[s-v]|mbG5r)'
+composite_rules:
+  - id: base64-zip-inline-archive
+    desc: Base64 ZIP archive embedded inline
+    any:
+      - id: base64-zip-string-assignment
+      - id: base64-zip-element-content
+      - id: data-uri-zip-archive
+  - id: base64-zip-lnk-entry
+    desc: Base64 ZIP and encoded .lnk filename occur together
+    crit: notable
+    all:
+      - id: base64-zip-inline-archive
+      - id: base64-lnk-filename-fragment
+    near_bytes: 8192

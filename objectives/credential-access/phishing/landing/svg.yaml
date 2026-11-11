@@ -16,16 +16,6 @@ composite_rules:
       - id: micro-behaviors/communications/http/post::svg-fetch-post-request
     near_bytes: 2200
 
-  - id: svg-obfuscated-external-redirector
-    desc: SVG hides script logic and redirects the browser externally
-    conf: 0.98
-    attack: T1027,T1189,T1566.002
-    all:
-      - id: metadata/file/format/markup::inline-svg-script-body
-      - id: micro-behaviors/data/encode/hex::svg-hex-escaped-member-call
-      - id: micro-behaviors/communications/http/url/navigation::svg-location-external-assignment
-    near_bytes: 2200
-
   # Voicemail-lure campaigns (INKY-reported, June-August 2026) concealed the
   # loader behind deferred execution: the inline script sleeps briefly, then
   # injects a <script> element pointing at a remote endpoint. Each leg alone
@@ -55,26 +45,29 @@ composite_rules:
     any:
       - id: micro-behaviors/data/encode/hex::svg-hex-escaped-string-array
       - id: micro-behaviors/data/encode/hex::svg-hex-escaped-member-call
-      - id: micro-behaviors/data/decode/base64::base64-decode-call-text
-      - id: micro-behaviors/data/decode/custom::fromcharcode-apply-array
-      - id: micro-behaviors/data/decode/custom::fromcharcode-indexed-array
+      - id: micro-behaviors/data/decode/base64/unspecified::base64-decode-call-text
+      - id: micro-behaviors/data/decode/char-code::fromcharcode-apply-array
+      - id: micro-behaviors/data/decode/char-code::fromcharcode-indexed-array
     near_bytes: 2200
 
-  # The redirect variant: the destination URL is assembled at runtime and
-  # assigned from a variable, so the literal-URL redirector above cannot see
-  # it. The reconstruction evidence plus the computed navigation write is the
-  # campaign's "fetched a remote endpoint" leg.
-  - id: svg-reconstructed-external-redirect
-    desc: SVG redirects browser to runtime-reconstructed URL
-    conf: 0.96
-    attack: T1027,T1189,T1566.002
+  # The fully encrypted variant: both the next-stage URL and the loader
+  # itself are hex ciphertext decrypted at runtime by a stream-cipher loop
+  # (parseInt/substring/fromCharCode), then executed through a hex-concealed
+  # Function constructor (`["\x63...\x72"]["\x63...\x72"](u,d)(c)`), which
+  # injects a remote script element (createElementNS/setAttribute href/
+  # append). No plaintext API, URL, or DOM call survives in the outer bytes,
+  # so the src/navigation legs above cannot see it. The encrypted blobs plus
+  # the concealed constructor invocation plus the charcode rebuild is the
+  # campaign's "decrypts and runs a hidden loader" leg. Manual decode of the
+  # reference specimen yields a remote `<script href>` injection; the rule
+  # claims the decrypt-and-execute loader, not the decoded URL.
+  - id: svg-encrypted-stage-function-execution
+    desc: SVG decrypts hex stages and executes them via Function
+    conf: 0.97
+    attack: T1027,T1059.007,T1566.002
     all:
       - id: metadata/file/format/markup::inline-svg-script-body
-      - id: micro-behaviors/communications/http/url/navigation::svg-location-variable-assignment
-    any:
-      - id: micro-behaviors/data/encode/hex::svg-hex-escaped-string-array
+      - id: micro-behaviors/data/encode/hex::svg-long-hex-string-literal
+      - id: objectives/execution/interpreter/eval/dynamic::svg-hex-encoded-constructor-property
       - id: micro-behaviors/data/encode/hex::svg-hex-escaped-member-call
-      - id: micro-behaviors/data/decode/base64::base64-decode-call-text
-      - id: micro-behaviors/data/decode/custom::fromcharcode-apply-array
-      - id: micro-behaviors/data/decode/custom::fromcharcode-indexed-array
     near_bytes: 2200

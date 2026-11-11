@@ -5,7 +5,84 @@ defaults:
   for: [javascript, typescript, chrome-manifest, crx, xpi, zip]
   attack: T1185,T1566
 
+traits:
+  - id: referral-cookie-write
+    desc: Writes referral cookies for redirects
+    crit: suspicious
+    conf: 0.97
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?i)setCookie\s*\(\s*["''](a|utm_term|affiliate|referral|partner)["'']'
+
+  - id: trading-order-controls-clicked-by-extension
+    desc: Clicks trading order buttons
+    crit: suspicious
+    conf: 0.96
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?is)\.btn-(put|call)[\s\S]{0,120}\.click\s*\('
+
 composite_rules:
+  - id: delayed-storage-latched-page-redirect
+    desc: Delayed storage-gated page redirect
+    crit: suspicious
+    conf: 0.97
+    for: [javascript, typescript]
+    near_bytes: 2200
+    all:
+      - id: micro-behaviors/time/schedule/timeout::setTimeout
+      - id: micro-behaviors/data/db/read/key-value::extension-local-sync-get-text
+      - id: micro-behaviors/data/db/write::extension-local-sync-set-text
+      - id: micro-behaviors/ui/window/navigation/location::remote-page-location-assignment
+  - id: all-sites-delayed-shortener-redirect
+    desc: Extension delays then forcibly redirects pages through a shortener
+    crit: hostile
+    conf: 0.99
+    attack: T1176,T1185,T1566
+    scope: archive
+    all:
+      - id: delayed-storage-latched-page-redirect
+      - id: micro-behaviors/ui/window/navigation/location::navigation-near-shortener-reference
+      - id: metadata/permission/host::broad-content-script-matches
+
+  - id: extension-shortener-referral-cookie-hijack
+    desc: Extension routes all-site browsing through a referral shortener
+    crit: hostile
+    conf: 0.99
+    attack: T1176,T1185,T1497
+    scope: archive
+    all:
+      - id: micro-behaviors/ui/window/navigation/location::navigation-near-shortener-reference
+      - id: referral-cookie-write
+      - id: metadata/permission/host::broad-content-script-matches
+
+  - id: extension-trading-order-automation
+    desc: Extension automates trading orders on matched pages
+    crit: suspicious
+    conf: 0.96
+    attack: T1176,T1491
+    scope: archive
+    all:
+      - id: trading-order-controls-clicked-by-extension
+      - id: metadata/package/description/vertical::description-trading
+
+  - id: extension-install-and-removal-promo-tracking
+    desc: Extension opens tracked promotional pages on install and removal
+    crit: suspicious
+    conf: 0.92
+    attack: T1176
+    scope: archive
+    for: [crx, xpi, zip, javascript, json, chrome-manifest]
+    all:
+      - id: micro-behaviors/browser-extension/lifecycle::chrome-runtime-on-installed
+      - id: micro-behaviors/browser-extension/lifecycle::runtime-set-uninstall-url
+      - id: micro-behaviors/browser-extension/tabs::chrome-tabs-create-with-url-option
+    any:
+      - id: objectives/supply-chain/hidden-payload/extensions/affiliate::extension-affiliate-tracking-parameter
+      - id: micro-behaviors/communications/url/query/tracking::install-removal-utm-promo-url
+
   # Rewriting the host of a *top-level navigation* through declarativeNetRequest
   # means the user can type or click one domain and be served by another, with
   # no redirect step visible in the address bar and no code running in the page.
@@ -23,3 +100,43 @@ composite_rules:
     all:
       - id: metadata/permission/network::dnr-host-rewrite-transform
       - id: metadata/permission/network::dnr-main-frame-condition
+
+  - id: wim-code-free-search-and-suggest-takeover
+    desc: Code-free WIM search and suggest endpoint override
+    crit: hostile
+    conf: 0.98
+    attack: T1176
+    for: [crx, xpi, zip, json, chrome-manifest]
+    scope: archive
+    all:
+      - id: metadata/permission/activation::search-only-code-free-manifest
+      - id: micro-behaviors/communications/http/url/api-path/route::wim-gotohub-uninstall-endpoint
+      - id: micro-behaviors/communications/http/url/api-path/route::wim-v1-sug-endpoint
+
+  - id: builtin-pdf-shortcut-lure-code-free-search-override
+    desc: Built-in PDF shortcut lure with code-free search override
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1036.005
+    for: [crx, xpi, zip, json, chrome-manifest]
+    scope: archive
+    all:
+      - id: metadata/permission/activation::search-only-code-free-manifest
+      - id: metadata/package/description/vertical::description-builtin-shortcut-pdf-editor
+      - id: metadata/permission/manifest::extension-custom-search-endpoint
+
+  # The popup teaches keyword-scoped use ("type spotify into your address bar
+  # followed by a song") while the manifest silently makes the provider the
+  # default for every query. The UI describes an opt-in shortcut; the
+  # manifest takes all address-bar searches.
+  - id: keyword-search-lure-masks-default-takeover
+    desc: Keyword search instructions mask default takeover
+    crit: hostile
+    conf: 0.94
+    attack: T1176,T1036
+    for: [crx, xpi, zip, json, chrome-manifest, html]
+    scope: archive
+    all:
+      - id: metadata/permission/manifest::extension-default-search-provider
+      - id: metadata/permission/manifest::extension-custom-search-endpoint
+      - id: micro-behaviors/browser-extension/action::address-bar-keyword-usage-instruction

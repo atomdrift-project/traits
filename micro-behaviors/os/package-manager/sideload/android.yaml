@@ -23,6 +23,22 @@ traits:
     if:
       type: text
       substr: "application/vnd.android.package-archive"
+  # The call site itself types an Intent as an APK, which is how a viewer
+  # intent becomes a package-installer prompt. It does not prove the file's
+  # origin or that installation occurred.
+  - id: intent-apk-mime-type-call
+    desc: Intent call site typed as APK
+    platforms: [android]
+    for: [dex, java]
+    conf: 0.95
+    attack: "T1631"
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|;->)set(DataAndType|Type)$'
+      arg:
+        kind: string
+        exact: "application/vnd.android.package-archive"
   - id: package-installer-service-class
     desc: Android package installer service class
     crit: notable
@@ -160,7 +176,7 @@ composite_rules:
     for: [source, binaries]
     any:
       - id: android-source-pm-apk-reinstall-auto-grant
-      - id: micro-behaviors/communications/socket/tcp::adb-shell-apk-reinstall-auto-grant
+      - id: micro-behaviors/os/package-manager/sideload::adb-shell-apk-reinstall-auto-grant
 
   - id: android-apk-installer-attribution
     desc: Install command sets installer attribution
@@ -169,7 +185,7 @@ composite_rules:
     for: [source, binaries]
     any:
       - id: android-source-pm-installer-attribution
-      - id: micro-behaviors/communications/socket/tcp::adb-shell-apk-installer-attribution
+      - id: micro-behaviors/os/package-manager/sideload::adb-shell-apk-installer-attribution
 
   # Actually driving the installer, as opposed to declaring the permission that
   # allows it. Named once so persistence objectives can require the behaviour:
@@ -212,20 +228,17 @@ composite_rules:
     all:
       - id: android-programmatic-apk-install
       - id: android-package-installer-no-user-action
-  - id: android-install-permission-boot-foreground
-    for: [android_apk, dex, zip, xml]
-    desc: Manifest declares install, boot-receiver and foreground-service capabilities
-    # These declarations describe separate app capabilities; they do not show
-    # that an install is launched at boot or that the foreground service stages it.
+
+  # Co-located call sites, not proven data flow: a file stream is written and
+  # an Intent typed as an APK is launched in the same code region.
+  - id: written-file-apk-install-prompt
+    desc: Writes a file near an APK install prompt
     crit: notable
-    conf: 0.95
-    attack: "T1631, T1624.001"
-    # REQUEST_INSTALL_PACKAGES, RECEIVE_BOOT_COMPLETED, and FOREGROUND_SERVICE
-    # are three ordinary permission declarations (self-update, notification
-    # restore, a download service). The boot *action* is what registers a
-    # receiver; the permission alone does not.
+    conf: 0.93
+    attack: "T1631"
+    platforms: [android]
+    for: [dex]
+    near_bytes: 640
     all:
-      - id: metadata/permission/management::android-install-packages-permission-reference
-      - id: metadata/permission/activation::android-boot-completed-permission-reference
-      - id: micro-behaviors/os/message/intent::android-boot-completed-reference
-      - id: metadata/permission/activation::android-foreground-service-permission-reference
+      - id: intent-apk-mime-type-call
+      - id: micro-behaviors/fs/file/open/write::dex-file-output-write-call

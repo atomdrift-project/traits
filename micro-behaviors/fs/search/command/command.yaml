@@ -1,0 +1,147 @@
+defaults:
+  platforms: [linux, macos]
+  for: [applescript, shell, javascript, typescript]
+  crit: component
+traits:
+- id: locate-token
+  crit: notable
+  desc: "Text contains the locate word"
+  for: [shell, applescript]
+  if:
+    type: text
+    word: locate
+    case_insensitive: true
+- id: grep-keyword
+  desc: Contains the grep command keyword
+  conf: 0.7
+  if:
+    type: text
+    word: grep
+# `find / -type f` is a whole-filesystem sweep. It is the recon step of an
+# install-hook harvester, but it is equally a Docker build or an admin cleanup
+# script, so the trait is the neutral capability and the intent comes from the
+# composites that reference it (e.g. supply-chain recon + database clients).
+- id: find-from-filesystem-root
+  desc: Sweeps every file from the filesystem root
+  crit: notable
+  conf: 0.94
+  for: [scripts, source]
+  platforms: [unix]
+  if:
+    type: text
+    # Options such as `-maxdepth 5` may legitimately appear between the root
+    # operand and the file-type predicate.
+    regex: 'find\s+/\s+[^;\r\n]{0,160}-type\s+f'
+  not:
+    # Permission-bit enumeration (SUID/SGID audits) is a separate capability.
+    - regex: '-perm\s'
+- id: find-setuid-files
+  desc: Searches the filesystem for setuid files
+  crit: notable
+  conf: 0.95
+  for: [scripts, source]
+  platforms: [unix]
+  if:
+    type: text
+    regex: '(?i)\bfind\s+/[^\n]{0,120}\s-perm\s-4000\b'
+- id: js-env-file-finder-helper
+  desc: JavaScript dotenv finder helper
+  for: [javascript, typescript]
+  platforms: [unix, windows]
+  if:
+    type: text
+    regex: "find.{0,10}[Ee]nv.{0,10}[Ff]ile"
+- id: windows-where-powershell-command
+  desc: Windows where searches for PowerShell
+  crit: notable
+  conf: 0.9
+  for: [batch, powershell]
+  platforms: [windows]
+  if:
+    type: text
+    regex: '(?im)^\s*where\s+powershell(\.exe)?\b'
+- id: recursive-secret-key-grep
+  desc: Recursively greps files for secret keys
+  crit: notable
+  conf: 0.9
+  for: [shell, python, javascript, go, ruby, perl]
+  platforms: [unix]
+  if:
+    type: text
+    regex: 'grep\s+-[A-Za-z]{0,4}r[A-Za-z]{0,4}\s+[''"][^''"]{0,48}(assword|ecret|Seed)'
+  unless:
+  - id: well-known/app/utility/cmdchamp/
+- id: shell-recursive-root-grep
+  desc: Recursively greps the filesystem root
+  crit: notable
+  conf: 0.9
+  for: [shell, package.json]
+  platforms: [unix]
+  if:
+    # The search target is what makes this a sweep: a recursive grep rooted
+    # at `/` reads every file on the host. The pattern it hunts for is a
+    # separate atom; harvest composites pair the two.
+    type: text
+    regex: 'grep\s+-[A-Za-z]*r[A-Za-z]*\s+\S+\s+/( |$|;)'
+# Relocated from objectives/discovery/host/application/endpoint
+# (grep-token-secret / grep-password-credential): a grep whose pattern names a
+# credential keyword. MariaDB's columnstore_review.sh greps its own
+# storagemanager.cnf for aws_secret_access_key -- reading a known config key,
+# which is why this is a capability; the endpoint-recon composite adds intent.
+- id: grep-token-or-secret-keyword
+  desc: grep pattern names token or secret
+  crit: notable
+  conf: 0.8
+  for: [shell]
+  platforms: [unix]
+  attack: T1552
+  if:
+    type: text
+    regex: '\bgrep\b.{0,30}(token|secret|apikey)'
+# `grep "^eyJh"` filters for the base64 JWT header (`{"a...`). Nothing
+# legitimate greps for that prefix except token tooling; paired with an
+# exfil channel it is a JWT harvest sweep.
+- id: eyjh-header-grep
+  desc: Greps for eyJh-prefixed JWT header strings
+  crit: notable
+  conf: 0.93
+  for: [shell, package.json]
+  platforms: [unix]
+  attack: T1552
+  if:
+    type: text
+    regex: 'grep\s+[^\n;]{0,60}[''"]\^eyJh'
+- id: grep-password-or-credential-keyword
+  desc: grep pattern names a password or credential
+  crit: notable
+  conf: 0.8
+  for: [shell]
+  platforms: [unix]
+  attack: T1552
+  if:
+    type: text
+    regex: '\bgrep\b.{0,30}(password|credential)'
+# Windows twin of the grep keyword sweep above: a case-insensitive findstr
+# for password-like keywords across files. Auditors do run these; the
+# credential-theft composites supply exfiltration context.
+- id: findstr-password-keyword-sweep
+  desc: findstr filters files for password keyword
+  crit: notable
+  conf: 0.9
+  for: [scripts, source]
+  platforms: [windows]
+  attack: T1552
+  if:
+    type: text
+    regex: '(?i)\bfindstr\s+/i\s+\\?".{0,60}password.{0,60}"'
+composite_rules:
+- id: js-env-file-search
+  desc: JavaScript enumerates dotenv configuration files
+  crit: notable
+  conf: 0.88
+  for: [javascript, typescript]
+  platforms: [unix, windows]
+  near_bytes: 500
+  all:
+  - id: js-env-file-finder-helper
+  - id: micro-behaviors/fs/path/config/environment::env-file-path

@@ -5,7 +5,7 @@
 #   pdf-launch-exec      — /Launch fires an OS command (always hostile)
 #   pdf-openaction-js    — document auto-executes JavaScript on open
 #   pdf-js-shellcode     — JS with shellcode deobfuscation idioms
-#   pdf-known-cve-js     — specific CVE exploit API calls present
+#   pdf-js-acrobat-api-reference     — JavaScript action and Acrobat API reference
 #   pdf-obfuscated-js    — JS action combined with stream-level evasion
 #   pdf-autoopen-exploit — full chain: auto-open + JS + shellcode pattern
 #   pdf-form-exfil       — auto-triggered form submission to remote URL
@@ -16,7 +16,53 @@
 defaults:
   platforms: [linux, macos, windows, unix, android, ios]
   for: [pdf]
+traits:
+  # CVE-2024-4367 abuses an injected PDF font matrix as JavaScript source.
+  - id: pdf-font-matrix-javascript-injection
+    desc: PDF font matrix object present
+    crit: notable
+    conf: 0.96
+    platforms: [linux, macos, windows]
+    if:
+      type: raw
+      regex: '/FontMatrix\s*\['
+  - id: pdf-script-reads-document-domain
+    desc: PDF script reads document origin
+    crit: notable
+    conf: 0.94
+    platforms: [linux, macos, windows]
+    if:
+      type: text
+      substr: document.domain
+  - id: pdf-font-matrix-credential-endpoint
+    desc: PDF font script fetches credential endpoint
+    crit: notable
+    conf: 0.96
+    platforms: [linux, macos, windows]
+    if:
+      type: raw
+      regex: 'fetch\s*\(\s*["\x27]/[^"\x27]{0,100}(token|api[-_]?key|credential)'
+  - id: pdf-font-matrix-exposes-response
+    desc: PDF font script exposes fetched response
+    crit: notable
+    conf: 0.95
+    platforms: [linux, macos, windows]
+    if:
+      type: raw
+      regex: '\.text\s*\(\)[\s\S]{0,100}(slice\s*\(|textContent|innerHTML)'
 composite_rules:
+  - id: pdf-font-matrix-same-origin-credential-theft
+    desc: PDF font injection steals credential
+    crit: hostile
+    conf: 0.98
+    platforms: [linux, macos, windows]
+    attack: T1059.007,T1555
+    mbc: B0037
+    all:
+      - id: pdf-font-matrix-javascript-injection
+      - id: pdf-script-reads-document-domain
+      - id: pdf-font-matrix-credential-endpoint
+      - id: pdf-font-matrix-exposes-response
   # /S /Launch is the PDF action for executing an external program.
   # There is no legitimate reason for an end-user PDF to include this.
   # Exploit kits use it to shell out to cmd.exe, powershell, or curl.
@@ -50,9 +96,6 @@ composite_rules:
       - id: metadata/document/pdf/action::js-action
       - id: metadata/document/pdf/structure::pdf-names-javascript
       - id: metadata/document/pdf/structure::pdf-js-export-data-object
-    unless:
-      - id: well-known/lib/format/pdfium::source-tree
-      - id: well-known/lib/format/pdfjs::source-tree
   # JavaScript action combined with shellcode deobfuscation idioms.
   # eval(unescape(...)), String.fromCharCode, Unicode %u, or heap spray
   # are the canonical patterns for hiding shellcode in PDF JS content.
@@ -65,18 +108,18 @@ composite_rules:
     all:
       - id: metadata/document/pdf/action::js-action
       - id: objectives/execution/interpreter/eval/document::pdf-js-shellcode-pattern
-  # Known CVE exploit API calls — these specific JS APIs were abused in
-  # documented Adobe Reader/Acrobat vulnerabilities. Their presence in a
-  # PDF is near-certain evidence of a weaponized document.
-  - id: pdf-known-cve-js
-    desc: PDF contains known CVE JavaScript exploit pattern
-    crit: hostile
+  # These API names also appear in ordinary Acrobat scripts. A JS action and
+  # one API reference do not establish a vulnerable version or exploit payload.
+  - id: pdf-js-acrobat-api-reference
+    desc: PDF JavaScript action with Acrobat API reference
+    crit: notable
     conf: 0.97
     attack: "T1059.007"
-    mbc: "B0037"
     all:
+      - id: metadata/document/pdf/script::pdf-acrobat-api-reference
+    any:
       - id: metadata/document/pdf/action::js-action
-      - id: micro-behaviors/process/interpreter/document-api::pdf-known-cve
+      - id: metadata/document/pdf/action::pdf-action-javascript
   # JavaScript action with stream obfuscation — the attacker layers encoding
   # (multi-filter, hex-encoded names, ASCIIHex) to evade signature-based AV
   # while still delivering executable JavaScript.
@@ -150,11 +193,11 @@ composite_rules:
     attack: "T1566.002"
     all:
       - id: metadata/document/pdf/action::pdf-action-uri
-      - id: micro-behaviors/communications/http/url/navigation::pdf-http-external-ip-uri
+      - id: micro-behaviors/communications/url/navigation-http::pdf-http-external-ip-uri
     any:
       - id: metadata/document/pdf/action::uri-action
       - id: metadata/document/pdf/action::uri-ip-target
-      - id: micro-behaviors/communications/http/url/navigation::pdf-external-http-navigation
+      - id: micro-behaviors/communications/url/navigation-http::pdf-external-http-navigation
   - id: pdf-single-page-ip-php-lure
     desc: Single-page PDF IP link to index.php
     crit: hostile
@@ -163,8 +206,8 @@ composite_rules:
     all:
       - id: pdf-uri-ip-phishing
       - id: metadata/document/pdf/structure::pdf-single-page
-      - id: micro-behaviors/communications/http/url/navigation::pdf-uri-index-php
-      - id: micro-behaviors/communications/http/url/navigation::pdf-external-http-navigation
+      - id: micro-behaviors/communications/url/navigation-http::pdf-uri-index-php
+      - id: micro-behaviors/communications/url/navigation-http::pdf-external-http-navigation
   # Helper: any shellcode deobfuscation idiom in PDF JS.
   - id: pdf-js-shellcode-pattern
     desc: PDF JavaScript shellcode deobfuscation idiom
@@ -176,5 +219,5 @@ composite_rules:
       - id: metadata/document/pdf/script::js-unescape
       - id: metadata/document/pdf/script::js-decode-uri
       - id: metadata/document/pdf/script::js-fromcharcode
-      - id: objectives/execution/exploit/shellcode::js-unicode-shellcode
-      - id: objectives/execution/exploit/shellcode::js-heap-spray
+      - id: objectives/execution/exploit/shellcode/browser::js-unicode-shellcode
+      - id: objectives/execution/exploit/shellcode/browser::js-heap-spray

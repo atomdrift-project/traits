@@ -1,0 +1,71 @@
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+traits:
+  # Facts expose each assignment, but not the identity relationship across
+  # these three writes. A text co-occurrence also accepts different arrays.
+  - id: js-indexed-element-swap
+    size_max: 131072
+    desc: Swaps indexed elements using a temporary
+    crit: notable
+    conf: 0.98
+    if:
+      type: tree-sitter
+      language: javascript
+      query: |
+        ((statement_block
+          [(expression_statement (assignment_expression
+            left: (identifier) @tmp
+            right: (subscript_expression object: (identifier) @a
+              index: (identifier) @i)))
+           (lexical_declaration (variable_declarator name: (identifier) @tmp
+            value: (subscript_expression object: (identifier) @a
+              index: (identifier) @i)))
+           (variable_declaration (variable_declarator name: (identifier) @tmp
+            value: (subscript_expression object: (identifier) @a
+              index: (identifier) @i)))] @evidence
+          .
+          (expression_statement (assignment_expression
+            left: (subscript_expression object: (identifier) @b index: (identifier) @i2)
+            right: (subscript_expression object: (identifier) @c index: (identifier) @j)))
+          .
+          (expression_statement (assignment_expression
+            left: (subscript_expression object: (identifier) @d index: (identifier) @j2)
+            right: (identifier) @tmp2)))
+          (#eq? @a @b) (#eq? @a @c) (#eq? @a @d)
+          (#eq? @i @i2) (#eq? @j @j2) (#eq? @tmp @tmp2)
+          (#set! cleave.ignore-comments "true"))
+  # Compiled obfuscator output packs the same three writes into one comma
+  # expression inside a loop header: `n=a[s=r%e],a[s]=a[i],a[i]=n`. The
+  # regex cannot prove that the three writes share one array and index.
+  - id: seq-swap-first-write
+    desc: First comma-sequence indexed read with temp
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '[\w$]+\s*=\s*[\w$]+\[[^\[\]]{1,24}\]'
+  - id: seq-swap-pair
+    desc: Comma-sequence indexed swap pair with restore
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      regex: '[\w$]+\[[\w$]+\]\s*=\s*[\w$]+\[[\w$]+\],\s*[\w$]+\[[\w$]+\]\s*=\s*[\w$]+'
+composite_rules:
+  - id: js-sequence-indexed-element-swap
+    desc: Comma-sequence swap of indexed elements
+    crit: notable
+    conf: 0.9
+    near_bytes: 80
+    all:
+      - id: seq-swap-first-write
+      - id: seq-swap-pair
+  - id: js-indexed-swap-indications
+    desc: Indexed-swap operation or reassignment prefix
+    crit: component
+    conf: 0.9
+    any:
+      - id: js-indexed-element-swap
+      - id: js-sequence-indexed-element-swap
+      - id: metadata/lang/javascript-features::js-temp-indexed-swap-prefix

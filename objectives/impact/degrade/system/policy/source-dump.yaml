@@ -5,15 +5,17 @@ defaults:
 
 traits:
   - id: source-dump-disable-taskmgr
+    for: [html, text, vbs]
     desc: Source dump disables TaskMgr
     crit: notable
     conf: 0.94
     if:
       type: text
-      word: DisableTaskMgr
+      case_insensitive: true
+      regex: '\bRegWrite\b.{0,160}[\\"]DisableTaskMgr"\s*,\s*("REG_DWORD"\s*,\s*)?"?1\b'
 
   - id: source-dump-no-dispcpl
-    desc: Source dump disables display CPL
+    desc: Source mentions NoDispCPL policy
     crit: notable
     conf: 0.92
     if:
@@ -21,7 +23,7 @@ traits:
       word: NoDispCPL
 
   - id: source-dump-no-control-panel
-    desc: Source dump disables Control Panel
+    desc: Source mentions NoControlPanel policy
     crit: notable
     conf: 0.93
     if:
@@ -29,7 +31,7 @@ traits:
       word: NoControlPanel
 
   - id: source-dump-no-run
-    desc: Source dump disables Run
+    desc: Source mentions NoRun policy
     crit: notable
     conf: 0.92
     if:
@@ -37,7 +39,7 @@ traits:
       word: NoRun
 
   - id: source-dump-no-find
-    desc: Source dump disables Find
+    desc: Source mentions NoFind policy
     crit: notable
     conf: 0.92
     if:
@@ -45,7 +47,7 @@ traits:
       word: NoFind
 
   - id: source-dump-no-desktop
-    desc: Source dump disables desktop
+    desc: Source mentions NoDesktop policy
     crit: notable
     conf: 0.92
     if:
@@ -67,12 +69,12 @@ composite_rules:
     conf: 0.96
     all:
       - id: source-dump-disable-taskmgr
-      - id: "micro-behaviors/os/registry/keys/policy::disable-registry-tools"
+      - id: "objectives/impact/degrade/windows-policy::regwrite-disable-registry-tools"
     any:
       - id: source-dump-no-dispcpl
 
   - id: source-dump-explorer-shell-lockout
-    desc: Source dump locks Explorer
+    desc: Source mentions Explorer restrictions
     crit: suspicious
     conf: 0.96
     all:
@@ -88,7 +90,7 @@ composite_rules:
     conf: 0.95
     all:
       - id: source-dump-copy-system-exe
-      - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run"
+      - id: "micro-behaviors/os/registry/autostart/reference::currentversion-run"
 
   - id: source-dump-windows-policy-lockout
     desc: Source dump policy lockout
@@ -98,7 +100,7 @@ composite_rules:
       - id: source-dump-admin-tool-lockout
       - id: source-dump-explorer-shell-lockout
     any:
-      - id: micro-behaviors/os/registry/keys/policy::systemrestore-disable-value-cooccurrence
+      - id: micro-behaviors/os/registry/policy/reference::systemrestore-disable-value-cooccurrence
       - id: source-dump-runkey-persistence
 
   - id: source-dump-policy-lockout-persistence
@@ -110,20 +112,21 @@ composite_rules:
       - id: source-dump-runkey-persistence
     any:
       - id: source-dump-explorer-shell-lockout
-      - id: micro-behaviors/os/registry/keys/policy::systemrestore-disable-value-cooccurrence
+      - id: micro-behaviors/os/registry/policy/reference::systemrestore-disable-value-cooccurrence
 
-  # Nested lockout roll-ups do not resolve as scan legs. Flatten the
-  # DisableTaskMgr / Run / DisableRegistryTools atoms so a mass-mailer
-  # source dump in an archive still reports as a policy-lockout kit.
+  # A Run-key reference and tool-policy names alone do not establish attack.
+  # Require enabling writes and an independently detected propagation path.
   - id: source-dump-taskmgr-runkey-lockout
-    desc: Source dump locks TaskMgr via Run
+    desc: Propagating code locks tools beside Run key
     crit: hostile
     conf: 0.96
     for: [html, text, 7z, zip, tar]
     all:
       - id: source-dump-disable-taskmgr
-      - id: "micro-behaviors/os/registry/keys/policy::disable-registry-tools"
-      - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run"
+      - id: "objectives/impact/degrade/windows-policy::regwrite-disable-registry-tools"
+      - id: "micro-behaviors/os/registry/autostart/reference::currentversion-run"
+
+      - id: objectives/lateral-movement/usb-worm/drive-infector::autoit-removable-drive-spreader
 
   - id: source-dump-explorer-run-lockout
     desc: Source dump locks Explorer and Run
@@ -135,14 +138,16 @@ composite_rules:
       - id: source-dump-no-run
       - id: source-dump-disable-taskmgr
 
+  # Administrative lockdown can intentionally set both policies. Retain the
+  # operation as suspicious; hostile lockout needs independent attack context.
   - id: source-dump-taskmgr-reg-lock
     desc: Source dump disables TaskMgr and regedit
-    crit: hostile
+    crit: suspicious
     conf: 0.95
-    for: [html, text, 7z, zip, tar]
+    for: [html, text, vbs, 7z, zip, tar]
     all:
       - id: source-dump-disable-taskmgr
-      - id: "micro-behaviors/os/registry/keys/policy::disable-registry-tools"
+      - id: "objectives/impact/degrade/windows-policy::regwrite-disable-registry-tools"
 
   # WScript.Shell.CreateShortcut in a login helper is not a Run-key
   # launch. The Run path and the script host have to sit in the same
@@ -155,7 +160,7 @@ composite_rules:
     for: [text]
     near_lines: 30
     all:
-    - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run"
-    - id: micro-behaviors/os/com/automation::wscript-shell-text
+    - id: "micro-behaviors/os/registry/autostart/reference::currentversion-run"
+    - id: well-known/lib/runtime/scripted/windows-script-host::wscript-shell-text
     unless:
     - id: metadata/file/format/structured::serialized-skill-documentation-catalog

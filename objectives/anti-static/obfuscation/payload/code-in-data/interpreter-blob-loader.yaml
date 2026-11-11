@@ -51,15 +51,18 @@ composite_rules:
     conf: 0.93
     attack: T1027,T1140
     all:
-      - id: micro-behaviors/process/deploy/script-eval::decompressed-script-evaluation
-      - id: micro-behaviors/data/decode/base64::base64-decoding
+      - id: micro-behaviors/process/deploy/script-eval/transformed::decompressed-script-evaluation
+      - id: micro-behaviors/data/decode/base64/unspecified::base64-decoding
     unless:
       # A tool that compresses source code (such as a code packager, runtime UI
       # injector, or installer) generates stagers rather than executing an
       # embedded compressed payload itself.
-      - id: micro-behaviors/data/compress/zlib::zlib-compress-symbol
-      - id: micro-behaviors/data/compress/gzip::gzip-compress-call
+      - id: micro-behaviors/data/compress::zlib-compress-symbol
+      - id: micro-behaviors/data/compress::gzip-compress-call
       - id: embedded-library-unpacking-context
+      # A marshal code object recovered from the compressed blob is the
+      # narrower hostile form; do not also report this suspicious wrapper.
+      - id: objectives/anti-static/pack/runtime::exec-marshal-decompress-blob
 
   # === SUSPICIOUS: import-time compressed-code stub ==========================
   # The compressed-code exec sits at module scope: importing the module runs
@@ -75,12 +78,19 @@ composite_rules:
     for: [python]
     attack: T1027,T1059.006
     all:
-      - id: micro-behaviors/process/deploy/script-eval::decompressed-script-evaluation
-      - id: micro-behaviors/process/interpreter/eval/direct::module-scope-exec-builtin
+      - id: micro-behaviors/process/deploy/script-eval/transformed::decompressed-script-evaluation
+      - id: micro-behaviors/process/interpreter/eval/python-builtins::module-scope-exec-builtin
     unless:
+      # One packed body should not emit two suspicious wrapper findings.
+      # Module-scope execution remains visible as its neutral call fact.
+      - id: decompressed-code-executed
+      - id: objectives/anti-static/pack/runtime::exec-marshal-decompress-blob
+      # Quoted code recognized heuristically in a test or source literal has
+      # no established import/execution edge from its containing program.
+      - id: metadata/lang/source/origin::heuristic-quoted-source
       # The same file compresses the source it quotes. That is a generator
       # writing a pod or subprocess command, not an import of a hidden body.
-      - id: micro-behaviors/data/compress/zlib::zlib-compress-symbol
+      - id: micro-behaviors/data/compress::zlib-compress-symbol
       - id: embedded-library-unpacking-context
 
   - id: embedded-library-unpacking-context

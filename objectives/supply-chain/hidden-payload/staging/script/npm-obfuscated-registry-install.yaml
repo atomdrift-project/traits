@@ -1,0 +1,65 @@
+# A package install hook resolves a hidden registry origin and installs another
+# package from it. The registry is masked in the manifest to evade string scans.
+defaults:
+  platforms: [unix, windows]
+  for: [npm, tar, javascript, json, package.json]
+  attack: T1195.002,T1027,T1105,T1059.007
+
+traits:
+  - id: npm-loop-xor-decode
+    desc: Repeating-key XOR byte decoder
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: text
+      regex: "raw\\[i\\]\\s*\\^\\s*key\\[i\\s*%\\s*key\\.length\\]"
+
+  - id: npm-install-selects-decoded-registry
+    desc: npm install uses a runtime-selected registry URL
+    crit: suspicious
+    conf: 0.92
+    for: [javascript]
+    if:
+      type: text
+      regex: "['\"]install['\"][\\s\\S]{0,400}['\"]--registry['\"][\\s\\S]{0,80}spec\\.registry"
+
+composite_rules:
+  - id: npm-hex-xor-shell-stage
+    desc: Nearby hex decoding, XOR and shell execution
+    crit: suspicious
+    scope: file
+    near_bytes: 2048
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/bitwise/xor-forms/indexed::indexed-xor-array-assignment
+      - id: micro-behaviors/data/decode/hex::buffer-from-hex-call
+      - id: micro-behaviors/process/create/shell/command-string::child-process-exec-call-site
+  - id: npm-prepare-hex-xor-child-process-stage
+    desc: Prepared package includes XOR shell execution
+    crit: suspicious
+    conf: 0.95
+    attack: T1195.002,T1027,T1059.007
+    scope: archive
+    all:
+      - id: metadata/package/scripts/lifecycle::filtered-prepare-hook
+      - id: npm-hex-xor-shell-stage
+  - id: npm-xor-base64-origin-decoder
+    desc: JavaScript decodes an XOR-masked Base64 origin
+    crit: suspicious
+    conf: 0.96
+    scope: file
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/decode/base64/unspecified::buffer-from-base64
+      - id: npm-loop-xor-decode
+
+  - id: npm-postinstall-installs-from-masked-registry
+    desc: npm postinstall fetches a dependency from a masked registry origin
+    crit: hostile
+    conf: 0.99
+    scope: archive
+    all:
+      - id: metadata/package/scripts/entrypoint::postinstall-runs-node-script
+      - id: npm-xor-base64-origin-decoder
+      - id: npm-install-selects-decoded-registry

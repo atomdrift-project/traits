@@ -14,23 +14,6 @@ traits:
       type: text
       regex: '(?is)EtwEventWrite.{0,320}(Marshal\.Copy|VirtualProtect|m_Writer\s*\()'
 
-  - id: etw-event-write-symbol
-    desc: EtwEventWrite symbol reference
-    crit: notable
-    conf: 0.8
-    if:
-      type: symbol
-      exact: EtwEventWrite
-
-  - id: nttraceevent-api-reference
-    desc: NtTraceEvent telemetry API reference
-    crit: notable
-    conf: 0.95
-    for: [pe, dll]
-    if:
-      type: text
-      word: NtTraceEvent
-
   - id: nttraceevent-noop-patch
     desc: x86 NtTraceEvent no-op patch
     crit: suspicious
@@ -53,16 +36,6 @@ traits:
       type: text
       regex: '(?s)LoadLibrary\("ntdll\.dll"\).{0,120}GetProcAddress.{0,50}"EtwEventWrite"'
 
-  - id: native-etw-target-reference
-    desc: Native PE links EtwEventWrite to ntdll.dll
-    crit: notable
-    conf: 0.95
-    for: [pe, dll]
-    if:
-      type: raw
-      regex: '(?is)(ntdll\.dll.{0,320}EtwEventWrite|EtwEventWrite.{0,320}ntdll\.dll)'
-
-
 composite_rules:
   - id: etw-blinding-patch
     for: [pe]
@@ -72,10 +45,8 @@ composite_rules:
     all:
       - id: etw-write-after-api-string
     any:
-      - id: metadata/lang/source/literal::hex-return-zero-byte-sequence
-      - id: etw-event-write-symbol
-    unless:
-      - id: metadata/signed/platform/
+      - id: metadata/lang/source/literal/hex::hex-return-zero-byte-sequence
+      - id: micro-behaviors/os/telemetry/logging/etw::etw-event-write-symbol
 
   - id: csharp-etw-dynamic-memory-patch
     desc: C# dynamically patches EtwEventWrite
@@ -100,9 +71,9 @@ composite_rules:
     for: [csharp]
     all:
       - id: micro-behaviors/os/telemetry/logging/etw::etw-event-write-str
-      - id: metadata/lang/source/literal::hex-return-zero-byte-sequence
-      - id: micro-behaviors/fs/path/library::ntdll-module-name-source
-      - id: micro-behaviors/mem/protect/modify::virtual-protect-pinvoke
+      - id: metadata/lang/source/literal/hex::hex-return-zero-byte-sequence
+      - id: micro-behaviors/fs/path/system/library::ntdll-module-name-source
+      - id: micro-behaviors/mem/protect/modify/api-reference::virtual-protect-pinvoke
       - id: "micro-behaviors/mem/copy::marshal-copy-csharp"
 
   - id: nttraceevent-blinding-patch
@@ -113,10 +84,10 @@ composite_rules:
     mbc: B0030
     for: [pe, dll]
     all:
-      - id: nttraceevent-api-reference
+      - id: micro-behaviors/os/telemetry/logging/etw::nttraceevent-api-reference
       - id: nttraceevent-noop-patch
       - id: micro-behaviors/dylib/lookup::get-proc-address-import
-      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/mem/protect/modify/unspecified::virtual-protect-import
 
   - id: module-enumeration-with-nttraceevent-blinding
     desc: Module enumeration paired with NtTraceEvent telemetry blinding
@@ -137,13 +108,13 @@ composite_rules:
     attack: T1562.006
     all:
       - id: micro-behaviors/os/telemetry/logging/etw::etw-event-write-str
-      - id: native-etw-target-reference
+      - id: micro-behaviors/os/telemetry/logging/etw::native-etw-target-reference
       - id: micro-behaviors/dylib/lookup::get-proc-address-import
-      - id: micro-behaviors/mem/protect/modify::virtual-protect
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/tool/reverse-engineering/
-
+      - id: micro-behaviors/mem/protect/modify/unspecified::virtual-protect-import
+    any:
+      - id: micro-behaviors/mem/write/arbitrary::x64-store-zero-return-stub
+      - id: micro-behaviors/mem/write/arbitrary::x64-write-zero-return
+      - id: micro-behaviors/mem/write/arbitrary::x64-ret-store-between-one-byte-calls
   - id: managed-etw-memory-blinding
     for: [pe]
     desc: Managed PE patches EtwEventWrite in writable memory
@@ -151,14 +122,10 @@ composite_rules:
     conf: 0.99
     attack: T1562.006
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: micro-behaviors/os/telemetry/logging/etw::etw-event-write-str
       - id: micro-behaviors/os/api-resolution/dynamic::get-proc-address-resolved-name
-      - id: micro-behaviors/mem/protect/modify::virtual-protect-text-pe
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/tool/reverse-engineering/
-
+      - id: micro-behaviors/mem/protect/modify/api-reference::virtual-protect-text-pe
   - id: native-source-etw-memory-blinding
     desc: Native source patches EtwEventWrite to blind ETW
     crit: hostile
@@ -168,10 +135,10 @@ composite_rules:
     for: [c, cpp]
     all:
       - id: micro-behaviors/os/telemetry/logging/etw::etw-event-write-call
-      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/mem/protect/modify/unspecified::virtual-protect-import
       - id: micro-behaviors/mem/copy::native-memcpy-byte-copy
     any:
-      - id: metadata/lang/source/literal::hex-return-zero-byte-sequence
+      - id: metadata/lang/source/literal/hex::hex-return-zero-byte-sequence
       - id: etw-write-after-api-string
 
   - id: native-etw-memory-patch
@@ -182,11 +149,8 @@ composite_rules:
     for: [c, cpp]
     all:
       - id: micro-behaviors/os/telemetry/logging/etw::etw-event-write-str
-      - id: micro-behaviors/mem/protect/modify::virtual-protect-source-call
+      - id: micro-behaviors/mem/protect/modify/unspecified::virtual-protect-source-call
       - id: micro-behaviors/mem/copy::native-memcpy-byte-copy
-    unless:
-      - id: well-known/tool/reverse-engineering/
-
   - id: native-nttraceevent-context-blinding-loader
     desc: Native loader blinds NtTraceEvent via thread-context control
     crit: hostile
@@ -198,12 +162,9 @@ composite_rules:
       - id: micro-behaviors/os/exception/error-handling::add-vectored-exception-handler
       - id: micro-behaviors/process/info/thread::get-thread-context-import
       - id: micro-behaviors/process/info/thread::set-thread-context-import
-      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/mem/protect/modify/unspecified::virtual-protect-import
       - id: micro-behaviors/dylib/lookup::get-proc-address-import
     any:
-      - id: nttraceevent-api-reference
+      - id: micro-behaviors/os/telemetry/logging/etw::nttraceevent-api-reference
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/framework/
-      - id: metadata/binary/installer/family/
-      - id: well-known/tool/reverse-engineering/
+      - id: metadata/installer/product/

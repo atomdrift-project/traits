@@ -5,25 +5,6 @@ defaults:
   attack: T1222
   crit: notable
 
-composite_rules:
-  - id: python-path-chmod-stat-iexec
-    desc: Python chmod adds the executable bit
-    crit: notable
-    conf: 0.9
-    for: [python]
-    near_lines: 4
-    all:
-      - id: micro-behaviors/fs/chmod/modify::python-path-chmod
-      - id: python-stat-iexec-member
-  - id: chmod-exec-target
-    desc: chmod marks a target path executable
-    crit: notable
-    conf: 0.9
-    any:
-      - id: chmod-exec-var-target
-      - id: chmod-exec-literal-target
-      - id: chmod-exec-absolute-path
-
 traits:
   - id: chmod-make-executable
     desc: chmod adds executable permissions
@@ -41,6 +22,7 @@ traits:
       regex: 'chmod\s+(\+x|0?7[57][57])(\s|$)'
     unless:
       - id: well-known/tool/detection/security-remediation::compiled-remediation-catalog
+      - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
       - type: basename
         regex: '(?i)^(METADATA|PKG-INFO|README(?:\.[^/\\!]*)?)$'
   - id: composer-chmod-make-executable
@@ -96,13 +78,17 @@ traits:
       type: text
       # Require a command boundary: "or chmod +x the file" is prose.
       # Slashes retain /bin/chmod and /bin/busybox command spellings.
-      regex: '(?m)(^|[;&|"''`(/])\s*(busybox\s+)?chmod\s+(\+x|0?7[57][57])\s+[.\w][\w.-]*'
+      # The target class admits `~` and `/` so home-relative staging paths
+      # (`chmod 755 ~/Movies/Helplog`) match as literal targets; absolute
+      # paths keep their own atom below.
+      regex: '(?m)(^|[;&|"''`(/])\s*(busybox\s+)?chmod\s+(\+x|0?7[57][57])\s+[.\w~][\w./-]*'
     unless:
       - id: well-known/tool/detection/security-remediation::compiled-remediation-catalog
+      - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
       - type: basename
         regex: '(?i)^(METADATA|PKG-INFO|README(?:\.[^/\\!]*)?)$'
   - id: chmod-exec-absolute-path
-    desc: chmod makes an absolute path executable
+    desc: chmod executable absolute-path command text
     crit: notable
     conf: 0.92
     # `scripts`, not `shell`: the command text is identical whether it sits in
@@ -116,6 +102,7 @@ traits:
       regex: '\bchmod\s+(\+x|0?7[57][57])\s+["'']?/[A-Za-z0-9._/-]+'
     unless:
       - id: well-known/tool/detection/security-remediation::compiled-remediation-catalog
+      - id: micro-behaviors/os/security/command-policy::command-policy-implementation-context
       - type: basename
         regex: '(?i)^(METADATA|PKG-INFO|README(?:\.[^/\\!]*)?)$'
   - id: chmod-exec-app-tree-path
@@ -135,62 +122,6 @@ traits:
       - regex: '/opt/(local/)?bin/|/opt/cache/bin/|/opt/(azure|aws|cni|kubectl|helm)/'
     unless:
       - id: well-known/tool/detection/security-remediation::compiled-remediation-catalog
-  - id: chmod-hidden-tmp-executable
-    desc: chmod makes a hidden temporary file executable
-    # A chmod atom is only a capability.  Download/execute composites below
-    # promote it when it is paired with staging or process execution.
-    crit: notable
-    conf: 0.94
-    for: [scripts, source, manifests, -pyproject.toml]
-    if:
-      type: text
-      regex: '\bchmod\s+(\+x|0?7[57][57])\s+["'']?/(var/)?tmp/\.'
-    unless:
-      - id: metadata/build/archive::source-archive-member
-      - id: metadata/build/vcs::vcs-ssh-wrapper-context
-      # JSON image-history fixtures preserve build commands as data; they are
-      # not executable scripts or payloads.
-      - id: metadata/file/format/structured::valid
-  - id: chmod-hidden-shm-executable
-    desc: Marks hidden shared-memory file executable
-    crit: suspicious
-    conf: 0.94
-    for: [shell]
-    if:
-      type: text
-      regex: '\bchmod\s+(\+x|0?7[57][57])\s+["'']?/dev/shm/\.'
-  - id: chmod-hidden-home-executable
-    desc: Marks hidden home path executable
-    crit: notable
-    conf: 0.92
-    for: [shell]
-    if:
-      type: text
-      regex: '\bchmod\s+(\+x|0?7[57][57])\s+["'']?(\$HOME|~)/(\.local/share/)?\.[^\s"'']{0,40}'
-    # Consume the path so not: can see Termux:Boot's ~/.termux/boot/ helper
-    # dir; a `/ \.` span stopped at the first dot and missed the rest.
-    not:
-      - substr: '.termux/boot/'
-      # Coursier's documented bootstrap writes ~/.coursier/coursier.
-      - substr: '.coursier/'
-      # cargo and cargo-dist install the built binary into ~/.cargo/bin.
-      - substr: '/.cargo/bin'
-      # XDG user executables are ordinary install destinations. Keep hidden
-      # basenames such as ~/.local/bin/.stage eligible for stage detection.
-      - regex: '/\.local/bin/[^./][^/]*$'
-      # ~/.bin is also an ordinary user executable install destination.
-      - regex: '/\.bin/[^./][^/]*$'
-      # `~/.local/share` is the XDG data dir, and the same reasoning applies:
-      # installing a file-manager action there is what the freedesktop specs
-      # tell an application to do. PeaZip's two-line integration scripts
-      # (`cp ./KDE6-dolphin/peazip-kde6.desktop ~/.local/share/kio/servicemenus/`
-      # then `chmod +x` it) scored suspicious for it. Every component after
-      # `share/` must be visible, so ~/.local/share/foo/.stage still counts --
-      # which is what the optional `(\.local/share/)?` in the matcher above
-      # was written to preserve.
-      - regex: '/\.local/share/([^./][^/]*/)*[^./][^/]*$'
-    unless:
-      - id: well-known/app/ai/knowledge/animica::rag-documentation-context
   - id: shell-plus-x
     desc: chmod +x (make executable)
     conf: 0.75
@@ -206,30 +137,14 @@ traits:
       - id: metadata/build/docker::buildkit-dockerfile-frontend
       - id: metadata/file/extension/identity::markdown-file-basename
       - id: metadata/build/autotools::autoconf-generated-script
-      - id: metadata/package/testing/harness/runtime/
   - id: shell-plus-x-wildcard
-    # Bare `chmod +x *` makes *every* file in the directory executable — the
-    # dropper pattern for a freshly-unpacked payload set. An extension-scoped
-    # form (`chmod +x *.sh`, `*/*.py`) is ordinary build/install hygiene, so
-    # the trailing `*` must stand alone (followed by whitespace or EOL only).
     desc: chmod +x on unscoped wildcard
-    crit: suspicious
+    crit: notable
     conf: 0.85
     for: [shell]
     if:
       type: text
       regex: 'chmod\s+(\-[a-zA-Z]{1,8}\s+){0,3}\+x\s+\*(\s|[;&|]|$)'
-    unless:
-      - id: micro-behaviors/fs/path/application/bundle::appimage-glob-reference
-      # A conda recipe build.sh operates on the freshly-unpacked upstream
-      # source tree it was handed, so blanket +x there is packaging hygiene
-      # rather than arming a dropped payload set.
-      - id: metadata/build/conda::conda-recipe-build-script
-      # cybench worm droppers arm payloads with `chmod +x *` verbatim.
-      - id: well-known/lib/ai/inspect-evals::eval-corpus-context
-      # A BSD ports Makefile arms the files of the upstream build image it is
-      # packaging; it is a build recipe, not a dropped payload set.
-      - id: metadata/package/files/bsd::bsd-port-makefile-include
   - id: chmod-no-space
     desc: chmod +x glued to target, no space
     crit: suspicious
@@ -262,11 +177,7 @@ traits:
       - regex: '(?i)\b\w*(dir|directory|home|base|root|folder|path)\w*\.chmod\(\s*0o?700'
       - regex: '(?i)os\.chmod\([^,\n]*(dir|directory|home|base|root|folder|path)[^,\n]*,\s*0o?700'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
       - type: text
         substr: 'preserving the unix file mode bits'
     if:
@@ -282,14 +193,7 @@ traits:
       type: text
       regex: '\.chmod\([^\n]{0,220}stat\.S_IXUSR'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-  # Named for the mode, not a language: the regex is plain text and matches
-  # `chmod($path, 0755)` in PHP/C/Perl just as well as Python's `0o755`, so
-  # calling every WordPress cache-file chmod a "Python" call mislabels it.
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
   - id: chmod-0755-mode
     desc: chmod() call with 0755 permission mode
     conf: 0.8
@@ -314,29 +218,6 @@ traits:
     if:
       type: text
       regex: 'chmod\s+(\+x|0?7[0-7][0-7])\s+["'']?/(usr/)?(s)?bin/[A-Za-z0-9._-]{2,80}'
-  - id: chmod-setuid-system-binary
-    desc: SUID chmod system binary
-    # A privileged helper is a real permission-boundary change, but it is also
-    # normal in package-managed monitoring, backup, and device software. Keep
-    # the capability visible without treating the permission bit alone as abuse.
-    crit: notable
-    conf: 0.9
-    platforms: [unix]
-    for: [scripts]
-    if:
-      type: text
-      regex: '\bchmod\s+4[0-7]{3}\s+/(bin|usr/bin|sbin|usr/sbin)/'
-    unless:
-      - id: well-known/app/infrastructure/dokku::dokku-source-tree
-  - id: chmod-setuid-file
-    desc: chmod sets SUID bit
-    crit: notable
-    conf: 0.86
-    platforms: [unix]
-    for: [scripts]
-    if:
-      type: text
-      regex: '\bchmod\s+\+s\s+'
   - id: python-stat-iexec
     desc: Python os.chmod with stat.S_IEXEC
     crit: notable
@@ -393,7 +274,7 @@ traits:
       type: text
       regex: '\bchmod\s+\+x\s+\./[A-Za-z0-9._-]+'
     unless:
-      - id: metadata/file/format/structured::serialized-news-article-catalog
+      - id: metadata/file/format/news::serialized-news-article-catalog
   - id: chmod-exec-tmp-file
     desc: chmod marks /tmp file executable
     crit: notable
@@ -409,7 +290,7 @@ traits:
       type: text
       regex: '\bchmod\s+(\+x|0?7[57][57])\s+/tmp/[A-Za-z0-9._-]+'
     unless:
-      - id: metadata/file/format/structured::serialized-news-article-catalog
+      - id: metadata/file/format/news::serialized-news-article-catalog
   - id: chmod-initd-script-executable
     desc: chmod makes init.d script executable
     crit: notable
@@ -420,7 +301,7 @@ traits:
       type: text
       regex: '\bchmod\s+\+x\s+/etc/init\.d/'
   - id: shell-chmod-0755
-    desc: Shell chmod 0755 command
+    desc: chmod 0755 command text
     for: [shell]
     platforms: [unix]
     if:
@@ -428,9 +309,28 @@ traits:
       substr: "chmod 0755"
 
   - id: shell-owner-executable-numeric-mode
-    desc: Shell chmod sets owner-executable numeric mode
+    desc: chmod owner-executable numeric mode text
     conf: 0.9
     for: [shell]
     if:
       type: text
       regex: '(?m)(^|[;&|]\s*)[ \t]*chmod\s+[0-7]?[1357][0-7]{2}\s+'
+composite_rules:
+  - id: python-path-chmod-stat-iexec
+    desc: Python chmod adds the executable bit
+    crit: notable
+    conf: 0.9
+    for: [python]
+    near_lines: 4
+    all:
+      - id: micro-behaviors/fs/chmod/modify::python-path-chmod
+      - id: python-stat-iexec-member
+  - id: chmod-exec-target
+    desc: chmod marks a target path executable
+    crit: notable
+    conf: 0.9
+    any:
+      - id: chmod-exec-var-target
+      - id: chmod-exec-literal-target
+      - id: chmod-exec-absolute-path
+

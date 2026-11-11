@@ -1,0 +1,105 @@
+defaults:
+  platforms: [unix]
+  for: [shell]
+traits:
+# curl-pipe-install-sh-url relocated to
+# micro-behaviors/os/package-manager/installer-script::curl-install-sh-pipe —
+# fetching a vendor install.sh into a pipe is the documented install idiom.
+- id: printf-wget-pipe-bash-loader
+  desc: printf-built wget pipe bash loader
+  crit: suspicious
+  conf: 0.9
+  attack: T1105
+  # The wget|bash text has to sit on the printf line. A later usage
+  # example is not a command printf assembled.
+  if:
+    type: text
+    regex: 'printf\s+["''][^\n]{0,300}\bwget\b[^\n]{0,180}\|\s*bash\b'
+  unless:
+  # Defensive repository checks often print changed source into grep and keep
+  # the dangerous pipeline only as a regex that causes the check to fail.
+  - type: text
+    substr: hidden-logic self-scan
+- id: random-sleep-fetch-loop
+  desc: randomized sleep fetch loop
+  crit: suspicious
+  conf: 0.88
+  attack: T1027
+  if:
+    type: text
+    regex: 'while\s+true\s*;?\s*do[\s\S]{0,160}sleep\s+\$\(\(\s*RANDOM\s*%[\s\S]{0,260}\bwget\b'
+composite_rules:
+- id: shell-fetch-exec-bash
+  desc: Shell script downloads and executes via pipe to bash
+  crit: suspicious
+  conf: 0.98
+  attack: T1105
+  all:
+  - id: metadata/lang/source/literal/string/command::bash-command-option-text
+  - id: metadata/lang/source/syntax/command/pipeline::pipe-to-shell
+  - id: micro-behaviors/communications/http/download/wget::wget-silent-stdout
+# Quiet curl-to-shell execution alone is also an installer idiom, not proof
+# of hostile delivery. Its structural observation lives at
+# micro-behaviors/process/deploy/interpreter-stdin::curl-response-shell-stdin.
+# The old shell-fetch-exec-curl wrapper added no intent-specific evidence.
+- id: shell-fetch-exec-wget
+  desc: Shell script downloads via wget and executes via pipe
+  crit: suspicious
+  conf: 0.95
+  attack: T1105
+  # wget -O- for a JSON API piped to grep, plus a later curl|sh installer,
+  # is not wget-to-shell. Require the wget stdout and shell pipe on the same
+  # command cluster.
+  near_lines: 4
+  all:
+  - id: micro-behaviors/communications/http/download/wget::wget-silent-stdout
+  - id: metadata/lang/source/syntax/command/pipeline::pipe-to-shell
+  any:
+  - id: metadata/lang/source/literal/string/command::bash-command-option-text
+  - id: micro-behaviors/fs/path/application/interpreter::unix-shell-executable-path
+- id: generated-wget-bash-loop-loader
+  desc: Generated wget bash loop loader
+  crit: hostile
+  conf: 0.97
+  attack: T1105
+  all:
+  - id: printf-wget-pipe-bash-loader
+  - id: random-sleep-fetch-loop
+  - id: micro-behaviors/process/deploy/file-exec/command::world-writable-local-path-exec
+  - id: micro-behaviors/process/create/path-execution::execute-dot-slash-literal
+  - id: micro-behaviors/fs/delete/directory::shell-recursive-delete
+  any:
+  - id: objectives/evasion/indicator-removal/logs::history-c
+  - id: micro-behaviors/process/daemonize/detach::background-ampersand-hidden
+
+# Retired shell-os-gated-pipe-loader and shell-rot13-eval-loader: OS
+# selection, a variable URL and curl-to-shell are ordinary installer mechanics;
+# tr, variable eval and sh -c do not establish a bound decoded-payload chain.
+# Their concrete capabilities remain in micro-behaviors. Neither combination
+# establishes an unwanted execution trigger or a hostile endpoint.
+# package-doc-curl-shell-delivery was removed: its `all:` was the canonical
+# curl-pipe atom AND a second copy of the same matcher, so it restated one
+# observation as a C2/dropper finding on every source tarball whose README
+# documents an installer. Its own comment conceded it established neither
+# execution nor a malicious endpoint. The atom itself now carries that fact at
+# metadata/lang/source/syntax/command/download::curl-pipe-shell-text.
+# A cross-platform stager keeps one remote-script pipeline per OS and picks
+# between them at runtime (runtime.GOOS, sys.platform): `curl … | cmd` for
+# Windows beside `curl … | sh` for Unix. Windows installers ship `irm | iex`
+# or a downloaded package, never a cmd pipe, so the pairing is the dropper.
+- id: per-os-remote-script-pipelines
+  desc: Holds remote-script pipes for Windows and Unix
+  crit: hostile
+  conf: 0.95
+  attack: T1059.003,T1059.004,T1105
+  platforms: [windows, unix]
+  for: [python, javascript, typescript, go, rust, ruby, php, java]
+  # The runtime OS switch picks between the two pipes, so they sit together.
+  # Pooled over a large source file, a command-recognising parser's unit tests
+  # name one pipe in a test and the other in a doc comment thousands of lines away.
+  near_bytes: 1024
+  all:
+  - id: micro-behaviors/process/deploy/interpreter-stdin/network::curl-pipe-cmd-literal
+  # Literal surface where one is parsed; raw text for Ruby (heredocs).
+  - id: metadata/lang/source/syntax/command/download::curl-pipe-shell-text
+

@@ -1,0 +1,112 @@
+# Search-provider and start-page hijacking: rewriting where the user's browser
+# sends them, so that navigation and search traffic is monetized by someone
+# other than the browser vendor. The classic payload of a bundled-installer
+# adware family, and the reason `traffic/` exists in this directory.
+#
+# The discriminator is *breadth*, not the individual write. A browser sets its
+# own home page. A migration utility copies settings between two profiles of
+# the same product. A single binary that reaches into the search settings of
+# two unrelated browser products -- Internet Explorer's SearchScopes and
+# Firefox's prefs.js -- is not configuring anything it owns; there is no
+# legitimate program whose job is to pick the default search engine for every
+# browser installed on the machine.
+#
+# The legs are plain settings references from micro-behaviors/, none of which
+# is suspicious alone; the pairing across products is what carries the intent.
+#
+# A registry-write leg is required on top of the pairing. Without it a tool
+# that merely *reports* which browsers are configured how -- an inventory
+# script, a support-diagnostics dump -- names the same two settings and would
+# otherwise be convicted for reading them.
+#
+# The breadth argument has one honest exception: a browser *engine*. Chromium
+# ships importers for the other products -- `firefox_importer_utils.cc` reads
+# `prefs.js` for `browser.startup.homepage`, `ie_importer_win.cc` reads
+# `Internet Explorer\Main` -- so it holds both halves of the pairing for a
+# feature the user invokes on purpose. `well-known/app/browser/` covered the
+# shipped browser applications but not the engine shipped as a library, so
+# OBS Studio's bundled `libcef.dll` scored hostile on the Chromium importer's
+# own string table. The engine identity is added to `unless:` alongside it.
+defaults:
+  platforms: [windows]
+  for: [scripts, source, binaries, data]
+  attack: T1112
+
+composite_rules:
+  - id: java-macos-remote-pac-proxy-configuration
+    desc: Java references a hidden preference entry and configures a remote PAC proxy
+    crit: hostile
+    conf: 0.98
+    platforms: [macos]
+    for: [java_class]
+    all:
+      - id: micro-behaviors/communications/proxy/system::jvm-configures-auto-proxy-url
+      - id: micro-behaviors/fs/path/personal::java-hidden-path-component
+
+  - id: cross-browser-search-provider-hijack
+    mbc: E1112
+    for: [pe, batch, python, javascript, csharp, powershell, vbs]
+    desc: Rewrites search providers in unrelated browsers
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: "micro-behaviors/os/registry/browser/reference::ie-search-scopes-registry-key"
+      - id: micro-behaviors/data/config/browser-preference::firefox-selected-engine-pref
+    any:
+      - id: micro-behaviors/os/registry/value/write::registry-set-value-api
+      - id: micro-behaviors/os/registry/create::registry-create-key-api
+      - id: micro-behaviors/os/registry/value/write::registry-set-value-source
+      - id: micro-behaviors/os/registry/value/write::reg-exe-add-command
+      - id: micro-behaviors/os/registry/value/write::powershell-registry-property-write
+    unless:
+      - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
+      - id: well-known/app/system/iobit::iobit-signed-component-context
+      - id: well-known/unwanted/amonetize::aminsis-plugin-library-context
+
+  # Homepage strings and generic registry-write APIs are retained as neutral
+  # co-occurrence under micro-behaviors/data/config/browser-preference.
+  # This separate rule concerns Firefox search-plugin configuration.
+  - id: firefox-search-plugin-silent-install
+    for: [source, data, scripts, '!jcl', elf, pe]
+    desc: Installs and selects a Firefox search plugin
+    crit: suspicious
+    conf: 0.94
+    platforms: [windows, unix]
+    all:
+      - id: micro-behaviors/fs/path/application/extensions::firefox-search-plugins-directory
+      - id: micro-behaviors/data/config/browser-preference::firefox-selected-engine-pref
+    unless:
+      - id: well-known/unwanted/amonetize::aminsis-plugin-library-context
+
+  # Internet Explorer search settings hijacking in scripts or documents.
+  # Rewriting IE's default search URL, search bar, search page, or search assistant
+  # redirects user search queries. Corroborated by script obfuscation/encoding or
+  # ActiveX Shell CLSID instantiation.
+  - id: ie-search-settings-hijack
+    mbc: E1112
+    for: [scripts, source, binaries, data, static-lib, html]
+    desc: Rewrites Internet Explorer search settings
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/os/application/config::regwrite-ie-search-settings
+    any:
+      - id: objectives/anti-static/obfuscation/syntax::html-vbscript-encode-payload
+      - id: objectives/anti-static/obfuscation/payload/data-file::jscript-encode-block-delimiters
+      - id: objectives/anti-static/obfuscation/syntax::hta-markup-with-jscript-encode
+      - id: well-known/lib/runtime/scripted/windows-script-host::wsh-shell-clsid
+    unless:
+      - id: well-known/lib/runtime/scripted/electron::electron-chromium-runtime-strong
+      - id: well-known/app/system/iobit::iobit-signed-component-context
+      - id: well-known/unwanted/amonetize::aminsis-plugin-library-context
+
+  # Obfuscated AutoIt script targeting Internet Explorer Start Page.
+  - id: autoit-hex-packed-start-page-hijack
+    mbc: E1112
+    for: [text]
+    desc: AutoIt hex table hijacks IE Start Page
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: micro-behaviors/os/registry/browser/reference::ie-start-page-registry-key
+      - id: objectives/anti-static/obfuscation/encoding/hex::autoit-o-delimited-hex-string-table

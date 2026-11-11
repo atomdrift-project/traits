@@ -46,6 +46,30 @@ traits:
     if:
       type: text
       regex: '_native\.platform_check\s*\('
+  - id: python-relative-private-native-import
+    desc: Imports a relative private native module
+    conf: 0.88
+    if:
+      type: text
+      regex: 'from\s+\.\s+import\s+_(native|core|accel|rust|ext)\b'
+  - id: python-private-native-noarg-hook-call
+    desc: Calls a zero-arg private native hook
+    conf: 0.88
+    if:
+      type: text
+      regex: '\b_(native|core|accel|rust|ext)\.[A-Za-z_]\w{1,32}\(\s*\)'
+  - id: python-private-native-resolved-path-call
+    desc: Passes resolved path to private native call
+    conf: 0.9
+    if:
+      type: text
+      regex: '\b_(native|core|accel|rust|ext)\.\w+\([^)\n]{1,40},\s*str\([^)\n]{1,32}\.resolve\(\)\)\)'
+  - id: python-except-import-attr-pass
+    desc: Swallows ImportError and AttributeError silently
+    conf: 0.88
+    if:
+      type: text
+      regex: 'except\s*\(\s*ImportError\s*,\s*AttributeError[^)\n]{0,32}\)\s*:\s*\r?\n\s+pass\b'
   - id: module-level-bare-call
     desc: Multiple bare function calls at module scope
     conf: 0.8
@@ -57,14 +81,10 @@ traits:
       - regex: '\n(print|logging\.)\w*\('
     count_min: 2
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-
+      - id: metadata/lang/source/syntax/directive::utscapy-campaign
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
   - id: module-level-side-effect-call
-    desc: Calls a function at module load
+    desc: Calls a function at Python module scope
     conf: 0.82
     if:
       type: tree-sitter
@@ -95,17 +115,11 @@ traits:
       - exact: print()
       - regex: '(?i)^print\s*\(\s*["''].*uninstall'
     unless:
+      - id: metadata/lang/source/syntax/directive::utscapy-campaign
       - id: metadata/lang/compiler/generated::pulumi-language-python-generated
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
-      # Non-Python DSL, build, and specification files (.feature, .rbi, .rbs,
-      # .nix, Bazel/Starlark, Ghidra SLEIGH) can be heuristically parsed with
-      # the Python grammar; their top-level forms are not Python import hooks.
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
       - type: basename
         regex: '(?i)(\.(feature|rbi|rbs|nix|bzl|bazel|sinc|slaspec)$|^(BUILD|WORKSPACE)(\.bazel)?$)'
-      # __main__.py is the CLI/module entrypoint; module-scope calls there are
-      # intentional startup, not library import-time side effects.
-      - type: basename
-        exact: __main__.py
       # A unified diff is heuristically classified as Python when its hunks
       # contain Python syntax.  Its added calls are not module-scope calls in
       # the patch file itself, so do not infer import-time execution from it.
@@ -123,8 +137,45 @@ traits:
       - type: text
         regex: '\A[^"''#]{0,240}(^|\n)\s*>>>\s'
 
+  - id: python-import-once-sentinel
+    desc: Python import guarded by a once-only sentinel
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'if\s+not\s+getattr\(\s*sys\s*,\s*[''"''].{1,80}?[''"'']'
+
+  - id: python-class-eager-thread-start
+    desc: Module-level class evaluates Thread target
+    crit: notable
+    conf: 0.94
+    if:
+      type: tree-sitter
+      language: python
+      # Class suites execute when their declaration is reached. Methods and
+      # classes declared inside functions are deferred and must not match.
+      # target=collect() evaluates collect before constructing the thread;
+      # target=collect and target=lambda: collect() do not have that meaning.
+      query: |
+        (module
+          (class_definition
+            body: (block
+              (expression_statement
+                (call
+                  function: (attribute
+                    object: (call
+                      function: (_) @constructor
+                      arguments: (argument_list
+                        (keyword_argument
+                          name: (identifier) @target
+                          value: (call))))
+                    attribute: (identifier) @start))))) @initializer
+          (#match? @constructor "(^|\\.)Thread$")
+          (#eq? @target "target")
+          (#eq? @start "start"))
+
   - id: guarded-module-level-side-effect-call
-    desc: Import-time call under a platform guard
+    desc: Platform-guarded module-level call
     conf: 0.8
     # The same import-time execution as `module-level-side-effect-call`, one
     # level deeper. A payload that only wants to run on one operating system
@@ -173,6 +224,23 @@ traits:
       type: text
       regex: '(?m)^try:\s*\r?\n\s{1,8}[A-Za-z_][\w.]{0,60}\(\)\s*\r?\n^except'
 
+  - id: try-block-module-call
+    desc: Module-scope try block calls a function
+    conf: 0.8
+    if:
+      type: tree-sitter
+      language: python
+      # Covers argument-bearing calls the single-line text form above misses,
+      # e.g. urlopen(req, timeout=20).read() wrapped in try/except at import.
+      query: |
+        (module
+          (try_statement
+            body: (block
+              (expression_statement
+                (call
+                  function: (_) @callee) @call)))
+          (#not-match? @callee "(^|\\.)setup$"))
+
   - id: python-module-level-call-assignment
     desc: Module scope assigns a call result
     crit: baseline
@@ -187,6 +255,9 @@ traits:
     if:
       type: text
       regex: '(?m)^while True:'
+    unless:
+      - id: metadata/lang/source/syntax/directive::utscapy-campaign
+
   - id: python-column0-noarg-call-assignment
     desc: Module assigns a no-arg call
     crit: notable
@@ -195,14 +266,9 @@ traits:
       type: text
       regex: '(?m)^[A-Za-z_]\w*\s*=\s*[A-Za-z_]\w*\(\)\s*$'
     unless:
+      - id: metadata/lang/source/syntax/directive::utscapy-campaign
       - type: text
         regex: '(?m)^_FORMATTER\s*=\s*CurrencyFormatter\(\)\s*$'
-  - id: python-json-loads-remote-fetch-decode
-    desc: json.loads on urllib response decode
-    conf: 0.9
-    if:
-      type: text
-      regex: json\.loads\(\s*\w+\([^)]{0,80}\)\.decode\(
   - id: python-http-remote-cmd-suffix-poll
     desc: Remote HTTP cmd task suffix path
     conf: 0.9
@@ -219,6 +285,24 @@ composite_rules:
       - id: python-bootstrap-relative-import
       - id: python-bootstrap-native-loader-call
 
+  - id: python-silent-relative-native-hook-call
+    desc: Silently imports and calls native hook
+    conf: 0.92
+    near_lines: 6
+    all:
+      - id: python-relative-private-native-import
+      - id: python-private-native-noarg-hook-call
+      - id: python-except-import-attr-pass
+
+  - id: python-silent-native-cache-path-forward
+    desc: Silently forwards data to native module
+    conf: 0.92
+    near_lines: 6
+    all:
+      - id: python-relative-private-native-import
+      - id: python-private-native-resolved-path-call
+      - id: python-except-import-attr-pass
+
   - id: module-level-execution
     desc: Code runs when the module is imported
     conf: 0.85
@@ -229,3 +313,4 @@ composite_rules:
       - id: module-level-side-effect-call
       - id: guarded-module-level-side-effect-call
       - id: try-wrapped-module-call
+      - id: try-block-module-call

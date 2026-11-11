@@ -63,14 +63,14 @@ traits:
     regex: '(?i)^wsock32\.dll$'
   downgrade:
     any:
-    - id: metadata/binary/vendor::is-microsoft-named
+    - id: metadata/filename/name-form::is-microsoft-named
 - id: wsa-socket
-  desc: Create a Winsock socket with WSASocketW
+  desc: Create a Winsock socket with WSASocket
   crit: notable
   conf: 0.9
   if:
     type: symbol
-    exact: WSASocketW
+    regex: '^WSASocket[AW]$'
 - id: wsa-connect
   desc: Winsock outbound WSAConnect import
   crit: notable
@@ -150,31 +150,50 @@ traits:
   if:
     type: symbol
     exact: freeaddrinfo
+# MSVC's ws2_32.lib imports WSAStartup/WSACleanup by ordinal. cleave resolves
+# those ordinals to names, so no "ORDINAL 115" record survives; the PE import
+# table keyed to WS2_32.dll still identifies the by-ordinal form.
+- id: winsock-startup-ordinal
+  desc: Initialize Winsock via ordinal import
+  crit: notable
+  conf: 0.86
+  if:
+    type: yara
+    source: |
+      import "pe"
+      rule winsock_startup_ordinal {
+        strings:
+          $library = "WS2_32.dll" ascii nocase
+        condition:
+          $library and
+          pe.imports("WS2_32.dll", 115)
+      }
+- id: winsock-cleanup-ordinal
+  desc: Cleanup Winsock via ordinal import
+  crit: baseline
+  conf: 0.84
+  if:
+    type: yara
+    source: |
+      import "pe"
+      rule winsock_cleanup_ordinal {
+        strings:
+          $library = "WS2_32.dll" ascii nocase
+        condition:
+          $library and
+          pe.imports("WS2_32.dll", 116)
+      }
 composite_rules:
 - id: winsock-client-ordinal-imports
   desc: Winsock client ordinal imports
   crit: notable
   conf: 0.86
   all:
-  - id: micro-behaviors/fs/path/library::ws2-32-dll-marker
+  - id: micro-behaviors/fs/path/system/library::ws2-32-dll-marker
   # The four-of-nine threshold now lives with the ordinals themselves.
   - id: metadata/binary/symbols/imports::four-low-ordinal-imports
   unless:
   - id: metadata/binary/symbols/count::many-imports-40
-- id: winsock-startup-ordinal
-  desc: Initialize Winsock library
-  crit: notable
-  conf: 0.86
-  all:
-  - id: micro-behaviors/fs/path/library::ws2-32-dll-marker
-  - id: metadata/binary/symbols/imports::ordinal-import-115
-- id: winsock-cleanup-ordinal
-  desc: Cleanup Winsock library
-  crit: baseline
-  conf: 0.84
-  all:
-  - id: micro-behaviors/fs/path/library::ws2-32-dll-marker
-  - id: metadata/binary/symbols/imports::ordinal-import-116
 - id: winsock-legacy-client-lifecycle
   desc: Legacy Winsock client lifecycle
   crit: notable
@@ -182,7 +201,7 @@ composite_rules:
   all:
   - id: wsock32-dll-marker
   any:
-  - id: micro-behaviors/communications/socket/connect::winsock-client-symbol-lifecycle
+  - id: micro-behaviors/communications/socket/connect/attempt::winsock-client-symbol-lifecycle
   - id: winsock-client-ordinal-imports
 - id: winsock-server-symbol-lifecycle
   desc: Winsock server listener API imports
@@ -195,13 +214,13 @@ composite_rules:
   any:
   - id: accept-api
   - id: micro-behaviors/communications/socket/receive::recv-api
-  - id: micro-behaviors/communications/socket/send::send-api
+  - id: micro-behaviors/communications/socket/send/reference::send-api
 - id: winsock-dual-role-lifecycle
   desc: Winsock client and server API references
   crit: notable
   conf: 0.94
   all:
-  - id: micro-behaviors/communications/socket/connect::winsock-client-lifecycle
+  - id: micro-behaviors/communications/socket/connect/attempt::winsock-client-lifecycle
   - id: winsock-server-symbol-lifecycle
   any:
   - id: select-api
@@ -215,6 +234,6 @@ composite_rules:
   - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
   any:
   - id: micro-behaviors/communications/ip/resolve::resolve-getaddrinfo-import
-  - id: micro-behaviors/process/create/thread::create-thread
+  - id: micro-behaviors/process/thread/create::create-thread
   - id: select-api
   needs: 2

@@ -26,15 +26,6 @@ traits:
     regex: 'SELECT\s+quote\(encrypted_value\)\s+FROM\s+cookies'
   unless:
   - id: well-known/app/ai/gateway/kimi-chat-opencode::kimi-chat-opencode-context
-- id: firefox-cookie-sql
-  desc: Firefox moz_cookies table SQL query
-  crit: suspicious
-  conf: 0.8
-  attack: T1555.003
-  if:
-    type: text
-    regex: SELECT.{0,30}host_key.{0,30}encrypted_value.{0,30}FROM\s+moz_cookies
-    case_insensitive: true
 - id: slash-encoded-password-value-field
   desc: Slash-encoded Chromium password database field
   crit: suspicious
@@ -85,15 +76,6 @@ traits:
   if:
     type: text
     word: extractChromiumCookies
-- id: cng-ncrypt-decrypt
-  desc: Windows CNG NCryptDecrypt call
-  crit: suspicious
-  conf: 0.9
-  for: [python]
-  platforms: [windows]
-  if:
-    type: symbol
-    exact: ncrypt.NCryptDecrypt
 - id: suspicious-browser-launch-flags
   desc: Headless no-sandbox browser launch flags
   crit: suspicious
@@ -160,33 +142,6 @@ traits:
   if:
     type: text
     regex: '(?i)DecryptChromiumV(10|20)Secret'
-- id: native-browser-session-token-log
-  # A bare "Session Token:" label is also used by unrelated GUI/network
-  # clients.  Keep it as a review clue; browser credential theft requires the
-  # stronger extraction/decryption markers below.
-  desc: Generic session-token log marker
-  crit: notable
-  conf: 0.8
-  attack: T1555.003
-  for: [pe, dll]
-  platforms: [windows]
-  if:
-    type: text
-    regex: '(?i)(failed\s+to\s+set\s+)?(Session|Sync)\s+Token:'
-  not:
-  - substr: 'failed to set session token:'
-- id: native-browser-process-discovery-log
-  desc: Native browser process discovery log
-  crit: notable
-  conf: 0.96
-  attack: T1555.003
-  for: [pe, dll]
-  platforms: [windows]
-  if:
-    type: text
-    regex: '(?i:Found\s+[^\r\n]{0,24}Running\s+Browser\s+Processes)|Detected\s+Browser:'
-  unless:
-  - id: well-known/app/ai/coding-agent/anthropic-claude-code::native-windows-package-context
 composite_rules:
 - id: native-browser-key-extraction
   desc: Native browser key extraction
@@ -201,7 +156,7 @@ composite_rules:
   - id: native-browser-key-record-send-log
 - id: browser-credential-store-decryption-api-set
   desc: Chromium stores and CNG decrypt APIs co-occur
-  crit: suspicious
+  crit: notable
   conf: 0.97
   attack: T1555.003
   for: [pe, dll]
@@ -209,11 +164,7 @@ composite_rules:
   all:
   - id: micro-behaviors/fs/path/password-store::login-data-string
   - id: micro-behaviors/fs/path/personal::chromium-web-data-file
-  - id: micro-behaviors/crypto/library/cryptoapi::bcrypt-gcm-decrypt-api-set
-  unless:
-  - id: well-known/tool/browser
-  - id: well-known/app/browser/ungoogled-chromium/
-  - id: well-known/app/browser/microsoft-edge/
+  - id: micro-behaviors/crypto/decrypt/transform/symmetric::bcrypt-gcm-decrypt-api-set
 - id: chromium-master-key-dpapi-symbols
   desc: DPAPI-decrypts Chromium master key
   crit: suspicious
@@ -226,23 +177,9 @@ composite_rules:
   any:
   - id: chromium-master-key-dpapi-symbols--getchromiummasterkey
   - id: chromium-master-key-dpapi-symbols--decryptchromiumpassword
-  - id: micro-behaviors/data/db/access::chromium-login-sql
+  - id: micro-behaviors/data/db/read/column::chromium-login-sql
   - id: chromium-password-extractor-symbol
   - id: chromium-cookie-extractor-symbol
-- id: arc-path
-  desc: Arc profile path with credential-store context
-  crit: suspicious
-  conf: 0.7
-  attack: T1555.003
-  all:
-  - id: micro-behaviors/fs/path/application/browser::arc-profile-path
-  any:
-  - id: micro-behaviors/fs/path/password-store::login-data-string
-  - id: micro-behaviors/data/db/sql::chromium-cookie-select-query
-  - id: micro-behaviors/data/config/schema::encrypted-key-field-reference
-  - id: micro-behaviors/data/config/browser-preference::chromium-os-crypt-reference
-  unless:
-  - id: well-known/lib/development/browser-cookie3/
 - id: shell-cookie-theft
   desc: Chrome cookie theft via shell
   crit: suspicious
@@ -251,11 +188,11 @@ composite_rules:
   for:
   - shell
   all:
-  - id: micro-behaviors/fs/path/application/browser::chrome-path
-  - id: micro-behaviors/data/db/sql::chromium-cookie-select-query
+  - id: micro-behaviors/fs/path/application/browser/storage::chrome-path
+  - id: micro-behaviors/data/db/read/column::chromium-cookie-select-query
   any:
-  - id: micro-behaviors/process/create/local-exec::cp-execute
-  - id: micro-behaviors/communications/http/curl::curl-command-url-or-option
+  - id: micro-behaviors/fs/file/copy/command::cp-execute
+  - id: micro-behaviors/communications/http/curl/command::curl-command-url-or-option
   - id: micro-behaviors/fs/attributes/xattr::xattr-remove
 - id: powershell-chromium-cookie-decryption
   desc: PowerShell decrypts Chromium cookies from the browser database
@@ -265,10 +202,22 @@ composite_rules:
   platforms: [windows]
   attack: T1555.003
   all:
-  - id: micro-behaviors/data/db/sql::powershell-cookie-table-select
+  - id: micro-behaviors/data/db/read/records::powershell-cookie-table-select
   - id: micro-behaviors/data/config/browser-preference::chromium-encrypted-key-metadata
   - id: micro-behaviors/os/security/dpapi::dotnet-protected-data-unprotect
-  - id: micro-behaviors/crypto/symmetric/aes/script::powershell-aes-gcm-decrypt
+  - id: micro-behaviors/crypto/symmetric/aes/mode::powershell-aes-gcm-object-or-decrypt
+- id: powershell-chromium-masterkey-dpapi-theft
+  desc: PowerShell steals browser DPAPI master key
+  crit: hostile
+  conf: 0.98
+  for: [powershell]
+  platforms: [windows]
+  attack: T1555.003
+  all:
+  - id: micro-behaviors/fs/path/application/browser/profile::local-state
+  - id: micro-behaviors/os/security/dpapi::dotnet-protected-data-unprotect
+  - id: micro-behaviors/data/config/schema::encrypted-key-field-common-formats
+  - id: micro-behaviors/fs/path/application/browser/profile::browser-localappdata-userdata-root
 - id: chromium-go-credential-extractor
   desc: Go Chromium credential extraction code
   crit: hostile
@@ -281,39 +230,7 @@ composite_rules:
   any:
   - id: chromium-password-extractor-symbol
   - id: chromium-cookie-extractor-symbol
-  - id: micro-behaviors/data/db/access::chromium-login-sql
-- id: credential-access-signals
-  desc: Credential access signals for browser stealer
-  crit: component
-  conf: 0.9
-  any:
-  - id: micro-behaviors/data/db/access::chromium-login-sql
-  - id: micro-behaviors/data/db/sql::chromium-cookie-select-query
-  - id: micro-behaviors/communications/http/cookie-store::chromium-cookie-query-with-browser-path
-  - id: micro-behaviors/data/config/browser-preference::chromium-encrypted-key-metadata
-- id: multi-browser
-  desc: Multiple Chromium browser data paths
-  crit: suspicious
-  conf: 0.95
-  attack: T1555.003
-  all:
-  - id: credential-access-signals
-  needs: 3
-  any:
-  - id: micro-behaviors/fs/path/application/browser::chrome-path
-  - id: micro-behaviors/fs/path/application/browser::brave-path
-  - id: micro-behaviors/fs/path/application/browser::edge-path
-  - id: micro-behaviors/fs/path/application/browser::opera-path
-  - id: micro-behaviors/fs/path/application/browser::operagx-path
-  - id: micro-behaviors/fs/path/application/browser::vivaldi-path
-  - id: arc-path
-  - id: micro-behaviors/fs/path/application/browser::yandex-path
-  downgrade:
-    any:
-    - id: metadata/binary/layout/size::massive-executable
-  unless:
-  - id: well-known/tool/browser/
-  - id: well-known/app/utility/installer::idman-installer
+  - id: micro-behaviors/data/db/read/column::chromium-login-sql
 - id: browser-injection-suspended
   desc: Browser injection with suspended process and library targeting
   crit: hostile
@@ -321,7 +238,7 @@ composite_rules:
   attack: T1055.003
   all:
   - id: micro-behaviors/fs/path/library::chromium-main-library-name
-  - id: micro-behaviors/process/create/flags::create-suspended-flag-reference
+  - id: micro-behaviors/process/config/launch::create-suspended-flag-reference
   - id: micro-behaviors/process/thread/lifecycle::resume-thread
 - id: browser-stealer-exfil-chain
   desc: Browser stealer credential theft and exfiltration chain
@@ -343,21 +260,19 @@ composite_rules:
   # importers, and profile migration utilities can perform the same query.
   # Decryption or exfiltration composites supply the hostile intent.
   all:
-  - id: micro-behaviors/fs/path/application/browser::chrome-user-data
-  - id: micro-behaviors/data/db/sql::browser-record-table-select
+  - id: micro-behaviors/fs/path/application/browser/profile::chrome-user-data
+  - id: micro-behaviors/data/db/read/records::browser-record-table-select
   any:
   - id: micro-behaviors/fs/path/password-store::login-data
   - id: micro-behaviors/fs/path/cookie::browser-cookies-file-path
   unless:
-  - id: well-known/tool/offensive/peas/
-  - id: metadata/package/testing/corpus/
-  - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-  - id: well-known/tool/reverse-engineering/forenselab::browser-forensics-module
-  - id: well-known/tool/media/yt-dlp/
-  - id: well-known/app/finance/emoney-mcp::session-reuse-context
+  - id: well-known/tool/media/youtube-dl::yt-dlp-browser-cookie-importer
   downgrade:
     any:
     - id: well-known/tool/offensive/psbits::source-tree-member
+    # A cookie-only query is already reported more specifically by the
+    # decryption profile; retain this broader observation at notable.
+    - id: micro-behaviors/communications/http/cookies::python-cookie-decryption-without-login-query
 - id: powershell-chromium-login-dpapi-decrypt
   desc: PowerShell decrypts Chromium Login Data passwords
   crit: hostile
@@ -377,7 +292,7 @@ composite_rules:
   platforms: [windows]
   attack: T1555.003
   all:
-  - id: micro-behaviors/data/db/access::chromium-login-sql
+  - id: micro-behaviors/data/db/read/column::chromium-login-sql
   - id: micro-behaviors/data/config/browser-preference::chromium-app-bound-encrypted-key-field
   - id: micro-behaviors/os/security/dpapi::crypt-unprotect-data-source-reference
   - id: chromium-v10-v20-secret-decrypt-reference
@@ -409,9 +324,9 @@ composite_rules:
   attack: T1185
   for: [python]
   all:
-  - id: micro-behaviors/fs/path/application/browser::chrome-path
-  - id: micro-behaviors/fs/file/copy::shutil-copy
-  - id: micro-behaviors/process/create/flags::chromium-user-data-dir
+  - id: micro-behaviors/fs/path/application/browser/storage::chrome-path
+  - id: micro-behaviors/fs/file/copy/source-destination::shutil-copy
+  - id: micro-behaviors/os/application/config::chromium-user-data-dir
   - id: micro-behaviors/communications/http/cookies::playwright-browser-context-cookie-read
   near_bytes: 12000
 # REMOVED: `node-kimi-browser-session-theft` (hostile) and its `node-kimi-auth-
@@ -443,9 +358,9 @@ composite_rules:
   - id: well-known/lib/development/vscode::vscode-extension-marker
   - id: micro-behaviors/data/config/browser-preference::chromium-encrypted-key-metadata
   any:
-  - id: micro-behaviors/data/db/sql::browser-record-table-select
-  - id: micro-behaviors/data/db/access::chromium-login-sql
-  - id: micro-behaviors/data/db/sql::chromium-cookie-select-query
+  - id: micro-behaviors/data/db/read/records::browser-record-table-select
+  - id: micro-behaviors/data/db/read/column::chromium-login-sql
+  - id: micro-behaviors/data/db/read/column::chromium-cookie-select-query
   - id: chrome-keychain-query
   - id: micro-behaviors/os/security/keychain::chrome-safe-storage-query
   - id: micro-behaviors/fs/path/password-store::chromium-safe-storage-service-name

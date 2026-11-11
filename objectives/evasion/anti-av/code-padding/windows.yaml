@@ -27,15 +27,14 @@ composite_rules:
     mbc: F0001
     all:
       - id: metadata/binary/section/prose::sentence-strings-1000-plus
-      - id: "metadata/file/profile/string-population::high-entropy-strings-450-plus"
+      - id: "metadata/binary/layout/strings::high-entropy-strings-450-plus"
       - id: metadata/binary/section/prose::average-string-length-200-plus
       - id: metadata/binary/section/entropy::large-elevated-entropy-rdata
       - id: metadata/file/entropy::high-overall-entropy-70
       - id: metadata/build/manifest::pe-manifest-myapplication-template
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/signature/absent::unsigned-missing-signature-record
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
+      - id: metadata/installer/product/
 
   # Post-link detection dilution seen in adversarial PE variants: a stale
   # populated checksum shows that the linked image changed, while random mass
@@ -53,10 +52,8 @@ composite_rules:
       - id: metadata/binary/section/ratio::large-reloc-section
       - id: metadata/binary/section/entropy::high-entropy-reloc-section
       - id: metadata/binary/layout/checksum::pe-checksum-mismatch
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/signature/absent::unsigned-missing-signature-record
     unless:
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/sfx/
       - id: metadata/build/protector::executable-packer-references
 
   # A random relocation trailer can be benign in a protector, while dense
@@ -89,16 +86,12 @@ composite_rules:
       - id: metadata/binary/section/ratio::pe-largest-section-65-percent
       - id: metadata/binary/section/ratio::rdata-ratio-over-5x
       - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/signature/absent::unsigned-missing-signature-record
     any:
-      - id: micro-behaviors/data/control-flow/dispatch::rip-relative-rotate-sub-jump-x64
-      - id: micro-behaviors/data/control-flow/dispatch::rip-relative-rotate-xor-jump-x64
+      - id: micro-behaviors/data/control-flow/dispatch/indirect::rip-relative-rotate-sub-jump-x64
+      - id: micro-behaviors/data/control-flow/dispatch/indirect::rip-relative-rotate-xor-jump-x64
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/framework/
-      - id: metadata/binary/installer/family/
-      - id: well-known/tool/reverse-engineering/
-
+      - id: metadata/installer/product/
   - id: ml-evasion-recognized-code-mass
     desc: Shellcode loader padded with unrelated recognized code paths
     crit: suspicious
@@ -111,23 +104,15 @@ composite_rules:
       - id: metadata/lang/compiled::rust-integer-parse-error-variants
       - id: metadata/lang/compiled::rust-io-error-variants
       - id: rust-fs-readdir-strings
-    unless:
-      - id: metadata/binary/framework/
-  # Brand-agnostic SilverFox/Winos dropper shape: a >16MB PE whose writable .data
-  # is >=95% of the file at low entropy (NUL size-inflation to defeat size-capped
-  # sandboxes) AND is stuffed with 50k+ ripped decoy strings to read as a complex
-  # benign app. The two techniques are independent, so requiring both stays tight.
   - id: size-inflated-decoy-stuffed-pe
     desc: Size-inflated loader carries a very high decoy-string count
     crit: hostile
     conf: 0.92
     for: [pe]
     all:
-      - id: objectives/anti-static/obfuscation/payload/section/content::low-entropy-data-padding-geometry
+      - id: metadata/binary/section/layout::dominant-low-entropy-writable-data-layout
       - id: metadata/binary/section/prose::very-high-string-count
-      - id: objectives/anti-static/pack/runtime::embedded-stage-copy-jump-x64
-    unless:
-      - id: metadata/signed/platform/
+      - id: micro-behaviors/process/inject/runtime/call::copy-loop-indirect-jump-x64
   # Go programs do not place nearly the entire image in one low-entropy writable
   # .data section. A valid Go module record in that geometry, coupled with a
   # post-link checksum mismatch, is copied code corpus used as detection ballast.
@@ -138,12 +123,10 @@ composite_rules:
     attack: T1027.001
     for: [pe]
     all:
-      - id: objectives/anti-static/obfuscation/payload/section/content::low-entropy-data-padding-geometry
+      - id: metadata/binary/section/layout::dominant-low-entropy-writable-data-layout
       - id: metadata/lang/compiler/systems::go-module-path
       - id: metadata/binary/layout/checksum::pe-checksum-mismatch
-      - id: objectives/anti-static/pack/runtime::embedded-stage-copy-jump-x64
-    unless:
-      - id: metadata/signed/platform/
+      - id: micro-behaviors/process/inject/runtime/call::copy-loop-indirect-jump-x64
   # The same size-inflating geometry can be paired with file-level entropy
   # windows. The padding legs observe the sparse carrier while the peak-region
   # measurements establish that a substantial dense byte range sits inside it;
@@ -154,21 +137,33 @@ composite_rules:
     conf: 0.95
     for: [pe]
     all:
-      - id: objectives/anti-static/obfuscation/payload/section/content::low-entropy-data-padding-geometry
+      - id: metadata/binary/section/layout::dominant-low-entropy-writable-data-layout
       - id: metadata/binary/layout/entropy::peak-region-entropy-7p5
-      - id: metadata/file/entropy::low-overall-entropy-binary
+      - id: metadata/file/entropy::overall-entropy-at-most-five
       - id: metadata/binary/layout/entropy::binary-peak-region-mass-over-8k
-      - id: objectives/anti-static/pack/runtime::embedded-stage-copy-jump-x64
-    unless:
-      - id: metadata/signed/platform/
+      - id: micro-behaviors/process/inject/runtime/call::copy-loop-indirect-jump-x64
+
+  # Post-link size inflation: an unsigned image padded with null filler to
+  # inflate file size past scanner ceilings while carrying in-memory decryptor
+  # logic. The ultralow whole-file entropy and checksum mismatch observe the
+  # synthetic padding, while the transform loop proves runtime unpacking.
+  - id: size-inflated-unpacker-pe
+    desc: Size-inflated PE contains payload unpacker
+    crit: hostile
+    conf: 0.98
+    attack: T1027.001,T1140
+    all:
+      - id: metadata/binary/header/geometry::pe-large-ultralow-entropy-image
+      - id: metadata/binary/layout/checksum::pe-checksum-mismatch
+      - id: micro-behaviors/data/decode/xor/transform::x64-byte-subtract-xor-store
   - id: dominant-high-entropy-overlay-before-7z-payload
     desc: Dominant high-entropy overlay precedes a late 7-Zip payload
     crit: suspicious
     conf: 0.97
     for: [pe]
     all:
-      - id: metadata/binary/layout/overlay::large-overlay-1mb
-      - id: metadata/binary/layout/overlay::high-entropy-overlay
+      - id: metadata/binary/layout/size::large-overlay-1mb
+      - id: metadata/binary/layout/entropy::high-entropy-overlay
       - id: metadata/binary/layout/ratio::overlay-over-90pct
       - id: micro-behaviors/data/embedded/payload/archive::late-embedded-7z-archive
 
@@ -186,24 +181,6 @@ composite_rules:
     all:
       - id: metadata/binary/section/prose::sentence-string-dominant
       - id: metadata/binary/section/prose::extreme-string-count
-    unless:
-      - id: metadata/signed/platform/
-
-  # Compact native loaders sometimes surround a small amount of real loader
-  # logic with generated grammatical sentences and opaque arithmetic. The
-  # loader objective proves the execution behavior; the sentence metrics and
-  # sentence density distinguishes this evasion layer from normal PE loaders
-  # and language runtimes with help or diagnostic text.
-  - id: sentence-padded-manual-image-loader
-    desc: Manual PE loader with sentence decoys
-    crit: hostile
-    conf: 0.99
-    all:
-      - id: objectives/evasion/process/loader::x86-file-backed-manual-image-loader
-      - id: metadata/file/profile/string-population::rich-sentence-strings-20pct
-      - id: metadata/binary/section/prose::sentence-strings-20-plus
-    unless:
-      - id: metadata/signed/platform/
 
   # The high-entropy counterpart of the null-padding rules above. A runtime
   # packer stub is a complete self-contained image — it emits no overlay — and
@@ -213,30 +190,25 @@ composite_rules:
   # sample on every build and pushes the artifact past the file-size ceiling AV
   # and sandbox scanners apply. Installers and self-extractors also carry huge
   # overlays, but their stub code is not compressed and they do not ship paired
-  # writable-executable sections, so they never reach all four legs; signed and
-  # installer-framework images are excluded outright.
+  # writable-executable sections, but these properties alone do not establish
+  # hostile intent.
   - id: packed-stub-multi-megabyte-random-trailer
     desc: Packed stub carries a multi-megabyte maximum-entropy trailer
-    crit: hostile
+    crit: suspicious
     conf: 0.95
     attack: T1027.001
     mbc: F0001
     for: [pe]
     all:
-      - id: metadata/binary/layout/overlay::large-overlay-1mb
-      - id: metadata/binary/layout/overlay::high-entropy-overlay
+      - id: metadata/binary/layout/size::large-overlay-1mb
+      - id: metadata/binary/layout/entropy::high-entropy-overlay
       - id: metadata/binary/layout/ratio::overlay-over-90pct
       - id: metadata/binary/code/entropy::code-region-entropy-78
       - id: metadata/binary/section/permission::pe-multiple-executable-writable-sections
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/signed/certificate/identity/
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/sfx/
-
-  # The executable image already contains the complete command surface. A
-  # dominant maximum-entropy trailer on that image is therefore file-size and
-  # hash dilution, not evidence that the trailer is an encrypted payload.
+      - id: metadata/installer/product/
+      - id: well-known/tool/packaging/inno-setup-runtime::inno-delphi-installer-foundation
+      - id: well-known/tool/packaging/inno-setup::inno-setup-installer-context
   - id: native-rat-random-overlay-padding
     desc: Native RAT carries file-dominating random overlay padding
     crit: hostile
@@ -248,19 +220,7 @@ composite_rules:
       - id: objectives/command-and-control/backdoor/binary::native-profile-file-control-rat
       - id: metadata/binary/layout/overlay::large-high-entropy-overlay
       - id: metadata/binary/layout/ratio::overlay-over-90pct
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/
-
-  # Detection dilution by bulk: a Go image whose build metadata was stripped of
-  # any real module identity (both the module path and the build path are
-  # single random tokens, the shape mass-produced loader builders leave) that
-  # additionally drags a multi-megabyte overlay containing a pile of unrelated
-  # executables. The overlay contributes nothing the program declares and
-  # exists to move the file's size, entropy and import profile away from the
-  # small stub a classifier expects. Genuine Go self-extractors name their
-  # module.
+      - id: metadata/signature/absent::unsigned-missing-signature-record
   - id: anonymized-go-image-padded-with-foreign-executables
     desc: Anonymized Go PE padded with an overlay of unrelated executables
     crit: hostile
@@ -270,11 +230,10 @@ composite_rules:
     all:
       - id: metadata/lang/compiler/systems::go-opaque-module-path
       - id: metadata/lang/compiler/systems::go-opaque-build-path
-      - id: metadata/binary/layout/overlay::large-overlay-1mb
+      - id: metadata/binary/layout/size::large-overlay-1mb
       - id: metadata/binary/layout/ratio::many-pe-embedded
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
+      - id: metadata/installer/product/
 
   # Resource bloat: a PE whose .rsrc holds most of the file as low-entropy
   # bitmap/media while the actual code is a stub. Uploading a 1 MB image that
@@ -284,7 +243,7 @@ composite_rules:
   # the whole file. Real resource-heavy applications carry many resources and
   # a proportionate amount of code; this shape is a stub plus ballast.
   - id: low-entropy-resource-ballast
-    desc: Unsigned PE padded with a large low-entropy resource
+    desc: "Unsigned PE with large low-entropy resource"
     crit: suspicious
     conf: 0.88
     all:
@@ -295,16 +254,14 @@ composite_rules:
       # .text beside a megabyte of bitmaps, and ship code-signed. Ballast is a
       # scanner-evasion trick for images that cannot be signed, so require the
       # absence of a signature -- the same leg the other padding rules here use.
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
+      - id: metadata/signature/absent::unsigned-missing-signature-record
     unless:
       # Installer frameworks legitimately carry their whole payload in .rsrc.
-      - id: metadata/binary/installer/
-      - id: metadata/signed/platform/
       # Managed IL is substantially denser than native machine code, while an
       # ordinary multi-resolution application icon can dominate the resulting
       # small assembly. Resource/code geometry therefore cannot distinguish
       # ballast in a CLR image without additional padding-specific evidence.
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       # ReactOS utilities embed uncompressed bitmap resources and are unsigned
       # because the open-source release image has no Authenticode trust chain.
       - id: well-known/app/system/reactos::system-component

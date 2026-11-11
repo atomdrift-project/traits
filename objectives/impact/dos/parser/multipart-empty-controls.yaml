@@ -4,6 +4,19 @@
 # rather than convicting on ordinary large uploads or the progress field.
 # These are independent depth and cardinality observations, not proof of RCE.
 # Wire syntax is independent of the request builder's language and target OS.
+# PHP2Shell's Seqrite analysis and linked PHP advisory describe the same
+# amplification. MIME parameter names are case-insensitive; whitespace around
+# '=' and filename/name ordering are not security boundaries. Keep the depth
+# and cardinality observations separate, without claiming successful RCE.
+# Bracket keys are PHP array keys, not identifiers: punctuation, spaces and
+# non-ASCII bytes still create the same nested HashTables. Exclude structural
+# delimiters, LF and MIME quote bytes rather than requiring
+# ASCII word characters. Bound keys to 32 characters and the prefix to 99
+# characters for scanning cost; the bracket-to-bracket range also excludes
+# the MIME escape byte (backslash). Match wire requests and escaped client
+# literals regardless of builder language or server platform.
+# Context: https://bishopfox.com/blog/responder-guidance-for-php2shell and its
+# linked https://calif.io/php2shell/ ("You said OOM-fatal?").
 defaults:
   platforms: [unix, windows]
   for: [scripts, source, text, data]
@@ -12,11 +25,19 @@ defaults:
   attack: T1499.004
 
 traits:
-  - id: deeply-nested-empty-file-control
-    desc: Empty file control with deeply nested name
+  - id: deeply-nested-empty-file-name-first
+    desc: Deeply nested upload name before empty filename
     if:
       type: text
-      regex: '(?i-u)name=\\?"[^"\r\n]{0,512}(\[[\w.-]{0,16}\]){12}\\?";\s*filename=\\?"\\?"'
+      case_insensitive: true
+      regex: 'name\s*=\s*\\?".{0,99}(\[[^\[-\]\n"]{0,32}\]){12}\\?";\s*filename\s*=\s*\\?"\\?"'
+
+  - id: deeply-nested-empty-file-filename-first
+    desc: Empty filename before deeply nested upload name
+    if:
+      type: text
+      case_insensitive: true
+      regex: 'filename\s*=\s*\\?"\\?";\s*name\s*=\s*\\?".{0,99}(\[[^\[-\]\n"]{0,32}\]){12}\\?"'
 
   - id: many-empty-multipart-file-controls
     desc: Fifty-one or more empty multipart file controls
@@ -26,7 +47,7 @@ traits:
     count_min: 51
     if:
       type: text
-      regex: '(?i-u)Content-Disposition:\s*form-data;[^\r\n]{0,900}?;\s*filename=\\?"\\?"'
+      regex: '(?i)Content-Disposition:\s*form-data\b[^\r\n]{0,900}?;\s*filename\s*=\s*\\?"\\?"'
 
   - id: serialized-session-many-empty-upload-names
     desc: Ten or more serialized empty upload names
@@ -34,3 +55,41 @@ traits:
     if:
       type: text
       substr: 's:4:"name";s:0:""'
+
+  - id: repeated-nested-array-key-segment
+    desc: Repeats bracketed array key segment
+    crit: notable
+    for: [scripts, source]
+    if:
+      type: text
+      exclude_comments: true
+      regex: '(\.encode\(\)|[''"\]])\s*\+\s*b?[''"]\[\w{1,8}\][''"]\s*[*x]\s*(\(|[A-Za-z_]\w*|\d{2,})'
+
+composite_rules:
+  - id: deeply-nested-empty-file-control
+    desc: Empty file control with deeply nested name
+    any:
+      - id: deeply-nested-empty-file-name-first
+      - id: deeply-nested-empty-file-filename-first
+
+  - id: nested-empty-filename-multipart-builder
+    desc: Builds nested empty-filename multipart controls
+    crit: suspicious
+    conf: 0.94
+    for: [scripts, source]
+    all:
+      - id: repeated-nested-array-key-segment
+      - id: micro-behaviors/communications/http/header/content-disposition::empty-filename-multipart-disposition-fragment
+      - id: micro-behaviors/communications/http/form::form-data-header
+    near_bytes: 4096
+
+  - id: php-upload-progress-nested-empty-file-oom-builder
+    desc: Builds nested empty-file PHP upload-progress OOM payload
+    crit: hostile
+    conf: 0.97
+    for: [scripts, source]
+    scope: file
+    all:
+      - id: nested-empty-filename-multipart-builder
+      - id: micro-behaviors/communications/http/form::php-session-upload-progress-token
+      - id: micro-behaviors/communications/http/cookie-name::php-session-id-field-token

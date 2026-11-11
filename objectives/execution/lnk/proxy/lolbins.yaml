@@ -98,15 +98,6 @@ traits:
       path: lnk.arguments
       regex: '(?i)\bforfiles(\.exe)?\b[^\r\n]{0,200}\bmshta(\.exe)?\b'
 
-  - id: mshta-argument
-    desc: LNK arguments invoke mshta.exe
-    crit: notable
-    conf: 0.95
-    attack: T1218.005
-    if:
-      type: value
-      path: lnk.arguments
-      regex: '(?i)\bmshta(\.exe)?\b'
   - id: pcalua-target
     desc: 'LNK targets pcalua.exe'
     crit: suspicious
@@ -157,6 +148,26 @@ traits:
       type: value
       path: lnk.target_path
       regex: '(?i)jsc\.exe$'
+  # Map an IP-hosted WebDAV resource, then hand an SCT scriptlet on that
+  # mapped drive to regsvr32/scrobj. Generic UNC rules do not cover this form.
+  - id: lnk-map-public-webdav-drive
+    desc: LNK maps HTTP IP to drive
+    crit: suspicious
+    conf: 0.97
+    attack: T1105,T1021.002
+    if:
+      type: value
+      path: lnk.arguments
+      regex: '(?i)\bnet\s+use\s+[A-Z]:\s+https?://\d{1,3}(\.\d{1,3}){3}'
+  - id: lnk-regsvr32-mapped-scriptlet
+    desc: LNK regsvr32 executes mapped SCT scriptlet
+    crit: suspicious
+    conf: 0.99
+    attack: T1218.010,T1059.003
+    if:
+      type: value
+      path: lnk.arguments
+      regex: '(?i)\bregsvr32\b.{0,80}\.sct.{0,20}scrobj\.dll'
 composite_rules:
   # Helper: code execution LOLBINs
   - id: execution-lolbin
@@ -213,25 +224,25 @@ composite_rules:
     attack: T1202
     all:
       - id: forfiles-target
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-command-c-argument
+      - id: micro-behaviors/process/argument/interpreter::lnk-command-c-argument
   - id: headless-conhost-command-proxy
     desc: Headless conhost shortcut proxies cmd execution
     crit: hostile
     conf: 0.96
     attack: T1202
     all:
-      - id: micro-behaviors/process/create/shortcut::lnk-conhost-target
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-conhost-headless-cmd
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-command-c-argument
+      - id: micro-behaviors/process/config/target::lnk-conhost-target
+      - id: micro-behaviors/process/config/launch::lnk-conhost-headless-cmd
+      - id: micro-behaviors/process/argument/interpreter::lnk-command-c-argument
   - id: headless-conhost-batch-carrier
     desc: Headless conhost shortcut launches a batch carrier
     crit: hostile
     conf: 0.97
     attack: T1059.003
     all:
-      - id: micro-behaviors/process/create/shortcut::lnk-conhost-target
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-conhost-headless-cmd
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-command-c-argument
+      - id: micro-behaviors/process/config/target::lnk-conhost-target
+      - id: micro-behaviors/process/config/launch::lnk-conhost-headless-cmd
+      - id: micro-behaviors/process/argument/interpreter::lnk-command-c-argument
       - id: micro-behaviors/process/argument/file::lnk-batch-file-argument
   - id: forfiles-script-proxy
     desc: LNK uses forfiles to proxy script execution
@@ -250,14 +261,14 @@ composite_rules:
     attack: T1218.005,T1218
     all:
       - id: pcalua-target
-      - id: mshta-argument
+      - id: micro-behaviors/fs/path/application/executable::lnk-mshta-argument-reference
   - id: powershell-msbuild-proxy-execution
     desc: LNK uses stealth PowerShell to proxy MSBuild execution
     crit: hostile
     conf: 0.98
     attack: T1059.001,T1127.001,T1218
     all:
-      - id: micro-behaviors/process/create/shortcut::lnk-powershell-stealth-window
+      - id: micro-behaviors/ui/window/state::lnk-powershell-stealth-window
       - id: msbuild-argument
   - id: hidden-bitsadmin
     desc: LNK runs bitsadmin with hidden window
@@ -266,21 +277,55 @@ composite_rules:
     all:
       - id: bitsadmin-target
       - id: micro-behaviors/ui/window/state::lnk-hidden-window
+  - id: minimized-webdav-scriptlet-shortcut
+    desc: Minimized IP WebDAV scriptlet execution
+    crit: hostile
+    conf: 0.995
+    attack: T1105,T1204.002,T1218.010,T1059.003,T1564.003
+    all:
+      - id: micro-behaviors/process/config/target::lnk-cmd-target
+      - id: micro-behaviors/ui/window/state::lnk-minimized-inactive-window
+      - id: lnk-map-public-webdav-drive
+      - id: lnk-regsvr32-mapped-scriptlet
   - id: lnk-command-proxy-download-chain
     desc: LNK proxies command execution after download
     crit: hostile
     conf: 0.99
     attack: T1105,T1218
     all:
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-command-c-argument
+      - id: micro-behaviors/process/argument/interpreter::lnk-command-c-argument
       - id: micro-behaviors/communications/http/client/reference::lnk-curl-command-reference
-      - id: micro-behaviors/process/create/shortcut::lnk-rundll32-target
+      - id: micro-behaviors/process/config/target::lnk-rundll32-target
   - id: lnk-command-proxy-bitsadmin-msiexec
     desc: LNK proxies BITSAdmin download and MSI install
     crit: hostile
     conf: 0.99
     attack: T1105,T1218.007
     all:
-      - id: micro-behaviors/process/create/shell/command-flag::lnk-command-c-argument
+      - id: micro-behaviors/process/argument/interpreter::lnk-command-c-argument
       - id: micro-behaviors/communications/http/download/manager::lnk-bitsadmin-transfer-download
-      - id: micro-behaviors/process/create/installer::lnk-msiexec-quiet-install
+      - id: micro-behaviors/os/package-manager/reference-install::lnk-msiexec-quiet-install
+  - id: minimized-cmd-msi-proxy
+    desc: Minimized or hidden shortcut launches MSI package via cmd.exe
+    crit: hostile
+    conf: 0.95
+    attack: T1218.007,T1059.003,T1564.003
+    all:
+      - id: micro-behaviors/process/config/target::lnk-cmd-target
+      - id: micro-behaviors/process/argument/option::lnk-slash-c-switch
+      - id: micro-behaviors/process/argument/file::lnk-msi-package-argument
+    any:
+      - id: micro-behaviors/ui/window/state::lnk-minimized-inactive-window
+      - id: micro-behaviors/ui/window/state::lnk-hidden-window
+  - id: ftp-script-proxy-shortcut
+    desc: Shortcut proxies script execution through ftp.exe -s
+    crit: hostile
+    conf: 0.96
+    attack: T1202,T1204.002
+    all:
+      - id: micro-behaviors/process/config/target::lnk-ftp-target
+      - id: micro-behaviors/process/argument/short-option::lnk-short-s-option
+    any:
+      - id: micro-behaviors/ui/window/state::lnk-minimized-inactive-window
+      - id: micro-behaviors/ui/window/state::lnk-hidden-window
+      - id: micro-behaviors/process/argument/short-option::lnk-short-s-media-path

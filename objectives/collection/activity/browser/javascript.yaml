@@ -3,20 +3,6 @@ defaults:
   for: [javascript, typescript]
 # User Activity Exfiltration
 traits:
-  - id: extension-user-guid-field
-    desc: Extension telemetry user GUID field
-    crit: component
-    conf: 0.9
-    if:
-      type: text
-      word: userGuid
-  - id: webextension-api-marker
-    desc: WebExtension API context
-    crit: component
-    conf: 0.9
-    if:
-      type: text
-      regex: '\b(chrome|browser)\.(tabs|storage|runtime|cookies|alarms)\b'
   - id: netflix-viewing-activity-api
     desc: Netflix viewing activity API harvest
     crit: suspicious
@@ -62,37 +48,103 @@ traits:
     if:
       type: text
       substr: sas.peacocktv.com/graphql
-composite_rules:
-  - id: extension-click-attribution-fields
-    desc: Extension click-attribution fields
+
+  - id: ext-config-cookie-name
+    desc: Extension config cookie name ext_config
+    crit: notable
+    conf: 0.92
+    if:
+      type: text
+      substr: '"ext_config"'
+
+  - id: ext-install-api-v2-json-path
+    desc: Extension install API v2 JSON path
+    crit: notable
+    conf: 0.95
+    if:
+      type: text
+      substr: /api/v2/json/install?
+
+  - id: yahoo-serp-ad-and-natural-click-tracker
+    desc: Tracks Yahoo SERP ad clicks
+    crit: notable
+    conf: 0.97
+    if:
+      type: text
+      regex: '(?is)result-click-ad[\s\S]{0,120}result-click-natural[\s\S]{0,600}querySelectorAll'
+
+  # Yahoo hosted-search partners receive their own SERPs tagged with an
+  # hsimp code. Comparing the page's hsimp to one value limits click
+  # counting to the partner's own sold traffic.
+  - id: yahoo-serp-own-partner-tag-gate
+    desc: Gates script on own Yahoo hsimp tag
     crit: notable
     conf: 0.9
-    near_bytes: 1600
-    all:
-      - id: micro-behaviors/communications/http/services/analytics::extension-attribution-field
-      - id: webextension-api-marker
+    if:
+      type: text
+      regex: '(?i)\bhsimp\b[^;\n]{0,40}(===?|!==?)\s*["''][\w-]{3,60}["'']'
 
+composite_rules:
+  - id: extension-install-cookie-config-and-telemetry-beacon
+    desc: Newtab extension harvests ext_config cookie and reports install telemetry
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1041
+    scope: archive
+    for: [crx, xpi, zip, json, chrome-manifest, javascript, typescript]
+    all:
+      - id: metadata/permission/manifest::chrome-newtab-override
+      - id: ext-config-cookie-name
+      - id: ext-install-api-v2-json-path
+
+  - id: extension-hourly-os-profile-and-gclid-telemetry
+    desc: Extension POSTs throttled host and attribution telemetry
+    # OS/browser profile plus ad-click attribution is vendor telemetry of the
+    # kind search-monetization extensions send; no account or content data.
+    crit: suspicious
+    conf: 0.98
+    attack: T1176,T1082,T1041
+    scope: archive
+    for: [crx, xpi, zip, json, chrome-manifest, javascript, typescript]
+    all:
+      - id: micro-behaviors/os/telemetry/attribution::hourly-inline-alive-os-profile-map
+      - id: micro-behaviors/communications/http/request/json::http-post-json
+
+  - id: extension-yahoo-serp-ad-and-organic-click-tracker
+    desc: Search hijack extension monitors Yahoo SERP DOM to track ad and natural clicks
+    # Click counting confined to the partner's own hsimp-tagged SERPs is
+    # revenue attribution for traffic it was paid for, not page surveillance.
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1119
+    scope: archive
+    for: [crx, xpi, zip, json, chrome-manifest, javascript, typescript]
+    all:
+      - id: metadata/permission/manifest::extension-default-search-provider
+      - id: yahoo-serp-ad-and-natural-click-tracker
+    unless:
+      - id: yahoo-serp-own-partner-tag-gate
   - id: extension-image-event-telemetry
     desc: Browser extension sends event telemetry by image request
     crit: notable
     conf: 0.95
     all:
       - id: micro-behaviors/communications/http/request/client::image-src-network-request
-      - id: extension-user-guid-field
+      - id: micro-behaviors/communications/http/services/analytics::extension-user-guid-field
       - id: micro-behaviors/os/telemetry/logging/event::event-name-label
-      - id: extension-click-attribution-fields
+      - id: micro-behaviors/communications/http/services/analytics::extension-click-attribution-fields
   - id: extension-persistent-affiliate-tracking
     desc: Browser extension persists affiliate tracking identifiers
     crit: suspicious
     conf: 0.96
     all:
-      - id: extension-user-guid-field
-      - id: extension-click-attribution-fields
+      - id: micro-behaviors/communications/http/services/analytics::extension-user-guid-field
+      - id: micro-behaviors/communications/http/services/analytics::extension-click-attribution-fields
       - id: micro-behaviors/communications/http/cookies::extension-long-lived-cookie
-      - id: micro-behaviors/data/db/web-storage::chrome-storage-local-set
+      - id: micro-behaviors/data/db/write::chrome-storage-local-set
     any:
-      - id: micro-behaviors/communications/http/cookies::chrome-cookies-on-changed-listener
-      - id: micro-behaviors/data/db/web-storage::dom-storage-getitem
+      - id: micro-behaviors/communications/http/cookie-store::chrome-cookies-on-changed-listener
+      - id: micro-behaviors/data/db/read/key-value::dom-storage-getitem
 
   # A deleted tracking cookie that comes back is evercookie-shaped
   # persistence: the onChanged removal branch exists only to rewrite the
@@ -106,7 +158,7 @@ composite_rules:
     conf: 0.97
     all:
       - id: extension-persistent-affiliate-tracking
-      - id: micro-behaviors/communications/http/cookies::cookies-removed-change-handler
+      - id: micro-behaviors/communications/http/cookie-store::cookies-removed-change-handler
   # Reading the active tab's URL is neutral by itself: search helpers and
   # attribution flows commonly inspect query parameters.  Combined with the
   # extension's persistent click/user identifiers and cookie state, it is a
@@ -134,7 +186,7 @@ composite_rules:
     all:
       - id: metadata/permission/host::broad-host-access
       - id: "metadata/permission/host::broad-content-script-matches"
-      - id: micro-behaviors/communications/ipc/message::chrome-runtime-send-message
+      - id: micro-behaviors/communications/ipc/extension-message::chrome-runtime-send-message
       - id: micro-behaviors/communications/http/services/supabase::rest-api-endpoint
     any:
       - id: micro-behaviors/os/telemetry/activity::trusted-keyboard-activity-listener
@@ -150,7 +202,7 @@ composite_rules:
       - id: micro-behaviors/os/security/webextension::chrome-identity-profile-info
       - id: micro-behaviors/communications/http/services/supabase::rest-api-endpoint
       - id: micro-behaviors/communications/http/request/json::http-post-json
-      - id: micro-behaviors/data/db/web-storage::chrome-storage-sync-set
+      - id: micro-behaviors/data/db/write::chrome-storage-sync-set
     any:
       - id: micro-behaviors/os/telemetry/activity::trusted-keyboard-activity-listener
       - id: micro-behaviors/os/telemetry/activity::trusted-pointer-activity-listener
@@ -171,12 +223,14 @@ composite_rules:
       - id: metadata/permission/cookie::permission-cookies
       - id: extension-persistent-affiliate-tracking
       - id: micro-behaviors/communications/http/telemetry::extension-periodic-heartbeat
-      - id: micro-behaviors/communications/http/cookies::chrome-cookies-get
+      - id: micro-behaviors/communications/http/cookie-store::chrome-cookies-get
 
   - id: extension-search-host-profile-telemetry
     for: [javascript, typescript, chrome-manifest, crx, xpi, zip]
-    desc: Search hijacker uploads host and search telemetry
-    crit: hostile
+    desc: Search override reports host and search-activity telemetry
+    # Host profile and extension status from a declared search provider is
+    # monetization telemetry, intrusive but not theft.
+    crit: suspicious
     conf: 0.98
     attack: T1176,T1041,T1119
     scope: archive
@@ -186,11 +240,11 @@ composite_rules:
       - id: metadata/permission/manifest::chrome-search-provider-override
       - id: metadata/permission/manifest::chrome-default-search-provider
       - id: metadata/permission/manifest::chrome-search-terms-template
-      - id: metadata/file/string/telemetry::extension-os-profile-fields
-      - id: metadata/file/string/telemetry::extension-runtime-identity-fields
+      - id: micro-behaviors/os/sysinfo/platform/string::extension-os-profile-fields
+      - id: metadata/lang/source/naming/extension::extension-runtime-identity-fields
       - id: micro-behaviors/os/telemetry/activity::search-or-extension-status-labels
       - id: micro-behaviors/communications/http/request/json::http-post-json
-      - id: micro-behaviors/communications/http/url/domain::js-remote-host-url
+      - id: micro-behaviors/communications/url/host/domain-http::js-remote-host-url
   - id: browser-push-subscription-upload
     desc: Browser push subscription upload
     crit: suspicious
@@ -200,7 +254,7 @@ composite_rules:
       - id: micro-behaviors/communications/http/service-worker::push-subscribe
       - id: micro-behaviors/communications/http/service-worker::notification-request-permission
       - id: micro-behaviors/communications/http/request/client::xmlhttprequest-constructor-text
-      - id: micro-behaviors/communications/http/url/php-endpoint::url-php-endpoint-script
+      - id: micro-behaviors/communications/url/resource-path/file::url-php-endpoint-script
     any:
       - id: micro-behaviors/communications/http/service-worker::push-get-subscription
       - id: micro-behaviors/communications/http/service-worker::api-register
@@ -246,7 +300,7 @@ composite_rules:
       - id: streaming-account-api-harvest
       - id: micro-behaviors/browser-extension/lifecycle::extension-install-user-id-key
     any:
-      - id: micro-behaviors/data/db/web-storage::indexeddb-open
+      - id: micro-behaviors/data/db/access::indexeddb-open
       - id: micro-behaviors/communications/http/request/verb::post-method-text
     unless:
       - id: well-known/unwanted/qvi::disclosed-qvi-panel-context
@@ -257,6 +311,6 @@ composite_rules:
     conf: 0.98
     attack: T1119,T1041,T1059.007
     all:
-      - id: micro-behaviors/communications/http/url/navigation::browser-page-url-referrer-read
+      - id: micro-behaviors/communications/url/navigation-http::browser-page-url-referrer-read
       - id: micro-behaviors/communications/ipc/message::postmessage-to-iframe
-      - id: objectives/command-and-control/remote-command/dispatch::js-postmessage-body-eval
+      - id: objectives/command-and-control/remote-command/dispatch/eval::js-postmessage-body-eval

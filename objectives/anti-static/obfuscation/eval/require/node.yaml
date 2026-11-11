@@ -21,8 +21,6 @@ traits:
       regex: new\s*\(?\s*Function\.constructor\s*\)?\(\s*['"]require['"]
     downgrade:
       any:
-        - id: metadata/build/bundler/asset::js-large-module-bundle
-        - id: metadata/build/recognized-contexts::benign-build-tooling-context
         - id: well-known/lib/development/vscode-webview::vscode-webview-bundle
         - id: well-known/lib/development/vscode-webview::acquire-vscode-api
 
@@ -89,14 +87,35 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/read/file/target::read-package-relative-file
       - id: micro-behaviors/data/encode/xor::js-byte-buffer-xor-transform
-      - id: micro-behaviors/metaprogramming/generation::function-constructor-node-module-wrapper
+      - id: micro-behaviors/metaprogramming/generation/function::function-constructor-node-module-wrapper
     any:
       - id: micro-behaviors/data/decompress/zlib::node-inflate-function
       - id: micro-behaviors/data/decompress/brotli::node-brotli-decompress-function
     unless:
-      - id: metadata/package/testing/harness/runtime/
       - id: metadata/build/bundler/asset::js-large-module-bundle
-      - id: well-known/tool/detection/security-scanner/
+      - id: micro-behaviors/os/security/scan/documentation/
+  # A sibling of the XOR loader above for stubs that skip the cipher: the
+  # entry point requires its own manifest, inflates a concealed numeric-array
+  # blob, and compiles it through a function literal's constructor, so
+  # neither the `Function` token nor a `readFile` call appears. Keep the
+  # capability atoms neutral; the complete loader is the intent-bearing
+  # finding.
+  - id: manifest-blob-indirect-constructor-loader
+    desc: Manifest-embedded blob executes via indirect constructor
+    crit: hostile
+    conf: 0.97
+    attack: T1027,T1059.007
+    for: [javascript, typescript]
+    near_lines: 24
+    all:
+      - id: micro-behaviors/fs/read/file/target::require-local-package-json
+      # Any script decompressor (zlib, gzip, brotli): the encoding varies,
+      # the manifest-blob-to-eval shape is the invariant.
+      - id: micro-behaviors/data/compression::script-decompression-operation-evidence
+      - id: micro-behaviors/metaprogramming/generation/function::js-function-literal-constructor
+    unless:
+      - id: metadata/build/bundler/asset::js-large-module-bundle
+      - id: micro-behaviors/os/security/scan/documentation/
   - id: function-constructor-recognized-marker
     desc: Function constructor recognized bundle marker
     crit: component
@@ -110,34 +129,10 @@ composite_rules:
       - id: well-known/lib/development/vscode-webview::acquire-vscode-api
       - id: well-known/lib/development/vscode::vscode-extension-marker
       - id: micro-behaviors/os/module/require::dynamic-import-function-constructor
-      - id: "metadata/lang/source/naming/interface::tiktoken-reference"
-      - id: metadata/filename/identity::esbuild-helper-basename
+      - id: "metadata/lang/source/naming/interface/runtime::tiktoken-reference"
+      - id: well-known/lib/development/esbuild::esbuild-helper-basename
       - id: well-known/lib/web/client-side/ecmascript::shutter-reloaded-lightbox
       - id: firebug-function-constructor-basename
-
-  - id: remote-code-module-smuggle
-    desc: Remote code executed via Function module smuggling
-    crit: hostile
-    conf: 0.96
-    attack: T1059.007
-    for: [javascript, typescript]
-    all:
-      - id: micro-behaviors/metaprogramming/generation::js-function-constructor-commonjs-wrapper
-    any:
-      - id: micro-behaviors/communications/http/request/client::js-fetch-call
-      - id: micro-behaviors/communications/http/request/client::axios-direct-call
-      - id: micro-behaviors/communications/http/request/client::http-request
-      - id: micro-behaviors/communications/blockchain/client::solana-rpc-method-any
-    unless:
-      - id: metadata/build/bundler/asset::js-large-module-bundle
-      - id: well-known/lib/development/vscode-webview::vscode-webview-bundle
-      - id: metadata/build/recognized-contexts::benign-build-tooling-context
-      # The CommonJS wrapper is also how a test suite loads a module under
-      # test with stubbed imports: transpile the real source, then run it with
-      # a `require` that resolves to doubles (unsloth's
-      # studio/frontend/tests/helpers/module-stubs.ts). Smuggling hides a
-      # payload; a test helper evaluates a file that ships beside it.
-      - id: metadata/path::test-directory-component
 
   - id: obfuscated-fetch-module-smuggle
     desc: Obfuscated fetched response executes with Node require access
@@ -151,7 +146,6 @@ composite_rules:
       - id: micro-behaviors/communications/http/request-wrapper::forwarded-fetch-url-options
       - id: metadata/lang/source/syntax/call/relationship::computed-awaited-call-result-index
     unless:
-      - id: metadata/package/testing/harness/runtime/
       - id: metadata/build/bundler/asset::js-large-module-bundle
 
   - id: message-payload-module-smuggling
@@ -162,16 +156,14 @@ composite_rules:
     mbc: B0032
     for: [javascript, typescript]
     all:
-      - id: micro-behaviors/metaprogramming/generation::js-function-constructor-require-parameter
+      - id: micro-behaviors/metaprogramming/generation/function::js-function-constructor-require-parameter
       - id: message-payload-function-body
     any:
-      - id: micro-behaviors/process/hook/event::js-event-on-message
+      - id: micro-behaviors/data/control-flow/event-callback::js-event-on-message
       - id: micro-behaviors/communications/ipc/message::js-message-event-listener
-      - id: micro-behaviors/process/create/workers::worker-threads-require
+      - id: micro-behaviors/process/thread/runtime::worker-threads-require
     unless:
       - id: metadata/build/bundler/asset::js-large-module-bundle
-      - id: metadata/build/recognized-contexts::benign-build-tooling-context
-
   - id: worker-message-payload-module-smuggling
     desc: Worker task message executes payload
     crit: hostile
@@ -183,8 +175,8 @@ composite_rules:
       - id: message-payload-module-smuggling
       - id: worker-run-task-token
     any:
-      - id: micro-behaviors/process/create/workers::worker-threads-require
-      - id: micro-behaviors/process/create/workers::worker-threads-import
+      - id: micro-behaviors/process/thread/runtime::worker-threads-require
+      - id: micro-behaviors/process/thread/runtime::worker-threads-import
 
   - id: remote-worker-module-compile
     desc: Remote code compiled inside worker thread
@@ -194,8 +186,8 @@ composite_rules:
     mbc: B0009.016
     for: [javascript, typescript]
     all:
-      - id: objectives/command-and-control/dropper/script-eval/remote-code::remote-worker-module-compile-loader
-      - id: micro-behaviors/process/create/workers::worker-eval-option
+      - id: objectives/execution/payload/module-load/network::remote-worker-module-compile-loader
+      - id: micro-behaviors/process/thread/worker::worker-eval-option
 
   - id: font-steganography-hex
     for: [javascript]
@@ -205,4 +197,4 @@ composite_rules:
     all:
       - id: micro-behaviors/data/decode/hex::buffer-from-hex-string
       - id: micro-behaviors/fs/read/file/target::read-font-file
-      - id: micro-behaviors/metaprogramming/generation::js-new-function-constructor
+      - id: micro-behaviors/metaprogramming/generation/function::js-new-function-constructor

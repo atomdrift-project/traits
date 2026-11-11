@@ -1,0 +1,67 @@
+defaults:
+  attack: "T1027, T1059.001, T1105"
+  platforms: [windows]
+  for: [batch]
+
+traits:
+- id: batch-powershell-web-download
+  desc: Batch PowerShell downloads from the web
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: text
+    regex: '(?i)powershell(\.exe)?\s+-command.{0,20}Invoke-WebRequest\b.{0,200}https?://\S{1,60}'
+    # A health check against the machine's own loopback service fetches nothing.
+  not:
+  - regex: '(?i)https?://(127\.0\.0\.1|localhost|\[::1\])'
+  unless:
+      # Fetching nuget.exe from Microsoft's own CDN is how a .cmd bootstraps
+      # the NuGet CLI before restore; PowerToys' cmdpal NugetWrapper.cmd is
+      # the canonical form. The URL is the whole exemption -- the shape
+      # (download an exe to TEMP and run it) is identical to a dropper's.
+  - id: metadata/package/manager::nuget-org-bootstrap-url
+  # Notable for the same reason as `batch-start-executable-payload` below:
+  # unzipping with PowerShell is what a build script or an app's tool
+  # bootstrapper does. WinMerge 2.16.56 ships two -- Plugins/Commands/
+  # DownloadFiles.bat and Plugins/Commands/Java/java.bat -- that fetch an
+  # optional plugin dependency and expand it into %APPDATA%\WinMerge\Commands.
+  # The dropper claim belongs to `batch-webrequest-archive-executable-dropper`,
+  # which pairs this with the download and the launch.
+- id: batch-powershell-archive-extract
+  desc: Batch invokes PowerShell to extract an archive
+  crit: notable
+  conf: 0.96
+  if:
+    type: text
+    regex: '(?i)\bpowershell(\.exe)?\s+-command\s+["'']?\s*Expand-Archive\b'
+
+composite_rules:
+- id: fragmented-envvar-syswow64-powershell-base64-iex
+  desc: Fragmented env-var assignments reassemble hidden SysWOW64 PowerShell Base64 IEX
+  crit: hostile
+  conf: 0.99
+  for: [batch, vbs]
+  attack: T1027,T1059.001,T1059.003
+  mbc: B0032
+  all:
+  - id: metadata/lang/source/literal/fragment/syntax::envvar-chunk-syswow64-powershell-path
+  - id: metadata/lang/source/literal/fragment/syntax::envvar-chunk-hidden-bypass-flags
+  - id: metadata/lang/source/literal/fragment/syntax::envvar-chunk-frombase64-iex-pipeline
+- id: short-envvar-powershell-downloadstring
+  desc: Short-envvar PowerShell stager
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: metadata/lang/source/literal/fragment/syntax::short-env-cmd-fragments
+  - id: metadata/lang/source/literal/fragment/syntax::short-env-powershell-fragments
+  - id: metadata/lang/source/literal/fragment/syntax::short-env-downloadstring
+  - id: metadata/lang/source/literal/fragment/syntax::short-env-iex
+  - id: micro-behaviors/communications/url/reference::batch-ps1-url-reference
+- id: batch-webrequest-archive-executable-dropper
+  desc: Batch downloads, extracts, and launches an executable payload
+  crit: hostile
+  conf: 0.97
+  all:
+  - id: batch-powershell-web-download
+  - id: batch-powershell-archive-extract
+  - id: micro-behaviors/process/create/path-execution::start-executable-command

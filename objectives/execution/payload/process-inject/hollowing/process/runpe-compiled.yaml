@@ -1,0 +1,47 @@
+# Unmap-based RunPE process hollowing on compiled Windows PEs.
+#
+# Unmap, process creation and remote writes alone also occur in debuggers and
+# compatibility runtimes. Require PE-header parsing and thread-context resume
+# evidence before inferring replacement-image execution. These are static API
+# and instruction observations, not a recovered cross-process data-flow trace.
+defaults:
+  platforms: [windows]
+  for: [pe, dll]
+  attack: T1055.012
+  mbc: E1055.012.014
+composite_rules:
+  - id: objectives/execution/payload/process-inject/hollowing/process::unmap-runpe-hollowing
+    desc: Process hollowing with image unmapping
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/binary/instruction/sequence/unspecified::pe-signature-immediate-compare
+      - id: micro-behaviors/process/info/thread::set-thread-context-import
+      - id: micro-behaviors/process/info/thread::resume-thread-import
+      - id: micro-behaviors/mem/unmap::native-section-unmap-api-references
+      # The text atom intentionally suppresses itself when CreateProcess is an
+      # import. Use the API-family composite so either representation counts.
+      - id: micro-behaviors/process/create/exec::child-process-creation-evidence
+    any:
+      - id: micro-behaviors/mem/write/arbitrary::write-process-memory-source
+      - id: micro-behaviors/mem/write/arbitrary::write-process-memory-binary
+    unless:
+      # POSIX fork reconstructs a child's address space using these APIs.
+      - id: well-known/lib/runtime/native-platform/cygwin::cygwin-family-runtime
+      - id: metadata/binary/debug::pdb-remcos-backdoor-tree
+      - id: objectives/execution/payload/process-inject/hollowing/process::explorer-process-hollowing-loader
+      # Chromium's sandbox broker spawns suspended targets and patches them.
+      - id: well-known/lib/runtime/scripted/electron::chromium-engine-binary-context
+      - id: well-known/tool/browser::google-chrome-runtime-component
+      # kernel32 implements the unmap, write and thread-context APIs.
+      - id: well-known/app/system/microsoft/platform::microsoft-signed-kernel-api-dll-context
+
+  - id: unmap-runpe-embedded-libcurl-module
+    desc: Embedded libcurl module does RunPE hollowing
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: objectives/execution/payload/process-inject/hollowing/process::unmap-runpe-hollowing
+      - id: well-known/lib/network/curl::libcurl-version
+    unless:
+      - id: well-known/lib/network/curl::windows-runtime-library

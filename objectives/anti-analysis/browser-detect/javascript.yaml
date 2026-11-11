@@ -2,23 +2,6 @@ defaults:
   platforms: [windows, unix]
   for: [javascript, typescript, html]
 traits:
-  - id: js-ctrl-u-shortcut
-    desc: Handles Ctrl+U browser shortcut
-    crit: notable
-    conf: 0.85
-    if:
-      type: text
-      regex: e\.(ctrlKey|metaKey).{0,80}e\.key.{0,12}['"]u['"]
-  - id: js-disable-view-source
-    desc: Handles Ctrl+Shift+I/J browser shortcuts
-    crit: notable
-    conf: 0.85
-    size_max: 100000
-    if:
-      type: text
-      regex: e\.ctrlKey.{0,40}e\.shiftKey.{0,80}e\.key.{0,12}['"](I|J)['"]
-    not:
-      - substr: "e.altKey"
   - id: js-console-getter-tripwire
     desc: Console getter DevTools tripwire
     crit: suspicious
@@ -38,24 +21,13 @@ traits:
       type: text
       regex: 'document\.referrer!==undefined\|\|document\.referrer!==["'']["'']'
 composite_rules:
-  - id: js-disable-inspect
-    desc: Blocks developer-tools shortcuts
-    # Production web applications and kiosk-style UI helpers may intentionally
-    # suppress inspection shortcuts. Keep this as a notable capability; the
-    # debugger tripwire below remains the stronger intent signal.
-    crit: notable
-    conf: 0.9
-    near_lines: 5
-    all:
-      - id: micro-behaviors/hardware/input/event::browser-f12-key-comparison
-      - id: micro-behaviors/ui/window/event::browser-prevent-default-call
   - id: js-browser-locking
     desc: Browser anti-analysis locking (disable inspect + devtools)
     crit: suspicious
     conf: 0.9
     all:
       - id: micro-behaviors/process/debug/detect::browser-devtools-open-state-reference
-      - id: js-disable-inspect
+      - id: micro-behaviors/ui/window/event::browser-f12-with-event-cancellation
   - id: js-devtools-heuristics
     desc: Browser DevTools heuristic detection
     crit: suspicious
@@ -71,9 +43,9 @@ composite_rules:
     conf: 0.92
     needs: 2
     any:
-      - id: js-disable-inspect
+      - id: micro-behaviors/ui/window/event::browser-f12-with-event-cancellation
       - id: micro-behaviors/ui/menu::browser-contextmenu-suppress
-      - id: js-disable-view-source
+      - id: micro-behaviors/hardware/input/event::browser-ctrl-shift-inspect-shortcut
   - id: js-destructive-devtools-response
     desc: DevTools detection triggers destructive page wipe
     crit: hostile
@@ -83,7 +55,7 @@ composite_rules:
     any:
       - id: micro-behaviors/ui/window/insert-html::browser-document-element-blanking
       - id: micro-behaviors/ui/window/insert-html::browser-empty-document-write
-      - id: micro-behaviors/ui/window/navigation::browser-window-stop
+      - id: micro-behaviors/ui/window/control::browser-window-stop
     needs: 2
   - id: js-headless-page-suppression
     for: [javascript]
@@ -94,7 +66,7 @@ composite_rules:
     all:
       - id: micro-behaviors/os/sysinfo/platform/browser::browser-headless-indicator-suite
       - id: micro-behaviors/ui/window/insert-html::browser-document-element-blanking
-      - id: micro-behaviors/ui/window/navigation::browser-window-stop
+      - id: micro-behaviors/ui/window/control::browser-window-stop
   # View-source interception that navigates away instead of merely blocking:
   # pressing Ctrl+U bounces the analyst to an external page, destroying the
   # inspection session and force-feeding third-party traffic. Suppression
@@ -107,8 +79,8 @@ composite_rules:
     near_bytes: 1500
     all:
       - id: micro-behaviors/ui/window/event::browser-view-source-shortcut-intercept
-      - id: micro-behaviors/ui/window/navigation::browser-location-replace
-      - id: micro-behaviors/ui/window/navigation::browser-location-external-method
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-replace
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-external-method
   # Right-click twin of the trap above: hijacking the context-menu gesture
   # to force an external navigation serves no page function — menus,
   # galleries and editors that suppress the menu keep the visitor where
@@ -122,18 +94,21 @@ composite_rules:
     near_bytes: 1500
     all:
       - id: micro-behaviors/ui/window/event::browser-contextmenu-handler
-      - id: micro-behaviors/ui/window/navigation::browser-location-replace
-      - id: micro-behaviors/ui/window/navigation::browser-location-external-method
-  - id: js-headless-probes-with-rogue-admin
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-replace
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-external-method
+    any:
+      - id: micro-behaviors/ui/window/event::named-contextmenu-navigation
+      - id: micro-behaviors/ui/window/event::inline-contextmenu-navigation
+  - id: js-headless-wordpress-admin-clues
     for: [javascript]
-    desc: Rogue WordPress admin payload checks headless state
+    desc: Headless checks and WordPress admin request clues
     crit: hostile
     conf: 0.99
     attack: T1497.001,T1136.001
     near_bytes: 1800
     all:
       - id: micro-behaviors/os/sysinfo/platform/browser::browser-headless-indicator-suite
-      - id: objectives/persistence/login/account/create::js-wordpress-rogue-admin-create
+      - id: micro-behaviors/communications/http/request/account::js-wordpress-admin-create-clues
   - id: js-debugger-timing-page-suppression
     for: [javascript]
     desc: Debugger timing check clears and stops the page
@@ -145,7 +120,7 @@ composite_rules:
       - id: micro-behaviors/process/debug/event::debugger-statement
       - id: micro-behaviors/time/timing/check::js-elapsed-time-threshold
       - id: micro-behaviors/ui/window/insert-html::browser-document-element-blanking
-      - id: micro-behaviors/ui/window/navigation::browser-window-stop
+      - id: micro-behaviors/ui/window/control::browser-window-stop
   - id: js-profiled-headless-page-suppression
     for: [javascript]
     desc: Browser fingerprint beacon accompanies destructive headless suppression
@@ -155,20 +130,9 @@ composite_rules:
     near_bytes: 8192
     all:
       - id: js-headless-page-suppression
-      - id: objectives/discovery/system/fingerprint/browser::browser-hardware-profile
+      - id: micro-behaviors/os/sysinfo/platform/browser::browser-hardware-profile
       - id: micro-behaviors/communications/http/request/client::fetch-post-pattern
       - id: micro-behaviors/data/serialize/json::json-stringify-call
-  - id: js-devtools-navigation-redirect
-    desc: Browser anti-inspection logic redirects page navigation
-    # An explicit, opt-in production protector can use this same response. A
-    # debugger tripwire is retained as suspicious; this broader redirect shape
-    # is only a notable browser behavior on its own.
-    crit: notable
-    conf: 0.96
-    near_lines: 30
-    all:
-      - id: js-disable-inspect
-      - id: micro-behaviors/ui/window/navigation::browser-location-href-assign
   - id: js-debugger-navigation-redirect
     for: [javascript]
     desc: Browser debugger tripwire redirects page navigation
@@ -176,9 +140,9 @@ composite_rules:
     conf: 0.97
     near_lines: 30
     all:
-      - id: js-disable-inspect
+      - id: micro-behaviors/ui/window/event::browser-f12-with-event-cancellation
       - id: micro-behaviors/process/debug/event::debugger-statement
-      - id: micro-behaviors/ui/window/navigation::browser-location-href-assign
+      - id: micro-behaviors/data/property/assign::location-href-write-text
   # Phishing kits ship "F12 disable" and right-click blockers so a victim or
   # responder cannot open DevTools or view source on the harvest page. The
   # credential-harvest form is already convicted elsewhere; F12 key

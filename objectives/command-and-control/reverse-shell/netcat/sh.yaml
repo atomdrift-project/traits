@@ -2,69 +2,23 @@
 defaults:
   attack: T1059.004
 traits:
-  - id: nc-exec-sh
-    platforms: [unix, windows]
-    desc: nc -e shell execution
-    crit: suspicious
-    conf: 0.9
-    for:
-      - shell
-      - package.json
-      - javascript
-      - typescript
-      - swift
-      - text
+  - id: python-os-system-nc-fifo-literal
+    for: [python]
+    platforms: [linux, macos]
+    desc: Python system call contains Netcat FIFO shell
+    crit: component
+    conf: 0.95
     if:
-      type: text
-      # Anchor at a non-comment line. This still admits shell commands and
-      # commands embedded in exec/system string arguments, while excluding
-      # //, /*, leading *, and # comment examples.
-      regex: '(?m)^[ \t]*([^/#*\s][^\n]{0,80})?(\\n|\b)nc\s+[-\w. ]{0,40}-e\s+((/usr)?/bin/)?(ba)?sh\b'
-    unless:
-      - id: micro-behaviors/metaprogramming/generation::javascript-parameterized-shell-template
-      - id: well-known/tool/offensive/
-      - id: metadata/package/testing/
-      - id: well-known/tool/detection/
-      - id: metadata/file/format/security-corpus::command-injection-probe-list
-  - id: ncat-exec-sh
-    platforms: [unix, windows]
-    desc: ncat -e shell execution
-    crit: suspicious
-    conf: 0.9
-    for:
-      - shell
-      - package.json
-      - javascript
-      - typescript
-      - text
-    if:
-      type: text
-      regex: '(\\n|\b)ncat\s+[-\w. ]{0,90}(-e|--exec)\s+(/usr/bin/|/bin/)?(ba)?sh\b'
-    unless:
-      - id: metadata/lang/source/shape::javascript-literal-tables-pure-helpers
-      - id: well-known/app/utility/cmdchamp/
-      - id: well-known/app/system/aptl/
-      - id: well-known/tool/detection/ai-guardrail::command-rule-corpus
-  - id: netcat-exec-sh
-    platforms: [unix, windows]
-    desc: netcat -e shell execution
-    crit: suspicious
-    conf: 0.9
-    for:
-      - shell
-      - package.json
-      - javascript
-      - typescript
-      - text
-    if:
-      type: text
-      regex: '(\\n|\b)netcat\s+[-\w. ]{0,90}-e\s+(/usr/bin/|/bin/)?(ba)?sh\b'
-    unless:
-      - id: micro-behaviors/metaprogramming/generation::javascript-parameterized-shell-template
-      - id: well-known/tool/offensive/
-      - id: metadata/package/testing/
-      - id: well-known/tool/detection/
-      - id: metadata/file/format/security-corpus::command-injection-probe-list
+      type: tree-sitter
+      query: |
+        ((call
+          function: (attribute object: (identifier) @module attribute: (identifier) @method)
+          arguments: (argument_list (string) @command))
+          (#eq? @module "os")
+          (#eq? @method "system")
+          (#match? @command "mkfifo")
+          (#match? @command "\\|/bin/(ba)?sh[ \\t]+-i")
+          (#match? @command "\\|nc[ \\t]+"))
 composite_rules:
   - id: nc-fifo-revshell
     for: [shell]
@@ -77,38 +31,26 @@ composite_rules:
       - id: micro-behaviors/fs/pipe::mkfifo-reference
       - id: micro-behaviors/communications/socket/netcat::nc-connect-endpoint
     any:
-      - id: micro-behaviors/process/create/shell/pipeline::pipe-to-absolute-shell-path
-      - id: micro-behaviors/process/create/shell/interactive::sh-interactive
+      - id: metadata/lang/source/syntax/command/pipeline::pipe-to-absolute-shell-path
+      - id: micro-behaviors/process/interpreter/shell::sh-interactive
       - id: micro-behaviors/process/create/shell/interactive::sh-interactive-command
     unless:
-      - id: well-known/tool/detection/llm-scanner/
-      - id: well-known/tool/detection/pattern-catalog/
-      - id: metadata/file/catalog/identity/
-      - id: metadata/package/testing/presence/path::git-tests-directory
-      - id: metadata/package/testing/presence/harness::test-directory
+      - id: metadata/package/testing/corpus/security-tests::rust-scanner-payload-unit-test
   - id: nc-fifo-sh-pipe-revshell
     # Exploit builders and droppers often carry this shell payload inside a
     # source string rather than in a standalone .sh member.
     for: [scripts, source]
     platforms: [linux, macos]
     mbc: B0030
-    desc: mkfifo + nc + shell pipe (classic nc revshell)
-    crit: hostile
+    desc: Netcat FIFO reverse shell command pattern
+    crit: suspicious
     conf: 0.99
     all:
       - id: micro-behaviors/fs/pipe::mkfifo-reference
       - id: micro-behaviors/communications/socket/netcat::nc-outbound-target
-      - id: micro-behaviors/process/create/shell/pipeline::pipe-to-absolute-shell-path
+      - id: metadata/lang/source/syntax/command/pipeline::pipe-to-absolute-shell-path
     unless:
-      - id: metadata/package/documentation/security-testing::authorized-fenced-testing-skill
-      - id: well-known/tool/detection/llm-scanner/
-      - id: well-known/tool/detection/pattern-catalog/
-      - id: metadata/file/catalog/identity/
-      - id: metadata/package/testing/presence/path::git-tests-directory
-      - id: metadata/package/testing/presence/harness::test-directory
-      - id: well-known/tool/offensive/
-      - id: micro-behaviors/metaprogramming/generation::parameterized-shell-command-builder
-      - id: micro-behaviors/metaprogramming/generation::configured-payload-generator
+      - id: metadata/package/testing/corpus/security-tests::rust-scanner-payload-unit-test
   - id: makeself-nc-fifo-revshell
     for: [shell]
     platforms: [linux, macos]
@@ -119,6 +61,16 @@ composite_rules:
     all:
       - id: micro-behaviors/data/archive/package::makeself-archive-context
       - id: objectives/command-and-control/reverse-shell/netcat::nc-fifo-revshell
+  - id: python-executes-nc-fifo-shell
+    for: [python]
+    platforms: [linux, macos]
+    desc: Python system call contains a FIFO shell
+    crit: hostile
+    conf: 0.95
+    near_bytes: 256
+    all:
+      - id: nc-fifo-sh-pipe-revshell
+      - id: python-os-system-nc-fifo-literal
   - id: reverse-shell-netcat
     platforms: [unix, windows]
     desc: Netcat reverse shell pattern
@@ -127,30 +79,31 @@ composite_rules:
     for:
       - shell
       - package.json
-      - javascript
-      - typescript
       - text
     all:
-      - id: micro-behaviors/communications/socket/netcat::nc-connect-endpoint
+      - id: micro-behaviors/communications/socket/netcat::nc-outbound-target
     # The required -e/--exec shell evidence below supplies the shell role.
     # A separate generic spawn fact excludes valid direct Netcat commands.
     near_bytes: 1024
+    # Do not join a listener's -e shell with a separate outbound command.
+    near_lines: 0
     any:
-      - id: nc-exec-sh
-      - id: ncat-exec-sh
-      - id: netcat-exec-sh
+      - id: objectives/command-and-control/remote-command/shell::nc-exec-sh
+      - id: objectives/command-and-control/remote-command/shell::ncat-exec-sh
+      - id: objectives/command-and-control/remote-command/shell::netcat-exec-sh
     unless:
       - id: metadata/lang/source/shape::javascript-literal-tables-pure-helpers
-      - id: metadata/package/testing/corpus/
       - id: metadata/package/testing/presence/scripted::it-call
       - id: well-known/app/utility/cmdchamp/
       - id: well-known/tool/offensive/pentestkit/
-      - id: well-known/tool/offensive/nmap::nmap-source-tree
       - id: metadata/file/format/security-corpus::command-injection-probe-list
+      - id: metadata/file/format/security-corpus::attack-payload-corpus
+      - id: metadata/package/documentation/security-testing::shell-scanner-payload-unit-test
+      - id: metadata/package/testing/corpus/security-tests::rust-scanner-payload-unit-test
     downgrade:
       scope: archive
       any:
-      - id: well-known/tool/detection/cc-audit::cc-audit-source-package-identity
+      - id: well-known/tool/detection/agent/cc-audit::cc-audit-source-package-identity
   # In JavaScript, the shell process is created by child_process.exec rather
   # than by a shell-language spawn token.  Join that executable call surface
   # to the complete nc -e /bin/sh command so reverse-shell generators that
@@ -165,10 +118,10 @@ composite_rules:
     for: [javascript, typescript]
     near_bytes: 512
     all:
-      - id: nc-exec-sh
-      - id: micro-behaviors/process/create/shell/bridge::js-exec
+      - id: objectives/command-and-control/remote-command/shell::nc-exec-sh
+    any:
+      - id: micro-behaviors/process/create/shell/command-string::js-exec
+      - id: micro-behaviors/process/create/shell/command-string::execSync-call
+      - id: micro-behaviors/process/create/exec::js-child-process
     unless:
-      - id: metadata/package/testing/
       - id: well-known/tool/offensive/pentestkit/
-      - id: well-known/tool/offensive/nmap::nmap-source-tree
-      - id: metadata/path::test-directory-component

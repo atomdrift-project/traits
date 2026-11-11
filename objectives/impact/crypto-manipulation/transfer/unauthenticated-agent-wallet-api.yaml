@@ -1,0 +1,76 @@
+# An HTTP endpoint that turns arbitrary callers' payment requests into wallet
+# signatures is hostile when its API-key check only tests header presence.
+defaults:
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+  attack: T1657
+
+traits:
+  - id: x-api-key-header-read
+    desc: Reads the x-api-key request header
+    crit: notable
+    if:
+      type: text
+      regex: 'req\.headers\[["\x27]x-api-key'
+
+  - id: api-key-missing-header-rejection
+    desc: Rejects missing API-key header with 401
+    crit: suspicious
+    if:
+      type: text
+      regex: 'if\s*\(\s*!\w+\s*\)\s*\{\s*res\.statusCode\s*=\s*401'
+
+  - id: request-derived-recipient-field
+    desc: Request-derived recipient field
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      # The request-shaped receiver (not a local fixture or options object)
+      # is what makes this the payment-destination leg of the endpoint
+      # signature below; the wallet context comes from the other legs.
+      regex: 'recipient\s*:\s*(req(uest)?|body|payload|params|query|msg|message)\.recipient\b'
+
+  - id: sdk-wallet-pay-call
+    desc: Calls wallet SDK payment method
+    crit: notable
+    if:
+      type: text
+      regex: '\w+\.sdk\.pay\s*\('
+
+  - id: service-loads-agent-private-keys
+    desc: Loads private keys into a service
+    crit: notable
+    if:
+      type: text
+      regex: 'privateKey\s*:\s*m\.privateKey'
+
+composite_rules:
+  - id: api-rejects-only-missing-key-header
+    desc: API rejects missing key without value validation
+    crit: suspicious
+    near_bytes: 240
+    all:
+      - id: x-api-key-header-read
+      - id: api-key-missing-header-rejection
+    unless:
+      - id: metadata/lang/source/syntax/comparison::api-key-or-supplied-inequality
+  - id: presence-key-gated-wallet-payment-endpoint
+    desc: Wallet payment endpoint checks only key presence
+    crit: suspicious
+    near_bytes: 3500
+    all:
+      - id: api-rejects-only-missing-key-header
+      - id: micro-behaviors/data/parse/json::json-body-identifier-parse
+      - id: request-derived-recipient-field
+      - id: sdk-wallet-pay-call
+
+  - id: unauthenticated-agent-wallet-payment-api
+    desc: Wallet payments lack API-key value validation
+    crit: hostile
+    conf: 0.98
+    attack: T1657,T1190
+    near_bytes: 5000
+    all:
+      - id: presence-key-gated-wallet-payment-endpoint
+      - id: service-loads-agent-private-keys

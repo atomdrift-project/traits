@@ -1,0 +1,59 @@
+defaults:
+  platforms: [windows]
+  attack: T1055.001
+  mbc: E1055
+
+composite_rules:
+  # Imports alone do not establish injection. A small, resource-free loader
+  # that also parses PE headers gives additional evidence of a custom payload.
+  - id: window-hook-thread-dll-injector
+    desc: Small PE-parsing window-hook loader
+    crit: hostile
+    conf: 0.95
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/ui/window/hook::hook-window-and-library-api-profile
+      - id: metadata/binary/layout/size::small-pe
+      - id: metadata/binary/resource/size::no-resources
+      - id: micro-behaviors/data/format/pe-parser::inline-pe-signature-check
+      - id: metadata/binary/layout/tls::pe-multiple-tls-callbacks
+  # Hooking a window's thread with a loaded DLL, walking that DLL's export
+  # directory for any hook procedure, and posting a thread message to force
+  # the load is a generic arbitrary-DLL injector. Companion-DLL hook tools
+  # name their own export and do not enumerate a foreign export table.
+  - id: window-thread-hook-arbitrary-dll-injector
+    desc: Injects chosen DLL via window-thread hook
+    crit: hostile
+    conf: 0.95
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/ui/window/hook::hook-window-and-library-api-profile
+      - id: micro-behaviors/fs/file/pe-inspect::staged-dll-export-directory-lookup
+      - id: micro-behaviors/os/message/queue::post-thread-message-api
+  - id: source-window-hook-thread-dll-injector
+    desc: Source injects DLL via foreign window hook
+    crit: hostile
+    conf: 0.96
+    for: [c, cpp]
+    near_lines: 80
+    all:
+      - id: micro-behaviors/ui/window/enumerate::find-window-source
+      - id: micro-behaviors/ui/window/enumerate::get-window-thread-process-id-call-source
+      - id: micro-behaviors/dylib/load/source::load-library-source
+      - id: micro-behaviors/dylib/lookup::get-proc-address-source-call
+      - id: micro-behaviors/ui/window/hook::set-windows-hook-ex-call-or-name-source
+    any:
+      - id: micro-behaviors/os/message/queue::post-thread-message-source
+      - id: micro-behaviors/fs/file/pe-inspect::image-directory-entry-to-data-source
+  - id: unsigned-debug-privileged-window-hook
+    desc: Unsigned binary with debug privilege and hooks
+    crit: hostile
+    conf: 0.97
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/ui/window/hook::hook-window-and-library-api-profile
+      - id: metadata/signature/absent::unsigned-missing-signature-record
+      - id: micro-behaviors/os/privilege/token/adjust::debug-privilege-process-access
+    any:
+      - id: micro-behaviors/mem/read/cross-process::read-process-memory
+      - id: micro-behaviors/ui/window/hook::windows-hook-lifecycle

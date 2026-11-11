@@ -1,0 +1,104 @@
+# Generic received-task dispatch.
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+  attack: T1059.007
+  mbc: B0022
+
+traits:
+  - id: deno-forwarded-hidden-run-key-command
+    desc: Forwards hidden Run-key command by HTTP
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: tree-sitter
+      language: javascript
+      query: |
+        ((function_declaration
+          body: (statement_block) @installer)
+          (#match? @installer "(?s)reg add.{0,180}conhost\\.exe\\s+--headless")
+          (#match? @installer "(?s)return fetch\\s*\\([^,]{1,80},.{0,180}JSON\\.stringify\\s*\\(\\s*\\{\\s*command\\s*\\}\\s*\\)")) @forwarding
+  - id: deno-forwarded-hidden-run-key-survey
+    desc: WebSocket forwards hidden autorun and recon
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: tree-sitter
+      language: javascript
+      query: |
+        ((program
+          (lexical_declaration
+            (variable_declarator
+              name: (identifier) @socket
+              value: (new_expression constructor: (identifier) @constructor)))
+          (expression_statement
+            (assignment_expression
+              left: (member_expression
+                object: (identifier) @owner
+                property: (property_identifier) @event)
+              right: (arrow_function
+                body: (statement_block
+                  (expression_statement
+                    (await_expression
+                      (call_expression
+                        function: (identifier) @callback_post
+                        arguments: (arguments . (identifier) @callback_endpoint)))))) @handler))
+          (function_declaration
+            name: (identifier) @installer
+            body: (statement_block
+              (return_statement
+                (call_expression
+                  function: (identifier) @installer_post
+                  arguments: (arguments . (identifier) @install_endpoint))))) @persistence)
+          (#eq? @constructor "WebSocket")
+          (#eq? @socket @owner)
+          (#eq? @event "onopen")
+          (#eq? @callback_post "fetch")
+          (#eq? @installer "installPersistence")
+          (#eq? @installer_post "fetch")
+          (#eq? @callback_endpoint @install_endpoint)
+          (#match? @handler "(?s)JSON\\.stringify.{0,180}ipconfig\\s+/all\\s*&&\\s*route\\s+print\\s*&&\\s*tasklist")
+          (#match? @persistence "(?s)reg add.{0,180}conhost\\.exe\\s+--headless")
+          (#match? @persistence "JSON\\.stringify\\s*\\(\\s*\\{\\s*command\\s*\\}\\s*\\)")) @forwarding
+
+  - id: deno-request-body-shell-output
+    desc: Deno server runs request body through shell
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: tree-sitter
+      language: javascript
+      query: |
+        ((call_expression
+          function: (member_expression object: (identifier) @deno_server property: (property_identifier) @serve)
+          arguments: (arguments (arrow_function
+            parameters: (formal_parameters . (identifier) @request .)
+            body: (statement_block
+              (lexical_declaration (variable_declarator
+                name: (identifier) @body
+                value: (await_expression (call_expression
+                  function: (member_expression object: (identifier) @request_use property: (property_identifier) @text)
+                  arguments: (arguments)))))
+              .
+              (expression_statement (await_expression (call_expression
+                function: (member_expression
+                  object: (new_expression
+                    constructor: (member_expression object: (identifier) @deno_command property: (property_identifier) @command)
+                    arguments: (arguments . (string (string_fragment) @shell)
+                      (object (pair key: (property_identifier) @args
+                        value: (array . (string (string_fragment) @flag) . (identifier) @body_use .))) .))
+                  property: (property_identifier) @start)
+                arguments: (arguments))))))))
+          (#eq? @deno_server "Deno")
+          (#eq? @serve "serve")
+          (#eq? @request @request_use)
+          (#eq? @text "text")
+          (#eq? @deno_command "Deno")
+          (#eq? @command "Command")
+          (#eq? @shell "cmd")
+          (#eq? @args "args")
+          (#eq? @flag "/c")
+          (#eq? @body @body_use)
+          (#eq? @start "output")) @dispatch
+
+composite_rules:

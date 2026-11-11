@@ -1,0 +1,69 @@
+# Provider security withdrawals. Registry facts retain the exact reason in
+# metadata; these rules set the endpoint triage disposition for the affected
+# coordinate. They apply equally to a package and to its fetched dependencies.
+defaults:
+  for: [registry]
+  platforms: [all]
+  attack: T1195.002
+
+composite_rules:
+  # The validator recognizes this exact file-scoped policy: either official
+  # registry fact independently establishes the security hold.
+  - id: registry-security-held-package
+    desc: Registry reports a security hold
+    crit: suspicious
+    conf: 0.99
+    scope: file
+    any:
+      - id: metadata/registry::registry-security-hold
+      - id: metadata/registry::registry-security-hold-record
+    # Report the original release's security withdrawal, not a hostile verdict
+    # on npm's inert replacement. The removed-coordinate rule below still
+    # requires the independent historical-release removal fact.
+    unless:
+      - id: metadata/registry::registry-security-holder-version
+
+  - id: declared-dependency-security-held
+    desc: Declared dependency under registry security hold
+    for: [package.json]
+    crit: suspicious
+    conf: 0.99
+    scope: file
+    # The follow phase attributes this to the exact declaring file, including
+    # when no payload can be fetched. Unknown resolution never supplies it.
+    # Suspicious, not hostile: the count also covers npm's still-listed inert
+    # holder (benign packages commonly declare "fs": "0.0.1-security"). A
+    # dependency release actually removed under the hold is convicted by
+    # registry-security-withdrawn-package-coordinate below.
+    all:
+      - id: metadata/package/dependencies/declaration::declared-dependency-security-held
+
+  - id: registry-security-withdrawn-package-coordinate
+    desc: Release removed under registry security hold
+    crit: hostile
+    conf: 0.97
+    # Same registry document, never outer scope: pairing one dependency's hold
+    # with a different dependency's ordinary removal would fabricate a verdict.
+    # A historical publication timestamp must survive for version-removed to
+    # be set. A 404, private name, or network failure cannot supply these facts.
+    # The inert replacement and reserved core-module names remain listed and
+    # do not satisfy version-removed. The hold is either npm's holder record
+    # or the provider's own hold on this removed version (npm deletes a single
+    # malicious version under a malware advisory, leaving no holder).
+    all:
+      - id: metadata/registry::version-removed
+    any:
+      - id: metadata/registry::registry-security-hold-record
+      - id: metadata/registry::registry-security-hold
+
+  - id: registry-security-withdrawn-deprecation
+    desc: Registry withdrew release for security reasons
+    crit: hostile
+    conf: 0.98
+    # Security must be tied to withdrawal in the provider's own reason. A
+    # vulnerability warning, ordinary deprecation or unspecified unpublish is
+    # insufficient, even when the dependency's original bytes are unavailable.
+    all:
+      - id: metadata/registry::registry-security-withdrawal-reason
+      - id: metadata/registry::deprecated
+

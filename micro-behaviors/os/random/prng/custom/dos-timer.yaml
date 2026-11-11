@@ -5,6 +5,24 @@ defaults:
   platforms: [windows, unix]
   size_max: 65536
 traits:
+  - id: dos-bios-tick-counter-read
+    desc: DOS reads BIOS tick counter
+    crit: notable
+    conf: 0.8
+    if:
+      type: hex
+      pattern: "26 (A1 6C 00|8B 1E 6C 00|8B 16 6C 00|8B 0E 6C 00)"
+
+  # PIT timing and the DOS date service contribute masked values to the
+  # generator's state. Keep both sources and the state update in one match.
+  - id: dos-pit-date-state-values
+    desc: DOS mixes PIT/date values into state
+    crit: notable
+    conf: 0.94
+    if:
+      type: hex
+      pattern: "E5 40 (25 ?? ??|83 E0 ??) 91 33 DB E8 ?? ?? B4 2A CD 21 (8A CE|88 F1|8A CA) 83 E1 ?? B3 04 E8"
+
   - id: dos-bios-pit-rotate-xor-prng
     desc: DOS timer-seeded rotate/XOR state generator
     crit: notable
@@ -12,3 +30,45 @@ traits:
     if:
       type: hex
       pattern: "2B C0 CD 1A E4 40 91 92 [0-8] 31 07 D3 07 33 0F D3 C0 33 17 D3 CA"
+
+  - id: dos-pit-feedback-table-index
+    desc: DOS mixes PIT timer into table index
+    crit: notable
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "(E4|E5) 40 [2-6] (25 03 00|83 E0 03|24 03) [0-10] (03 C0|01 C0|D1 E0) (03 F0|01 C6|03 D8|01 C3) C3"
+
+  - id: dos-pit-register-exclusion-selector
+    desc: DOS PIT loop selects non-SP register
+    crit: notable
+    conf: 0.96
+    if:
+      type: hex
+      pattern: "(E4|E5) 40 [2-12] 80 E4 07 (80 FC 04|3C 04) 74 ?? (3A 26|3A 06|38 26|38 06) ?? ?? 74 ?? (0C C0 C3|C3)"
+
+  # Seeds a 32-bit shift/XOR LFSR (SHL AX, 1; RCL DX, 1; XOR BL, DH) using
+  # DOS time (INT 21h AH=2Ch) mixed with two PIT timer channel-0 reads (IN AL, 40h).
+  - id: dos-pit-time-seeded-lfsr-prng
+    desc: DOS time and PIT seed 32-bit LFSR
+    crit: notable
+    conf: 0.96
+    if:
+      type: yara
+      source: |
+        rule dos_pit_time_seeded_lfsr_prng {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $lfsr = {
+              B4 2C CD 21
+              E4 40 8A E0 E4 40
+              33 C1 33 D0
+              [2-16]
+              D1 E0 D1 D2 8A D8 32 DE 79 02 FE C0 E2 F2
+            }
+          condition:
+            $lfsr
+        }
+
+

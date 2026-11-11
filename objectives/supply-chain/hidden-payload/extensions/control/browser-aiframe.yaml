@@ -3,6 +3,12 @@ defaults:
   for: [javascript, typescript]
   attack: T1195.002
 traits:
+- id: encrypted-prompts-http-upload
+  desc: Encrypts prompt records for HTTP upload
+  crit: notable
+  if:
+    type: text
+    regex: '(?i)["'']?prompts["'']?\s*:\s*\w+[\s\S]{0,300}encrypt\w*\([\s\S]{0,200}fetch\('
 - id: runtime-onmessage-accept-all
   desc: Extension message listener accepts all
   crit: suspicious
@@ -20,13 +26,6 @@ traits:
 # NOTE: postMessage sender/receiver traits live in
 # micro-behaviors/communications/ipc/message. They are neutral capabilities
 # used by normal pages, workers, iframes, and extensions.
-- id: message-origin-validation--rx-12
-  desc: allowedOrigins.includes(event.origin) check
-  crit: notable
-  conf: 0.82
-  if:
-    type: text
-    regex: allowedOrigins?\.includes\(.{0,80}\.origin
 - id: extension-local-ui-iframe-prompt-src
   desc: iframe.src points to extension prompt.html
   crit: notable
@@ -83,7 +82,7 @@ composite_rules:
   any:
   - id: iframe-paywall-path
   - id: shadow-dom-iframe
-  - id: message-origin-validation
+  - id: micro-behaviors/communications/http/client/origin-policy::origin-comparison-or-allowlist-check
 - id: extension-remote-dnr-header-control
   desc: Remote config controls all-site subframe headers
   crit: hostile
@@ -92,13 +91,13 @@ composite_rules:
   for: [xpi, crx, zip, chrome-manifest, javascript, json]
   scope: archive
   all:
-  - id: metadata/permission/manifest::host-permission-all-urls
+  - id: metadata/permission/host::host-permission-all-urls
   - id: micro-behaviors/communications/http/request/json::fetch-json-response
-  - id: micro-behaviors/communications/http/request/credentials::fetch-credentials-include
-  - id: micro-behaviors/process/hook/webextension::chrome-dnr-update-dynamic-rules
-  - id: micro-behaviors/process/hook/webextension::dnr-modify
+  - id: micro-behaviors/communications/http/request/credentials/literal::fetch-credentials-include
+  - id: micro-behaviors/communications/http/intercept::chrome-dnr-update-dynamic-rules
+  - id: micro-behaviors/communications/http/header/modify::dnr-modify
   - id: micro-behaviors/communications/http/header/custom::header-remove-operation
-  - id: micro-behaviors/process/hook/webextension::dnr-subframe-resource-type
+  - id: micro-behaviors/communications/http/intercept::dnr-subframe-resource-type
 - id: extension-shadow-iframe-message-channel
   desc: Shadow DOM iframe message channel
   crit: suspicious
@@ -110,7 +109,7 @@ composite_rules:
   any:
   - id: iframe-paywall-path
   - id: micro-behaviors/communications/ipc/message::postmessage-to-iframe
-  - id: message-origin-validation
+  - id: micro-behaviors/communications/http/client/origin-policy::origin-comparison-or-allowlist-check
 - id: extension-remote-storage-proxy
   desc: Extension storage remote-control proxy
   crit: hostile
@@ -118,10 +117,10 @@ composite_rules:
   all:
   - id: metadata/permission/runtime::is-extension
   - id: micro-behaviors/data/db/web-storage::chrome-storage-api
-  - id: micro-behaviors/data/db/web-storage::storage-proxy-command-words
+  - id: micro-behaviors/data/db/access::storage-proxy-command-words
   - id: micro-behaviors/communications/ipc/message::js-message-event-listener
   any:
-  - id: message-origin-validation
+  - id: micro-behaviors/communications/http/client/origin-policy::origin-comparison-or-allowlist-check
   - id: micro-behaviors/communications/ipc/message::postmessage-to-iframe
   unless:
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
@@ -136,25 +135,28 @@ composite_rules:
   any:
   - id: micro-behaviors/browser-extension/tabs::chrome-tabs-query
   - id: micro-behaviors/browser-extension/tabs::chrome-tabs-update
-  - id: objectives/collection/messaging/app::ai-chat-dom-scrape
+  - id: micro-behaviors/data/collection/dom::ai-chat-dom-scrape
   unless:
   - id: well-known/app/ai/browser-agent/quantomate::quantomate-browser-extension-context
   - id: well-known/app/ai/browser-agent/quantomate::quantomate-cdp-runtime-context
 - id: extension-ai-chat-exfil
   for: [xpi, crx, zip, javascript, typescript]
-  desc: Extension scrapes AI chat and rewrites CORS for cross-origin exfil
+  desc: Extension collects and uploads AI prompts
   crit: hostile
   conf: 0.95
-  # A content script that scrapes AI chat conversation DOM AND builds a
-  # declarativeNetRequest rule rewriting Access-Control-Allow-Origin is
-  # exfiltrating those conversations cross-origin (the koi AI-chat-stealer
-  # campaign). A legitimate AI tool that reads its own page never needs to
-  # forge CORS response headers. scope: outer pools evidence across the
-  # extension's bundled scripts.
+  # The scraper and encrypted upload can be in separate extension scripts.
   scope: outer
   all:
-  - id: objectives/collection/messaging/app::ai-chat-dom-scrape
-  - id: micro-behaviors/process/hook/webextension::dnr-cors-origin-rewrite
+  - id: micro-behaviors/data/collection/dom::ai-chat-dom-scrape
+  - id: encrypted-prompts-http-upload
+- id: extension-ai-chat-cors-combination
+  for: [xpi, crx, zip, javascript, typescript]
+  desc: Extension reads AI chat and rewrites CORS
+  crit: suspicious
+  scope: outer
+  all:
+  - id: micro-behaviors/data/collection/dom::ai-chat-dom-scrape
+  - id: micro-behaviors/communications/http/header/modify::dnr-cors-origin-rewrite
 - id: vscode-chat-cookie-file-exfil
   desc: VS Code chat cookie file exfiltration
   crit: hostile
@@ -190,14 +192,6 @@ composite_rules:
   any:
   - id: micro-behaviors/ui/window/dom/create::shadow-root-near-iframe-create
   - id: micro-behaviors/ui/window/dom/create::iframe-create-near-shadow-root
-- id: message-origin-validation
-  desc: Validates postMessage origin
-  crit: notable
-  conf: 0.82
-  any:
-  - id: micro-behaviors/communications/ipc/message::http-origin-equality-check
-  - id: micro-behaviors/communications/ipc/message::http-origin-inequality-check
-  - id: message-origin-validation--rx-12
 - id: extension-local-ui-iframe
   desc: Extension local UI iframe with PASSA marker
   crit: component

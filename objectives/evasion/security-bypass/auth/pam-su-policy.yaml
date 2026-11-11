@@ -1,0 +1,59 @@
+# Dream's PHP2Shell/Fragnesia investigation describes replacing /etc/pam.d/su
+# with pam_permit.so to remove password authentication:
+# https://dreamgroup.com/blog/chained-php2shell-exploit-roots-25-servers
+# Bind destination and policy contents to the SAME write call. Reading the
+# policy, writing an audit fixture, or mentioning the module cannot match.
+defaults:
+  platforms: [unix]
+  for: [php, ruby, javascript, typescript]
+  attack: T1556.003
+
+traits:
+  - id: pam-su-unconditional-auth-write
+    desc: Writes sufficient-permit su PAM auth rule
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: symbol
+      kind: call
+      regex: '^(file_put_contents|File\.(bin)?write|([\w.]+\.)?writeFile(Sync)?)$'
+      args:
+        - index: 0
+          kind: string
+          exact: /etc/pam.d/su
+        - index: 1
+          kind: string
+          regex: &permit-policy '(?m)^[ \t]*auth[ \t]+sufficient[ \t]+pam_permit\.so([ \t\r\n]|$)'
+
+  # Path construction and policy contents must belong to the same write.
+  # A nearby read of su plus a write to an audit file is not policy tampering.
+  - id: pam-su-pathlib-unconditional-auth-write
+    desc: Pathlib writes permissive su authentication
+    crit: suspicious
+    conf: 0.98
+    for: [python]
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)write_text$'
+      receiver:
+        from:
+          call: '(^|\.)Path$'
+          argument: 0
+          literal: '^/etc/pam\.d/su$'
+      arg:
+        index: 0
+        kind: string
+        regex: *permit-policy
+
+composite_rules:
+  - id: pam-su-backdoor-command-execution
+    desc: Permissive su PAM write with webshell or root command
+    crit: hostile
+    conf: 0.99
+    attack: T1556.003,T1059
+    all:
+      - id: pam-su-unconditional-auth-write
+    any:
+      - id: micro-behaviors/process/identity/switch::php-shell-su-root
+      - id: objectives/command-and-control/backdoor/webshell/request/command::php-command-webshell

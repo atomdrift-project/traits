@@ -3,7 +3,6 @@ defaults:
   crit: notable
   conf: 0.8
   mbc: C0047
-  attack: T1070.004
 traits:
   - id: rimraf
     desc: Calls the rimraf recursive-deletion API
@@ -16,22 +15,13 @@ traits:
   - id: rm-rf
     desc: Contains rm -rf directory-deletion command
     for: [scripts, binaries, -shell]
-    unless:
-      - type: basename
-        regex: (^|[\\/])node_modules[\\/].{0,200}[\\/]test[\\/]
-      - id: metadata/package/testing/harness/runtime/
-      - id: micro-behaviors/process/create/shell/git::git-operations-1
-      - id: well-known/app/data/xore-honeypot::benign-context
-      - id: metadata/lang/source/syntax/command::git-working-tree-command-reference
-      - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
-      - id: well-known/app/infrastructure/k9x-satan::attack-fixture-context
-      - type: text
-        regex: '(?m)DEFAULT_DENIED_KEYWORDS\s*=\s*\['
-      - id: well-known/tool/offensive/ctf-skills::source-context
     if:
       type: text
       # Require command syntax: start of a line or a shell/string delimiter,
       # plus an operand. This excludes prose such as "similar to \`rm -rf\`".
+      # exclude_comments keeps commented-out commands (e.g. a disabled
+      # os.system cleanup line) from counting as deletion capability.
+      exclude_comments: true
       regex: '(?m)(^|["'';|&])\s*rm\s+-rf\s+\S'
   - id: shell-rm-rf-package-build-path
     desc: Shell recursively deletes package build path
@@ -54,12 +44,20 @@ traits:
     conf: 0.88
     platforms: [windows]
     for: [batch]
-    unless:
-      - type: basename
-        exact: build-pty4j-libpty.bat
     if:
       type: text
       regex: '(?i)\b(rd|rmdir)\s+/[sq]\b'
+  - id: powershell-remove-item-recurse
+    desc: PowerShell Remove-Item with -Recurse switch
+    crit: notable
+    conf: 0.88
+    platforms: [windows]
+    for: [scripts, binaries]
+    if:
+      type: text
+      # Bind the switch to the same pipeline segment as Remove-Item; a later
+      # Get-ChildItem -Recurse on another statement does not delete a tree.
+      regex: '(?i)\bRemove-Item\b[^\r\n|;]{0,120}\s-Recurse\b'
   - id: windows-deltree-recursive
     desc: Windows deltree removes a directory tree
     crit: notable
@@ -81,34 +79,50 @@ traits:
       # `exact: shutil.rmtree` missed — that gap is why a second, looser
       # `rmtree\s*\(` copy existed under fs/file/delete/.
       regex: '^(shutil\.)?rmtree$'
-    unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
   - id: fs-rm-recursive
+    size_max: 262144
     desc: Node.js fs.rm with recursive option
     crit: notable
     for:
       - javascript
       - typescript
-    unless:
-      - id: metadata/lang/scripted::dts-declaration-file
     if:
       # Imported functions and renamed receivers have the same behavior.
       # Require an actual recursive:true option, not a nearby comment or a
       # recursive:false request. Bind the true option to the removal call.
+      # Bundlers alias methods through a comma-sequence callee
+      # ((0, fs.rmSync)(dir, {recursive: true})) and minify true to !0;
+      # both shapes delete the same tree and keep the same option binding.
       type: tree-sitter
       query: |
         ((call_expression
           function: [(identifier) @call
-            (member_expression property: (property_identifier) @call)]
+            (member_expression property: (property_identifier) @call)
+            (parenthesized_expression
+              (sequence_expression
+                (member_expression property: (property_identifier) @call)))
+            (parenthesized_expression
+              (member_expression property: (property_identifier) @call))]
           arguments: (arguments (_) (object
             (pair key: [(property_identifier) @option
               (string (string_fragment) @option)] value: (true))))) @remove
           (#match? @call "^(rm|rmSync)$")
           (#eq? @option "recursive"))
+
+        ((call_expression
+          function: [(identifier) @call
+            (member_expression property: (property_identifier) @call)
+            (parenthesized_expression
+              (sequence_expression
+                (member_expression property: (property_identifier) @call)))
+            (parenthesized_expression
+              (member_expression property: (property_identifier) @call))]
+          arguments: (arguments (_) (object
+            (pair key: [(property_identifier) @option
+              (string (string_fragment) @option)] value: (unary_expression) @truthy)))) @remove
+          (#match? @call "^(rm|rmSync)$")
+          (#eq? @option "recursive")
+          (#match? @truthy "^!\\s*0$"))
   - id: rmdirSync-recursive
     desc: Node.js rmdirSync with recursive option
     for:
@@ -145,8 +159,6 @@ composite_rules:
     desc: Recursively deletes a directory tree
     crit: notable
     conf: 0.85
-    unless:
-      - id: well-known/lib/web/site-platforms/stacksjs/stx::stacksjs-stx-framework-context
     any:
       - id: rimraf
       - id: rm-rf

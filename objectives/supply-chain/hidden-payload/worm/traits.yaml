@@ -19,15 +19,7 @@ traits:
     type: string_literal
     regex: npm\s+owner\s+add
   unless:
-    - id: metadata/package/testing/presence/harness/
-    - id: metadata/package/testing/harness/runtime/
-# `npm-whoami-exec` and `npm-token-whoami-validation` moved to
-# micro-behaviors/os/package-manager/identity as one trait,
-# `npm-whoami-command`. Two matchers for one command meant every release script
-# was reported twice from a worm directory for making the login check npm
-# documents. The composites below reference the relocated atom and still supply
-# the owner-add, force-publish and workflow-write legs that carry worm intent.
-    - id: metadata/path::test-directory-component
+    - id: metadata/path/directory::test-directory-component
 - id: remove-postinstall
   desc: Removes postinstall script
   crit: notable
@@ -83,20 +75,36 @@ composite_rules:
   - id: npm-owner-add-exec
   - id: micro-behaviors/os/package-manager/identity::npm-whoami-command
   any:
-  - id: micro-behaviors/communications/http/url/registry::npm-profile-url
+  - id: micro-behaviors/communications/http/services/registry::npm-profile-url
   - id: remove-postinstall
 - id: npm-package-spam
-  desc: Modifies and mass-publishes npm packages
+  desc: Makes a package public and republishes it through npm
   crit: hostile
   conf: 0.95
   attack: T1195.002
   all:
   - id: micro-behaviors/os/package-manager/publish::npm-publish-command
-  - id: micro-behaviors/process/create/shell/bridge::js-exec
+  - id: micro-behaviors/process/create/shell/command-string::js-exec
   any:
   - id: micro-behaviors/data/property/assign::delete-private-property
   - id: npm-owner-add-exec
   - id: remove-postinstall
+- id: npm-generated-package-publish-loop
+  desc: Repeatedly renames and republishes a generated npm package
+  crit: hostile
+  conf: 0.96
+  attack: T1195.002
+  # Release automation may update a manifest and publish once. This loop
+  # combines generated manifest writes, a child-process publish, and randomized
+  # timer scheduling in one script, matching the registry-farming behavior
+  # even when it does not remove `private` or use a particular naming library.
+  all:
+  - id: micro-behaviors/fs/write/file/content::json-stringify-write-sync
+  - id: micro-behaviors/os/package-manager/publish::js-npm-publish-exec-string
+  - id: micro-behaviors/time/schedule/timeout::setTimeout
+  # The publish call, serialized manifest write, and timer are all required in
+  # the same script; together they distinguish a recurring package farm from
+  # ordinary one-shot release automation.
 - id: npm-maintainer-package-worm
   desc: Republish worm targets maintainer packages
   crit: hostile
@@ -123,7 +131,7 @@ composite_rules:
   attack: T1195.002,T1003.007,T1552.001
   all:
   - id: micro-behaviors/communications/http/services/registry::npm-maintainer-search-api
-  - id: objectives/supply-chain/credential-theft/registry::github-oidc-npm-publish
+  - id: micro-behaviors/communications/http/services/registry::github-oidc-npm-publish
   any:
   - id: objectives/credential-access/memory::github-runner-process-memory-secret-dump
   - id: objectives/credential-access/cloud/secret-inventory::detached-cloud-credential-collector
@@ -137,7 +145,7 @@ composite_rules:
   - id: npm-publish-token-option
   any:
   - id: npm-version-patch-force
-  - id: objectives/credential-access/env/secrets/file::npm-auth-token-extraction
+  - id: micro-behaviors/data/string/replace::npm-auth-prefix-replacement
   - id: micro-behaviors/os/env/package-manager::npm-token-env-read
 - id: npm-token-npmrc-publish-worm
   desc: NPM token writes npmrc then publishes package
@@ -169,9 +177,9 @@ composite_rules:
   all:
   - id: node-bundle-postinstall
   any:
-  - id: micro-behaviors/communications/http/services/github::github-workflow-file-write-api
+  - id: micro-behaviors/communications/http/services/github/automation::github-workflow-file-write-api
   - id: micro-behaviors/os/package-manager/identity::npm-whoami-command
-  - id: micro-behaviors/communications/http/services/github::github-create-repo-api
+  - id: micro-behaviors/communications/http/services/github/repository::github-create-repo-api
   - id: objectives/credential-access/api-harvest/token::trufflehog-filesystem-root-scan
   needs: 2
 - id: js-workflow-credential-worm
@@ -179,10 +187,10 @@ composite_rules:
   crit: hostile
   conf: 0.99
   all:
-  - id: micro-behaviors/communications/http/services/github::github-workflow-file-write-api
+  - id: micro-behaviors/communications/http/services/github/automation::github-workflow-file-write-api
   any:
   - id: micro-behaviors/os/package-manager/identity::npm-whoami-command
-  - id: micro-behaviors/communications/http/services/github::github-create-repo-api
+  - id: micro-behaviors/communications/http/services/github/repository::github-create-repo-api
   - id: objectives/credential-access/api-harvest/token::trufflehog-filesystem-root-scan
   - id: micro-behaviors/os/env/package-manager::npm-token-env-read
   needs: 2
@@ -198,7 +206,7 @@ composite_rules:
   near_bytes: 4000
   all:
   - id: npm-force-publish-token
-  - id: micro-behaviors/fs/read/file/full::node-npmrc-read-reference
+  - id: micro-behaviors/fs/read/file/content/configuration::node-npmrc-read-reference
 # The worm ships a push-triggered workflow template so any repository it
 # reaches re-executes the staged binary on the next push. Push triggers and
 # checkout steps are ordinary CI shape, so the run step invoking a staged

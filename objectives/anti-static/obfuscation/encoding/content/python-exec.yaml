@@ -1,0 +1,40 @@
+defaults:
+  platforms: [windows, unix]
+  for: [python]
+  crit: suspicious
+  attack: T1027
+
+traits:
+  # Text fallback when source parsing exceeds its line budget. The parser skips a
+  # line past its size limit, and these stagers put a multi-megabyte base64
+  # blob on the same line as the `exec(` -- so the call node never forms and
+  # the AST matchers miss the very packages that hide the most. A plain-text
+  # match survives the oversized line.
+  - id: base64-exec-text
+    desc: Standalone exec decodes long Base64 literal
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?m)^[ \t]*exec[ \t]*\([ \t]*(base64\.)?b64decode[ \t]*\(["'']{1,3}[A-Za-z0-9_+/=-]{256,}'
+
+composite_rules:
+  - id: b64decode-exec
+    # Bind the path to this member while reading package identity across files.
+    downgrade:
+      scope: archive
+      all:
+        - id: well-known/tool/detection/code-analysis/disclude::static-fixture-package-without-interpreter
+        - type: path
+          regex: '(^|[\\/])tests[\\/]fixtures[\\/]'
+    desc: Exec receives Base64-decoded Python source
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: micro-behaviors/process/interpreter/eval/python-builtins::python-exec-base64-result
+      - id: objectives/anti-static/obfuscation/control-flow/logic::imported-base64-exec
+    unless:
+      - id: metadata/lang/source/origin::heuristic-quoted-source
+      - id: objectives/anti-static/obfuscation/control-flow/logic::python-base64-runtime-wrappers
+      - id: metadata/package/testing/presence/harness::verified-python-test-file
+      - id: well-known/app/browser/ungoogled-chromium::ungoogled-chromium-patch-validator

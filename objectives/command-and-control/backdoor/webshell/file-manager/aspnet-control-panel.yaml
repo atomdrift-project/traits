@@ -23,7 +23,7 @@ traits:
     if:
       type: text
       exclude_html_comments: true
-      regex: '(?i)GetLogicalDrives\s*\(\s*\)'
+      regex: '(?i)(GetLogicalDrives|DriveInfo\.GetDrives)\s*\(\s*\)'
   - id: aspnet-control-panel-directory-listing-call
     desc: ASP.NET lists directory entries
     crit: notable
@@ -170,28 +170,51 @@ traits:
       regex: '(?is)new\s+SqlCommand\s*\(\s*command\s*,\s*myconn\s*\)[\s\S]{0,180}ExecuteReader\s*\('
 
 composite_rules:
-  # Read-only sibling of the file-manager panels: no upload, delete, or
-  # password gate, but any HTTP caller can enumerate every drive and
-  # directory and download any file whose path they supply. Whole-
-  # filesystem read exposure is the hostile claim on its own.
-  - id: aspnet-unauthenticated-file-browser
-    desc: ASP.NET endpoint browses drives and downloads any file
-    crit: hostile
+  # The matching endpoint exposes drive and directory browsing and accepts
+  # paths for download. These facts do not establish whether it has a gate.
+  - id: aspnet-drive-browser-file-download
+    desc: ASP.NET endpoint browses and downloads files
+    crit: suspicious
     conf: 0.98
     all:
       - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-directory-listing-call
       - id: aspnet-control-panel-logical-drives
-      - id: aspnet-control-panel-querystring-file-param
       - id: micro-behaviors/communications/http/response::aspnet-response-writefile
+    any:
+      - id: aspnet-control-panel-querystring-file-param
+      - id: aspnet-control-panel-request-get-value
+  # Host-wide exfiltration browser: drive enumeration takes the listing past
+  # the application root, listed entries link their full paths back into the
+  # page, a request value is accepted as a path, and file content is returned.
+  # No page-level user or role check gates it. Proximity does not prove data
+  # flow; the round trip of full paths through the page's own links does.
+  - id: aspnet-unauthenticated-host-file-browser
+    desc: Ungated ASP.NET drive browser returns files
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
+      - id: aspnet-control-panel-logical-drives
+      - id: aspnet-control-panel-directory-listing-call
+      - id: micro-behaviors/communications/http/server/response::aspnet-query-link-full-path
+      - id: micro-behaviors/communications/http/server/response::aspnet-file-content-response
+    any:
+      - id: micro-behaviors/fs/path/construct::aspnet-request-value-path-check
+      - id: micro-behaviors/fs/path/construct::aspnet-request-path-check-direct
+    unless:
+      - id: micro-behaviors/communications/http/server/authz::aspnet-authenticated-user-check
   - id: aspnet-request-file-download
     desc: ASP.NET serves any requested file for download
-    crit: hostile
+    # A requested path and response write also occur in ordinary file tools.
+    crit: notable
     conf: 0.98
     all:
       - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
-      - id: aspnet-control-panel-querystring-file-param
       - id: micro-behaviors/communications/http/response::aspnet-response-writefile
+    any:
+      - id: aspnet-control-panel-querystring-file-param
+      - id: aspnet-control-panel-request-get-value
   - id: aspnet-control-panel-command-loop
     desc: ASP.NET form runs commands through cmd.exe and returns output
     crit: hostile
@@ -199,8 +222,8 @@ composite_rules:
     all:
       - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
       - id: aspnet-control-panel-cmd-process
-      - id: micro-behaviors/process/io/stream::aspnet-input-redirect-or-line-write
-      - id: micro-behaviors/process/io/stream::aspnet-output-redirect-or-read
+      - id: micro-behaviors/data/stream/transfer::aspnet-input-redirect-or-line-write
+      - id: micro-behaviors/data/stream/transfer::aspnet-output-redirect-or-read
       - id: aspnet-control-panel-command-input
 
   - id: aspnet-control-panel-file-manager
@@ -222,9 +245,9 @@ composite_rules:
     conf: 0.99
     all:
       - id: "metadata/lang/source/syntax/directive::aspnet-page-directive"
-      - id: micro-behaviors/process/create/shell/spawn::aspnet-startinfo-cmd-exe
+      - id: metadata/lang/source/syntax/assignment/member::aspnet-startinfo-cmd-exe
       - id: aspnet-control-panel-text-startinfo-arguments
-      - id: micro-behaviors/process/io/stream::aspnet-output-redirect-or-read
+      - id: micro-behaviors/data/stream/transfer::aspnet-output-redirect-or-read
 
   - id: aspnet-control-panel-request-file-manager
     desc: ASP.NET request can browse, download, upload, and delete server files

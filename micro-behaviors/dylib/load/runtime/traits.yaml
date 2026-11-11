@@ -10,8 +10,16 @@ traits:
     conf: 0.9
     for: [pe, dll]
     if:
-      type: text
+      type: raw
       regex: 'platform_check\s*\('
+  - id: pyd-embeds-init-cache-path-symbol
+    desc: Windows pyd embeds init_cache hook signature
+    crit: notable
+    conf: 0.92
+    for: [pe, dll]
+    if:
+      type: raw
+      regex: 'init_cache\([A-Za-z_][A-Za-z0-9_]{0,24},\s*_[A-Za-z0-9_]{1,24}\)'
   - id: python-pyd-extension-string
     desc: Python code references a native module suffix
     crit: notable
@@ -52,13 +60,9 @@ traits:
     if:
       type: symbol
       exact: dlopen
-    unless:
-      - id: well-known/app/ai/coding-agent/tabby::tabby-basename
-      - id: metadata/file/string/identity::python3-interpreter-basename
-      - id: metadata/lang/compiler/generated/
     downgrade:
       any:
-        - id: metadata/file/string/identity::system-shell-basename
+        - id: micro-behaviors/fs/path/application/interpreter::system-shell-basename
   # GLib's GModule is the portable dlopen wrapper: GTK/GNOME-stack programs
   # (and anything else linked against GLib) load plugins through
   # g_module_open/g_module_symbol rather than calling dlopen directly, so a
@@ -148,12 +152,11 @@ traits:
       type: symbol
       exact: LoadLibraryA
     unless:
-      - id: metadata/binary/installer/family/
-      # Do not use metadata/signed/trust-level/ — it also contains unsigned-*
+      - id: metadata/installer/product/
+      # Do not use metadata/signature/trust-level/ — it also contains unsigned-*
       # markers that incorrectly blanked LoadLibrary on every unsigned PE.
-      - id: metadata/signed/platform/
-      - id: metadata/signed/developer/
-      - id: metadata/binary/section/label::upx-section
+      - id: metadata/signature/verified/developer/
+      - id: metadata/binary/section/label/packing::upx-section
       - id: well-known/tool/development/toolchain/llvm::clangd-name
       - id: well-known/tool/development/toolchain/llvm::clang-name
       - id: well-known/lib/runtime/scripted/electron::electron-enable-logging-env
@@ -177,7 +180,6 @@ traits:
       - id: metadata/binary/header/malformed::malformed-pe-structure
       - type: symbol
         exact: LoadLibraryA
-      - id: metadata/package/testing/corpus::concatenated-pe-poc-corpus
   - id: msi-embedded-load-library-a
     desc: MSI embedded LoadLibraryA reference
     crit: notable
@@ -212,8 +214,7 @@ traits:
     unless:
       - id: metadata/binary/symbols/count::many-imports
       - id: metadata/binary/code/complexity::many-functions
-      - id: metadata/binary/installer/family/
-      - id: metadata/signed/platform::microsoft
+      - id: metadata/signature/verified/platform::microsoft
       # Go's Windows syscall runtime imports LoadLibraryW even when the
       # program never performs dynamic library loading itself.
       - id: metadata/lang/runtime::go-runtime-marker
@@ -234,7 +235,7 @@ traits:
     unless:
     # The symbol records the API being used; this also sees the name sitting in
     # data. Standing down there keeps one use from counting twice.
-    - id: load-library-w
+      - id: load-library-w
   - id: load-library-ex
     desc: Extended dynamic library loading
     crit: notable
@@ -258,15 +259,6 @@ traits:
     if:
       type: symbol
       exact: LoadLibraryExA
-    unless:
-      - type: basename
-        exact: WebView2Loader.dll
-      - type: basename
-        regex: '(^|[!/])libEGL\.dll$'
-      - type: basename
-        regex: ^clink_dll_.*\.dll$
-      - type: basename
-        regex: \.node$
   - id: load-library-ex-w
     desc: LoadLibraryExW API reference
     crit: notable
@@ -282,10 +274,7 @@ traits:
     unless:
       - id: metadata/lang/compiler/systems::go-binary-comp
       - id: metadata/binary/symbols/count::many-imports
-      - id: metadata/binary/framework::electron-desktop-runtime
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/script/
-      - id: metadata/signed/platform::microsoft
+      - id: metadata/signature/verified/platform::microsoft
       - type: basename
         exact: WebView2Loader.dll
     downgrade:
@@ -307,7 +296,6 @@ traits:
       exact: SetDllDirectoryW
     downgrade:
       any:
-        - id: metadata/signed/platform/
         - id: metadata/binary/symbols/count::many-exports
   - id: dlerror
     desc: Dynamic linker error handling
@@ -322,11 +310,7 @@ traits:
       exact: dlerror
     downgrade:
       any:
-        - id: metadata/file/string/identity::system-shell-basename
-    unless:
-      - id: well-known/app/ai/coding-agent/tabby::tabby-basename
-      - id: metadata/file/string/identity::python3-interpreter-basename
-      - id: metadata/lang/compiler/generated/
+        - id: micro-behaviors/fs/path/application/interpreter::system-shell-basename
   - id: nsbundle
     desc: macOS NSBundle loading
     crit: notable
@@ -371,41 +355,22 @@ traits:
     desc: ctypes.CDLL pattern
     crit: notable
     conf: 0.7
-    attack: T1574
     for:
       - python
     if:
       type: symbol
       kind: call
       exact: ctypes.CDLL
-    unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
   - id: cdll-paren
     desc: CDLL( call pattern
     crit: notable
     conf: 0.7
-    attack: T1574
     for:
       - python
     if:
       type: symbol
       kind: call
       exact: CDLL
-    unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-  # A ctypes loader call used as a bare statement: `_ct.CDLL(path)` with the
-  # returned handle never bound. Nothing can be called through the library
-  # afterwards, so the only effect is the loader's own initialisation code
-  # (DllMain / constructors). Text-matched so aliased modules (`import
-  # ctypes as _ct`) are covered, which the exact symbol matchers above miss.
   - id: ctypes-load-handle-discarded
     desc: ctypes library load with handle discarded
     crit: notable
@@ -538,9 +503,7 @@ composite_rules:
       - id: micro-behaviors/dylib/lookup::dlsym-symbol
     downgrade:
       any:
-        - id: metadata/file/string/identity::system-shell-basename
-    unless:
-      - id: metadata/lang/compiler/generated/
+        - id: micro-behaviors/fs/path/application/interpreter::system-shell-basename
   - id: dl-function
     desc: Any dl* function usage
     crit: notable
@@ -552,7 +515,7 @@ composite_rules:
     any:
       - id: dlopen
       - id: micro-behaviors/dylib/lookup::dlsym-symbol
-      - id: micro-behaviors/dylib/load/unload::dlclose
+      - id: micro-behaviors/dylib/unload::dlclose
       - id: dlerror
   - id: nsbundle-dynamic
     desc: NSBundle and dynamic loader APIs
@@ -566,8 +529,7 @@ composite_rules:
       - id: dl-function
     downgrade:
       any:
-        - id: metadata/binary/vendor/
-        - id: metadata/signed/platform::apple
+        - id: metadata/signature/verified/platform::apple
   - id: dynamic-loader-detected
     desc: Dynamic code loading pattern
     crit: notable
@@ -582,10 +544,7 @@ composite_rules:
       - id: nsbundle-dynamic
     downgrade:
       any:
-        - id: metadata/binary/vendor/
-        - id: metadata/signed/platform::apple
-        - id: micro-behaviors/dylib/library/family/
-        - id: micro-behaviors/dylib/library/libc/
+        - id: metadata/signature/verified/platform::apple
   - id: ctypes-cdll
     desc: Python ctypes CDLL loading
     crit: notable

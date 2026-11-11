@@ -1,0 +1,74 @@
+defaults:
+  mbc: B0033
+  crit: hostile
+  platforms: [windows, unix]
+  attack: T1055
+  for: [python]
+
+composite_rules:
+  - id: text-python-ctypes-shellcode-loader
+    desc: Text Python RWX buffer and pointer call
+    conf: 0.98
+    for: [text]
+    platforms: [windows]
+    attack: T1036.008,T1055.001,T1620
+    near_lines: 40
+    all:
+      - id: metadata/file/extension/identity::doc-or-config-extension
+      - id: micro-behaviors/mem/alloc/virtual::python-virtualalloc-near-rwx-number
+      - id: "micro-behaviors/mem/copy::text-python-ctypes-memmove-call"
+      - id: micro-behaviors/process/inject/runtime/call::text-python-cfunctype-function-pointer-call
+  - id: python-ctypes-shellcode-loader
+    desc: Python executable buffer and thread
+    conf: 0.99
+    platforms: [windows]
+    attack: T1055.001,T1620
+    all:
+      - id: micro-behaviors/mem/alloc/virtual::python-virtualalloc-near-rwx-number
+      - id: "micro-behaviors/mem/copy::python-ctypes-memmove"
+      - id: micro-behaviors/process/thread/create::python-ctypes-create-thread
+    any:
+      - id: micro-behaviors/data/decode/base64/unspecified::base64-decoding
+      - id: micro-behaviors/crypto/symmetric/stream/rc4/cipher::source-rc4-implementation
+    needs: 1
+  # Heap-API sibling of the VirtualAlloc loader above: the stage is held in
+  # a private heap (HeapCreate, often with HEAP_CREATE_ENABLE_EXECUTE so no
+  # VirtualProtect call is needed), copied there with RtlMoveMemory, and
+  # entered with CreateThread. Same consequence — bytes allocated, copied,
+  # and threaded — through the heap API set instead of the virtual set.
+  - id: python-heap-copy-thread-shellcode-loader
+    desc: Python heap stage copied and threaded
+    conf: 0.97
+    platforms: [windows]
+    attack: T1055.001
+    all:
+      - id: micro-behaviors/mem/alloc/heap::python-heapalloc-call
+      - id: micro-behaviors/process/inject/runtime/call::python-rtlmovememory-call
+      - id: micro-behaviors/process/thread/create::python-ctypes-create-thread
+    any:
+      - id: micro-behaviors/data/decode/hex::python-fromhex
+      - id: metadata/lang/encoding/hex::hex-long-hex-string-literal
+      - id: micro-behaviors/data/decode/base64/unspecified::base64-decoding
+    needs: 1
+    unless:
+      - id: python-machineguid-bound-heap-shellcode-loader
+  # Host-bound variant of the heap loader above: execution is first gated
+  # on a marker file named by the SHA-256 of this host's MachineGuid, so
+  # the stage runs only on the intended host and exits elsewhere. The
+  # gate is what distinguishes a targeted, weaponized runner from the
+  # same heap-copy-thread loader delivered indiscriminately.
+  - id: python-machineguid-bound-heap-shellcode-loader
+    desc: MachineGuid-bound Python heap shellcode loader
+    conf: 0.97
+    platforms: [windows]
+    attack: T1055.001,T1497
+    all:
+      - id: micro-behaviors/os/sysinfo/machine-id::python-machineguid-hash-marker-gate
+      - id: micro-behaviors/mem/alloc/heap::python-heapalloc-call
+      - id: micro-behaviors/process/inject/runtime/call::python-rtlmovememory-call
+      - id: micro-behaviors/process/thread/create::python-ctypes-create-thread
+    any:
+      - id: micro-behaviors/data/decode/hex::python-fromhex
+      - id: metadata/lang/encoding/hex::hex-long-hex-string-literal
+      - id: micro-behaviors/data/decode/base64/unspecified::base64-decoding
+    needs: 1

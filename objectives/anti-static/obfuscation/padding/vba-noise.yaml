@@ -1,0 +1,59 @@
+defaults:
+  for: [vbs]
+  platforms: [windows]
+  attack: T1027,T1059.005
+
+traits:
+  # Structured VBScript/VBA COM code pairs each `On Error Resume Next` probe
+  # with `On Error GoTo 0` (or a label). Obfuscation noise repeats four or more
+  # unclosed `On Error Resume Next` statements within a compact span without an
+  # intervening `On Error GoTo` reset.
+  - id: vba-repeated-error-suppression
+    desc: VBA repeatedly suppresses errors
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule vba_repeated_error_suppression {
+          strings:
+            $oern = "on error resume next" ascii nocase
+            $oeg = "on error goto" ascii nocase
+          condition:
+            #oern >= 4 and
+            for any i in (1 .. #oern - 3) : (
+              @oern[i + 3] - @oern[i] <= 1500 and
+              not (
+                for any j in (1 .. #oeg) : (
+                  @oeg[j] > @oern[i] and @oeg[j] < @oern[i + 3]
+                )
+              )
+            )
+        }
+
+  - id: vba-hidden-object-window
+    desc: VBA sets an object window visibility
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)showwindow\s*='
+
+  - id: vba-document-open
+    desc: VBA document-open handler
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)\bDocument_Open\s*\('
+
+composite_rules:
+  - id: vba-autoopen-obfuscated-object-create
+    desc: Auto-open macro hides noisy object execution
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: vba-repeated-error-suppression
+      - id: vba-hidden-object-window
+      - id: vba-document-open
+      - id: micro-behaviors/os/com/instantiation::vbs-createobject-variable-progid

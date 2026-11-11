@@ -4,20 +4,39 @@ defaults:
   attack: T1547.001
 
 composite_rules:
+  # These self-install legs are unbound API imports and path strings. In a
+  # compact dropper they serve one routine; in a large multi-function
+  # program (an AV removal tool that lists autostart keys, installs its own
+  # driver under System32\drivers and copies quarantine files) each appears
+  # for an unrelated reason. Cap the file size where co-occurrence implies
+  # the self-install routine.
   - id: windows-systemdir-self-copy-run-key
     desc: Self-copy into Windows system directory with Run key
     crit: hostile
     conf: 0.96
+    size_max: 5242880
     all:
-      - id: micro-behaviors/fs/file/copy::copyfile-a
+      - id: micro-behaviors/fs/file/copy/call::copy
       - id: micro-behaviors/fs/path/check::get-module-filename
-      - id: micro-behaviors/fs/path/system::windows-system-drop-template
-      - id: "micro-behaviors/os/registry/keys/autostart::currentversion-run-key-path"
-      - id: micro-behaviors/os/registry/manipulate::registry-write-api-chain
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/vendor/
-
+      - id: "micro-behaviors/os/registry/autostart/reference::currentversion-run-key-path"
+      - id: micro-behaviors/os/registry/value/write::registry-set-value-api
+    any:
+      - id: micro-behaviors/fs/path/system/runtime::windows-system-drop-template
+      - id: micro-behaviors/fs/path/system/runtime::systemroot-system32-env-path
+  # Same self-install shape landing in the per-user AppData directory
+  # instead of the system directory: the running image is copied to an
+  # AppData executable path and relaunched from a Run key.
+  - id: windows-appdata-self-copy-run-key
+    desc: Self-copy into AppData with Run key
+    crit: hostile
+    conf: 0.96
+    size_max: 5242880
+    all:
+      - id: micro-behaviors/fs/file/copy/call::copy
+      - id: micro-behaviors/fs/path/check::get-module-filename
+      - id: micro-behaviors/fs/path/application/executable::appdata-exe-path
+      - id: "micro-behaviors/os/registry/autostart/reference::currentversion-run-key-path"
+      - id: micro-behaviors/os/registry/value/write::registry-set-value-api
   - id: windir-copy-winexec-drive-walker-worm
     desc: Windows-directory dropper that walks drives
     crit: hostile
@@ -26,11 +45,10 @@ composite_rules:
     size_max: 1048576
     all:
       - id: objectives/impact/infect/binary/rewrite::recursive-prepending-footer-infector
-      - id: micro-behaviors/fs/traversal/drives::logical-drive-type-enumeration
+      - id: micro-behaviors/fs/enumerate/drives::logical-drive-type-enumeration
       - id: micro-behaviors/fs/file/timestamp::set-file-time-with-walk-and-self-path
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
+      - id: metadata/installer/product/
 
   # Run-key APIs plus hash rotation prove no unwanted activation. The
   # registry/autorun observations remain notable, and deliberate image

@@ -12,8 +12,8 @@ traits:
     if:
       type: text
       regex: '(?i)\bNormal\.dotm?\b'
-  - id: ole-embedded-pe
-    desc: OLE document embeds executable binary
+  - id: ole-embedded-executable-signature
+    desc: OLE executable signature pattern
     for: [oledoc]
     crit: notable
     conf: 0.95
@@ -75,6 +75,16 @@ traits:
       type: value
       path: office.streams[*]
       regex: '__attach_version1\.0_#[0-9A-Fa-f]{8}/__substg1\.0_37010102$'
+  # The attachment's own recorded filename names a native Windows program.
+  - id: outlook-message-executable-attachment
+    desc: Outlook message attaches a Windows program
+    for: [msg, oledoc]
+    crit: notable
+    conf: 0.92
+    if:
+      type: value
+      path: office.msg.attachments[*].filename
+      regex: '(?i)\.(exe|scr|pif|com|cpl)$'
   - id: ole-many-streams
     desc: OLE document has many streams
     for: [msg, oledoc, rtf]
@@ -84,20 +94,30 @@ traits:
       type: value
       path: office.streams
       size_min: 64
-  - id: ole-high-entropy
-    desc: OLE document has high entropy
-    for: [msg, oledoc, rtf]
+  # A stream that is itself a native executable, or one an OLE1 Packager
+  # object wraps (`office.embedded[]` lists both). MSI installers carry
+  # custom-action binaries by design and are their own file type.
+  - id: ole-embedded-native-executable
+    desc: OLE document embeds a native executable
+    for: [oledoc]
     crit: notable
-    conf: 0.88
-    # MicroStation DGN files are OLE containers whose model streams are
-    # routinely high-entropy. The positive MicroStation identity is the
-    # format-specific benign context; retain this signal for other OLE files.
-    unless:
-      - id: well-known/app/media/microstation::dgn-model-storage
+    conf: 0.95
+    attack: T1027.006
     if:
       type: metrics
-      field: file.entropy
-      min: 7.8
+      field: office.embedded_executable_count
+      min: 1
+  # A storage bound to a COM class with a documented exploit history
+  # (Equation Editor, MSCOMCTL, scriptlet, Shell.Explorer, Packager, ...).
+  - id: ole-dangerous-clsid
+    desc: OLE storage bound to exploited COM class
+    for: [oledoc]
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: metrics
+      field: office.dangerous_clsid_count
+      min: 1
   - id: ole-vba-macro-count
     desc: OLE document contains a VBA macro project
     for: [oledoc]
@@ -138,6 +158,20 @@ traits:
       type: value
       path: office.features[*]
       exact: encryption
+  # A linked object whose link source is a URL: the object's \x01Ole stream
+  # binds CLSID_StdURLMoniker followed by the UTF-16 target string. Legacy
+  # documents legitimately link web pictures and web-hosted workbooks this
+  # way, so the binding itself stays notable; the exploit reading comes from
+  # the composites that pair it with a linked-object CLSID and an obfuscated
+  # remote host (objectives/execution/exploit/document).
+  - id: linked-object-url-moniker
+    desc: Linked OLE object binds a URL moniker
+    for: [oledoc]
+    crit: notable
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "E0 C9 EA 79 F9 BA CE 11 8C 82 00 AA 00 4B A9 0B"
   - id: ole-document-security-flag
     desc: OLE document security flag is set
     for: [oledoc]
@@ -205,7 +239,7 @@ composite_rules:
     conf: 0.92
     all:
       - id: ole-many-streams
-      - id: ole-high-entropy
+      - id: metadata/file/entropy::document-overall-entropy-78
       - id: ole-html-body
   - id: word-vba-macro-document
     for: [oledoc]

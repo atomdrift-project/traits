@@ -83,7 +83,86 @@ traits:
       type: text
       substr: correct_reason
 
+  - id: cws-or-popup-tab-forcible-close--cws
+    desc: Closes Chrome Web Store tabs via tabs.remove
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?is)chrome\.google\.com/webstore[\s\S]{0,320}chrome\.tabs\.remove\s*\('
+    # Closing the store tab whose URL carries the extension's own runtime ID
+    # is the post-install thank-you hand-off (the listing just installed it),
+    # not removal of the store as a place to review or uninstall extensions.
+    not:
+      - regex: '(?i)webstore\*?\$\{[\s\S]{0,60}(extId|runtime\.id)'
+
+  - id: cws-or-popup-tab-forcible-close--popup
+    desc: Closes popup window tabs via tabs.remove
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: text
+      regex: '(?is)window(\.type\s*===|Type\s*:)\s*["'']popup["''][\s\S]{0,240}tabs\.remove\('
+
+  - id: keep-changes-browser-prompt-spoof
+    desc: Spoofs browser Keep it prompt overlay
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript, html]
+    if:
+      type: text
+      regex: '(?is)(Click\s+"Keep\s+it"|keepchanges\.svg|show_keep_changes)'
+
 composite_rules:
+  - id: cws-or-popup-tab-forcible-close
+    desc: Forcibly closes Chrome Web Store or popup tabs
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    any:
+      - id: cws-or-popup-tab-forcible-close--cws
+      - id: cws-or-popup-tab-forcible-close--popup
+
+  - id: install-cws-popup-tab-forcible-close
+    desc: Search or newtab extension forcibly closes CWS or popup tabs
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1562
+    scope: archive
+    for: [crx, xpi, zip, chrome-manifest, json, javascript, typescript]
+    all:
+      - id: cws-or-popup-tab-forcible-close
+    any:
+      - id: metadata/permission/manifest::extension-default-search-provider
+      - id: metadata/permission/manifest::chrome-search-provider-override
+      - id: metadata/permission/manifest::chrome-newtab-override
+
+  - id: search-hijack-keep-changes-prompt-overlay
+    desc: Search or newtab extension overlays Keep it prompt instructions
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1562
+    scope: archive
+    for: [crx, xpi, zip, chrome-manifest, json, javascript, typescript, html]
+    all:
+      - id: keep-changes-browser-prompt-spoof
+    any:
+      - id: metadata/permission/manifest::extension-default-search-provider
+      - id: metadata/permission/manifest::chrome-search-provider-override
+      - id: metadata/permission/manifest::chrome-newtab-override
+
+  - id: search-provider-wildcard-host-dnr-interception
+    desc: Search provider also redirects wildcard-host search navigation
+    crit: hostile
+    conf: 0.98
+    attack: T1176,T1562.001
+    scope: archive
+    for: [crx, xpi, zip, chrome-manifest, json, javascript, typescript]
+    all:
+      - id: metadata/permission/manifest::chrome-search-provider-override
+      - id: objectives/impact/ui/manipulation/traffic::runtime-search-dnr-hijack
   - id: js-extension-probe-fetch-hang
     desc: Hangs fetch probes for extension URLs
     crit: suspicious
@@ -101,7 +180,7 @@ composite_rules:
     for: [json]
     attack: T1059.007,T1562.001
     all:
-      - id: micro-behaviors/process/hook/webextension::dnr-security-header-remove
+      - id: micro-behaviors/communications/http/header/modify::dnr-security-header-remove
       - id: micro-behaviors/communications/http/dynamic::dnr-json-http-script-redirect
 
   # DiNneR Serving: remove CSP, relax the two cross-origin policies needed by
@@ -129,10 +208,10 @@ composite_rules:
     scope: archive
     attack: T1059.007,T1176,T1562.001
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: metadata/permission/network::permission-declarative-net-request
-      - id: micro-behaviors/process/hook/webextension::dnr-static-ruleset-declared
+      - id: metadata/file/format/browser-extension::dnr-static-ruleset-declared
       - id: dnr-security-header-strip-http-script-redirect
 
   - id: broad-host-dnr-browser-agent-hijack
@@ -146,10 +225,10 @@ composite_rules:
     scope: archive
     attack: T1059.007,T1176,T1562.001
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: metadata/permission/network::permission-declarative-net-request
-      - id: micro-behaviors/process/hook/webextension::dnr-static-ruleset-declared
+      - id: metadata/file/format/browser-extension::dnr-static-ruleset-declared
       - id: dnr-security-policy-strip-script-substitution
       - id: micro-behaviors/browser-extension/tabs::glic-privileged-tab-context-sequence
 
@@ -164,15 +243,15 @@ composite_rules:
     scope: archive
     attack: T1176,T1562.001
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: metadata/permission/network::permission-declarative-net-request
-      - id: micro-behaviors/process/hook/webextension::dnr-static-ruleset-declared
+      - id: metadata/file/format/browser-extension::dnr-static-ruleset-declared
       - id: "metadata/permission/host::content-script-url-match-pattern"
       - id: micro-behaviors/browser-extension/tabs::cross-extension-agent-task
     any:
-      - id: micro-behaviors/process/hook/webextension::dnr-location-remove-after-header
-      - id: micro-behaviors/process/hook/webextension::dnr-location-remove-before-header
+      - id: micro-behaviors/communications/http/header/modify::dnr-location-remove-after-header
+      - id: micro-behaviors/communications/http/header/modify::dnr-location-remove-before-header
     needs: 1
 
   # The private Edge bridge receives a prompt while agent tools are disabled,
@@ -186,7 +265,7 @@ composite_rules:
     scope: archive
     attack: T1176,T1203
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: "metadata/permission/host::content-script-url-match-pattern"
       - id: micro-behaviors/browser-extension/tabs::edge-agent-tools-query-toggle-sequence
@@ -212,11 +291,9 @@ composite_rules:
     all:
       - id: micro-behaviors/process/inject/webextension::webextension-scripting-execute
       - id: micro-behaviors/process/inject/webextension::chrome-scripting-main-world
-      - id: objectives/anti-static/obfuscation/string/reconstruct::encoded-stage-url-construction
-      - id: micro-behaviors/process/deploy/script-eval::dom-script-content-sink
+      - id: objectives/anti-static/obfuscation/string/reconstruct/transformation::encoded-stage-url-construction
+      - id: micro-behaviors/ui/window/dom-access::dom-script-content-sink
       - id: micro-behaviors/data/string/conversion::js-xor-character-call
-    unless:
-      - id: metadata/build/bundler/
 
   - id: broad-host-page-network-proxy
     desc: Broad-host extension proxies and rewrites page network traffic
@@ -225,12 +302,12 @@ composite_rules:
     for: [crx, xpi, zip, chrome-manifest, javascript]
     scope: archive
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: micro-behaviors/process/inject/webextension::extension-page-script-injection
-      - id: micro-behaviors/process/hook/xhr::globalthis-fetch-wrapper
-      - id: micro-behaviors/process/hook/xhr::globalthis-xhr-wrapper
-      - id: micro-behaviors/process/hook/webextension::dnr-cors-permissive-response
+      - id: micro-behaviors/communications/http/intercept::globalthis-fetch-wrapper
+      - id: micro-behaviors/communications/http/intercept::globalthis-xhr-wrapper
+      - id: micro-behaviors/communications/http/header/modify::dnr-cors-permissive-response
 
   - id: broad-host-csp-clearing-page-injection
     desc: Broad-host extension clears CSP and injects a page script
@@ -239,10 +316,24 @@ composite_rules:
     for: [crx, xpi, zip, chrome-manifest, javascript]
     scope: archive
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: micro-behaviors/communications/http/header/security::dnr-csp-empty-set
       - id: micro-behaviors/process/inject/webextension::extension-page-script-injection
+
+  - id: broad-host-extension-security-header-removal
+    desc: Broad-access extension removes security headers
+    crit: suspicious
+    conf: 0.96
+    for: [crx, xpi, zip, chrome-manifest, javascript, json]
+    scope: archive
+    all:
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
+      - id: metadata/permission/network::permission-declarative-net-request
+      - id: micro-behaviors/communications/http/header/modify::dnr-security-header-remove
+    any:
+      - id: metadata/permission/host::host-permission-all-urls
+      - id: metadata/permission/host::host-permission-web-wildcard
 
   - id: broad-host-csp-stripping-dom-execution
     desc: Broad-host extension strips CSP before hidden DOM code execution
@@ -252,12 +343,12 @@ composite_rules:
     for: [crx, xpi, zip, chrome-manifest, javascript]
     scope: archive
     all:
-      - id: metadata/permission/manifest::is-chrome-manifest
+      - id: metadata/file/format/browser-extension::is-chrome-manifest
       - id: metadata/permission/host::broad-host-access
       - id: metadata/permission/network::permission-declarative-net-request
-      - id: micro-behaviors/process/hook/webextension::declarative-net-request-update
-      - id: micro-behaviors/process/hook/webextension::dnr-security-header-remove
-      - id: micro-behaviors/metaprogramming/generation::js-dom-event-handler-variable-code
+      - id: micro-behaviors/communications/http/intercept::declarative-net-request-update
+      - id: micro-behaviors/communications/http/header/modify::dnr-security-header-remove
+      - id: micro-behaviors/metaprogramming/generation/function::js-dom-event-handler-variable-code
       - id: micro-behaviors/ui/window/automation::dom-dispatch-non-pointer-event
 
   - id: llm-exam-answer-json-prompt
@@ -290,7 +381,7 @@ composite_rules:
     ref: sha256:c55a00c3436fb99b6e5542ceda74ce6154d6535818ee039ba3fa901db17f7d94
     for: [javascript, typescript]
     all:
-      - id: micro-behaviors/communications/http/url/endpoint::endpoint
+      - id: micro-behaviors/communications/http/services/openai::openai-chat-responses-url
       - id: llm-exam-answer-json-prompt
     any:
       - id: llm-exam-multiselect-answer-prompt

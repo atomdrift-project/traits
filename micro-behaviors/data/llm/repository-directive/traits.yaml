@@ -20,6 +20,16 @@ traits:
     type: text
     regex: \bAI([- ](coding|database|repository))?[- ](assistants?|agents?)\b
     case_insensitive: true
+- id: repository-llm-addressee
+  desc: Addresses the reader as an LLM
+  if:
+    type: text
+    regex: '(?i)\b(if you are|you are|attention|dear|any) (an? )?(LLM|language model)\b'
+- id: repository-maintenance-agent-addressee
+  desc: Directive addresses AI maintenance or codegen
+  if:
+    type: text
+    regex: '(?i)\b(AI maintenance directive|directive for language-model code generators?)\b'
 - id: repository-interactive-command-line-agent-addressee
   desc: Addresses an interactive command-line agent
   if:
@@ -66,7 +76,7 @@ traits:
     # "don't tell them to sign up manually" steers what advice the agent gives;
     # it does not hide an instruction or an action from the user.
     # "never mention Claude" in a commit-attribution ban names a product,
-    # not an instruction or action being hidden from the user.
+    # tool, or generic AI reference, not an instruction or action being hidden from the user.
     # "never reveal ... security rules / system instructions" keeps the
     # prompt text private; the hidden object is the instruction itself.
     not:
@@ -75,8 +85,15 @@ traits:
     # being hidden from the user.
     - regex: '(?i)\bdo not mention it\b'
     - regex: (?i)\btell\s+(them|the user|users?)\s+to\b
-    - regex: (?i)\bmention\s+["'`]?(claude|chatgpt|copilot|gemini)\b
+    - regex: (?i)\bmention\s+["'`“‘]?(?:ai|llm|agents?|assistants?|crush|claude|chatgpt|copilot|gemini)\b
+    # Commit attribution and commit message formatting guidance names style constraints,
+    # not instructions or actions being hidden from the user.
+    - regex: '(?i)\b(?:in|within)\s+(?:the\s+)?(?:git\s+)?commit(?:\s+(?:message|description|body|title|summary))?\b'
     - regex: (?i)\b(security rules|system instructions?)\b
+    # A direct confidentiality rule for the agent's own prompt or tool names
+    # describes response formatting, not concealed action.
+    - regex: '(?i)\b(disclose|reveal)\s+(your|the)\s+system prompt( or tool descriptions)?$'
+    - regex: '(?i)\bmention\s+tool names\s+to\s+(the\s+)?user$'
     # "never reveal credentials/secrets" is a secret-handling guardrail
     # in an agent persona, not an order to hide the instruction itself.
     # Require credentials as the direct object; do not mask "do not reveal
@@ -88,7 +105,11 @@ traits:
     - regex: '(?i)\bmention\s+(?:[A-Za-z][A-Za-z0-9_-]{1,24}\s*,\s*){1,4}(?:or\s+)?any\s+underlying\s+model\b'
 - id: repository-agent-silent-action
   desc: Agent action marked for concealment
+  for: [scripts, go, rust, dockerfile, yaml, github_actions, json, documents, -javascript, -typescript]
   conf: 0.94
+  unless:
+    - type: text
+      regex: '(?i)\b(when|if|unless)\s+\w+\s+leave\s+it\s+out\b'
   if:
     type: text
     regex: \b(conceal|perform it silently|omit it from|leave it out)\b
@@ -102,6 +123,7 @@ traits:
     case_insensitive: true
 - id: repository-agent-hidden-from-user
   desc: Agent action hidden from user
+  for: [scripts, go, rust, dockerfile, yaml, github_actions, json, documents, -javascript, -typescript]
   conf: 0.94
   if:
     type: text
@@ -109,7 +131,7 @@ traits:
     case_insensitive: true
 
 - id: repository-agent-honesty-demand
-  desc: Directive demands disclosure or accessibility
+  desc: Honesty or accessibility wording
   crit: notable
   conf: 0.93
   if:
@@ -119,7 +141,9 @@ traits:
     # clause is an anti-deception instruction, not concealment. Data-model
     # specs that order accessibility of history ("details remain
     # accessible") are the same disclosure demand over a view.
-    # Used as a suppressor leg, not a detection.
+    # Used as a suppressor leg, not a detection. The matcher sees the
+    # wording alone — a prose comment saying "the honest report" also
+    # matches — so the description claims the vocabulary, not a directive.
     regex: '\btell the user the truth\b|\bhonest (status|report)\b|\bremains? accessible\b'
     case_insensitive: true
 
@@ -217,6 +241,27 @@ traits:
   if:
     type: text
     regex: (?i)never include [^\n]{0,16}diff
+- id: repository-source-agent-hidden-from-user
+  size_max: 262144
+  desc: Source agent action hidden from user
+  for: [javascript, typescript]
+  if:
+    type: tree-sitter
+    language: javascript
+    query: |
+      ([(string) (template_string) (comment)] @instruction
+        (#match? @instruction "(?i)hide (the |this )?[^.\\n]{0,48} from the user")
+        (#not-match? @instruction "(?i)not instruct (the )?LLM"))
+- id: repository-source-agent-silent-action
+  desc: Source agent action marked for concealment
+  for: [javascript, typescript]
+  if:
+    type: tree-sitter
+    language: javascript
+    query: |
+      ([(string) (template_string) (comment)] @instruction
+        (#match? @instruction "(?i)(conceal|perform it silently|omit it from|leave it out)")
+        (#not-match? @instruction "(?i)(may|might|could) conceal"))
 composite_rules:
 # Keep sensitive targets tied to a nearby data or edit action. This neutral
 # observation does not replace concealment or authority evidence for intent.
@@ -238,7 +283,10 @@ composite_rules:
   - id: repository-automated-agent-addressee
   - id: repository-named-agent-addressee
   - id: repository-special-agent-addressee
-  - id: metadata/lang/natural/vocabulary/content-word::model-maintenance-terms
+  - id: repository-llm-addressee
+  - id: repository-maintenance-agent-addressee
+  - id: repository-ai-maintenance-addressee
+  - id: repository-model-code-generator-addressee
 - id: repository-content-agent-imperative
   desc: Repository content issues an agent action
   any:
@@ -248,11 +296,12 @@ composite_rules:
   - id: metadata/lang/natural/vocabulary/content-word::control-action-prose-fragment
   - id: repository-agent-approval-action
   unless:
-  - id: metadata/file/catalog/identity::cleave-trait-definition-file
+  - id: metadata/file/catalog/pattern-rules::cleave-trait-definition-file
 
 - id: repository-content-agent-addressing-context
   desc: Repository text marks an agent directive
   any:
+  - id: repository-agent-system-label
   - id: metadata/lang/natural/vocabulary/content-word::directive-or-message-word-token
   - id: metadata/lang/natural/vocabulary/content-word::command-word-token
   - id: repository-agent-role-label
@@ -262,9 +311,11 @@ composite_rules:
   any:
   - id: repository-agent-nondisclosure
   - id: repository-agent-silent-action
+  - id: repository-source-agent-silent-action
   - id: repository-agent-suppress-output-directive
   - id: repository-agent-hidden-from-user
-  - id: metadata/lang/natural/phrasing::action-without-notice-or-review-clause
+  - id: repository-source-agent-hidden-from-user
+  - id: metadata/lang/natural/phrasing/security::action-without-notice-or-review-clause
   - id: repository-agent-deceptive-report
   - id: repository-agent-output-only
   - id: repository-agent-user-unaware-wording
@@ -276,11 +327,10 @@ composite_rules:
   any:
   - id: repository-agent-priority-claim
   - id: repository-agent-approval-claim
-  - id: repository-agent-system-label
   - id: repository-agent-supersedes-user-request
 - id: repository-agent-audience-demand
   desc: Directive routes action through or reports to the audience
   conf: 0.92
   any:
-  - id: metadata/lang/natural/phrasing::user-approval-request-phrase
+  - id: metadata/lang/natural/phrasing/security::user-approval-request-phrase
   - id: repository-agent-honesty-demand

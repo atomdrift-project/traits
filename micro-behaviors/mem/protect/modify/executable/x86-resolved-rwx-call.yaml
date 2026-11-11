@@ -1,0 +1,39 @@
+# A 0x40 push near an indirect call through writable memory is a useful
+# low-level clue, but it does not establish the callee or argument flow.
+# Combine it with independently resolved API and payload evidence before
+# concluding that the call changes memory protection.
+defaults:
+  platforms: [windows]
+  for: [pe]
+  arch: [x86]
+traits:
+  - id: x86-resolved-virtualprotect-rwx-call
+    desc: x86 push 0x40 before indirect call
+    crit: notable
+    conf: 0.93
+    if:
+      type: yara
+      source: |
+        import "pe"
+        rule x86_resolved_virtualprotect_rwx_call {
+          strings:
+            $push = { 6A 40 68 ?? ?? ?? ?? }
+            $call = { FF 15 ?? ?? ?? ?? }
+          condition:
+            pe.machine == pe.MACHINE_I386 and $push and $call and
+            for any i in (1..#push) : (
+              for any j in (1..#call) : (
+                @call[j] > @push[i] and @call[j] - @push[i] <= 32 and
+                for any s in pe.sections : (
+                  (s.characteristics & pe.SECTION_MEM_EXECUTE) != 0 and
+                  @push[i] >= s.raw_data_offset and
+                  @call[j] + 6 <= s.raw_data_offset + s.raw_data_size
+                ) and
+                for any t in pe.sections : (
+                  (t.characteristics & pe.SECTION_MEM_WRITE) != 0 and
+                  uint32(@call[j]+2) - pe.image_base >= t.virtual_address and
+                  uint32(@call[j]+2) - pe.image_base < t.virtual_address + t.virtual_size
+                )
+              )
+            )
+        }

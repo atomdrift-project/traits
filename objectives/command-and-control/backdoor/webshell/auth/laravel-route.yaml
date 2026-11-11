@@ -1,0 +1,62 @@
+defaults:
+  platforms: [windows, unix]
+  for: [php]
+  mbc: B0030
+  attack: T1505.003
+traits:
+  - id: laravel-password-post-route
+    desc: Laravel route reads password
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: Route::post[\s\S]{0,500}input\(['"]password['"]\)
+
+  - id: laravel-hardcoded-password-secret
+    desc: Laravel route hardcoded password
+    crit: component
+    conf: 0.86
+    if:
+      type: text
+      regex: \$expected\s*=\s*['"][^'"\n]{6,64}['"]
+
+composite_rules:
+  - id: laravel-hardcoded-password-gate
+    desc: Laravel route hardcoded password gate
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/ui/controls/credential::php-password-input-element
+      - id: laravel-password-post-route
+      - id: laravel-hardcoded-password-secret
+
+  - id: laravel-destructive-route-backdoor
+    desc: Laravel password-gated destructive route
+    crit: hostile
+    conf: 0.97
+    all:
+      - id: micro-behaviors/ui/controls/credential::php-password-input-element
+      - id: laravel-password-post-route
+      - id: micro-behaviors/process/create/shell
+      - id: micro-behaviors/fs/path/application/webapp::laravel-base-path
+    any:
+      - id: micro-behaviors/fs/chmod/modify::php-shell-chmod-recursive-777
+      - id: micro-behaviors/fs/chmod/modify::php-shell-chown-recursive
+      - id: micro-behaviors/fs/chmod/modify::chmod-call
+      - id: micro-behaviors/fs/delete/directory::laravel-delete-directory
+      - id: micro-behaviors/fs/delete/directory::php-rmdir
+      - id: micro-behaviors/fs/delete/file/library::php-unlink
+    needs: 2
+
+  # A request header compared with a hard-coded secret unlocks a callee whose
+  # name was hidden in Base64, applied to request input. The parts are not
+  # individually malicious; together they are a header-keyed command backdoor.
+  - id: header-secret-gated-hidden-callee-request-exec
+    desc: Secret header unlocks hidden function on request input
+    crit: hostile
+    conf: 0.97
+    near_lines: 12
+    all:
+      - id: micro-behaviors/communications/http/header/custom::framework-request-header-literal-compare
+      - id: micro-behaviors/process/create/shell/reference::php-encoded-shell-function-name
+      - id: micro-behaviors/communications/http/server/request::laravel-request-input-read

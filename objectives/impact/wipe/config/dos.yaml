@@ -1,22 +1,74 @@
-# CMOS-killer stub as appended to an infected DOS SYS driver (strategy
-# routine redirected past the clean body): on the trigger day it zeroes CMOS
-# registers 10h-3Fh through ports 70h/71h — OUT 70h selects the register, a
-# zeroed AL goes out 71h, the loop steps through the range — then reboots
-# through the reset vector. The hardware configuration (drive types, boot
-# order) is destroyed, so the host cannot boot.
+# DOS CMOS destruction patterns. Separate a complete destructive register
+# sweep from partial loop evidence, date triggers, and reboot instructions:
+# an immediate CMOS wiper need not contain a date gate or reboot.
 defaults:
   platforms: [unix, windows]
   for: [dos_com, static-lib, data]
   size_max: 65536
-  attack: T1490
 traits:
+  - id: dos-cmos-ff-configuration-sweep
+    desc: FF-fills CMOS configuration range
+    crit: hostile
+    conf: 0.99
+    for: [dos_com, data]
+    # BX starts at 10h. Each iteration selects BL through port 70h, writes
+    # FFh through port 71h, and increments BX until 80h. The exact back edge
+    # targets MOV AL,BL. This overwrites configuration, including checksum
+    # fields, rather than merely accessing a CMOS port. Port EDh is optional;
+    # each variant retains its own correct branch displacement.
+    # Inline YARA also evaluates tiny stringless DOS images.
+    if:
+      type: yara
+      source: |
+        rule dos_cmos_ff_configuration_sweep {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $delay = { (31 DB | 33 DB) B3 10 88 D8 E6 70 E6 ED B0 FF E6 71 43 81 FB 80 00 73 02 EB ED }
+            $direct = { (31 DB | 33 DB) B3 10 88 D8 E6 70 B0 FF E6 71 43 81 FB 80 00 73 02 EB EF }
+          condition:
+            any of them
+        }
+
   - id: dos-cmos-zero-fill-iteration
-    desc: DOS writes zeros across CMOS registers
+    desc: CMOS zero write with incremented index
     crit: suspicious
     conf: 0.93
+    # Partial loop evidence: the initialization and branch target are unknown.
     if:
-      type: hex
-      pattern: "E6 70 [0-3] 2A C0 E6 71 [0-4] 40 3C 40 72"
+      type: yara
+      source: |
+        rule dos_cmos_zero_fill_indexed_loop {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $zero_loop = { E6 70 [0-3] 2A C0 E6 71 [0-4] 40 3C 40 72 }
+          condition:
+            $zero_loop
+        }
+
+  - id: dos-cmos-zero-fill-register-range
+    desc: Zero-fills CMOS RTC and hardware configuration
+    crit: hostile
+    conf: 0.99
+    # CX=30h, AX=BX=0. At each iteration OUT 70h selects AL's index;
+    # XCHG AX,BX supplies zero for OUT 71h, then restores the index.
+    # ADD AX,1 and LOOP -11 return to OUT 70h for indexes 00h-2Fh.
+    # This indiscriminately clears writable RTC state, device/memory settings
+    # and checksum bytes, without retaining or restoring their prior values.
+    # This is a destructive sweep, not a port reference or single RTC update.
+    # Keep inline YARA so tiny stringless images reach trait evaluation.
+    if:
+      type: yara
+      source: |
+        rule dos_cmos_zero_fill_register_range {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $zero_range = { B9 30 00 B8 00 00 8B D8 E6 70 93 E6 71 93 05 01 00 E2 F5 }
+          condition:
+            $zero_range
+        }
 
   # Direct CMOS-port access with a date/time gate. CMOS register 07h is the
   # day and register 02h is the minute.
@@ -38,43 +90,13 @@ traits:
       type: hex
       pattern: "B8 10 00 E8 ?? ?? B0 12 E8 ?? ?? B0 17 E8 ?? ?? B0 18 E8 ?? ?? 99 B0 10 50 E8 ?? ?? 03 D0 58 FE C0 3C 2E 75 ?? 8A E6 E8 ?? ?? 8A E2 B0 2F E6 70 8A C4 E6 71 C3"
 
-  - id: dos-cmos-register-wipe-loop
-    desc: DOS writes CMOS registers in a loop
-    crit: suspicious
-    conf: 0.96
-    if:
-      type: hex
-      pattern: "E6 70 [0-3] E6 71 [0-8] E2"
-    unless:
-      - id: well-known/app/system/limine::limine-boot-image-context
-
   - id: dos-cmos-status-register-access
-    desc: DOS accesses CMOS status register
-    crit: suspicious
+    desc: Selects CMOS status register index
+    crit: notable
     conf: 0.93
     if:
       type: hex
       pattern: "B0 0A E6 70"
-    unless:
-  - id: dos-cmos-register-overwrite-loop
-    desc: Loops to overwrite CMOS registers
-    crit: suspicious
-    conf: 0.95
-    if:
-      type: hex
-      pattern: "E6 70 [0-6] E6 71 [0-10] (EB|E2)"
-    unless:
-      - id: well-known/app/system/limine::limine-boot-image-context
-
-  # OUT 70h, OUT 71h, DEC AL, JGE: walk the CMOS index downward.
-  - id: dos-cmos-dec-index-write
-    desc: Decrements CMOS index and writes
-    crit: notable
-    conf: 0.94
-    for: [dos_com, data, batch]
-    if:
-      type: hex
-      pattern: "E6 70 [0-8] E6 71 [0-8] FE C8 [0-8] 7D"
   # Register 2Eh is the CMOS checksum high byte.
   - id: dos-cmos-reg-2e-write
     desc: Writes CMOS register 2Eh
@@ -85,31 +107,64 @@ traits:
       type: hex
       pattern: "B0 2E E6 70 E6 71"
 
-composite_rules:
-  - id: dos-cmos-config-wiper
-    desc: DOS wipes hardware CMOS configuration
+  # Vienna.DearUser.1407 and variants:
+  # Loops CX from 40h down to 1 (`MOV CX, 0040h; PUSH CX; MOV AX, CX;
+  # OUT 70h, AX; OUT 71h, AX; POP CX; LOOP`), overwriting 64 CMOS RAM
+  # registers via 16-bit word port writes to ports 70h/71h. Matches both
+  # unencrypted and backward-SUB additive-key-encrypted forms.
+  - id: dos-cmos-counter-word-port-sweep
+    desc: Overwrites 64 CMOS registers via word ports
     crit: hostile
-    conf: 0.98
-    all:
-      - id: metadata/binary/instruction/opcode::x86-cmos-port-write-sequence
-      - id: dos-cmos-register-overwrite-loop
-    unless:
-      - id: well-known/app/system/limine::limine-boot-image-context
+    conf: 0.99
+    for: [dos_com, data]
+    if:
+      type: yara
+      source: |
+        rule dos_cmos_counter_word_port_sweep {
+          meta:
+            filetypes = "dos_com,data"
+          strings:
+            $plain = { B9 40 00 51 8B C1 ( E7 70 E7 71 | E6 70 E6 71 ) 59 E2 F6 }
+            $stub = { B9 ?? 05 BF ?? ?? 8A 45 FF 8B DF 4B 28 07 E2 FB }
+          condition:
+            $plain or
+            for any i in (1..#stub) : (
+              @stub[i] + 19 + uint16(@stub[i] + 1) <= filesize and
+              (((uint8(@stub[i] + 0x353) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0xB9) and
+              (((uint8(@stub[i] + 0x354) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x40) and
+              (((uint8(@stub[i] + 0x355) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x00) and
+              (((uint8(@stub[i] + 0x356) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x51) and
+              (((uint8(@stub[i] + 0x357) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x8B) and
+              (((uint8(@stub[i] + 0x358) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0xC1) and
+              (((uint8(@stub[i] + 0x359) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0xE7) and
+              (((uint8(@stub[i] + 0x35A) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x70) and
+              (((uint8(@stub[i] + 0x35B) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0xE7) and
+              (((uint8(@stub[i] + 0x35C) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x71) and
+              (((uint8(@stub[i] + 0x35D) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0x59) and
+              (((uint8(@stub[i] + 0x35E) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0xE2) and
+              (((uint8(@stub[i] + 0x35F) + 256 - uint8(@stub[i] + 18 + uint16(@stub[i] + 1))) & 0xFF) == 0xF6)
+            )
+        }
 
+composite_rules:
   - id: dos-cmos-loop-wiper
-    desc: DOS loop wipes CMOS configuration
-    crit: hostile
+    desc: CMOS write loop and status register reference
+    crit: suspicious
     conf: 0.98
+    for: [dos_com, data]
     all:
-      - id: dos-cmos-register-wipe-loop
+      - id: metadata/binary/instruction/opcode::x86-cmos-port-write-loop
       - id: dos-cmos-status-register-access
   - id: dos-cmos-nvram-wipe-reboot
-    desc: DOS zeroes CMOS hardware configuration and reboots
+    desc: DOS zeroes CMOS NVRAM and reboots
     crit: hostile
     conf: 0.96
     all:
-      - id: dos-cmos-zero-fill-iteration
       - id: micro-behaviors/os/event/shutdown::dos-reset-vector-reboot-jump
+    # Retain both zero-write variants after separating the bounded sweep.
+    any:
+      - id: dos-cmos-zero-fill-iteration
+      - id: dos-cmos-zero-fill-register-range
   # The same wipe gated on the RTC date: the stub polls INT 1Ah AH=04h and
   # only runs the zero-fill on the trigger day, a logic bomb rather than an
   # immediate wiper.
@@ -134,7 +189,7 @@ composite_rules:
     conf: 0.96
     for: [dos_com, data, batch]
     all:
-      - id: dos-cmos-dec-index-write
+      - id: metadata/binary/instruction/opcode::x86-cmos-port-write-loop
       - id: dos-cmos-reg-2e-write
   - id: batch-hidden-cmos-com-drop
     desc: Hidden batch drops a CMOS wiper
@@ -142,6 +197,6 @@ composite_rules:
     conf: 0.95
     for: [batch]
     all:
-      - id: dos-cmos-dec-index-write
+      - id: metadata/binary/instruction/opcode::x86-cmos-port-write-loop
       - id: micro-behaviors/fs/write/file/redirect::batch-echo-redirect
       - id: micro-behaviors/os/console/control::batch-ctty-null-device

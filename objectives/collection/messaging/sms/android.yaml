@@ -3,6 +3,18 @@ defaults:
   for: [apk, zip]
 
 traits:
+  # TelephonyManager supplementary-service request API in compiled Dalvik.
+  # Carrier self-service apps call it from their own UI; the interception
+  # intent comes from the SMS-reading leg of the USSD-control composite.
+  - id: android-dex-ussd-request-api
+    desc: DEX references TelephonyManager USSD requests
+    crit: notable
+    conf: 0.93
+    for: [dex]
+    if:
+      type: text
+      word: sendUssdRequest
+
   # DEX form of Telephony.Sms.CONTENT_URI. Apps that query the inbox through
   # the framework field do not carry the expanded content:// URI literal.
   - id: android-dex-sms-address-token
@@ -31,15 +43,6 @@ traits:
     if:
       type: text
       exact: getAllSms
-
-  - id: android-dex-upload-file-operation
-    desc: DEX defines an HTTP file upload operation
-    crit: notable
-    conf: 0.94
-    for: [dex]
-    if:
-      type: text
-      exact: uploadFile
 
   - id: android-sms-inbox-content-uri
     desc: References Android SMS inbox content URI
@@ -102,7 +105,7 @@ traits:
       substr: android.permission.SEND_SMS
 
   - id: android-source-receive-sms-permission
-    desc: Android source requests SMS receive permission
+    desc: Android code references SMS receive permission
     crit: notable
     conf: 0.9
     for: [java, kotlin, dex]
@@ -111,7 +114,7 @@ traits:
       substr: android.permission.RECEIVE_SMS
 
   - id: android-source-read-sms-permission
-    desc: Android source requests SMS read permission
+    desc: Android code references SMS read permission
     crit: notable
     conf: 0.9
     for: [java, kotlin, dex]
@@ -120,7 +123,7 @@ traits:
       substr: android.permission.READ_SMS
 
   - id: android-source-sensitive-phone-permission
-    desc: Android source requests phone data permission
+    desc: Android source references phone data permission
     crit: notable
     conf: 0.9
     for: [java, kotlin]
@@ -162,7 +165,7 @@ traits:
     for: [dex]
     if:
       type: text
-      exact: SMS.json
+      substr: SMS.json
 
   - id: android-dex-firebase-sms-messages-path
     desc: DEX contains an SMS messages collection path
@@ -214,7 +217,7 @@ composite_rules:
       - id: android-dex-sms-address-token
       - id: android-dex-sms-body-token
       - id: android-dex-read-all-sms-operation
-      - id: android-dex-upload-file-operation
+      - id: micro-behaviors/communications/messaging/send::android-dex-upload-file-operation
       - id: micro-behaviors/communications/http/request/multipart::android-dex-okhttp-multipart-post
 
   - id: android-dex-firebase-sms-message-exfil
@@ -248,7 +251,7 @@ composite_rules:
     for: [java, kotlin]
     all:
       - id: android-sms-inbox-content-uri
-      - id: micro-behaviors/data/db/access::jvm-query-method-call
+      - id: micro-behaviors/data/db/query::jvm-query-method-call
     near_bytes: 1400
 
   - id: android-telephony-sms-inbox-query
@@ -258,7 +261,7 @@ composite_rules:
     for: [java, kotlin]
     all:
       - id: android-telephony-sms-inbox-uri
-      - id: micro-behaviors/data/db/access::jvm-query-method-call
+      - id: micro-behaviors/data/db/query::jvm-query-method-call
     near_bytes: 500
 
   - id: android-source-sms-inbox-query
@@ -286,7 +289,7 @@ composite_rules:
     conf: 0.98
     all:
       - id: metadata/permission/network::android-sms-phone-declarations
-      - id: objectives/command-and-control/dropper/staged-loader::android-native-encrypted-stage-writer
+      - id: objectives/execution/staging/store::android-native-entropy-file-write-chmod-clues
 
   # The manifest grant is invisible to static analysis when AndroidManifest.xml
   # is binary AXML, so the visible half of the same story lives in the DEX: an
@@ -302,8 +305,8 @@ composite_rules:
     scope: outer
     all:
       - id: android-source-send-sms-permission
-      - id: micro-behaviors/os/privilege/elevation::android-runtime-permission-request
-      - id: objectives/command-and-control/dropper/staged-loader::android-native-encrypted-stage-writer
+      - id: micro-behaviors/os/privilege/request::android-runtime-permission-request
+      - id: objectives/execution/staging/store::android-native-entropy-file-write-chmod-clues
 
   # A legitimate SMS-permission holder (2FA client, SMS backup/forwarder) has
   # no reason to also poison its own APK's archive layout with path-traversal
@@ -339,29 +342,11 @@ composite_rules:
       - id: objectives/anti-static/pack/archive::apk-heavy-path-traversal
     any:
       - id: micro-behaviors/process/debug/tool-markers::frida-server-agent-reference
-      - id: objectives/anti-analysis/debugger-detect/check::unix-tracerpid-debugger-check
+      - id: micro-behaviors/process/debug/detect::unix-tracerpid-status-references
 
-  # Accessibility plus SEND/READ SMS and boot persistence is the banker
-  # control surface (OTP theft + silent sends). Does not require
-  # RECEIVE_SMS, which some packs omit while still reading the inbox.
-  - id: android-accessibility-sms-banker-control
-    desc: Android accessibility service with SMS send/read and boot persistence
-    crit: hostile
-    conf: 0.97
-    attack: T1417.001,T1636.004,T1624.001
-    mbc: F0004
-    for: [apk, zip, dex, xml]
-    all:
-      - id: micro-behaviors/hardware/input/accessibility::android-accessibility-service-config
-      - id: metadata/permission/network::android-send-sms-request
-      - id: metadata/permission/storage::android-read-sms-request
-      - id: micro-behaviors/os/message/intent::android-boot-completed-reference
-    any:
-      - id: micro-behaviors/os/privilege/manifest::sms-manager-class
-      - id: micro-behaviors/os/privilege/manifest::sms-inbox-provider
-
-    unless:
-      - id: well-known/app/communication/mobilego::mobilego-manifest-identity
+  # SMS permissions, accessibility descriptors and BOOT_COMPLETED references
+  # remain separate neutral facts. They do not establish a banking controller,
+  # SMS theft, or an installed boot-persistence mechanism.
   - id: android-source-sms-phone-permission-cluster
     desc: Android source requests SMS control and phone data access
     crit: suspicious
@@ -370,6 +355,7 @@ composite_rules:
     unless:
       - id: well-known/app/system/maestro::android-test-driver-context
       - id: well-known/app/communication/sms-forwarder::smsforwarder-source-package
+      - id: metadata/permission/management::android-dangerous-permission-catalog
     all:
       - id: android-source-send-sms-permission
       - id: android-source-receive-sms-permission
@@ -399,20 +385,30 @@ composite_rules:
       - id: micro-behaviors/communications/socket/dial::net-dial-text
       - id: micro-behaviors/communications/http/websocket::websocket-upgrade-header
 
-  # Intercepted inbound SMS content posted to a remote collector over HTTP
-  # is the exfil half of lightweight SMS stealers (Corp MDM reports sender,
-  # body and timestamp for every new message). Kept at suspicious rather
-  # than hostile: SMS backup and sync tools upload message content the user
-  # asked them to move, so the destination's ownership — invisible in source
-  # — is what separates backup from theft.
-  - id: android-sms-http-report
-    desc: Android intercepted SMS content reported over HTTP POST
+  - id: android-sms-inbox-and-http-post
+    desc: Android app references SMS inbox and HTTP POST
     crit: suspicious
-    conf: 0.93
-    for: [java, kotlin]
+    conf: 0.85
+    scope: archive
+    for: [android_apk, apk, zip, dex, xml]
+    attack: T1636.004
     all:
-      - id: micro-behaviors/os/message/intent::android-sms-message-collection-source
-      - id: micro-behaviors/communications/http/post::jvm-urlconnection-post-source
+      - id: objectives/collection/messaging/sms::android-sms-inbox-content-uri
+      - id: micro-behaviors/communications/http/post::jvm-urlconnection-post-dex
+    any:
+      - id: metadata/permission/storage::android-read-sms-apk-request
+      - id: metadata/permission/storage::android-read-sms-request-axml
+      - id: objectives/collection/messaging/sms::android-source-read-sms-permission
+    unless:
+      - id: well-known/app/communication/sms-forwarder::smsforwarder-dex-communication-features
+      - id: well-known/app/communication/mobilego::mobilego-dex-identity
+    # Automation engines ship SMS action code in every export without the app
+    # being able to use it (permissions come from the manifest, not the
+    # engine). Engine context keeps the observation at notable.
+    downgrade:
+      scope: archive
+      any:
+        - id: well-known/app/utility/tasker::tasker-appfactory-engine-context
 
   # DEX does not inherit the Java/Kotlin source rules: the SMS and network
   # APIs are present as descriptors/method strings. Pair the compiled-Dalvik
@@ -425,9 +421,14 @@ composite_rules:
     all:
       - id: micro-behaviors/os/message/intent::android-dex-sms-pdu-message-read
       - id: micro-behaviors/communications/http/post::jvm-urlconnection-post-dex
-
     unless:
       - id: well-known/app/communication/mobilego::mobilego-dex-identity
+    # Automation engines ship SMS action code in every export; the engine
+    # context keeps the observation at notable.
+    downgrade:
+      scope: archive
+      any:
+        - id: well-known/app/utility/tasker::tasker-appfactory-engine-context
   # A hard-coded Firebase Realtime Database endpoint paired with the SMS
   # reader and an HTTP POST is direct evidence that received messages leave
   # the device for an app-controlled collector.
@@ -458,20 +459,33 @@ composite_rules:
     for: [java, kotlin]
     all:
       - id: micro-behaviors/os/message/intent::android-sms-message-collection-source
-      - id: micro-behaviors/communications/messaging/divert::android-mmi-forward-dial
+      - id: micro-behaviors/communications/telephony/divert::android-mmi-forward-dial
 
-  # The same interception paired with both stealth legs — launcher-icon
-  # suppression plus a foreground service that keeps the collector alive —
-  # is the hidden-resident spyware shape: nothing about the combination
-  # serves a user-visible feature.
-  - id: android-sms-spyware-hidden-persistence
-    desc: Android SMS interceptor hides its icon and persists in foreground
-    crit: hostile
+  # DEX co-occurrence does not link a USSD request to a forwarding command,
+  # or establish that the SMS-reading and USSD code are connected.
+  - id: android-dex-sms-ussd-reference-clues
+    desc: SMS PDU reads with USSD and SMS-manager references
+    crit: suspicious
+    conf: 0.94
+    attack: T1636.004
+    mbc: F0004
+    for: [dex]
+    scope: file
+    all:
+      - id: micro-behaviors/os/message/intent::android-dex-sms-pdu-message-read
+      - id: android-dex-ussd-request-api
+      - id: metadata/binary/symbols/descriptor::android-sms-manager-descriptor
+
+  # Component disable plus a foreground service does not prove icon hiding
+  # or durable reactivation. Keep the co-occurring SMS collection suspicious.
+  - id: android-sms-component-disable-foreground
+    desc: SMS reads with component disable and foreground
+    crit: suspicious
     conf: 0.97
-    attack: T1636.004,T1628.001
+    attack: T1636.004
     mbc: F0004
     for: [java, kotlin]
     all:
       - id: micro-behaviors/os/message/intent::android-sms-message-collection-source
-      - id: objectives/evasion/process/hidden/launcher::android-launcher-component-disable
+      - id: micro-behaviors/os/package-manager/config::android-component-disable
       - id: micro-behaviors/os/service/daemon::android-start-foreground-call

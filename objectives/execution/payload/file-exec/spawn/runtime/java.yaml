@@ -1,0 +1,49 @@
+defaults:
+  platforms: [unix]
+  for: [java, kotlin, class, jar, zip]
+  attack: T1027.009,T1059
+  mbc: B0032,E1059
+
+composite_rules:
+  - id: jvm-staged-executable-spawn
+    desc: JVM drops executable and spawns process
+    crit: hostile
+    conf: 0.98
+    attack: T1105,T1059
+    near_lines: 20
+    all:
+      - id: micro-behaviors/fs/write/file/executable::java-write-executable-file-source
+      - id: micro-behaviors/process/create/subprocess/launch::java-processbuilder-start-source
+    unless:
+      - id: metadata/path/directory::test-directory-component
+  - id: java-encrypted-temp-shell-dropper
+    desc: Java encrypted temporary shell dropper
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: metadata/lang/natural/vocabulary/payload::slash-payload-text
+      - id: metadata/lang/source/naming/function/cryptography::xor-decode-name-text
+      - id: metadata/lang/natural/vocabulary/payload::payload-prefix-text
+      - id: micro-behaviors/fs/chmod/executable/mode::java-owner-execute-permission
+    any:
+      - id: metadata/lang/source/syntax/call/construction::java-processbuilder-source
+      - id: metadata/binary/symbols/name/process::java-processbuilder-bytecode
+
+  - id: java-indexed-xor-resource-stager
+    desc: Java decrypts bundled resource, writes, and executes
+    crit: suspicious
+    conf: 0.97
+    platforms: [unix, windows]
+    for: [class, jar, zip]
+    all:
+      - id: micro-behaviors/data/embedded/payload/resource::java-classpath-resource-stream
+      - id: micro-behaviors/data/bitwise/xor-forms/indexed::jvm-indexed-additive-key-xor-loop
+      - id: micro-behaviors/fs/write/file/unspecified::jvm-files-write-bytecode
+      - id: metadata/import/jvm::java-runtime-exec-bytecode-reference
+
+  # A JVM stage that unwraps a Fernet-packed payload, writes it out, installs
+  # its Python dependencies, and runs it.  Fernet is a Python-only token format
+  # (`cryptography.fernet`), so a JVM class implementing it is decrypting
+  # something the operator packed with Python tooling; pip-installing the
+  # requirements of a payload that arrived encrypted is not a build step or a
+  # plugin bootstrap, it is second-stage delivery of an interpreted payload.

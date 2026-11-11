@@ -1,0 +1,45 @@
+defaults:
+  for:
+    - "pe"
+  platforms:
+    - "windows"
+  arch:
+    - "x86"
+traits:
+  - id: "native-socket-recreate-close-callback"
+    desc: "Socket close callback clones reconnect state"
+    crit: "notable"
+    conf: 0.98
+    if:
+      type: "yara"
+      source: |
+        import "pe"
+        rule native_socket_recreate_close_callback {
+          strings:
+            $copy = { 8B 43 4C 8B 4D ?? C7 45 FC FF FF FF FF 89 41 4C
+                      8B 53 44 89 51 44 8D 7B 10 8B 43 48 89 41 48
+                      8B 53 0C 89 51 0C 8B 43 08 89 41 08 }
+            $connect = { 8B 43 44 8D 4B 10 50 51 8B 4D ?? E8 ?? ?? ?? ??
+                         85 C0 74 ?? E8 ?? ?? ?? ?? 3D 33 27 00 00 }
+            $close = { FF 56 18 6A 00 8B 4D ?? FF 56 04 }
+          condition:
+            pe.imports("MFC40.DLL", 1758) and pe.imports("MFC40.DLL", 1805) and
+            for any s in (0..pe.number_of_sections-1) : (
+              pe.sections[s].characteristics & pe.SECTION_MEM_EXECUTE != 0 and
+              for any c in (1..#copy) : (
+                @copy[c] >= pe.sections[s].raw_data_offset and
+                for any n in (1..#connect) : (
+                  @connect[n] > @copy[c] and @connect[n]-@copy[c] < 192 and
+                  // The relative call must reach the imported CSocket::Connect thunk.
+                  @connect[n]+16+int32(@connect[n]+12) >= pe.sections[s].raw_data_offset and
+                  @connect[n]+22+int32(@connect[n]+12) <= pe.sections[s].raw_data_offset+pe.sections[s].raw_data_size and
+                  uint16(@connect[n]+16+int32(@connect[n]+12)) == 0x25ff and
+                  uint32(@connect[n]+18+int32(@connect[n]+12)) == pe.image_base+pe.import_rva("MFC40.DLL", 1758) and
+                  for any e in (1..#close) : (
+                    @close[e] > @connect[n] and @close[e]-@connect[n] < 96 and
+                    @close[e]+!close[e] <= pe.sections[s].raw_data_offset+pe.sections[s].raw_data_size
+                  )
+                )
+              )
+            )
+        }

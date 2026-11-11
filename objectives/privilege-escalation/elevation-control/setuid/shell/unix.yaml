@@ -28,13 +28,12 @@ traits:
   # of a shell.
   # This broad regex establishes ordered co-occurrence, not path identity.
   # system-path.yaml separately binds cp/chown/chmod to the same destination.
-  - id: suid-shell-copy
-    desc: Shell copy followed by setuid chmod
+  - id: embedded-suid-shell-copy-text
+    desc: Embedded shell copy followed by setuid chmod
     conf: 0.95
     platforms:
     - unix
     for:
-    - shell
     - python
     - perl
     - ruby
@@ -45,15 +44,59 @@ traits:
       type: text
       regex: cp\s+[^\n]{0,40}/bin/(ba)?sh\b[\s\S]{0,160}chmod\s+[^\n]{0,20}(u\+s|4[0-7]{3})
     unless:
-    - id: metadata/package/testing/presence/harness/
     - id: well-known/app/utility/cmdchamp/
-    - id: well-known/tool/offensive/bingo/
-    - id: metadata/path::test-directory-component
-    - id: micro-behaviors/metaprogramming/generation::configured-assessment-plugin
+    - id: micro-behaviors/metaprogramming/generation/source::configured-assessment-plugin
     - id: well-known/app/system/anthropic-cybersecurity-skills::cybersecurity-skill-template-guide
     - id: well-known/lib/cloud/datadog-cdk-constructs::sample-stack-context
     - id: well-known/tool/offensive/raxuiscli::source-tree-path
-    - id: metadata/file/catalog/identity::cleave-trait-definition-file
+    - id: metadata/file/catalog/pattern-rules::cleave-trait-definition-file
+    - id: metadata/package/testing/harness/unit::go-test-source-file
+
+  # Shell code has parsed commands: bind the source and chmod destination,
+  # rather than treating commented examples as an installed setuid shell.
+  - id: suid-shell-copy
+    desc: Copies shell and grants that copy setuid
+    crit: suspicious
+    conf: 0.97
+    platforms: [unix]
+    for: [shell]
+    if:
+      type: tree-sitter
+      language: shell
+      query: |
+        ((_
+          (command name: (command_name) @copy
+            argument: (_) @source argument: (_) @destination .)
+          (command name: (command_name) @chmod
+            . argument: (_) @mode . argument: (_) @modified .))
+          (#match? @copy "^(/(usr/)?bin/)?cp$")
+          (#match? @source "^[\"']?/(usr/)?bin/(ba)?sh[\"']?$")
+          (#match? @destination "^[\"']?/")
+          (#match? @chmod "^(/(usr/)?bin/)?chmod$")
+          (#match? @mode "^([ua]?\\+s|0?4[0-7]{3})$")
+          (#eq? @destination @modified))
+    unless:
+      - id: well-known/app/utility/cmdchamp/
+      - id: micro-behaviors/metaprogramming/generation/source::configured-assessment-plugin
+      - id: well-known/app/system/anthropic-cybersecurity-skills::cybersecurity-skill-template-guide
+      - id: well-known/lib/cloud/datadog-cdk-constructs::sample-stack-context
+      - id: well-known/tool/offensive/raxuiscli::source-tree-path
+      - id: metadata/file/catalog/pattern-rules::cleave-trait-definition-file
+      - id: metadata/package/testing/harness/unit::go-test-source-file
+  # install(1) performs the copy and the setuid mode change in one command,
+  # so `install -m 4755 /bin/sh /x` evades the cp-then-chmod pair above.
+  - id: install-suid-shell-copy
+    desc: install(1) copies a shell with setuid mode
+    crit: suspicious
+    conf: 0.96
+    platforms: [unix]
+    for: [shell]
+    if:
+      type: text
+      exclude_comments: true
+      regex: '\binstall\s[^\n;|]{0,40}(-m\s*|--mode=)(\w?\+s|0?[4-7]\d{3})\s[^\n;|]{0,40}/bin/\w?\w?sh\s'
+    unless:
+      - id: metadata/file/catalog/pattern-rules::cleave-trait-definition-file
 composite_rules:
   - id: shell-setuid-shell-backdoor
     for: [shell]
@@ -62,7 +105,7 @@ composite_rules:
     conf: 0.99
     platforms: [unix]
     all:
-      - id: micro-behaviors/fs/chmod/executable/mode::chmod-setuid-shell
+      - id: micro-behaviors/fs/chmod/executable/dangerous::chmod-setuid-shell
     any:
       - id: micro-behaviors/communications/ip/literal::direct-ip-http-client
       - id: objectives/command-and-control/backdoor/webshell/embedded::shell-php-webshell-drop
@@ -74,7 +117,7 @@ composite_rules:
     conf: 0.99
     platforms: [unix]
     all:
-      - id: micro-behaviors/fs/chmod/executable/mode::chmod-setuid-shell
+      - id: micro-behaviors/fs/chmod/executable/dangerous::chmod-setuid-shell
       - id: objectives/command-and-control/backdoor/webshell/embedded::embedded-php-request-command
 
 
@@ -86,6 +129,6 @@ composite_rules:
     crit: hostile
     conf: 0.97
     all:
-      - id: micro-behaviors/process/create/shell/native::unguarded-root-shell-main
+      - id: micro-behaviors/os/privilege/elevation::unguarded-root-shell-main
       - id: micro-behaviors/process/identity/setuid::root-setuid-call
       - id: metadata/file/size::tiny-c-source-file

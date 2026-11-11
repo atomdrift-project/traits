@@ -27,29 +27,6 @@ defaults:
   mbc: F0001
 
 traits:
-  - id: credential-compared-to-absence-literal
-    desc: Password compared to an absence word
-    crit: suspicious
-    conf: 0.93
-    for: [c, cpp, text]
-    # A password tested against the literal string "NULL", "nil" or "none".
-    # A username comparison to "none" can be an ordinary no-account sentinel
-    # (for example, Plan 9's `none` user), and does not establish a password
-    # bypass. Real password absence checks compare against a null pointer or an
-    # empty string, never against the spelling of the word.
-    if:
-      type: text
-      regex: '\bstr\w{0,4}cmp\s*\([^;\n]{0,32}pass(wd|word)?\w{0,4}\s*,\s*"(NULL|nil|none)"'
-      case_insensitive: true
-    unless:
-      # Parser unit tests assert that a missing credential came back as the
-      # word "none" (curl tests/unit/unit1304.c).
-      - type: path
-        regex: '(^|[\\/])tests[\\/]unit[\\/]'
-      # GNU screen uses the literal "none" as the sentinel for "no password".
-      - type: path
-        regex: '(^|[\\/])screen[\\/]process\.c$'
-
   - id: comparison-then-assignment-in-one-condition
     desc: Condition compares then assigns
     crit: suspicious
@@ -63,29 +40,6 @@ traits:
     if:
       type: text
       regex: '==[^;\n]{0,60}&&[^;\n]{0,20}(->|\.)(e|s|fs)?[ug]id\s*=\s*0'
-
-
-  - id: indexed-byte-hex-compare
-    desc: Buffer byte compared to hex value
-    crit: component
-    conf: 0.85
-    for: [c, cpp, text]
-    # The index has to be a name. `buf[n+1]==0xNN` contains the text `[1]==0xNN`,
-    # which is the following byte, not a second independent test.
-    if:
-      type: text
-      regex: '\[\s*[A-Za-z_]\w{0,5}\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
-
-  - id: next-byte-hex-compare
-    desc: Next byte compared to hex value
-    crit: component
-    conf: 0.85
-    for: [c, cpp, text]
-    # `p_buf[i+1] == 0x29`. Two adjacent bytes tested against fixed values is
-    # a signature check, not parsing.
-    if:
-      type: text
-      regex: '\[\s*\w{1,6}\s*\+\s*1\s*\]\s*==\s*0x[0-9a-fA-F]{2}'
 
 
   - id: base64-decoded-command-default
@@ -102,16 +56,6 @@ traits:
       regex: '\$\{[A-Za-z_]\w{0,20}:-[^}]{0,30}base64\s+-d'
 
 composite_rules:
-  - id: adjacent-byte-hex-signature-check
-    desc: Adjacent input bytes compared to fixed values
-    crit: notable
-    conf: 0.9
-    for: [c, cpp, text]
-    near_lines: 4
-    all:
-      - id: indexed-byte-hex-compare
-      - id: next-byte-hex-compare
-
   - id: execution-sink-named-as-sanitiser
     desc: Exec sink named as a data sanitiser
     crit: hostile
@@ -125,11 +69,9 @@ composite_rules:
     # sat in a core WordPress file for weeks.
     all:
       - id: objectives/command-and-control/backdoor/webshell/wrapper::function-body-is-execution-sink
-      - id: "metadata/lang/source/declaration::php-sanitizer-named-function"
+      - id: "metadata/lang/source/naming/action/function-name::php-sanitizer-named-function"
     unless:
-      - id: metadata/package/testing/
-
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
   - id: credential-backdoor-disguised-as-null-check
     desc: Magic credential disguised as null check
     crit: hostile
@@ -140,12 +82,10 @@ composite_rules:
     # password check. Either half alone is explainable; together they are a
     # magic credential written to be skimmed past.
     all:
-      - id: credential-compared-to-absence-literal
+      - id: metadata/lang/source/syntax/conditional::password-absence-word-comparison
       - id: micro-behaviors/os/security/auth/password::strcmp-password-field
     unless:
-      - id: metadata/package/testing/
-
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
   - id: privilege-assignment-behind-decoy-branch
     desc: Decoy branch hides a privilege assignment
     crit: hostile
@@ -173,9 +113,7 @@ composite_rules:
       - id: comparison-then-assignment-in-one-condition
       - id: micro-behaviors/os/exception/error-handling::negative-errno-assignment-repeated
     unless:
-      - id: metadata/package/testing/
-
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
   - id: magic-byte-trigger-in-character-scanner
     desc: Magic byte test inside a character scanner
     crit: hostile
@@ -200,12 +138,10 @@ composite_rules:
     # and it generalises to any signature check smuggled into a byte loop
     # whose stated purpose is character classification.
     all:
-      - id: adjacent-byte-hex-signature-check
+      - id: micro-behaviors/data/buffer/read::nearby-indexed-byte-hex-comparisons
       - id: micro-behaviors/data/string/case::ctype-class-test-call
     unless:
-      - id: metadata/package/testing/
-
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
   - id: build-execs-base64-hidden-command
     desc: Build execs a base64-hidden command
     crit: hostile
@@ -228,11 +164,9 @@ composite_rules:
     # data -- has no benign purpose in a build script.
     all:
       - id: base64-decoded-command-default
-      - id: micro-behaviors/process/create/exec::shell-exec-variable-command
+      - id: micro-behaviors/process/replace::shell-exec-variable-command
     unless:
-      - id: metadata/package/testing/
-
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
   - id: payload-hidden-in-test-fixture
     desc: Test fixture carries an executable payload
     crit: hostile
@@ -255,11 +189,11 @@ composite_rules:
     # finding, not a reason to suppress one -- the opposite of the
     # directory-wide `unless:` mistake documented on the sibling stego rule.
     all:
-      - id: metadata/path::test-directory-component
-      - id: metadata/file/encoded::large-base64-like-literal
+      - id: metadata/path/directory::test-directory-component
+      - id: metadata/file/encoding/shape::large-base64-like-literal
     any:
-      - id: micro-behaviors/crypto/symmetric/aes/runtime-library::create-decipher-hex-hidden
-      - id: micro-behaviors/os/module/load::module-compile-hex-hidden
+      - id: micro-behaviors/crypto/decrypt/initialize::create-decipher-hex-hidden
+      - id: micro-behaviors/os/module/load/memory::module-compile-hex-hidden
 
   - id: logging-named-macro-runs-commands
     desc: Debug-named macro expands to system
@@ -282,7 +216,7 @@ composite_rules:
     # generalises: any macro that promises to log and delivers execution puts
     # a `system()` behind a name a reader will skip.
     all:
-      - id: micro-behaviors/process/create/shell/native::c-debug-system-macro-wrapper
+      - id: metadata/lang/source/syntax/directive::c-debug-system-macro-wrapper
     any:
       - id: objectives/command-and-control/backdoor/dispatch/shell/source::debug-macro-system-wrapper
       - id: objectives/command-and-control/backdoor/dispatch/shell/source::source-tree-debug-macro-command-trigger

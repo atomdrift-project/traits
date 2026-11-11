@@ -1,0 +1,126 @@
+defaults:
+  platforms: [windows, unix]
+  for: [c, cpp, binaries]
+traits:
+- id: native-open-create-mode-0777-arm
+  desc: ARM native open/create with mode 0777
+  crit: notable
+  conf: 0.98
+  for: [elf]
+  arch: [arm]
+  if:
+    type: yara
+    source: |
+      import "elf"
+      rule arm_open_create_world_executable {
+        strings:
+          $legacy = { 41 02 00 00 FF 01 00 00 }
+          $args = { ?? 1? 9F E5 [4] ?? 2? 9F E5 ?? 0? 9F E5 ?? ?? ?? EB }
+          $open = { 04 E0 2D E5 01 C0 A0 E1 02 30 A0 E1 00 10 A0 E1 04 D0 4D E2 0C 20 A0 E1 05 00 A0 E3 ?? ?? ?? EB 04 D0 8D E2 04 E0 9D E4 1E FF 2F E1 }
+        condition:
+          // Retain the previous literal-pair detection in text sections.
+          (for any s in elf.sections : (
+            s.name contains "text" and
+            for any i in (1..#legacy) : (
+              @legacy[i] >= s.offset and
+              @legacy[i] + !legacy[i] <= s.offset + s.size
+            )
+          )) or (
+            uint16(18) == 40 and
+            for any i in (1..#args) : (
+              // Bind PC-relative r1/r2 loads to O_WRONLY|O_CREAT|O_TRUNC
+              // and 0777. Their pool offsets vary with the linked image.
+              uint32(@args[i]+8+(uint16(@args[i]) & 0xfff)) == 0x241 and
+              uint32(@args[i]+16+(uint16(@args[i]+8) & 0xfff)) == 0x1ff and
+              // Bind BL to this open(2) forwarding stub, not any callee.
+              for any j in (1..#open) : (
+                @args[i]+24+4*((uint32(@args[i]+16) & 0x7fffff)-
+                  (uint32(@args[i]+16) & 0x800000)) == @open[j]
+              )
+            )
+          )
+      }
+- id: native-open-create-mode-0777-x64
+  desc: x86-64 native open/create with mode 0777
+  crit: notable
+  conf: 0.98
+  for: [elf]
+  arch: [x86-64]
+  if:
+    type: hex
+    section: ".text"
+    pattern: "(ba ff 01 00 00 be 41 02 00 00|be 41 02 00 00 ba ff 01 00 00)"
+- id: native-open-create-flags-mips-be
+  desc: Big-endian MIPS open/create flags
+  crit: notable
+  conf: 0.98
+  for: [elf]
+  arch: [mips]
+  if:
+    type: hex
+    section: ".text"
+    pattern: "24 05 03 01"
+- id: native-open-mode-0777-mips-be
+  desc: Big-endian MIPS flags with mode 0777
+  crit: notable
+  conf: 0.98
+  for: [elf]
+  arch: [mips]
+  if:
+    type: hex
+    section: ".text"
+    # O_WRONLY|O_CREAT|O_TRUNC followed nearby by mode 0777. Matching the
+    # mode load alone also catches unrelated integer constants.
+    pattern: "24 05 03 01 [0-12] 24 06 01 ff"
+- id: native-open-create-flags-mips-le
+  desc: Little-endian MIPS open/create flags
+  crit: notable
+  conf: 0.98
+  for: [elf]
+  arch: [mips]
+  if:
+    type: hex
+    section: ".text"
+    pattern: "01 03 05 24"
+- id: native-open-mode-0777-mips-le
+  desc: Little-endian MIPS flags with mode 0777
+  crit: notable
+  conf: 0.98
+  for: [elf]
+  arch: [mips]
+  if:
+    type: hex
+    section: ".text"
+    pattern: "01 03 05 24 [0-12] ff 01 06 24"
+
+composite_rules:
+- id: native-open-create-mode-0777-mips-be
+  desc: Big-endian MIPS open/create with mode 0777
+  crit: suspicious
+  conf: 0.98
+  for: [elf]
+  arch: [mips]
+  near_bytes: 16
+  all:
+  - id: native-open-create-flags-mips-be
+  - id: native-open-mode-0777-mips-be
+  unless:
+  - id: well-known/tool/reverse-engineering/frida::frida-server-native
+  - id: well-known/tool/reverse-engineering/frida::frida-agent-native
+  - id: well-known/tool/reverse-engineering/frida::frida-gadget-native
+  - id: well-known/tool/reverse-engineering/frida::frida-inject-native
+- id: native-open-create-mode-0777-mips-le
+  desc: Little-endian MIPS open/create with mode 0777
+  crit: suspicious
+  conf: 0.98
+  for: [elf]
+  arch: [mips]
+  near_bytes: 16
+  all:
+  - id: native-open-create-flags-mips-le
+  - id: native-open-mode-0777-mips-le
+  unless:
+  - id: well-known/tool/reverse-engineering/frida::frida-server-native
+  - id: well-known/tool/reverse-engineering/frida::frida-agent-native
+  - id: well-known/tool/reverse-engineering/frida::frida-gadget-native
+  - id: well-known/tool/reverse-engineering/frida::frida-inject-native

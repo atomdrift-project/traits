@@ -36,23 +36,6 @@ traits:
       type: text
       case_insensitive: true
       substr: /msg $chan
-  - id: mirc-script-cmd-ignore-nick
-    desc: Detects mIRC ignore nickname command
-    crit: suspicious
-    if:
-      type: text
-      case_insensitive: true
-      substr: /ignore $nick
-  - id: mirc-command-targets-nick
-    desc: mIRC command targets nickname variable
-    crit: notable
-    if:
-      type: text
-      case_insensitive: true
-      # Both the slash form (/msg) and the silent dot form (.msg, which
-      # suppresses local echo) address a command at $nick; backdoors prefer
-      # the dot form so the victim never sees the reply.
-      regex: '([/.](msg|notice|query|ignore|kick|ban|dcc)\s+\$nick\b|\.privmsg\s+\$nick\b)'
   - id: mirc-script-event-ctcp
     desc: mIRC CTCP event handler
     crit: suspicious
@@ -78,16 +61,15 @@ traits:
       # archive's payload can contain the bytes `/$4-` by chance.
       regex: '(?m)(^|[{\n])[ \t]{0,8}(\.\$\+[ \t]+\$[0-9]-|/\$[0-9]-)'
   - id: mirc-controller-nick-gate
-    desc: mIRC handler gated on hardcoded nickname
-    crit: suspicious
+    desc: mIRC compares sender with a fixed nickname
+    crit: notable
     conf: 0.9
     for: [mirc, ircii, scripts]
     if:
       type: text
       case_insensitive: true
-      # `$nick != hacker` / `$nick == boss`: the handler only answers a fixed
-      # operator nick. The gated name must start with a nick character, which
-      # also excludes self-comparisons (`$nick != $me`) — those are ordinary.
+      # Comparisons can select an operator, exclude an ordinary nickname, or
+      # implement other routing. Require more context before inferring control.
       regex: '\$nick\s*(!=|==)\s*[A-Za-z0-9_\-\[\]{}^`|\\]{1,32}'
   - id: mirc-script-cmd-fserve
     desc: Detects mIRC file-server command
@@ -193,7 +175,7 @@ traits:
       substr: '.copy '
   - id: mirc-ping-pong-reply
     desc: Replies to an IRC PING
-    crit: suspicious
+    crit: notable
     conf: 0.92
     for: [mirc]
     if:
@@ -239,15 +221,6 @@ traits:
       type: text
       # A wildcard socket name (`clone*`) broadcasts to every connection.
       regex: '(?i)\bsockwrite\s+(-[a-z]+\s+)?[\w.]*\*\s+PRIVMSG\b'
-  - id: mirc-text-flood-command
-    desc: mIRC trigger names a flood command
-    crit: suspicious
-    conf: 0.9
-    for: [mirc, ircii, scripts, data]
-    if:
-      type: text
-      # `on *:TEXT:!msgflood1*:` or `if ($1 == !ctcpflood)`.
-      regex: '(?i)(:TEXT:|==\s*)[!.@]\w{0,12}flood'
   - id: mirc-random-chr-fill
     desc: mIRC builds strings from random characters
     crit: notable
@@ -377,16 +350,6 @@ traits:
     if:
       type: text
       regex: '(?i)(^|[\s;{|=])\.?/?inc\s+%(\w+[._])?(scan|ip|addr)([._]\w+)?\b'
-  # `nick $rand(a,z) $+ ...` chained three or more times: the bot builds an
-  # unblockable random identity instead of taking one $rand fallback nick.
-  - id: mirc-random-nick-chain
-    desc: mIRC randomizes its nick in chunks
-    crit: notable
-    conf: 0.86
-    for: [mirc, ircii]
-    if:
-      type: text
-      regex: '(?i)\bnick\s+(\$rand\([^)\r\n]{0,24}\)[^|\r\n}]{0,12}){3,}'
   # `.msg ns identify $did(2)`: the script sends a password to NickServ.
   # Auto-identify scripts do this with their own stored password; paired
   # with a password dialog below, the password is the victim's.
@@ -449,14 +412,14 @@ composite_rules:
     conf: 0.9
     all:
       - id: micro-behaviors/communications/irc/configure::mirc-server-endpoint-declaration
-      - id: micro-behaviors/data/config/schema::mirc-dde-server-enabled
-      - id: micro-behaviors/data/config/schema::mirc-dot-only-log-directory
+      - id: micro-behaviors/os/message/dde::mirc-dde-server-enabled
+      - id: micro-behaviors/fs/path/log/application::mirc-dot-only-log-directory
       - id: metadata/file/format/structured::mirc-remote-script-list
   - id: mirc-remote-bot-control-surface
     desc: mIRC remote bot control surface
     crit: suspicious
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
     any:
       - id: mirc-script-cmd-fserve
       - id: mirc-script-cmd-clone
@@ -468,14 +431,14 @@ composite_rules:
     conf: 0.96
     all:
       - id: mirc-script-event-join-bang
-      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
+      - id: micro-behaviors/communications/irc/command::mirc-dot-dcc-send
   - id: mirc-text-dcc-spread
     desc: Text handler also DCC-sends a file
     crit: hostile
     conf: 0.95
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
-      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/command::mirc-dot-dcc-send
   # A caret TEXT handler hides the trigger line and `| halt` swallows the
   # event, so a DCC send from it is operator-triggered silent file exfil.
   - id: mirc-hidden-text-dcc-send
@@ -486,14 +449,14 @@ composite_rules:
     for: [mirc, ircii]
     all:
       - id: mirc-caret-text-event
-      - id: micro-behaviors/communications/transfer::mirc-dcc-send-command
-      - id: micro-behaviors/communications/ipc/irc::mirc-halt-default-processing
+      - id: micro-behaviors/communications/irc/command::mirc-dcc-send-command
+      - id: micro-behaviors/communications/irc/handler::mirc-halt-default-processing
   - id: mirc-multi-command-bot
     desc: mIRC bot exposes several remote commands
     crit: hostile
     conf: 0.95
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
     any:
       - id: mirc-script-cmd-fserve
       - id: mirc-script-cmd-clone
@@ -509,7 +472,7 @@ composite_rules:
     # dead weight on this composite.
     for: [mirc, ircii]
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
       - id: micro-behaviors/process/create/exec::mirc-run-executable
   # A channel TEXT command that fires UDP datagrams off a million-repeat
   # timer is a remote-commanded UDP flood. Trigger, transport, and
@@ -521,16 +484,16 @@ composite_rules:
     attack: T1498
     for: [mirc, ircii]
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
       - id: mirc-sockudp-send
       - id: mirc-mass-repeat-timer
   - id: mirc-socket-ping-client
     desc: Socket client answers IRC PING
-    crit: hostile
+    crit: notable
     conf: 0.94
     for: [mirc]
     all:
-      - id: micro-behaviors/communications/socket/connect::mirc-sockopen
+      - id: micro-behaviors/communications/socket/connect/attempt::mirc-sockopen
       - id: mirc-ping-pong-reply
   - id: mirc-socket-command-backdoor
     desc: mIRC socket runs shell commands
@@ -548,7 +511,7 @@ composite_rules:
     conf: 0.95
     attack: T1498
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
       - id: mirc-run-ping-flood
   # A CTCP handler that runs the sender's message text as a command and then
   # halts is arbitrary remote command execution: anyone who can CTCP the
@@ -564,7 +527,7 @@ composite_rules:
     all:
       - id: mirc-script-event-ctcp
       - id: mirc-exec-sender-text-command
-      - id: micro-behaviors/communications/ipc/irc::mirc-halt-default-processing
+      - id: micro-behaviors/communications/irc/handler::mirc-halt-default-processing
 
   - id: mirc-numbered-join-dcc
     desc: Numbered JOIN event DCC-sends a file
@@ -578,8 +541,8 @@ composite_rules:
       # command on the handler line itself: Tiny-style DOS droppers write
       # `n0=on 1:JOIN:#:/dcc send $nick <path>` into the victim's
       # script.ini, auto-sending their self-copy to every joiner.
-      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
-      - id: micro-behaviors/communications/transfer::mirc-join-handler-dcc-send
+      - id: micro-behaviors/communications/irc/command::mirc-dot-dcc-send
+      - id: micro-behaviors/communications/irc/command::mirc-join-handler-dcc-send
   - id: mirc-copy-then-dcc
     desc: mIRC copies a file then DCC-sends it
     crit: hostile
@@ -587,7 +550,7 @@ composite_rules:
     for: [mirc]
     all:
       - id: mirc-dot-copy
-      - id: micro-behaviors/communications/transfer::mirc-dot-dcc-send
+      - id: micro-behaviors/communications/irc/command::mirc-dot-dcc-send
   - id: mirc-group-reports-client
     desc: Enabled group reports the client address
     crit: hostile
@@ -613,7 +576,7 @@ composite_rules:
     attack: T1071
     for: [mirc, ircii]
     all:
-      - id: micro-behaviors/communications/ipc/irc::mirc-on-text-handler
+      - id: micro-behaviors/communications/irc/handler::mirc-on-text-handler
       - id: mirc-clone-with-parameter
       - id: mirc-bocon-clone
 
@@ -624,6 +587,5 @@ composite_rules:
     attack: T1071,T1498
     for: [mirc, ircii]
     all:
-      - id: mirc-text-flood-command
+      - id: micro-behaviors/communications/irc/handler::mirc-text-flood-command
       - id: mirc-clone-with-parameter
-

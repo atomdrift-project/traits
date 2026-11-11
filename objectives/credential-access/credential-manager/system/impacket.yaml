@@ -1,0 +1,123 @@
+# Impacket's secretsdump utility extracts domain credential material.  The
+# utility is dual-use, so the named reference stays notable; the NTDS target
+# conjunction expresses the credential-dumping objective.
+#
+# `kerberosLogin(...)` calls and `aesKey` auth options moved to
+# micro-behaviors/os/security/auth/session/kerberos.yaml: those are neutral
+# Kerberos-authentication mechanics present in any impacket-based tool
+# (dump-related or not), not a dump-specific signal on their own.
+defaults:
+  platforms: [unix, windows]
+  for: [scripts, binaries]
+  attack: T1003.003
+  mbc: B0005
+
+traits:
+  - id: secretsdump-hash-authentication
+    desc: secretsdump hash-authentication option
+    crit: suspicious
+    conf: 0.95
+    attack: T1550.002
+    if:
+      type: text
+      # Impacket accepts LM:NT material after -hashes. The values may be
+      # literals or script substitutions assembled at runtime.
+      regex: '(?i)\bsecretsdump(\.py)?\b[^\r\n]{0,240}\s-hashes\s+[^\s:"'']{1,96}:[^\s"'']{1,96}'
+
+  - id: domain-controller-dump-option-fragment
+    desc: Domain-controller dump option fragment
+    crit: component
+    conf: 0.93
+    if:
+      type: text
+      regex: (?i)(^|[[:space:]\"'])(-just-dc-ntlm|-just-dc|-ntds)\b
+composite_rules:
+  # The leg is the option token alone (-just-dc, -just-dc-ntlm, -ntds); those
+  # option names are secretsdump's, but the tool name is not required here.
+  - id: secretsdump-domain-controller-mode
+    desc: Domain-controller dump option (-just-dc/-ntds)
+    crit: suspicious
+    conf: 0.93
+    downgrade:
+      any:
+        - id: well-known/tool/offensive/adpentest::scoped-framework
+        - id: well-known/app/security/packetfence::ntlm-cache-module
+    all:
+      - id: domain-controller-dump-option-fragment
+    unless:
+    - id: metadata/lang/source/shape::javascript-literal-tables-pure-helpers
+    - id: well-known/tool/offensive/impacket::source-tree-member
+    - id: metadata/package/documentation/security-exercise::assessment-playbook-examples
+    - id: micro-behaviors/metaprogramming/generation/source::configured-assessment-plugin
+  - id: impacket-dcsync-command
+    desc: secretsdump domain-controller extraction command text
+    crit: suspicious
+    conf: 0.98
+    downgrade:
+      all:
+      - id: well-known/tool/offensive/adpentest::scoped-framework
+    attack: T1003.006
+    all:
+    - id: metadata/lang/source/syntax/command/named-command::impacket-secretsdump-command
+    - id: secretsdump-domain-controller-mode
+    near_lines: 4
+    unless:
+    - id: metadata/lang/source/shape::javascript-literal-tables-pure-helpers
+    - id: well-known/tool/offensive/impacket::source-tree-member
+    - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+    - id: metadata/package/documentation/security-exercise::assessment-playbook-examples
+  - id: impacket-hash-authenticated-dcsync
+    desc: Impacket DCSync authenticates with hashes
+    crit: hostile
+    conf: 0.99
+    attack: T1003.006,T1550.002
+    all:
+      - id: impacket-dcsync-command
+      - id: secretsdump-hash-authentication
+    near_lines: 4
+    unless:
+      - id: well-known/tool/offensive/impacket::source-tree-member
+      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+
+  - id: impacket-dcsync-with-ad-recon
+    desc: AD reconnaissance paired with Impacket DCSync dump
+    crit: hostile
+    conf: 0.98
+    attack: T1003.006,T1087.002
+    all:
+      - id: impacket-dcsync-command
+      - id: objectives/discovery/account/ad::ad-recon-lolbins
+    near_lines: 30
+    unless:
+      - id: well-known/tool/offensive/impacket::source-tree-member
+      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
+      - id: metadata/package/documentation/security-exercise::assessment-playbook-examples
+
+  - id: impacket-ntds-credential-dump
+    desc: Impacket extracts domain credentials from NTDS
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: metadata/lang/source/syntax/command/named-command::impacket-secretsdump-command
+      - id: micro-behaviors/fs/path/account-db::ntds-database-path-reference
+    any:
+      - id: secretsdump-domain-controller-mode
+      - id: objectives/credential-access/files/password-database::ntdsutil-ntds-target
+    near_lines: 12
+    unless:
+      - id: metadata/lang/source/shape::javascript-literal-tables-pure-helpers
+      - id: well-known/tool/offensive/impacket::source-tree-member
+  - id: dcsync-kerberos-domain-dump
+    for: [elf, macho, pe, class, pyc, beam, wasm, staticlib]
+    desc: DCSync replication with Kerberos key auth
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/rpc::drsuapi-interface-reference
+      - id: micro-behaviors/os/security/auth/session::kerberos-login-call
+      - id: micro-behaviors/os/security/auth/session::kerberos-aeskey-reference-context
+    any:
+      - id: micro-behaviors/fs/path/account-db::ntds-database-path-reference
+      - id: secretsdump-domain-controller-mode
+    unless:
+      - id: well-known/tool/offensive/impacket::source-tree-member

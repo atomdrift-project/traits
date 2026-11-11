@@ -2,8 +2,7 @@ defaults:
   crit: hostile
   platforms: [windows]
   for: [pe]
-  attack: T1554.001
-  mbc: B0024
+  attack: T1554
 
 composite_rules:
   # P-code infectors do not import CreateFile/ReadFile/WriteFile: their Open,
@@ -15,16 +14,15 @@ composite_rules:
     conf: 0.99
     attack: T1083,T1554
     all:
-      - id: metadata/binary/framework::vb6-application-framework
-      - id: micro-behaviors/fs/directory/readdir::vb6-ordinal-rtcdir
+      - id: metadata/lang/runtime::vb6-application-framework
+      - id: micro-behaviors/fs/directory/readdir/native::vb6-ordinal-rtcdir
       - id: micro-behaviors/data/string/runtime::vb6-ordinal-right-char-helper
       - id: micro-behaviors/fs/path/extension::utf16-exe-suffix-token
       - id: micro-behaviors/fs/path/check::vb6-ordinal-rtcgetfileattr
       - id: micro-behaviors/fs/read/file/handle::vb6-pcode-binary-record-read
-      - id: micro-behaviors/fs/write/file/handle::vb6-pcode-repeated-binary-record-write
+      - id: micro-behaviors/fs/write/file/handle/unspecified::vb6-pcode-repeated-binary-record-write
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
+      - id: metadata/installer/product/
 
   # Native-code VB6 builds expose Get/Put and Dir through named MSVBVM60
   # imports rather than the ordinal and p-code byte sequences above. Repeated
@@ -36,86 +34,65 @@ composite_rules:
     conf: 0.99
     attack: T1083,T1554
     all:
-      - id: metadata/binary/framework::vb6-application-framework
+      - id: metadata/lang/runtime::vb6-application-framework
       - id: metadata/binary/layout/embedded::repeated-standard-pe-images
       - id: metadata/binary/layout/ratio::overlay-over-90pct
-      - id: metadata/binary/layout/overlay::large-overlay-1mb
-      - id: micro-behaviors/fs/directory/readdir::vb6-rtcdir
+      - id: metadata/binary/layout/size::large-overlay-1mb
+      - id: micro-behaviors/fs/directory/readdir/native::vb6-rtcdir
       - id: micro-behaviors/fs/read/file/handle::vb6-record-file-read
-      - id: micro-behaviors/fs/write/file/handle::vb6-binary-file-write
+      - id: micro-behaviors/fs/write/file/handle/unspecified::vb6-binary-file-write
       - id: micro-behaviors/fs/file/attributes::vb6-set-file-attributes
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/script/
-      - id: metadata/binary/installer/sfx/
-
-  # A VB6 wrapper with one appended host image can be an infector even when it
-  # does not contain the repeated images required by the broad binder profile.
-  # Require the executable walk, record reads and writes, and attribute changes
-  # together with the appended host image; a packed program or bundled PE alone
-  # does not establish this behavior.
   - id: vb6-single-host-image-file-infector
     desc: VB6 executable walk rewrites binary files around an embedded host
     crit: hostile
     conf: 0.98
-    attack: T1554
     all:
-      - id: metadata/binary/framework::vb6-application-framework
+      - id: metadata/lang/runtime::vb6-application-framework
       - id: metadata/binary/layout/embedded::pe-embedded
-      - id: micro-behaviors/fs/directory/readdir::find-file-walker
+      - id: micro-behaviors/fs/directory/readdir/native::find-file-walker
       - id: micro-behaviors/fs/read/file/handle::vb6-record-file-read
-      - id: micro-behaviors/fs/write/file/handle::vb6-binary-file-write
+      - id: micro-behaviors/fs/write/file/handle/unspecified::vb6-binary-file-write
       - id: micro-behaviors/fs/file/attributes::vb6-set-file-attributes
       - id: micro-behaviors/process/enumerate/snapshot::vb6-windowproc-process-api-profile
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/script/
-      - id: metadata/binary/installer/sfx/
-
-  # A VB6 stub whose self-modifying text section fronts an overlay that is
-  # mostly repeated standard PE images: the bundle-and-replay shape of a
-  # binder or infector that carries its own host copies. Signed products and
-  # installers legitimately bundle executables and are excluded.
   - id: vb6-writable-stub-repeated-pe-overlay
     desc: VB6 writable stub fronting repeated PE overlay
     conf: 0.9
     attack: T1027.002,T1554
     all:
       - id: metadata/lang/runtime::vb6-runtime-core-helper
-      - id: metadata/binary/section/header::writable-entry-with-wx-section
       - id: metadata/binary/layout/embedded::repeated-standard-pe-images
-      - id: metadata/binary/layout/overlay::overlay-dominates-80pct
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/installer/script/
-      - id: metadata/binary/installer/sfx/
-
+      - id: metadata/binary/layout/ratio::overlay-dominates-80pct
+    # ASPack-style stubs clear every execute flag and run from a writable,
+    # nominally non-executable entry; that is the same writable stub.
+    any:
+      - id: metadata/binary/section/header::writable-entry-with-wx-section
+      - id: metadata/binary/section/header::non-executable-writable-entry-pe-carrier
   - id: packed-vb6-host-binder
     desc: Packed VB6 file-attribute binder around host sections
     conf: 0.97
     all:
       - id: objectives/anti-static/pack/upx::single-bookend-renamed-upx-loader
-      - id: metadata/binary/framework::vb6-application-framework
+      - id: metadata/lang/runtime::vb6-application-framework
       - id: micro-behaviors/fs/file/attributes::vb6-set-file-attributes
       - id: metadata/binary/section/permission::six-plus-writable-sections
     unless:
-      - id: metadata/signed/trust-level::signer-evidence-present
+      - id: metadata/signature/verified/
 
-  # The handler and Autorun directive are decoded strings in packed VB6 P-code
-  # rather than reliable import facts.  Requiring both the embedded image and
-  # ASPack layout keeps this separate from ordinary VB6 file utilities.
-  - id: packed-pe-file-infector-autorun
-    desc: Packed PE file infector with Autorun propagation
+  # Native VB6 code reads self and host into fields, writes self at the start
+  # of the output and host at the computed self-length position. The dump may
+  # have damaged imports; helper names corroborate the retained call layout.
+  # Neither a chosen handler name nor a packer section establishes infection.
+  - id: vb6-self-prefix-file-infector-autorun
+    desc: VB6 self-prefix writer with AutoRun config
     conf: 0.99
     attack: T1554,T1091
     all:
-      - id: micro-behaviors/data/source/function/names::file-infection-handler-name
+      - id: metadata/binary/instruction/sequence/unspecified::x86-paired-field-offset-call-layout
+      - id: micro-behaviors/fs/path/self::vb6-app-executable-path-profile
+      - id: micro-behaviors/fs/write/file/handle/unspecified::vb6-put-owner3-text
+      - id: micro-behaviors/fs/path/config/autorun::autorun-section
+    any:
       - id: micro-behaviors/fs/path/config/autorun::autorun-shell-directive
-      - id: metadata/binary/layout/embedded::pe-embedded
-      - id: metadata/build/protector::aspack-name-reference
+      - id: micro-behaviors/fs/path/config/autorun::autorun-shell-directive-wide
     unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
+      - id: metadata/installer/product/

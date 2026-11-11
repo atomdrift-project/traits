@@ -4,7 +4,7 @@
 #
 # Filed here beside netlink.yaml and af_alg.yaml because what these matchers
 # find is the socket surface -- the family and protocol selectors a program
-# passes to socket(), plus the message types it writes over that socket.
+# passes to socket(), plus security-association message and encapsulation references.
 #
 # Every atom is a neutral capability. strongSwan, libreswan, iproute2,
 # systemd-networkd and the kernel's own selftests all install SAs this way, so
@@ -30,54 +30,39 @@ traits:
   # protocol selector is usually a locally defined integer constant, which is
   # how every non-C binding spells it.
   - id: xfrm-netlink-socket
-    desc: Opens a NETLINK_XFRM IPsec control socket
+    desc: References NETLINK_XFRM socket selectors
     conf: 0.95
     if:
       type: text
       regex: '(?i)(AF_NETLINK[^\n]{0,100}NETLINK_XFRM|NETLINK_XFRM[^\n]{0,100}AF_NETLINK)'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 
   # The netlink message types that create or replace a security association or
   # policy. Read-only types (GETSA, GETPOLICY) are deliberately absent:
   # querying the SAD is monitoring, writing to it is control.
   - id: xfrm-sa-install-message
-    desc: XFRM netlink message installing an SA
+    desc: XFRM SA/policy update message references
     conf: 0.93
     if:
       type: text
       regex: '\bXFRM_MSG_(NEW|UPD)(SA|POLICY)\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 
   - id: xfrm-usersa-info-struct
-    desc: Builds an XFRM security-association record
+    desc: XFRM SA/policy structure references
     conf: 0.93
     if:
       type: text
       regex: '\bxfrm_user(sa|policy)_(info|id)\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 
   # IP protocol 50. Selects the esp4/esp6 receive path for a raw socket or an
   # SA id -- the code that performs the in-place decrypt.
   - id: esp-protocol-selector
-    desc: Uses IPPROTO_ESP in a socket call
+    desc: Socket-call text selects IPPROTO_ESP
     conf: 0.9
     # A binary's DWARF symbol table can carry IPPROTO_ESP from the system
     # headers even when its code never selects that protocol. This observation
@@ -88,65 +73,49 @@ traits:
       type: text
       regex: '(?i)\bsocket\s*\([^;\n]{0,160}\bIPPROTO_ESP\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 
   # ESP-in-UDP / ESP-in-TCP encapsulation. The encap template is what routes an
   # SA's traffic back through IP reassembly before esp_input() sees it.
   - id: esp-encapsulation-template
-    desc: Configures ESP-in-UDP or ESP-in-TCP encap
+    desc: ESP-in-UDP/TCP encapsulation references
     conf: 0.93
     if:
       type: text
       regex: '\b(UDP_ENCAP_ESPINUDP(_NON_IKE)?|TCP_ENCAP_ESPINTCP|xfrm_encap_tmpl)\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 
   # PF_KEYv2 (RFC 2367) is the other userspace SA-management API and reaches
   # the same esp4/esp6 code without touching netlink.
   - id: pfkey-sa-install-message
-    desc: PF_KEYv2 message installing an IPsec SA
+    desc: References PF_KEYv2 SA management message types
     conf: 0.93
     if:
       type: text
       regex: '\bSADB_(ADD|UPDATE|GETSPI)\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
       - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
 
 composite_rules:
   # Installing an SA needs both the control channel and an install message; the
-  # pair separates a program that manages IPsec state from one that only
-  # mentions the constants.
-  - id: xfrm-sa-installation
-    desc: Installs an IPsec SA over XFRM netlink
+  # pair is a control-channel profile, not proof a request was transmitted.
+  - id: xfrm-sa-control-references
+    desc: XFRM socket selectors accompany SA update message types
     crit: notable
     conf: 0.95
     all:
       - id: xfrm-netlink-socket
       - id: xfrm-sa-install-message
 
-  # Canonical "this code drives the kernel ESP data path" fact, whichever of the
-  # userspace routes it takes. Composites elsewhere use it as a gate.
-  - id: ipsec-esp-datapath-control
-    desc: Drives the Linux kernel IPsec ESP data path
+  # IPsec/ESP control references; consumers must supply their own operation
+  # evidence. A bare template or constant does not establish a configured SA.
+  - id: ipsec-esp-control-references
+    desc: References Linux IPsec or ESP control interfaces
     crit: notable
     conf: 0.93
     any:
-      - id: xfrm-sa-installation
+      - id: xfrm-sa-control-references
       - id: pfkey-sa-install-message
       - id: esp-encapsulation-template
       - id: esp-protocol-selector

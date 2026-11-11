@@ -1,10 +1,21 @@
-# Building blocks of a resident INT 21h hook in a small COM image. Each is
-# written as YARA so the sequence is evaluated under the engine's size floor.
+# Building blocks of a resident INT 21h hook in a small COM image, raw dump,
+# or static library member. Each is written as YARA so the sequence is
+# evaluated under the engine's size floor.
 defaults:
   platforms: [windows, unix]
   for: [dos_com, data]
   size_max: 4096
 traits:
+  # AX=51FFh followed by INT 21h and CMP AX,51FFh is the DOS TSR
+  # identification probe. By itself it only checks for an installed TSR.
+  - id: dos-tsr-residency-probe
+    desc: Detects an installed DOS TSR
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "B8 FF 51 CD 21 3D 51 FF"
+
   # AH=35h reads the current INT 21h vector, a few moves save it, and AH=25h
   # installs a new handler, so every later DOS call reaches the new code.
   - id: dos-int21-vector-get-then-set
@@ -49,13 +60,15 @@ traits:
         }
 
   # AH=31h ends the program and keeps DX paragraphs resident (DOS 2.0+ TSR).
+  # DX is often loaded as a byte length and converted to paragraphs
+  # (SHR DX,CL with CL=4, or four SHR DX,1) before the call.
   - id: dos-tsr-keep-int21
     desc: DOS stays resident via INT 21h AH=31h
     crit: notable
     conf: 0.9
     if:
       type: hex
-      pattern: "(BA ?? ?? [0-4] B4 31|B4 31 [0-4] BA ?? ??|B8 ?? 31 [0-4] BA ?? ??|BA ?? ?? [0-4] B8 ?? 31) [0-4] CD 21"
+      pattern: "(BA ?? ?? [0-4] B4 31|B4 31 [0-4] BA ?? ??|B8 ?? 31 [0-4] BA ?? ??|BA ?? ?? [0-4] B8 ?? 31) ([0-4]|B1 04 D3 EA [0-4]|D1 EA D1 EA D1 EA D1 EA [0-4]) CD 21"
 
   # MOV DL,imm8 then INT 27h: DX was already loaded, and only the low byte
   # is adjusted to the resident length before the program stays in memory.
@@ -98,12 +111,13 @@ traits:
     desc: DOS low copy then vector store
     crit: suspicious
     conf: 0.9
+    for: [dos_com, data, static-lib]
     if:
       type: yara
       source: |
         rule dos_low_copy_vector_store {
           meta:
-            filetypes = "dos_com,data"
+            filetypes = "dos_com,data,static-lib"
           strings:
             $copy = { ( B1 ?? | B9 ?? ?? ) [0-8] F3 A4 [0-32] AB }
           condition:
@@ -166,13 +180,26 @@ traits:
             $patch in (0..512)
         }
 
-  # Open-service trigger for a resident hook: CMP AH,3Dh filters file open
-  # requests so the resident handler can intercept opens.
+  # Open-service trigger for a resident hook: CMP AH,3Dh or CMP AX,3D00h
+  # filters file open requests so the resident handler can intercept opens.
   - id: dos-int21-open-filter-trigger
-    desc: DOS handler checks for file open (AH=3Dh)
+    desc: DOS handler checks for file open (3Dh)
     crit: suspicious
     conf: 0.92
     if:
       type: hex
-      pattern: "80 FC 3D (74|75) ??"
+      pattern: "(80 FC 3D|3D 00 3D) (74|75) ??"
+
+  # Saved-vector dispatch helper: PUSHF followed by CALL FAR to an immediate
+  # segment:offset and RET. A hooked handler calls the saved original vector
+  # through a stub like this so flags cross the chain untouched; resident
+  # infectors patch the inline far target with the captured vector at
+  # install time. The stub alone is a dispatch capability, not a hook proof.
+  - id: dos-saved-vector-far-call-helper
+    desc: DOS calls saved vector via far-call stub
+    crit: notable
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "9C 9A ?? ?? ?? ?? C3"
 

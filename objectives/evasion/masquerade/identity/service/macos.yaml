@@ -19,18 +19,8 @@ traits:
       - regex: com\.apple\.private\.
       - regex: com\.apple\.(kext|driver)\.
       - regex: com\.apple\.(trustd|coresimulator)\.
-    unless:
-      - id: metadata/signed/platform::apple
-      - id: metadata/binary/vendor/
-      - id: metadata/import/package::claude-agent-sdk-module-reference
-      - id: objectives/supply-chain/trojanized/app/debug-probe/
-      - id: well-known/lib/runtime/scripted/electron::macos-framework
-      - id: well-known/tool/development/toolchain/darling/
-      - id: well-known/lib/runtime/scripted/php-runtime::runtime-shared-library
-      # Seatbelt profiles legitimately name Apple's preference services; these
-      # are IPC allowlists, not service-identity claims.
-      - type: text
-        regex: 'global-name\s+"com\.apple\.cfprefsd\.(daemon|agent)"'
+      # Apple-defined app-extension point (NSExtensionPointIdentifier).
+      - regex: com\.apple\.usernotifications\.service
   # A non-Apple vendor daemon identity (Canonical, Microsoft, Google, ...) on
   # a binary none of those vendors signed. Third-party software may reference
   # a vendor daemon it talks to, so this alone is notable; the ad-hoc-packed
@@ -43,7 +33,7 @@ traits:
       type: text
       regex: '(?i)\b(net|com|org)\.(canonical|ubuntu|microsoft)\.([a-z0-9._-]{1,30}\.)?daemon\b'
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
   - id: vendor-daemon-app-claim
     desc: App vendor daemon identity string
     crit: notable
@@ -52,7 +42,7 @@ traits:
       type: text
       regex: '(?i)\b(net|com|org)\.(google|mozilla|adobe|oracle)\.([a-z0-9._-]{1,30}\.)?daemon\b'
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
   # A hyphenated Name-Version code-signature identifier that claims a macOS
   # system-agent role ("MessageKitAgent-6.26"): neither Apple's reverse-DNS
   # scheme nor a vendor namespace, but a dressed-up agent identity.
@@ -66,10 +56,10 @@ traits:
       path: macho.code_signature.identifier
       regex: '^[A-Za-z][A-Za-z0-9]{1,24}(Agent|Daemon|Helper|Service)-[0-9]+(\.[0-9]+){1,3}$'
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
   # `brew.mxcl.<formula>` is the label scheme `brew services` mints for user
-  # LaunchAgents. Homebrew never code-signs, so an ad-hoc Mach-O carrying that
-  # namespace poses as a brew-managed helper service.
+  # LaunchAgents. The identifier is an unverified claim and an ad-hoc
+  # signature alone does not establish impersonation.
   - id: homebrew-service-identifier-claim
     desc: Homebrew service identifier claim
     crit: notable
@@ -93,10 +83,10 @@ composite_rules:
     crit: hostile
     conf: 0.95
     all:
-      - id: metadata/signed/trust-level::adhoc
+      - id: metadata/signature/ad-hoc::adhoc
       - id: vendor-daemon-identity
-      - id: metadata/file/encoded::large-base64-like-string
-      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: metadata/file/encoding/base64::large-base64-like-string
+      - id: micro-behaviors/process/create/subprocess/reference::system-command-api-clues
 
   # The agent-name shape replaces the vendor namespace in loader builds that
   # pose as a macOS messaging/management agent while carrying a Base64 stage.
@@ -105,21 +95,21 @@ composite_rules:
     crit: hostile
     conf: 0.94
     all:
-      - id: metadata/signed/trust-level::adhoc
+      - id: metadata/signature/ad-hoc::adhoc
       - id: agent-version-identifier-claim
-      - id: metadata/file/encoded::large-base64-like-string
-      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: metadata/file/encoding/base64::large-base64-like-string
+      - id: micro-behaviors/process/create/subprocess/reference::system-command-api-clues
 
-  # The Homebrew namespace variant: the loader poses as a brew-managed helper.
+  # These separate observations do not prove the encoded data is executed.
   - id: adhoc-homebrew-service-payload-runner
-    desc: Ad-hoc runner claims Homebrew service with payload blob
-    crit: hostile
+    desc: Ad-hoc Homebrew identity, encoded data and system API
+    crit: suspicious
     conf: 0.94
     all:
-      - id: metadata/signed/trust-level::adhoc
+      - id: metadata/signature/ad-hoc::adhoc
       - id: homebrew-service-identifier-claim
-      - id: metadata/file/encoded::large-base64-like-string
-      - id: micro-behaviors/process/create/shell/spawn::system-fn
+      - id: metadata/file/encoding/base64::large-base64-like-string
+      - id: micro-behaviors/process/create/subprocess/reference::system-command-api-clues
 
 
   # Apple does not ship jobs by scripting a plist into ~/Library/LaunchAgents
@@ -132,12 +122,11 @@ composite_rules:
     attack: T1036.004,T1543.001
     for: [scripts]
     all:
-      - id: micro-behaviors/os/service/configure::launchd-label-apple-namespace
+      - id: micro-behaviors/os/service/launchd/config::launchd-label-apple-namespace
       - id: micro-behaviors/os/service/launchagent::launchagent-path-reference
     any:
       - id: micro-behaviors/os/service/start::launchctl-load-command
       - id: micro-behaviors/os/service/start::launchctl-bootstrap-subcommand
       - id: micro-behaviors/os/service/control::python-launchctl-argv
     unless:
-      - id: metadata/signed/platform::apple
-      - id: metadata/binary/vendor/
+      - id: metadata/signature/verified/platform::apple

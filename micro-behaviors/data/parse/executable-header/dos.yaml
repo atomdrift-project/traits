@@ -1,0 +1,90 @@
+# 16-bit code testing a buffered word against the DOS executable signature
+# ("MZ", stored 4Dh 5Ah; DOS also loads the swapped "ZM"). Header parsers,
+# EXE loaders and EXE infectors all do this before trusting header fields.
+defaults:
+  platforms: [windows, unix]
+  for: [dos_com, static-lib, data]
+  size_max: 65536
+
+traits:
+  - id: dos-mz-signature-compare
+    desc: 16-bit code compares a word to MZ
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule dos_mz_signature_compare {
+          meta:
+            filetypes = "dos_com,static-lib,data"
+          strings:
+            // CMP WORD [disp16|SI|DI|BX(+d8)],'MZ'/'ZM' (any segment prefix)
+            $mem = { 81 ( 3E ?? ?? | 3C | 3D | 3F | 7C ?? | 7D ?? | 7F ?? ) ( 4D 5A | 5A 4D ) }
+            // CMP AX/BX/CX/DX/SI/DI,'MZ'/'ZM' followed by a branch
+            $ax = { 3D ( 4D 5A | 5A 4D ) ( 74 | 75 ) }
+            $reg = { 81 ( FB | F9 | FA | FE | FF ) ( 4D 5A | 5A 4D ) ( 74 | 75 ) }
+          condition:
+            any of them
+        }
+
+  # AH=3Fh read of a program's leading bytes, then CMP WORD [buf],imm16 with
+  # a constant other than the MZ signature and a branch on equality: the
+  # program tests the header it just read for its own fixed marker (Larry
+  # checks "MG" after the COM jump and in the MZ checksum field). Buffer,
+  # read length and marker value are free; only the read-then-test is kept.
+  - id: dos-read-header-word-marker-compare
+    desc: Tests read header for a fixed marker
+    crit: notable
+    conf: 0.86
+    if:
+      type: yara
+      source: |
+        rule dos_read_header_word_marker_compare {
+          meta:
+            filetypes = "dos_com,static-lib,data"
+          strings:
+            $r = { B4 3F [0-12] CD 21 [0-6] 81 ( 3E ?? ?? | 7E ?? | 7F ?? | 3F | 3C | 3D ) ?? ?? ( 74 | 75 ) }
+          condition:
+            for any i in (1..#r) : (
+              uint16(@r[i] + !r[i] - 3) != 0x5A4D and
+              uint16(@r[i] + !r[i] - 3) != 0x4D5A
+            )
+        }
+
+  # Tests a buffered MZ header for a 16-bit self-recognition marker in e_csum
+  # (+12h), saves the original e_cs/e_ss/e_ip/e_sp (+16h/+0Eh/+14h/+10h),
+  # writes updated entry/stack and page-count (+04h/+02h) fields, and stamps
+  # e_csum (+12h) with the same 16-bit marker constant.
+  - id: dos-mz-checksum-marker-entry-rewrite
+    desc: Rewrites MZ entry and stamps checksum marker
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: yara
+      source: |
+        rule dos_mz_checksum_marker_entry_rewrite {
+          meta:
+            filetypes = "dos_com,static-lib,data"
+          strings:
+            $mz = { 81 ( 3C | 3D | 3F ) ( 4D 5A | 5A 4D ) }
+            $cmp = { 81 ( 7C | 7D | 7F ) 12 ?? ?? }
+            $save_and_write_entry = {
+              FF ( 74 | 75 | 77 ) 16 [0-6] 89 ( 44 | 45 | 47 ) 16
+              FF ( 74 | 75 | 77 ) 0E [0-6] 89 ( 44 | 45 | 47 ) 0E
+              FF ( 74 | 75 | 77 ) 14 [0-6] 89 ( 54 | 55 | 57 ) 14
+              FF ( 74 | 75 | 77 ) 10 [0-6] C7 ( 44 | 45 | 47 ) 10 ?? ??
+              [16-64]
+              89 ( 44 | 45 | 47 ) 04
+              89 ( 54 | 55 | 57 ) 02
+            }
+            $stamp = { C7 ( 44 | 45 | 47 ) 12 ?? ?? }
+          condition:
+            $mz and $save_and_write_entry and
+            for any i in (1..#cmp) : (
+              for any j in (1..#stamp) : (
+                @stamp[j] > @cmp[i] and
+                @stamp[j] - @cmp[i] <= 320 and
+                uint16(@cmp[i] + 3) == uint16(@stamp[j] + 3)
+              )
+            )
+        }

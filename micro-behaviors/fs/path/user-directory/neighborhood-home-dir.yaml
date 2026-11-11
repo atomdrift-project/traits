@@ -1,0 +1,75 @@
+defaults:
+  platforms: [windows, unix]
+  for:
+    - python
+traits:
+  - id: os-path-expanduser
+    desc: Expand user home directory
+    crit: baseline
+    conf: 0.8
+    if:
+      type: text
+      regex: os\.path\.expanduser\s*\(
+  - id: python-expanduser-tilde
+    desc: Expands a bare home directory
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: 'expanduser\(\s*["'']~["'']\s*\)'
+
+  # A path anchored to the user's home that names a hidden dot-entry:
+  # `Path.home() / ".foo"` or `expanduser("~/.foo")`. Building block only
+  # (component) -- reading `~/.aws/credentials` is caught elsewhere; this atom
+  # exists so the install-hook composite can flag a package that *writes* a
+  # hidden file into HOME at install time, which ordinary packaging never does.
+  - id: home-hidden-dotpath
+    desc: Hidden dot-entry under the home directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '(Path\.home\(\)\s*/\s*["'']\.|expanduser\(\s*["'']~/?\.)'
+
+  # The same anchor narrowed to a custom dot-directory. ~/.local, ~/.cache and
+  # ~/.config are the XDG base directories where applications are expected to
+  # keep data, cache and settings; a dot-name of the program's own choosing is
+  # the part that keeps a staged file out of the user's ordinary view.
+  - id: home-custom-hidden-dotdir
+    desc: Custom hidden dot-directory under home
+    crit: notable
+    conf: 0.85
+    if:
+      type: text
+      regex: '(Path\.home\(\)\s*/\s*["'']|expanduser\(\s*["'']~/)\.[A-Za-z0-9_-]+'
+    not:
+      - regex: '\.(local|cache|config)$'
+  # A hardcoded absolute home directory (/Users/<name>/ or /home/<name>/) baked
+  # into shipped code is a leaked developer-machine path: a code-quality smell
+  # and a weak signal of hastily-packaged code (dev paths left in source, test
+  # fixtures, quick malware repackaging). Neutral `notable` — it describes a
+  # real property, not intent. Unix mirror of the embedded-PDB user-profile path
+  # signal in metadata/binary/debug. Shared/CI accounts are excluded.
+  # The trailing segment is required: a leaked path points *into* the developer's
+  # home tree ("/Users/jane/Documents/proj/", "/home/dev/venv/lib/"), whereas
+  # "/home/<word>/<action>" with nothing below it is the shape of a web route
+  # ("/home/setting/sign", "/home/index/list"), where "home" is a controller and
+  # the next segment is not a username at all. Depth is what separates the two
+  # without guessing which words can be account names.
+  - id: hardcoded-home-dir-path
+    desc: Hardcoded absolute home directory path
+    crit: notable
+    conf: 0.8
+    # This reports path text, including examples and comments.
+    for: [scripts]
+    platforms: [unix]
+    if:
+      type: text
+      regex: '(^|[^:/A-Za-z0-9])/(Users|home)/[a-zA-Z][a-zA-Z0-9._-]{1,30}/[A-Za-z0-9._-]+/'
+    not:
+      - regex: '/Users/Shared/'
+      - regex: '/home/(runner|user|ubuntu|vagrant|node|root|circleci|travis)/'
+      # Ivanti uses these as appliance storage/web roots, not user homes.
+      # Exclude only the reserved subtrees, retaining other paths under a
+      # user named runtime or webserver and other developer-home evidence.
+      - regex: '/home/(runtime/tmp|webserver/htdocs)/'

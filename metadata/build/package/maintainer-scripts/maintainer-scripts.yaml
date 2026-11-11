@@ -66,7 +66,7 @@ traits:
       type: text
       regex: '(?m)^[^#\n]{0,80}\brabbitmqctl\s+add_user\s+[A-Za-z0-9_.-]{1,64}\s+[^[:space:];&|]{1,128}'
     unless:
-      - id: metadata/package/tooling::proxmoxve-community-scripts
+      - id: metadata/path/software::proxmoxve-community-scripts
 
   # `.*` in all three RabbitMQ permission fields grants configure, write and
   # read access to every vhost/resource pattern; this is an authorization
@@ -97,7 +97,7 @@ traits:
     for: [shell]
     if:
       type: text
-      regex: '(DigitalOcean|Vultr) Marketplace|one-click-droplet|cloud-init'
+      regex: '(?i)(DigitalOcean|Vultr) Marketplace|one-click-droplet|cloud-init'
   - id: cloud-marketplace-do-marker
     desc: DigitalOcean image cleanup marker
     crit: notable
@@ -107,6 +107,15 @@ traits:
     if:
       type: text
       substr: DO Directory
+  - id: cloud-marketplace-droplet-marker
+    desc: DigitalOcean droplet cleanup marker
+    crit: notable
+    conf: 0.95
+    platforms: [unix]
+    for: [shell]
+    if:
+      type: text
+      regex: '(?i)digitalocean/marketplace|droplet-agent|marketplace-partners'
   - id: cloud-marketplace-cleanup-path
     desc: Cloud marketplace cleanup path
     crit: notable
@@ -161,7 +170,7 @@ traits:
     for: [shell]
     if:
       type: text
-      substr: securely erase the unused
+      regex: '(?i)securely\s+erase\s+the\s+unused'
   - id: bsd-rc-subr-source
     desc: BSD rc.subr source
     crit: notable
@@ -246,15 +255,6 @@ traits:
       type: path
       basename: true
       exact: preinst
-  - id: debian-prerm-script-path
-    desc: Debian pre-remove maintainer script
-    crit: notable
-    conf: 0.95
-    for: [shell]
-    if:
-      type: path
-      basename: true
-      exact: prerm
   - id: package-preuninstall-script-path
     desc: Package uninstallation shell script
     crit: notable
@@ -444,7 +444,7 @@ composite_rules:
     all:
       - id: debian-postinst-script-basename
       - id: micro-behaviors/fs/delete/file/command::selinux-context-cache-delete
-      - id: micro-behaviors/process/create/shell/systemd-tmpfiles::systemd-tmpfiles-create-command
+      - id: micro-behaviors/fs/temp/create::systemd-tmpfiles-create-command
   - id: server-hardening-deployment-script
     desc: Server hardening deployment script
     crit: component
@@ -455,18 +455,16 @@ composite_rules:
       - id: server-hardening-package-install
       - id: server-hardening-firewall-policy
       - id: "micro-behaviors/os/service/control::systemctl-enable-or-start-reference"
-  - id: cloud-marketplace-image-script
-    desc: Cloud marketplace image script
+  - id: cloud-marketplace-image-content
+    desc: Cloud marketplace image content markers
     crit: component
-    conf: 0.95
     platforms: [unix]
     for: [shell]
     any:
-      - id: cloud-marketplace-path
       - id: cloud-marketplace-text
       - id: cloud-marketplace-do-marker
-      - id: cloud-image-provisioner-path
-      - id: cloud-marketplace-cloud-instance-clean
+      - id: cloud-marketplace-path
+      - id: cloud-marketplace-droplet-marker
   - id: cloud-marketplace-cleanup-script
     desc: Cloud marketplace cleanup script
     crit: component
@@ -474,9 +472,8 @@ composite_rules:
     platforms: [unix]
     for: [shell]
     all:
-      - id: cloud-marketplace-image-script
+      - id: cloud-marketplace-image-content
     any:
-      - id: cloud-marketplace-cleanup-path
       - id: cloud-marketplace-clean-functions
       - id: cloud-marketplace-cloud-instance-clean
       - id: cloud-marketplace-free-space-erase
@@ -498,7 +495,7 @@ composite_rules:
     any:
       - id: debian-postinst-path
       - id: debian-preinst-script-path
-      - id: debian-prerm-script-path
+      - id: metadata/filename/identity::debian-prerm-script-name
       - id: package-preuninstall-script-path
       - id: package-postinstall-script-path
       - id: debian-postrm-script-path
@@ -531,32 +528,25 @@ composite_rules:
     all:
       - id: rpm-spec-file-path
       - id: rpm-postun-scriptlet-section
-  - id: pacman-post-remove-cron-cleanup
-    desc: Pacman uninstall hook removes cron schedules
-    crit: exception
+  - id: pacman-post-remove-hook-context
+    desc: Pacman package post-remove lifecycle hook
+    crit: notable
     conf: 0.98
     for: [shell]
     all:
       - id: install-suffixed-lifecycle-script
       - id: package-post-remove-hook
-  - id: debian-postrm-cron-cleanup
-    desc: Debian post-remove script removes cron schedules
-    crit: exception
+  - id: debian-postrm-debhelper-context
+    desc: Debian postrm and debhelper markers
+    crit: notable
     conf: 0.98
     for: [shell]
     all:
       - id: debian-postrm-script-path
       - id: debian-postrm-debhelper-marker
-  # Debian Policy §10.8 requires a package's postrm to remove any files or
-  # directories it created in each user's home directory on purge -- since
-  # dpkg does not know which local users exist, that cleanup necessarily
-  # globs `/home/*/...`. Gated on the script also branching on the dpkg
-  # lifecycle argument (`purge`), not merely living at a path named postrm,
-  # so a payload that borrows the filename without the surrounding
-  # maintainer-script shape does not inherit the exception.
-  - id: debian-postrm-purge-home-cleanup
-    desc: Debian postrm purge removes package data from home directories
-    crit: exception
+  - id: debian-postrm-lifecycle-argument-context
+    desc: Debian postrm branches on lifecycle argument
+    crit: notable
     conf: 0.95
     for: [shell]
     all:
@@ -572,7 +562,7 @@ composite_rules:
     conf: 0.94
     for: [shell]
     all:
-      - id: objectives/supply-chain/install-hook/distro-scriptlet::dpkg-maintainer-script-hook
+      - id: micro-behaviors/os/package-manager/installer-script::dpkg-maintainer-script-hook
       - id: debian-maintainer-system-nologin-useradd
       - id: micro-behaviors/fs/config/sudo::nopasswd-all-directive
       - id: micro-behaviors/os/service/control::systemctl-enable-command-text

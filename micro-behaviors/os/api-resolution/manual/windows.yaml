@@ -53,6 +53,31 @@ traits:
   # is a neutral Windows process-information mechanic — Zig's own `zig.h`
   # runtime header does it — so it lives here beside the other PEB atoms and
   # the api-hashing objective composes it, rather than owning it.
+  # x64 PEB loader-data access via the TEB self-pointer: NtTib.Self
+  # (gs:[0x30]), then TEB->ProcessEnvironmentBlock (+0x60), then PEB->Ldr (+0x18). Inlined
+  # NtCurrentTeb()->ProcessEnvironmentBlock->Ldr compiles to this shape; it is
+  # the first step of enumerating loaded modules without any loader API.
+  - id: teb-self-peb-ldr-access-x64
+    desc: x64 TEB self-pointer to PEB loader data
+    crit: notable
+    conf: 0.94
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: '65 4? 8B ?? 25 30 00 00 00 [0-48] 4? 8B ?? 60 [0-16] 4? 8B ?? 18'
+  # Direct form: read the PEB pointer at gs:[0x60] and follow PEB->Ldr (+0x18).
+  - id: gs-peb-ldr-access-x64
+    desc: x64 GS:0x60 PEB read then loader data
+    crit: notable
+    conf: 0.94
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: any
+      pattern: '65 4? 8B ?? 25 60 00 00 00 [0-16] 4? 8B ?? 18'
   - id: x64-peb-access-source
     desc: Access PEB via GS segment in source
     crit: notable
@@ -69,14 +94,12 @@ traits:
       type: text
       word: PEB_LDR_DATA
   - id: module-list-walk
-    desc: Walk PEB module list
+    desc: PEB module-list field reference
     crit: notable
     conf: 0.9
     if:
       type: text
       regex: \bIn(Memory|Load|Initialization)OrderModuleList\b
-    unless:
-      - id: well-known/tool/sysadmin/sandboxie/
 
   - id: kernel32-resolver
     desc: Kernel32 DLL resolution string
@@ -88,8 +111,6 @@ traits:
     if:
       type: text
       substr: kernel32.dll
-    unless:
-      - id: metadata/binary/framework/
   - id: shadow-ntdll-indicator
     desc: Shadow ntdll technique indicator
     crit: suspicious
@@ -130,6 +151,28 @@ traits:
       type: hex
       section: any
       pattern: '25 00 00 FF FF B9 4D 5A 00 00 [0-8] 2D 00 00 01 00 66 39 08 75 ?? 0F B7 48 3C [0-20] 66 39 08 [0-20] 8B 70 60 [0-8] 8B 7E 20 8B 46 14'
+
+  - id: x86-backward-mz-export-traversal
+    desc: Backward MZ scan walks PE export directory
+    crit: notable
+    conf: 0.98
+    for: [pe, dll]
+    arch: [x86]
+    if:
+      type: hex
+      section: any
+      pattern: 'B9 4D 5A 00 00 [0-8] 25 00 00 FF FF [0-8] (2D 00 00 01 00 | 05 00 00 FF FF) 66 39 08 75 ?? 0F B7 48 3C [0-32] 8B 70 60 [0-8] (8B 7E 20 8B 46 14 | 8B 46 14 8B 7E 20)'
+
+  - id: x86-backward-mz-search-export-resolver
+    desc: Backward scans for MZ header and exports
+    crit: notable
+    conf: 0.98
+    for: [pe, dll]
+    arch: [x86]
+    if:
+      type: hex
+      section: .text
+      pattern: '2B C2 8B 08 02 CD FE C1 66 81 F9 A8 5A 75 F1'
 
   - id: x86-sib-pe-export-directory-walk
     desc: x86 SIB-based PE export-directory walk
@@ -208,6 +251,33 @@ traits:
       section: .text
       pattern: 48 63 ?? 3C 44 8B ?? ?? 88 [0-24] 45 8B ?? ?? 20 45 8B ?? ?? 1C 4C 03 ?? 41 8B ?? ?? 24
 
+  # Zero-extended e_lfanew (`mov reg32, [base+0x3c]`) + SIB export directory RVA
+  # (`[base+idx+0x88]`) followed by AddressOfNames/NumberOfNames loop and
+  # AddressOfNameOrdinals/AddressOfFunctions resolution.
+  - id: x64-pe-export-directory-sib-walk
+    desc: x64 SIB-based PE64 export-directory walk
+    crit: notable
+    conf: 0.97
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: '8B ?? 3C 8B (84|8C|94|9C|A4|AC|B4|BC) ?? 88 00 00 00 [6-28] 8B ?? 20 [0-8] 8B ?? 18 [24-96] 8B ?? 24 [0-16] 0F B7 ?? ?? [0-8] 8B ?? 1C'
+
+  # Export resolver that XOR-masks each candidate export name byte with a
+  # non-zero key before comparing against an obfuscated target name buffer.
+  - id: x64-xor-masked-pe-export-lookup
+    desc: x64 XOR-masked PE64 export-name lookup
+    crit: notable
+    conf: 0.99
+    for: [pe, dll]
+    arch: [x86-64]
+    if:
+      type: hex
+      section: .text
+      pattern: '8B ?? 3C [0-8] 8B (84|8C|94|9C|A4|AC|B4|BC) ?? 88 00 00 00 [20-56] 8A ?? ?? [0-4] (80|83) (F0|F1|F2|F3|F6|F7) ~00 [0-4] (38|3A) ?? ?? 75 ?? [8-32] 8B ?? 24 [0-16] 0F B7 ?? ?? [0-8] 8B ?? 1C'
+
   - id: getprocaddress-wrapper-source
     desc: Source references custom GetProcAddress wrapper
     crit: notable
@@ -242,8 +312,8 @@ composite_rules:
     unless:
       - id: well-known/lib/platform/wine::wine-source-tree
   - id: peb-module-walk
-    desc: Resolve modules from PEB
-    crit: suspicious
+    desc: TEB, loader-data and module-list references
+    crit: notable
     conf: 0.9
     all:
       - id: nt-current-teb
@@ -263,8 +333,9 @@ composite_rules:
       - id: x64-pe-export-directory-walk-inline
       - id: x64-pe-export-directory-walk-packed-stub
       - id: x64-pe-export-directory-walk-inline-rex
-      - id: micro-behaviors/os/api-resolution/hash-based::pe-export-directory-walk-x86
-      - id: micro-behaviors/os/api-resolution/hash-based::checked-pe-export-directory-walk-x86
+      - id: x64-pe-export-directory-sib-walk
+      - id: micro-behaviors/os/api-resolution/digest-export/walk::pe-export-directory-walk-x86
+      - id: micro-behaviors/os/api-resolution/digest-export/walk::checked-pe-export-directory-walk-x86
 
   - id: peb-export-resolver-x64
     desc: x64 PEB access with export-table traversal

@@ -3,19 +3,17 @@ defaults:
   for: [pe, dll]
   attack: T1486
 composite_rules:
-  # This async .NET family uses operation-level crypto and file I/O metadata
-  # alongside an explicit extortion note. The profile establishes attempted
-  # ransomware behavior, not successful encryption on a victim system.
-  - id: managed-filecrypto-with-wide-btc-demand
-    desc: Managed file encryption operations with a BTC ransom note
+  # Co-occurring API names and a note do not bind a file to the cipher.
+  - id: managed-crypto-file-apis-with-wide-btc-demand
+    desc: Managed crypto and file APIs with BTC demand
     crit: hostile
     conf: 0.98
     all:
-      - id: metadata/binary/framework::clr-runtime-header
-      - id: micro-behaviors/crypto/encrypt::dotnet-create-encryptor
-      - id: micro-behaviors/crypto/cipher::dotnet-cryptostream
-      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
-      - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
+      - id: metadata/lang/compiler/managed::clr-runtime-header
+      - id: micro-behaviors/crypto/encrypt/reference::dotnet-create-encryptor
+      - id: micro-behaviors/crypto/cipher/io::dotnet-cryptostream
+      - id: micro-behaviors/fs/read/file/content/unspecified::dotnet-readallbytes-token
+      - id: micro-behaviors/fs/write/file/full/bytes::dotnet-writeallbytes-token
       - id: objectives/impact/ransom/keywords::ransom-note-btc-payment-wide
 
   # This is an attempted replacement, not proof of successful encryption.
@@ -26,33 +24,30 @@ composite_rules:
     crit: hostile
     conf: 0.98
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: micro-behaviors/data/control-flow/sequence::cil-transform-suffixed-output-call-layout
-      - id: micro-behaviors/crypto/encrypt::dotnet-create-encryptor
-      - id: micro-behaviors/crypto/cipher::dotnet-cryptostream
-      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
-      - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
+      - id: micro-behaviors/crypto/encrypt/reference::dotnet-create-encryptor
+      - id: micro-behaviors/crypto/cipher/io::dotnet-cryptostream
+      - id: micro-behaviors/fs/read/file/content/unspecified::dotnet-readallbytes-token
+      - id: micro-behaviors/fs/write/file/full/bytes::dotnet-writeallbytes-token
     any:
       - id: objectives/impact/ransom/keywords::ransom-note-btc-payment-wide
       - id: objectives/impact/ransom/keywords::pay-bitcoin-phrase
       - id: objectives/impact/ransom/keywords::transfer-bitcoin-phrase
 
-  # Managed async implementations may expose the operations without matching
-  # the older single-method CIL layout above. This operation profile identifies
-  # an attempted transform; it does not validate key/IV sizes or prove that an
-  # encrypted replacement was written. Drive enumeration may support separate
-  # replication and does not show that files on those drives are transformed.
-  - id: managed-file-encryption-attempt-with-ransom-demand
-    desc: Managed code attempts file encryption with ransom payment demand
+  # Enumeration, crypto and file APIs can occur in separate methods. This
+  # profile does not establish data flow or successful encryption.
+  - id: managed-file-enumeration-crypto-with-ransom-demand
+    desc: Managed file enumeration and crypto with ransom demand
     crit: hostile
     conf: 0.98
     all:
-      - id: metadata/binary/framework::clr-runtime-header
-      - id: micro-behaviors/crypto/encrypt::dotnet-create-encryptor
-      - id: micro-behaviors/crypto/cipher::dotnet-cryptostream
-      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
-      - id: micro-behaviors/fs/write/file/full::dotnet-writeallbytes-token
-      - id: metadata/binary/symbols/name/token::dotnet-getfiles-method-name
+      - id: metadata/lang/compiler/managed::clr-runtime-header
+      - id: micro-behaviors/crypto/encrypt/reference::dotnet-create-encryptor
+      - id: micro-behaviors/crypto/cipher/io::dotnet-cryptostream
+      - id: micro-behaviors/fs/read/file/content/unspecified::dotnet-readallbytes-token
+      - id: micro-behaviors/fs/write/file/full/bytes::dotnet-writeallbytes-token
+      - id: metadata/binary/symbols/name/token/filesystem::dotnet-getfiles-method-name
       - id: objectives/impact/ransom/keywords::ransom-note-btc-payment-wide
 
   # Some managed lockers only encode their target text before writing a
@@ -66,10 +61,32 @@ composite_rules:
     crit: hostile
     conf: 0.98
     all:
-      - id: metadata/binary/symbols/name/token::dotnet-getfiles-method-name
-      - id: micro-behaviors/fs/read/file/full::dotnet-read-all-text
-      - id: micro-behaviors/data/encode/base64::dotnet-to-base64string-text
-      - id: micro-behaviors/fs/write/file/full::dotnet-writealltext-token
+      - id: metadata/binary/symbols/name/token/filesystem::dotnet-getfiles-method-name
+      - id: micro-behaviors/fs/read/file/content/characters::dotnet-read-all-text
+      - id: micro-behaviors/data/encode/base64/primitive::dotnet-to-base64string-text
+      - id: micro-behaviors/fs/write/file/full/string::dotnet-writealltext-token
       - id: micro-behaviors/fs/file/extension::compiled-locked-extension-reference
       - id: objectives/impact/ransom/keywords::ransom-ui-your-files-encrypted
     near_bytes: 12000
+
+  # FileStream lockers (HiddenTear lineage, XWorm's Ransomware plugin) walk
+  # drives or profile folders, stream each file through a CryptoStream
+  # encryptor into a suffixed copy and delete the original, instead of the
+  # ReadAllBytes/WriteAllBytes shape above. API co-occurrence does not prove
+  # data flow; the paired file-scope and demand note supplies the intent.
+  - id: managed-cryptostream-file-locker-with-note
+    desc: CryptoStream file locker with ransom note
+    crit: hostile
+    conf: 0.96
+    all:
+      - id: metadata/lang/compiler/managed::dotnet-assembly
+      - id: micro-behaviors/crypto/encrypt/reference::dotnet-create-encryptor
+      - id: micro-behaviors/crypto/cipher/io::dotnet-cryptostream
+      - id: micro-behaviors/fs/file/handle::dotnet-filestream-type-reference
+      - id: metadata/binary/symbols/name/token/filesystem::dotnet-getfiles-method-name
+      - id: micro-behaviors/fs/delete/file/library::dotnet-file-delete-call
+      - id: objectives/impact/ransom/note::multi-phrase-ransom-note-text
+    any:
+      - id: micro-behaviors/fs/enumerate/drives::get-logical-drives-text
+      - id: micro-behaviors/fs/enumerate/drives::drive-info-class
+      - id: micro-behaviors/fs/path/user-directory::windows-user-profile-desktop-documents-path-reference

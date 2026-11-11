@@ -13,9 +13,6 @@ traits:
     if:
       type: text
       regex: '"Effect"\s*:\s*"Allow"'
-    unless:
-      - id: well-known/app/infrastructure/ovhcloud-cli::github-source-tree-member-path
-      - id: well-known/app/infrastructure/ovhcloud-cli::github-source-archive-zip-name
 
   - id: kms-policy-wildcard-resource
     desc: AWS KMS policy targets every resource
@@ -35,22 +32,15 @@ traits:
 
   - id: kms-policy-full-action
     desc: AWS KMS policy grants every KMS action
-    crit: suspicious
+    # The action alone does not establish who receives the grant or whether
+    # the policy is an AWS-recommended same-account root delegation.
+    crit: notable
     conf: 0.99
     if:
       type: text
       regex: '"Action"\s*:\s*"kms:\*"'
     unless:
       - id: kms-policy-own-account-root-principal
-      # A CloudFormation policy linter keeps deliberately-bad templates as its
-      # test corpus: cfripper's tests/test_templates/rules/<RuleName>/ is a
-      # directory of precisely the policies its own rules are meant to catch.
-      # The optional dunder covers Jest/Vitest and CDK fixture layouts such
-      # as src/cdk/__fixtures__/cdk.out/.
-      - type: path
-        regex: '(^|/)(__)?(tests?|fixtures?|validation)(__)?/'
-      - id: metadata/package/testing/presence/path::test-fixture-directory-path
-      - id: metadata/package/testing/presence/path::json-testdata-directory-path
 
   - id: kms-policy-wildcard-principal
     desc: AWS KMS policy wildcard principal
@@ -64,23 +54,12 @@ traits:
       # with SourceOwner / SecureTransport conditions.
       regex: '"Principal"\s*:\s*\{\s*"AWS"\s*:\s*"\*"[\s\S]{0,180}kms:'
     unless:
-      # Fuzzer seed/regression corpora (cargo-fuzz, go-fuzz, AFL, etc. all
-      # use this directory convention) keep a "valid" example policy as an
-      # input fixture for the JSON policy parser under test, not a deployed
-      # policy granting real access.
-      - type: path
-        regex: (^|/)fuzz/corpus/
-      # ...and a policy linter's own test corpus is the same thing: cfripper
-      # ships tests/test_templates/rules/<RuleName>/ full of the policies its
-      # rules exist to flag. The optional dunder covers Jest/Vitest and CDK
-      # fixture layouts such as src/cdk/__fixtures__/cdk.out/.
-      - type: path
-        regex: '(^|/)(__)?(tests?|fixtures?|validation)(__)?/'
-      - id: metadata/package/testing/presence/path::test-fixture-directory-path
       # A wildcard principal paired with an aws:SecureTransport condition is
       # the deny-unless-TLS control every IaC framework emits (typically an
       # S3 BucketPolicy with Effect Deny), not a wildcard grant.
-      - id: metadata/file/policy/identity::aws-policy-secure-transport-condition
+      - id: micro-behaviors/data/config/syntax::aws-secure-transport-condition-key
+      - id: micro-behaviors/data/config/syntax::aws-caller-account-condition-key
+      - id: metadata/package/testing/presence/path::json-testdata-directory-path
 
   - id: kms-policy-allow-wildcard-principal
     desc: AWS KMS allows wildcard principal access
@@ -90,15 +69,8 @@ traits:
       type: text
       regex: '"Effect"\s*:\s*"Allow"[\s\S]{0,180}"AWS"\s*:\s*"\*"[\s\S]{0,180}"kms:'
     unless:
-      - type: path
-        regex: (^|/)fuzz/corpus/
-      # ...and a policy linter's own test corpus is the same thing: cfripper
-      # ships tests/test_templates/rules/<RuleName>/ full of the policies its
-      # rules exist to flag. The optional dunder covers Jest/Vitest and CDK
-      # fixture layouts such as src/cdk/__fixtures__/cdk.out/.
-      - type: path
-        regex: '(^|/)(__)?(tests?|fixtures?|validation)(__)?/'
-      - id: metadata/package/testing/presence/path::test-fixture-directory-path
+      - id: micro-behaviors/data/config/syntax::aws-caller-account-condition-key
+      - id: metadata/package/testing/presence/path::json-testdata-directory-path
 
   - id: kms-policy-put-key-policy
     desc: AWS KMS policy permits key-policy mutation
@@ -143,11 +115,14 @@ traits:
     if:
       type: text
       regex: '"Effect"\s*:\s*"Allow"[\s\S]{0,180}"AWS"\s*:\s*"\*"[\s\S]{0,180}"kms:Decrypt"'
+    unless:
+      - id: micro-behaviors/data/config/syntax::aws-caller-account-condition-key
+      - id: metadata/package/testing/presence/path::json-testdata-directory-path
 
 composite_rules:
-  - id: kms-root-account-wide-administration
-    desc: AWS KMS root grant gives account-wide administration
-    crit: hostile
+  - id: kms-root-full-action-grant
+    desc: AWS KMS policy delegates all actions to an account's IAM policies
+    crit: suspicious
     conf: 0.99
     all:
       - id: kms-policy-root-principal
@@ -156,6 +131,9 @@ composite_rules:
       - id: kms-policy-wildcard-resource
     near_bytes: 220
     unless:
+      # AWS's recommended key policy delegates the key's permissions to the
+      # deploying account's IAM policies through this dynamic root ARN.
+      - id: kms-policy-own-account-root-principal
       # Policy tooling keeps deliberately-broad grants as parser/diff test
       # fixtures (e.g. Crossplane's go:embed testdata for policy comparison),
       # never as deployed policies granting real access.

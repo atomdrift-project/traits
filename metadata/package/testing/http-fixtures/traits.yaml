@@ -6,6 +6,21 @@ defaults:
 # context is a benign context for request-smuggling heuristics, not a trust
 # claim about the package that ships the source.
 traits:
+  - id: rust-http-client-test-macro
+    desc: Rust test macro declares client fixture
+    crit: notable
+    for: [rust]
+    if:
+      type: text
+      regex: 'test!\s*\{\s*name:\s*client_'
+
+  - id: rust-http-mocked-server-exchange
+    desc: Test fixture declares server request and reply
+    crit: notable
+    for: [rust]
+    if:
+      type: text
+      regex: '(?s)server:\s*expected:\s*".{0,300}reply:\s*"'
   - id: http-parser-double-framing-test
     desc: HTTP parser duplicate-framing test function
     crit: notable
@@ -21,6 +36,69 @@ traits:
     if:
       type: text
       substr: test_chunked_content_length_error
+
+  # A parser hardening test can contain the attack-shaped framing bytes while
+  # feeding them to a local parser and asserting that parsing does not finish.
+  # Keep the exception tied to all three parts of that test case.
+  - id: http-te-cl-rejection-test-name
+    desc: Names a test rejecting TE and Content-Length
+    crit: notable
+    for: [c, cpp]
+    if:
+      type: text
+      regex: '(?i)test_(te|transfer_encoding).{0,24}content_length.{0,16}(reject|error)'
+
+  - id: http-te-cl-rejection-test-literal
+    desc: TE and Content-Length framing test literal
+    crit: notable
+    for: [c, cpp]
+    if:
+      type: text
+      regex: '(?is)Transfer-Encoding:\s*chunked.{0,160}Content-Length\s*:'
+
+  # Swift HTTP decoder tests keep both framing headers near each other in
+  # request fixtures and assert that the local decoder rejects them. The
+  # composite below also requires an explicit throwing assertion.
+  - id: swift-http-decoder-throws-assertion
+    desc: Swift test asserts decoder throws
+    crit: component
+    for: [swift]
+    if:
+      type: text
+      regex: '(?i)XCTAssertThrows(Async)?(Error)?'
+
+  - id: swift-http-parser-rejection-result
+    desc: Expects invalid content length
+    crit: notable
+    for: [swift]
+    if:
+      type: text
+      substr: HTTPParserError.invalidContentLength
+
+  - id: http-te-cl-conflicting-header-pair
+    desc: Test literal has chunked then Content-Length
+    crit: notable
+    for: [swift, python, rust]
+    if:
+      type: literal
+      kind: string
+      regex: '(?is)Transfer-Encoding\s*:\s*chunked.{0,200}Content-Length\s*:'
+
+  - id: http-parser-test-refusal-assertion
+    desc: Parser test asserts request is not complete
+    crit: notable
+    for: [c, cpp]
+    if:
+      type: text
+      regex: '(?i)read_http_request\([^)]{0,60}\)\s*!=\s*REQUEST_COMPLETE'
+
+  - id: http-parser-test-mocked-input
+    desc: Queues input chunks for local parser tests
+    crit: notable
+    for: [c, cpp]
+    if:
+      type: text
+      regex: 'reset_receive\(chunks,\s*sizeof\(chunks\)'
 
   - id: cpp-dot-test-basename
     desc: C++ doctest-style test basename suffix
@@ -50,7 +128,158 @@ traits:
       type: text
       regex: '(?i)(smuggl|framing violation|refused_reason|request-smuggling|desync)'
 
+  # Some parser test suites keep duplicate Content-Length requests as data and
+  # assert that the parser rejects conflicting values. Keep this context tied
+  # to both the named request-reading test and its explicit rejection result;
+  # a test path or duplicate header string alone is not enough.
+  - id: http-duplicate-length-parser-test-name
+    desc: Names an HTTP request parser test
+    crit: notable
+    for: [javascript, typescript, python]
+    if:
+      type: text
+      regex: '(?i)(\bfunction\s+\w*readrequest|test_\w*duplicate\w*cl)'
+
+  - id: http-duplicate-length-parser-rejection-assertion
+    desc: Names duplicate length rejection
+    crit: notable
+    for: [javascript, typescript, python]
+    if:
+      type: text
+      regex: '(?i)(cannot contain multiple Content-Length headers|Duplicate Content-Length)'
+
+  # Python HTTP parser tests keep conflicting framing in request fixtures
+  # and assert that the local parser rejects it. Keep the exception tied to
+  # the test name, conflicting framing literal, rejection assertion, and in-memory feed.
+  - id: http-cl-te-conflicting-header-pair
+    desc: Test literal has Content-Length then chunked
+    crit: notable
+    for: [swift, python, rust]
+    if:
+      type: literal
+      kind: string
+      regex: '(?is)Content-Length\s*:.{0,200}Transfer-Encoding\s*:\s*chunked'
+
+  # Rust HTTP parser tests keep conflicting framing in request fixtures and
+  # assert that the local parser or decoder rejects it (is_err, expect_parse_err).
+  - id: rust-http-parser-rejection-test-name
+    desc: Rust test names framing rejection
+    crit: notable
+    for: [rust]
+    if:
+      type: symbol
+      kind: function
+      regex: '(?i)(^|_)(hrs|test_.*|.*(cl_?te|te_?cl|reject|chunked|desync|smuggl|malformed))'
+
+  - id: rust-http-parser-rejection-assertion
+    desc: Rust test asserts HTTP parser error
+    crit: notable
+    for: [rust]
+    if:
+      type: text
+      regex: '(?i)(\.(is_err|unwrap_err|expect_err)\s*\(|expect_parse_err!|assert_err!|\bParseError\b)'
+
+  - id: rust-http-parser-err-variant-assertion
+    desc: Rust test asserts Err result variant
+    crit: notable
+    for: [rust]
+    if:
+      type: text
+      regex: 'assert\w*!\(.{0,60}\bErr\b'
+
+  - id: python-http-parser-rejection-test-name
+    desc: Python test names framing rejection
+    crit: notable
+    for: [python]
+    if:
+      type: symbol
+      kind: function
+      regex: '(?i)^test_.*(cl_?te|te_?(cl|before)|chunked.*content_length|transfer_encoding)'
+
+  - id: python-http-parser-rejection-assertion
+    desc: Python test asserts HTTP parser error
+    crit: notable
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)(pytest\.raises|assertRaises)\s*\(\s*(\w+\.)?(BadHttp|HttpParser|InvalidHeader)'
+
+  - id: python-http-parser-feed-call
+    desc: Feeds data to in-memory HTTP parser
+    crit: notable
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)\b(\w+\.(feed_data|feed|parse_bytes|parse|dataReceived)|parse_request(_fast)?)\s*\('
+
+  # Test methods named for the Content-Length / Transfer-Encoding conflict in
+  # either spelling (test_cl_te_..., test_contentLengthAndTransferEncoding).
+  - id: python-http-framing-conflict-test-name
+    desc: Python test names CL/TE framing conflict
+    crit: notable
+    for: [python]
+    if:
+      type: symbol
+      kind: function
+      regex: '(?i)^test_?.*(content_?length.*(transfer|chunked)|(transfer|chunked).*content_?length)'
+
+  - id: python-http-framing-rejection-expectation
+    desc: Python test expects framing rejection
+    crit: notable
+    for: [python]
+    if:
+      type: text
+      regex: '(?i)(both Transfer-Encoding and Content-Length|assertEqual\(\s*400\s*,)'
+
+  # A client's own tests hand its response reader canned server replies, some
+  # carrying both framing headers, and check it does not reuse the connection.
+  # The literal starts with a status line, so it is data a client parses, not a
+  # request that could smuggle past a front-end.
+  - id: http-reply-content-length-before-chunked-literal
+    desc: Test literal reply sets length then chunked
+    crit: notable
+    for: [rust]
+    if:
+      type: literal
+      kind: string
+      regex: '(?is)^\s*HTTP/1\.[01] \d{3}.{0,300}Content-Length.{0,100}Transfer-Encoding: *chunked'
+
+  - id: http-reply-chunked-before-content-length-literal
+    desc: Test literal reply sets chunked then length
+    crit: notable
+    for: [rust]
+    if:
+      type: literal
+      kind: string
+      regex: '(?is)^\s*HTTP/1\.[01] \d{3}.{0,300}Transfer-Encoding: *chunked.{0,100}Content-Length'
+
+  - id: http-request-literal-with-framing-header
+    desc: Test literal request carries a framing header
+    crit: notable
+    for: [rust]
+    if:
+      type: literal
+      kind: string
+      regex: '(?is)^\s*[A-Z]{3,9} \S+ HTTP/1\.[01]\s.{0,300}(Content-Length|chunked)'
+
 composite_rules:
+  - id: rust-http-client-local-exchange-tests
+    desc: Rust HTTP client local exchange fixtures
+    crit: notable
+    for: [rust]
+    scope: file
+    all:
+      - id: rust-http-client-test-macro
+      - id: rust-http-mocked-server-exchange
+      - id: metadata/path/directory::test-directory-component
+  - id: swift-http-decoder-throws-on-decoder
+    desc: Swift test expects parser rejection
+    crit: notable
+    all:
+      - id: swift-http-decoder-throws-assertion
+      - id: swift-http-parser-rejection-result
+    near_lines: 3
+
   - id: parser-refusal-demo-context
     desc: Parser refusal demonstration example file
     crit: baseline
@@ -69,9 +298,9 @@ composite_rules:
     any:
       - id: metadata/package/testing/harness/unit::zig-inline-test-block
       - id: metadata/package/testing/presence/harness::ruby-test-file
-      - id: metadata/path::test-spec-source-file-component
+      - id: metadata/path/directory::test-spec-source-file-component
       - id: metadata/package/testing/presence/harness::perl-test-file
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
       - id: metadata/package/testing/harness/runtime::test-basename-suffix
       - id: metadata/package/testing/http-fixtures::http-parser-double-framing-test
       - id: metadata/package/testing/http-fixtures::http-parser-chunked-framing-test
@@ -87,3 +316,130 @@ composite_rules:
     all:
       - id: http-parser-double-framing-test
       - id: http-parser-chunked-framing-test
+
+  - id: http-te-cl-parser-rejection-test-context
+    desc: Local HTTP parser test rejects conflicting framing input
+    crit: exception
+    # A parser test does not excuse a socket send elsewhere in the source.
+    unless:
+      - id: micro-behaviors/communications/socket/send/reference::send
+    all:
+      - id: http-te-cl-rejection-test-name
+      - id: http-te-cl-rejection-test-literal
+      - id: http-parser-test-refusal-assertion
+      - id: http-parser-test-mocked-input
+    near_lines: 12
+
+  - id: swift-http-te-cl-parser-rejection-test-context
+    desc: Swift HTTP decoder test rejects conflicting framing input
+    crit: exception
+    unless:
+      - id: micro-behaviors/communications/socket/send/reference::send
+    all:
+      - id: metadata/package/testing/harness/unit::swift-tests-directory-path
+      - id: http-te-cl-conflicting-header-pair
+      - id: swift-http-decoder-throws-on-decoder
+    near_lines: 12
+
+  - id: http-duplicate-length-parser-test-context
+    desc: HTTP parser test asserts duplicate length rejection
+    crit: exception
+    all:
+      - id: http-duplicate-length-parser-test-name
+      - id: http-duplicate-length-parser-rejection-assertion
+      - id: micro-behaviors/communications/http/header/content-length::duplicate-content-length-literal
+    near_lines: 100
+
+  # RFC 7230 3.3.3 lets a parser accept both headers and ignore
+  # Content-Length, so conformance tests (e.g. Twisted's HTTPClientParser)
+  # feed the conflicting pair to an in-memory parser and assert the chunked
+  # body wins rather than a rejection. Same contract as the rejection
+  # context: no socket send in the file.
+  - id: python-http-te-cl-parser-handling-test-context
+    desc: Python test feeds conflicting framing to parser
+    crit: exception
+    unless:
+      - id: micro-behaviors/communications/socket/send/reference::send
+      - id: micro-behaviors/communications/socket/send/message::python-local-socket-send
+    all:
+      - id: python-http-framing-conflict-test-name
+      - id: http-te-cl-conflicting-header-pair-literal
+      - id: python-http-parser-feed-call
+    near_lines: 25
+
+  - id: http-te-cl-conflicting-header-pair-literal
+    desc: Test literal has conflicting HTTP framing
+    crit: notable
+    for: [python, rust]
+    any:
+      - id: http-cl-te-conflicting-header-pair
+      - id: http-te-cl-conflicting-header-pair
+
+  - id: python-http-te-cl-parser-rejection-test-context
+    desc: Python parser test rejects TE/CL framing
+    crit: exception
+    unless:
+      - id: micro-behaviors/communications/socket/send/reference::send
+    all:
+      - id: python-http-parser-rejection-test-name
+      - id: http-te-cl-conflicting-header-pair-literal
+      - id: python-http-parser-rejection-assertion
+      - id: python-http-parser-feed-call
+    near_lines: 16
+
+  # Tornado-style: writes the conflicting request to a server stream and
+  # expects the server to log the rejection or answer 400.
+  - id: python-http-te-cl-server-rejection-test-context
+    desc: Python test expects server framing rejection
+    crit: exception
+    all:
+      - id: python-http-parser-rejection-test-name
+      - id: http-te-cl-conflicting-header-pair-literal
+      - id: python-http-framing-rejection-expectation
+    near_lines: 24
+
+  - id: rust-http-te-cl-parser-rejection-test-context
+    desc: Rust HTTP parser test rejects conflicting framing input
+    crit: exception
+    unless:
+      - id: micro-behaviors/communications/socket/send/reference::send
+    all:
+      - id: rust-http-parser-rejection-test-name
+      - id: http-te-cl-conflicting-header-pair-literal
+    any:
+      - id: rust-http-parser-rejection-assertion
+      - id: rust-http-parser-err-variant-assertion
+    near_lines: 24
+
+  - id: http-reply-conflicting-framing-literal
+    desc: Test literal reply with conflicting framing
+    crit: notable
+    for: [rust]
+    any:
+      - id: http-reply-content-length-before-chunked-literal
+      - id: http-reply-chunked-before-content-length-literal
+
+  - id: rust-http-client-reply-framing-test-context
+    desc: Client test feeds conflicting-framing replies
+    crit: notable
+    for: [rust]
+    unless:
+      - id: http-request-literal-with-framing-header
+    all:
+      - id: http-reply-conflicting-framing-literal
+      - id: metadata/package/testing/harness/unit::rust-test-attr
+
+  # One test-fixture semantic: a local parser test feeds conflicting
+  # framing to an in-memory parser and asserts its handling.
+  - id: http-framing-parser-test-context
+    desc: Local parser test exercises conflicting HTTP framing
+    crit: exception
+    any:
+      - id: http-parser-framing-fixture-context
+      - id: http-te-cl-parser-rejection-test-context
+      - id: swift-http-te-cl-parser-rejection-test-context
+      - id: python-http-te-cl-parser-rejection-test-context
+      - id: python-http-te-cl-parser-handling-test-context
+      - id: python-http-te-cl-server-rejection-test-context
+      - id: rust-http-te-cl-parser-rejection-test-context
+      - id: rust-http-client-reply-framing-test-context

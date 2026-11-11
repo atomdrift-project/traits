@@ -14,108 +14,21 @@ traits:
       type: text
       regex: 'netsh\s+wlan\s+show\s+networks\b'
     attack: T1016
-  - id: netcat-port-scan
-    desc: netcat port scanning
-    crit: suspicious
-    conf: 0.85
-    for:
-      - elf
-      - shell
-    if:
-      type: text
-      regex: '\bnc\b[^\n]{0,80}\s-zv?\b[^\n]{0,80}\b([0-9]{1,5}-[0-9]{1,5}|[0-9]{1,5},[0-9,\s-]{1,80})\b'
-    not:
-      - substr: nc 127.0.0.1
-      - substr: nc localhost
-    unless:
-      - id: well-known/app/utility/cmdchamp/
-      - type: text
-        regex: \bnc\b.{0,40}(127\.0\.0\.1|localhost)\b
-      - type: text
-        substr: nc -z -w 1 127.0.0.1 $port | grep -ic succeeded
-      - type: text
-        regex: (until|while !)\s+nc\b.{0,24}\s-zv?(\s|$)
-    attack: T1046
-  - id: nmap-scanning
-    desc: nmap network scanning
-    crit: suspicious
-    conf: 0.9
-    for:
-      - elf
-    if:
-      type: text
-      regex: \bnmap\s+-s[STUAFVNX]\b
-    attack: T1046
-  - id: shell-port-scanner
-    desc: shell port scanning loop
-    crit: suspicious
-    conf: 0.8
-    for:
-      - shell
-    if:
-      type: string_literal
-      regex: (for|while)[^\n;]{0,50}\{[^\n;]{0,50}\bnc\s+[^;&|\n]{0,20}-z\b
-    attack: T1046
 composite_rules:
-  - id: known-benign-network-diagnostics-context
-    desc: Known benign diagnostics or VPN context
-    crit: exception
-    conf: 0.99
-    for: [elf, shell]
-    any:
-      - id: metadata/build/recognized-contexts::shell-diagnostic-report-collection-context
-      - id: well-known/tool/sysadmin/container::pelagos-network-diagnostics-context
-      - id: well-known/dual-use/tunnel/nostr-vpn::benign-e2e-context
-      - id: well-known/dual-use/tunnel/nostr-vpn::cli-identity
-      # CLI trainers embed interface/route quiz answers without performing recon.
-      - id: well-known/app/utility/cmdchamp::trainer-header
   - id: network-enumeration
-    desc: Queries local interface and routing information
+    desc: Local network interface and routing signals
     crit: notable
     conf: 0.88
     for:
       - elf
       - shell
-    unless:
-      - id: well-known/app/infrastructure/syslog-ng::syslog-ng-debun
-      - id: well-known/dual-use/tunnel/spoofdpi::spoofdpi-go-module
-      - id: well-known/app/system/hedgehog-fabricator::official-fabricator-context
-      # A VPN daemon must inspect local interfaces and routes to establish its
-      # tunnel; the high-confidence product identity is benign context.
-      - id: metadata/package/testing/presence/harness::test-directory
-      - id: well-known/tool/sysadmin/busybox/
-      # Mageia's stock ifup-aliases helper necessarily reads interfaces and
-      # routes while configuring aliases; these calls are capability evidence,
-      # not standalone host discovery.
-      - id: metadata/package/files/system-package::system-network-alias-script
-      - id: metadata/path::openshift-release-ci-step-context
-      # agent-glovebox queries interfaces and routes to characterize the
-      # sandbox boundary it is enforcing, not to discover an attack target.
-      - id: well-known/tool/detection/agent-glovebox::archive-context
-      # Named diagnostic collectors and VPN e2e harnesses inspect local networking
-      # for troubleshooting or tunnel setup, not attacker reconnaissance.
-      - id: known-benign-network-diagnostics-context
     needs: 2
     any:
       - id: objectives/discovery/network/interface
-      - id: micro-behaviors/network/interface::ip-addr
-      - id: "micro-behaviors/os/network/route::ip-route-show"
-      - id: "micro-behaviors/os/network/neighbors::shell-arp-display-flag-call"
-      - id: "micro-behaviors/os/network/neighbors::ip-neigh-display"
-  - id: port-scanning
-    desc: Active port scanning
-    crit: suspicious
-    conf: 0.9
-    for:
-    - elf
-    - shell
-    attack: T1046
-    any:
-    - id: netcat-port-scan
-    - id: nmap-scanning
-    - id: shell-port-scanner
-    unless:
-    - id: well-known/app/utility/cmdchamp/
+      - id: micro-behaviors/network/interface/command::ip-addr
+      - id: "micro-behaviors/network/route::ip-route-show"
+      - id: "micro-behaviors/network/neighbors::shell-arp-display-flag-call"
+      - id: "micro-behaviors/network/neighbors::ip-neigh-display"
   - id: credential-plus-scanning
     desc: Credential access with network scanning
     crit: hostile
@@ -127,5 +40,15 @@ composite_rules:
     mbc: E1103
     all:
       - id: network-enumeration
-      - id: port-scanning
-      - id: micro-behaviors/communications/ssh/client::ssh-identity-file-flag
+      - id: micro-behaviors/communications/socket/probe::port-scanning
+      - id: micro-behaviors/communications/ssh/keys::ssh-identity-file-flag
+  - id: hosts-file-internal-host-discovery
+    desc: Filters hosts file loopback entries to discover internal network hosts
+    crit: hostile
+    conf: 0.95
+    attack: T1016,T1082
+    for: [scripts, source]
+    platforms: [unix, windows]
+    all:
+      - id: micro-behaviors/fs/path/config/network::hosts-file-path
+      - id: micro-behaviors/network/dns::hosts-exclude-non-local-addresses

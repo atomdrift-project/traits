@@ -16,15 +16,6 @@ traits:
     if:
       type: symbol
       regex: memfd_create
-    unless:
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-any
-      - id: well-known/lib/runtime/scripted/php-runtime::source-tree
-      - id: well-known/tool/reverse-engineering/radare2::radare2-go-module-source-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
-      - id: well-known/app/communication/telegram::telegram-desktop-third-party-source
-    downgrade:
-      any:
-        - id: metadata/file/string/identity::system-shell-basename
   - id: memfd-create-syscall-number-x86
     desc: Raw syscall invokes memfd_create by number (x86)
     conf: 0.8
@@ -51,7 +42,7 @@ traits:
       # libc syscall(). The x1 instruction is address-layout dependent.
       pattern: 'E0 22 80 52 ?? ?? ?? ?? (02|22) 00 80 52 ?? ?? ?? 97'
   - id: x64-memfd-call-arguments
-    desc: x64 memfd-number call argument sequence
+    desc: Calls memfd_create by raw syscall number
     conf: 0.94
     arch: [x86-64]
     platforms: [linux]
@@ -60,8 +51,20 @@ traits:
       section: .text
       # syscall(319, name, flags): edx is flags (0 or MFD_CLOEXEC 1), esi
       # the name pointer, edi the Linux syscall number (319); eax is cleared
-      # for the variadic wrapper.
-      pattern: '( 31 D2 31 C0 | 31 C0 BA 01 00 00 00 | 31 C0 BA 00 00 00 00 ) BE ?? ?? ?? ?? BF 3F 01 00 00 E8'
+      # for the variadic wrapper. The last form loads flags first and copies a
+      # computed name from a register (mov rsi, r64) instead of an address.
+      pattern: '( 31 D2 31 C0 BE ?? ?? ?? ?? BF 3F 01 00 00 E8 | 31 C0 BA 01 00 00 00 BE ?? ?? ?? ?? BF 3F 01 00 00 E8 | 31 C0 BA 00 00 00 00 BE ?? ?? ?? ?? BF 3F 01 00 00 E8 | 41 B8 3F 01 00 00 44 89 C7 48 89 45 ?? 48 8B 75 ?? BA 01 00 00 00 B0 00 E8 | BA ?? 00 00 00 ?? 89 ?? 31 C0 BF 3F 01 00 00 E8 )'
+  - id: arm-eabi-memfd-create-syscall
+    desc: ARM memfd_create syscall
+    conf: 0.94
+    arch: [arm]
+    platforms: [linux]
+    if:
+      type: hex
+      section: .text
+      # Thumb-2: clear flags, load ARM EABI syscall 385 (memfd_create),
+      # then branch through the imported syscall wrapper.
+      pattern: '?? ?? 00 22 40 F2 81 10 79 44 ?? F? ?? E?'
   - id: memfd-create-python
     desc: Python calls a memfd_create wrapper
     conf: 0.95
@@ -71,25 +74,18 @@ traits:
       type: symbol
       kind: call
       regex: '^(os|libc)\.memfd_create$'
-    unless:
-      - id: well-known/lib/stdlib/python-stdlib::python-stdlib-test-file
-      - id: metadata/package/files/dependency::python-type-stub-path
-  - id: python-libc-memfd-create
-    desc: Python invokes memfd_create via libc
+  - id: source-libc-memfd-create
+    desc: Invokes SYS_memfd_create via syscall()
     conf: 0.96
-    platforms: [linux]
-    for: [python]
+    platforms: [linux, android]
+    for: [python, c, cpp]
     if:
       type: text
       regex: '\bsyscall\s*\(\s*SYS_memfd_create\b'
-    unless:
-      - id: well-known/lib/stdlib/python-stdlib::python-stdlib-test-file
-  # Same capability as the memfd-create symbol above (notable) — the Go wrapper is
-  # no more suspicious. memfd_create is used legitimately by JIT/runtime code
-  # (clangd/LLVM, Go programs); fileless-exec intent comes from composites.
   - id: memfd-create-go
     desc: Go MemfdCreate reference
     conf: 0.8
+    for: [elf, go]
     platforms:
       - linux
     if:
@@ -105,3 +101,17 @@ composite_rules:
     all:
       - id: x64-memfd-call-arguments
       - id: micro-behaviors/os/syscall/invoke::syscall-wrapper-import
+  - id: anonymous-memfd-creation
+    desc: Creates in-memory file via memfd_create
+    conf: 0.92
+    for: [c, cpp, rust, go, python, elf]
+    platforms: [linux, android]
+    any:
+      - id: memfd-create
+      - id: source-libc-memfd-create
+      - id: memfd-create-python
+      - id: memfd-create-go
+      - id: memfd-create-syscall-number-x64
+      - id: memfd-create-syscall-number-x86
+      - id: memfd-create-syscall-number-aarch64
+      - id: arm-eabi-memfd-create-syscall

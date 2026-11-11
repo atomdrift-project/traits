@@ -3,54 +3,26 @@ defaults:
   for: [powershell, batch, shell, pe, dll]
   attack: T1059.001
   mbc: E1027
-traits:
-  - id: executionpolicy-jbang-wrapper
-    desc: JBang PowerShell wrapper marker
-    crit: notable
-    conf: 0.8
-    if:
-      type: text
-      regex: 'jbang\.ps1\s+(version|jdk\s+install)'
-  - id: executionpolicy-rustup-wrapper
-    desc: Rust target setup wrapper marker
-    crit: notable
-    conf: 0.82
-    for: [batch]
-    if:
-      type: text
-      substr: rustup target add
-  - id: executionpolicy-hardware-tweak-marker
-    desc: Hardware tweak execution-policy marker
-    crit: notable
-    conf: 0.82
-    for: [batch]
-    if:
-      type: text
-      regex: '(?i)MSPower_DeviceEnable|Media\.SoundPlayer|EdgeRemover'
-  - id: executionpolicy-msys2-shell-wrapper
-    desc: MSYS2 installer shell wrapper marker
-    crit: notable
-    conf: 0.86
-    for: [powershell, batch]
-    if:
-      type: text
-      regex: '(?i)msys2_shell\.cmd.{0,200}(-ExecutionPolicy\s+Bypass|pacman\s+-Syuu)'
-  - id: executionpolicy-local-script-wrapper
-    desc: Local PowerShell script wrapper marker
-    crit: notable
-    conf: 0.82
-    for: [powershell, batch, shell]
-    if:
-      type: text
-      regex: '(?i)-ExecutionPolicy\s+Bypass\s+-File\s+(\.\\|\./)?(scripts|installers)[/\\]'
-  - id: powershell-shim-policy-constraint
-    for: [javascript]
-    desc: PowerShell shim linked to execution policy
-    crit: component
-    if:
-      type: text
-      regex: '(?is)\.ps1.{0,250}execution polic|execution polic.{0,250}\.ps1'
 composite_rules:
+  # Node-based CLI wrappers that bypass PowerShell policy while sourcing
+  # executable code remotely express the same evasion intent as native
+  # PowerShell launchers. Keep the full chain requirement in the shared atom.
+  - id: node-policy-bypassed-remote-powershell
+    desc: Node CLI bypasses PowerShell policy for a remote script
+    crit: suspicious
+    conf: 0.98
+    for: [javascript, typescript]
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/process/create/shell/interpreter::powershell-exe-spawn
+      - id: micro-behaviors/process/argument/interpreter::powershell-policy-bypass-argument
+    any:
+      - id: well-known/app/development/code-forge/github::raw-githubusercontent-script-file
+      - id: objectives/execution/payload/script-eval/network/response-body::embedded-irm-iex-pipeline
+    unless:
+      - id: micro-behaviors/communications/url/host/tld-http::reserved-documentation-tld-url
+      - id: micro-behaviors/communications/url/host/tld-http::reserved-example-registered-domain-url
+
   # A JavaScript WSH Run call that hides a policy-bypassed PowerShell file
   # launch is a separate execution-policy and visibility behavior from the
   # remote stage acquisition profile in objectives/execution/payload/file-exec.
@@ -63,24 +35,25 @@ composite_rules:
     attack: T1059.001,T1562.001,T1564.003
     all:
       - id: micro-behaviors/os/com/automation::wscript-shell-literal
-      - id: micro-behaviors/process/create/flags::powershell-nop-ep-bypass-file-command
-      - id: micro-behaviors/data/control-flow/dispatch::javascript-run-zero-second-argument
-      - id: micro-behaviors/process/create/exec::wsh-powershell-policy-launch
+      - id: micro-behaviors/process/create/shell/interpreter::powershell-nop-ep-bypass-file-command
+      - id: micro-behaviors/data/control-flow/dispatch/run::javascript-run-zero-second-argument
+      - id: micro-behaviors/process/deploy/interpreter-command::wsh-powershell-policy-launch
 
   - id: benign-executionpolicy-wrapper-context
     desc: Documented local script execution wrapper
     crit: exception
     any:
       - id: micro-behaviors/fs/path/script::batch-build-powershell-script-path
-      - id: executionpolicy-rustup-wrapper
+      - id: micro-behaviors/os/security/execution-policy::executionpolicy-rustup-wrapper
       - id: micro-behaviors/fs/path/construct::sibling-powershell-script-path
-      - id: executionpolicy-local-script-wrapper
+      - id: micro-behaviors/os/security/execution-policy::executionpolicy-local-script-wrapper
       - id: micro-behaviors/os/security/policy::powershell-plugin-root-bypass-file-text
       - id: metadata/package/documentation/powershell-help::documented-executionpolicy-bypass-help
       - id: metadata/package/documentation/powershell-help::documented-executionpolicy-bypass-comment
       - id: metadata/package/testing/harness/runtime::powershell-dogfood-harness
       - id: objectives/evasion/security-bypass/policy/execution::chocolatey-package-installer-marker
       - id: metadata/build/ci/github-actions::workflow-definition-path
+      - id: micro-behaviors/os/security/execution-policy::policy-bypass-in-uninstall-entry
 
   - id: hidden-policy-bypassed-remote-script-eval
     desc: Hidden policy-bypassed launcher evaluates a remote script
@@ -91,12 +64,27 @@ composite_rules:
     near_bytes: 512
     all:
       - id: micro-behaviors/os/security/policy::powershell-policy-bypass-text
-      - id: micro-behaviors/process/argument/option::powershell-hidden-command-text
-      - id: micro-behaviors/process/deploy/script-eval::powershell-web-response-piped-eval-text
+      - id: micro-behaviors/process/argument/visibility::powershell-hidden-command-text
+      - id: objectives/execution/payload/script-eval/network/response-body::powershell-web-response-piped-eval-text
     unless:
       - id: benign-executionpolicy-wrapper-context
       - id: well-known/tool/sysadmin/scoop::scoop-bootstrap-installer-context
       - id: well-known/app/productivity/ferronote::ferronote-windows-installer-context
+
+  - id: batch-hidden-policy-bypassed-appdata-launch
+    desc: Batch launches hidden policy-bypassed PowerShell targeting AppData executable
+    crit: hostile
+    conf: 0.97
+    attack: T1059.001,T1562.001,T1564.003
+    for: [batch]
+    near_bytes: 512
+    near_lines: 0
+    all:
+      - id: batch-concealed-policy-override-call
+      - id: micro-behaviors/fs/path/application/executable::appdata-exe-path
+      - id: micro-behaviors/process/create/path-execution::powershell-command-call-executable-path
+    unless:
+      - id: benign-executionpolicy-wrapper-context
 
   - id: compressed-policy-bypass-stage
     for: [powershell]
@@ -106,14 +94,14 @@ composite_rules:
     attack: T1027,T1140,T1059.001
     mbc: B0032,E1059
     all:
-      - id: metadata/file/encoding::multiple-long-base64-literals
+      - id: metadata/file/encoding/base64::multiple-long-base64-literals
       - id: micro-behaviors/data/decompress/gzip::gzip-decompression-stream
-      - id: micro-behaviors/fs/write/file/full::write-all-text
-      - id: micro-behaviors/process/create/exec::start-process-call
-      - id: micro-behaviors/process/argument/option::powershell-policy-bypass-option-alternatives
+      - id: micro-behaviors/fs/write/file/full/string::write-all-text
+      - id: micro-behaviors/process/create/cmdlet::start-process-call
+      - id: micro-behaviors/os/security/execution-policy::powershell-policy-bypass-option-alternatives
     any:
       - id: micro-behaviors/process/create/hidden::start-process-windowstyle-hidden
-      - id: micro-behaviors/fs/path/application/executable::powershell-executable-token
+      - id: micro-behaviors/fs/path/application/interpreter::powershell-executable-token
 
   - id: pe-concealed-policy-override-profile
     for: [pe]
@@ -127,22 +115,24 @@ composite_rules:
       - id: micro-behaviors/os/security/policy::execution-policy-bypass
     any:
       - id: micro-behaviors/process/create/hidden/
-      - id: micro-behaviors/process/argument/option::hidden-console-execution
+      - id: micro-behaviors/process/argument/visibility::powershell-bypass-file-hidden-flags
+      - id: micro-behaviors/process/argument/visibility::powershell-hidden-window
+      - id: micro-behaviors/process/argument/visibility::powershell-windowstyle-1-option
+      - id: micro-behaviors/process/config/window::sfx-hidcon-prefix
+      - id: metadata/binary/code/bytecode::python-serialized-hidden-popen
+      - id: micro-behaviors/process/argument/visibility::hidden-console-execution
     unless:
       # MSBuild build integration ships the same switches as script text: the
       # <Exec> task and its $(...)/@(...) properties only resolve inside a
       # build, so this is developer tooling, not a concealed runtime launch.
-      - id: metadata/build/manifest::msbuild-exec-task-text
+      - id: metadata/build/msbuild::msbuild-exec-task-text
       - id: benign-executionpolicy-wrapper-context
       - id: well-known/tool/sysadmin/win-unattended::signer
-      - id: well-known/app/enterprise/microsoft-office-support::microsoft-office-support-bundle-context
-      - id: metadata/signed/leaf::microsoft-corporation
-      - id: well-known/app/utility/rufus::rufus-official-context
-      - id: well-known/tool/sysadmin/microsoft-office::office-c2r-kms-activation-context
+      - id: metadata/signature/verified/signer::microsoft-corporation
       # Advanced Installer's bootstrapper carries its PowerShell custom-action
       # launcher (-ExecutionPolicy Bypass in a hidden window) in every build;
       # the strings are the installer runtime's, not the packaged product's.
-      - id: metadata/binary/installer/builder::advanced-installer-bootstrapper
+      - id: well-known/lib/platform/advanced-installer::advanced-installer-bootstrapper
   - id: bypass-execution-policy
     for: [pe, batch]
     desc: Concealed PowerShell policy override
@@ -160,7 +150,7 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/delete/file/library::fs-unlinkSync
       - id: micro-behaviors/os/env/package-manager::npm-config-global-scope-read
-      - id: powershell-shim-policy-constraint
+      - id: micro-behaviors/os/security/execution-policy::powershell-shim-policy-constraint
     unless:
       - id: well-known/tool/development/cli/swytchcode::postinstall-ps1-shim-removal
   - id: policy-bypassing-runtime-replacement
@@ -171,7 +161,7 @@ composite_rules:
     all:
       - id: metadata/build/manifest::require-administrator
       - id: objectives/evasion/hijack-execution-flow/dll-hijacking/runtime::runtime-dll-backup-name
-      - id: metadata/binary/symbols/name/token::dotnet-processstartinfo-name
+      - id: metadata/binary/symbols/name/process::dotnet-processstartinfo-name
     # `bypass-execution-policy` needs the interpreter name and its switches in
     # one contiguous run of text.  A managed launcher assigns
     # ProcessStartInfo.FileName and .Arguments as two separate metadata
@@ -185,40 +175,3 @@ composite_rules:
       - id: bypass-execution-policy
       - id: micro-behaviors/os/security/policy::powershell-policy-bypass-text
       - id: micro-behaviors/os/security/policy::execution-policy-bypass-spellings
-  - id: executionpolicy-known-installer-marker
-    desc: Known installer execution-policy marker
-    crit: notable
-    conf: 0.85
-    any:
-      - id: micro-behaviors/os/security/policy::powershell-process-policy-bypass-command
-      - id: metadata/lang/source/syntax/argument::batch-local-file-option
-      - id: executionpolicy-jbang-wrapper
-      - id: micro-behaviors/fs/path/script::batch-build-powershell-script-path
-      - id: micro-behaviors/communications/http/download/cli::psdownload-helper-label
-      - id: executionpolicy-hardware-tweak-marker
-      - id: executionpolicy-msys2-shell-wrapper
-      - id: metadata/lang/source/naming/action::gocross-name-reference
-      - id: executionpolicy-local-script-wrapper
-      - id: micro-behaviors/fs/path/config/app::vm-config-iso-configuration-context
-
-  # An unsigned PE binary that stages PowerShell execution-policy bypass
-  # arguments alongside the runas verb and a shell interpreter is launching
-  # elevated, unconstrained scripts. Platform signing and installer contexts
-  # are excluded.
-  - id: pe-elevated-powershell-policy-bypass
-    desc: Unsigned PE stages elevated PowerShell policy bypass
-    crit: hostile
-    conf: 0.98
-    for: [pe, dll]
-    attack: T1059.001,T1548.002,T1562.001
-    all:
-      - id: micro-behaviors/process/argument/option::powershell-policy-bypass-argument
-      - id: micro-behaviors/os/privilege/elevation::runas-verb-token
-      - id: metadata/signed/trust-level::unsigned-missing-signature-record
-    any:
-      - id: micro-behaviors/fs/path/application/executable::cmd-exe-image-name
-      - id: metadata/lang/encoded/wide::shell-interpreter-cmd
-    unless:
-      - id: benign-executionpolicy-wrapper-context
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/

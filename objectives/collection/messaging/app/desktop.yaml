@@ -4,22 +4,6 @@ defaults:
   attack: T1005
   crit: suspicious
 traits:
-  - id: go-main-find-tdata-routine
-    desc: Go routine name for locating Telegram tdata
-    crit: suspicious
-    conf: 0.94
-    for: [pe]
-    if:
-      type: text
-      exact: main.findTdata
-  - id: go-main-zip-tdata-routine
-    desc: Go routine name for archiving Telegram tdata
-    crit: suspicious
-    conf: 0.94
-    for: [pe]
-    if:
-      type: text
-      exact: main.zipTdataChunked
   - id: go-main-grab-send-routine
     desc: Go routine name for collecting and sending
     crit: suspicious
@@ -40,15 +24,6 @@ traits:
       regex: '(?i)(telegram.{0,160}key_datas|key_datas.{0,160}telegram)'
     unless:
       - id: well-known/tool/detection/malcontent::malcontent-defensive-scanner-context
-  - id: telegram-go-collector-symbol
-    desc: Go Telegram collection routine
-    crit: notable
-    conf: 0.9
-    platforms: [macos]
-    for: [macho]
-    if:
-      type: text
-      exact: GetTelegram
   - id: discord-core-module-versioned
     desc: Discord versioned core module path
     crit: suspicious
@@ -64,6 +39,34 @@ traits:
       type: text
       regex: 'discord_desktop_core-.{1,40}[/\\]{1,2}discord_desktop_core[/\\]{1,2}index\.js'
       case_insensitive: true
+  - id: discord-core-remote-injection-source
+    desc: Remote GitHub Discord injection script source
+    crit: notable
+    conf: 0.98
+    if:
+      type: text
+      regex: '(?i)raw\.githubusercontent\.com/[^\s"'']{1,180}/Injection/injection\b'
+  - id: discord-core-webhook-placeholder
+    desc: Injection script webhook placeholder
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      substr: '%WEBHOOK_LINK%'
+  - id: discord-core-infect-routine
+    desc: Discord core infection routine marker
+    crit: notable
+    conf: 0.9
+    if:
+      type: function
+      exact: Infect
+  - id: discord-core-injection-target-list
+    desc: Collected Discord core index targets
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)injectPath\s*\.forEach\s*\(\s*file'
   - id: discord-core-protection-library
     desc: Discord core protection DLL artifact
     crit: suspicious
@@ -227,19 +230,6 @@ traits:
       regex: 'settings\.db-wal([^A-Za-z0-9_.-]|$)'
       case_insensitive: true
 composite_rules:
-  - id: go-telegram-tdata-archive-exfiltration
-    desc: Go Telegram session archive upload
-    crit: hostile
-    conf: 0.99
-    attack: T1005,T1041
-    mbc: B0047,E1041
-    for: [pe]
-    platforms: [windows]
-    all:
-      - id: go-main-find-tdata-routine
-      - id: go-main-zip-tdata-routine
-      - id: go-main-grab-send-routine
-      - id: micro-behaviors/communications/messaging/send::telegram-bot-api-file-upload
   - id: whatsapp-desktop-settings-db
     desc: WhatsApp Desktop settings SQLite database
     crit: notable
@@ -274,10 +264,10 @@ composite_rules:
     mbc: E1005
     ref: sha256:2c2ea9613e294962bd4145978ab0a9b61b7cbe8ad3f7b29ae25e678d55b28a1f
     all:
-      - id: micro-behaviors/fs/path/app-data::signal-desktop-database-path
+      - id: micro-behaviors/fs/path/application/messaging::signal-desktop-database-path
       - id: micro-behaviors/fs/path/password-store::signal-safe-storage-item
     any:
-      - id: micro-behaviors/data/db/sql::sql-messages-table-query
+      - id: micro-behaviors/data/db/read/records::sql-messages-table-query
       - id: objectives/credential-access/keychain/extract::find-generic-password
       - id: micro-behaviors/crypto/kdf/algorithm::chrome-compatible-kdf-salt
     needs: 2
@@ -291,21 +281,12 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/path/personal::imessage-chat-db
     any:
-      - id: micro-behaviors/data/db/sql::imessage-message-table-query
+      - id: micro-behaviors/data/db/read/records::imessage-message-table-query
       - id: objectives/collection/messaging/imessage::attributed-body-parser
       - id: objectives/collection/messaging/imessage::chatdb-temp-copy
     needs: 2
     unless:
       - id: well-known/app/ai/knowledge/topos::topos-logger-namespace
-  - id: telegram-go-stealer-routine
-    desc: Telegram collector with keychain theft
-    crit: suspicious
-    conf: 0.95
-    platforms: [macos]
-    for: [macho]
-    all:
-      - id: telegram-go-collector-symbol
-      - id: objectives/credential-access/keychain/extract::go-dump-keychain-symbol
   - id: whatsapp-storage
     desc: WhatsApp Desktop storage
     crit: suspicious
@@ -334,7 +315,7 @@ composite_rules:
       - id: whatsapp-desktop-settings-db
       - id: whatsapp-desktop-settings-db-shm
       - id: whatsapp-desktop-settings-db-wal
-      - id: micro-behaviors/fs/file/copy::copyfile-w
+      - id: micro-behaviors/fs/file/copy/call::copyfile-w
   - id: whatsapp-desktop-sqlite-remote-injection
     for: [pe]
     desc: WhatsApp SQLite staging with remote injection
@@ -344,9 +325,6 @@ composite_rules:
     all:
       - id: whatsapp-desktop-sqlite-staging
       - id: micro-behaviors/process/inject/runtime/call::remote-thread-resource-api-profile
-    unless:
-      - id: metadata/signed/platform/
-      - id: well-known/tool/reverse-engineering/
   - id: multi-messenger
     desc: Messaging store paths and file-read APIs
     crit: suspicious
@@ -355,20 +333,22 @@ composite_rules:
       - id: micro-behaviors/fs/read/file
     needs: 2
     any:
-      - id: micro-behaviors/fs/path/token::telegram-session-data-location
-      - id: micro-behaviors/fs/path/app-data::discord-local-storage-path
-      - id: micro-behaviors/fs/path/app-data::signal-data-path
+      - id: micro-behaviors/fs/path/application/messaging::telegram-session-data-location
+      - id: micro-behaviors/fs/path/app-data/application::discord-local-storage-path
+      - id: micro-behaviors/fs/path/application/messaging::signal-data-path
       - id: whatsapp-web-indexeddb-leveldb
       - id: telegram-web-indexeddb-leveldb
       - id: teams-web-indexeddb-leveldb
       - id: chatwork-indexeddb-leveldb
+    unless:
+      - id: well-known/app/ai/tool-server/local-mcp::signed-binary-context
   - id: discord-session-theft
     desc: Discord session data harvesting
     crit: suspicious
     conf: 0.95
     needs: 2
     any:
-      - id: micro-behaviors/fs/path/app-data::discord-local-storage-path
+      - id: micro-behaviors/fs/path/app-data/application::discord-local-storage-path
       - id: discord-session-storage
       - id: discord-local-state-json
       - id: discord-masterkey-dump
@@ -380,14 +360,14 @@ composite_rules:
     conf: 0.97
     near_bytes: 512
     all:
-      - id: micro-behaviors/fs/path/app-data::discord-core-module
+      - id: micro-behaviors/fs/path/app-data/application::discord-core-module
       - id: discord-core-module-versioned
-      - id: micro-behaviors/fs/path/app-data::discord-index-js
+      - id: micro-behaviors/fs/path/app-data/application::discord-index-js
     any:
       - id: micro-behaviors/communications/http/request/client::https-request
       - id: discord-core-eval-loader
       - id: well-known/app/communication/discord::discord-core-asar-bridge
-      - id: micro-behaviors/fs/path/app-data::slack-data-path
+      - id: micro-behaviors/fs/path/app-data/application::slack-data-path
       - id: whatsapp-storage
   - id: extension-discord-idle-keepalive
     desc: Extension fakes Discord activity to prevent idle logout
@@ -410,9 +390,9 @@ composite_rules:
       - id: discord-core-module-versioned
       - id: discord-core-index-js
     any:
-      - id: micro-behaviors/fs/write/file/full::node-write-file-sync
-      - id: micro-behaviors/fs/write/file/handle::write-file-source
-      - id: micro-behaviors/fs/write/file/handle::write-file
+      - id: micro-behaviors/fs/write/file/unspecified::node-write-file-sync
+      - id: micro-behaviors/fs/write/file/handle/unspecified::write-file-source
+      - id: micro-behaviors/fs/write/file/handle/unspecified::write-file
   - id: discord-core-protection-artifact-set
     desc: Discord core protection artifact set
     crit: suspicious
@@ -446,18 +426,56 @@ composite_rules:
       - id: discord-core-index-modified
       - id: discord-core-protection-removed
   - id: discord-leveldb-token-scan
-    desc: Discord LevelDB token regex scan
+    desc: Reads Discord tokens from Chromium LevelDB files
     crit: hostile
     conf: 0.99
     attack: T1555.003,T1005
     for: [javascript, typescript]
-    platforms: [windows]
     all:
-      - id: micro-behaviors/fs/path/app-data::discord-core-module
-      - id: micro-behaviors/data/format/credentials::discord-token-regex-source
-      - id: micro-behaviors/fs/path/app-data::chromium-leveldb-local-storage
-      - id: micro-behaviors/fs/directory/readdir::node-readdir-sync-call
-      - id: micro-behaviors/fs/read/file/full::read-node
+      - id: micro-behaviors/fs/path/app-data/application::discord-core-module
+      - id: micro-behaviors/data/format/discord-token::discord-token-regex-source-variants
+      - id: micro-behaviors/fs/path/app-data/browser::chromium-leveldb-local-storage
+      - id: micro-behaviors/fs/read/file/content/unspecified::read-node
+    any:
+      - id: micro-behaviors/fs/directory/readdir/language::node-readdir-sync-call
+      - id: micro-behaviors/fs/directory/async-enumeration::node-readdir-async-call
+  - id: discord-core-remote-script-fetch
+    desc: Fetches a remote script intended for Discord core injection
+    crit: hostile
+    conf: 0.99
+    attack: T1105,T1195.002
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/fs/path/app-data/application::discord-core-module
+      - id: discord-core-index-js
+      - id: discord-core-remote-injection-source
+      - id: micro-behaviors/communications/http/get::node-https-get-reference
+      - id: micro-behaviors/fs/write/file/unspecified::node-write-file-sync-call
+  - id: discord-core-script-overwrite
+    desc: Replaces Discord desktop core with a webhook-configured script
+    crit: hostile
+    conf: 0.99
+    attack: T1059.007,T1195.002,T1565.001
+    for: [javascript, typescript]
+    all:
+      - id: discord-core-index-js
+      - id: discord-core-injection-target-list
+      - id: micro-behaviors/fs/write/file/unspecified::node-write-file-sync-call
+      - id: discord-core-webhook-placeholder
+      - id: discord-core-infect-routine
+  - id: discord-core-process-kill-activation
+    desc: Force-kills Discord clients before core injection
+    crit: hostile
+    conf: 0.98
+    attack: T1489,T1059.007
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/fs/path/app-data/application::discord-core-module
+      - id: discord-core-remote-injection-source
+      - id: micro-behaviors/process/terminate/command::js-taskkill-force-command
+    any:
+      - id: discord-core-infect-routine
+      - id: discord-core-injection-target-list
   - id: messaging-data-staging
     for: [python]
     desc: Staging stolen messaging app credentials
@@ -466,7 +484,7 @@ composite_rules:
     attack: T1074.001
     mbc: E1074
     all:
-      - id: micro-behaviors/fs/path/token::telegram-session-data-location
-      - id: micro-behaviors/process/identity/query::python-current-username
+      - id: micro-behaviors/fs/path/application/messaging::telegram-session-data-location
+      - id: micro-behaviors/process/identity/query/principal::python-current-username
       - id: micro-behaviors/os/sysinfo/directories::python-temp-directory-lookup
-      - id: micro-behaviors/fs/directory/mkdir::mkdir-python
+      - id: micro-behaviors/fs/directory/create::mkdir-python

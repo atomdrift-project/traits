@@ -1,54 +1,66 @@
-# Randomly named executable and data sections, high overall entropy, access
-# to the PEB, and a debugger check in a small console program describe a
-# loader whose payload sits in the oddly named data section and whose code
-# checks for analysis before touching it.
+# These independent binary indicators can occur in loaders, but also in
+# complex application runtimes. They do not establish a payload or its use.
 defaults:
   platforms: [windows]
   for: [pe]
   attack: T1027.002,T1622
 composite_rules:
   - id: random-section-loader-with-peb-access-and-debugger-check
-    desc: Random-section loader with PEB access and anti-debug
+    desc: Nonstandard sections with PEB and debugger-check indicators
     crit: suspicious
     conf: 0.72
     all:
-      - id: metadata/binary/section/label::multiple-nonstandard-section-names
+      - id: metadata/binary/section/layout::multiple-nonstandard-section-names
       - id: metadata/file/entropy::high-overall-entropy-70
       - id: micro-behaviors/process/info/query::peb-access-x86
       - id: micro-behaviors/process/debug/detect::is-debugger-present-import
     unless:
-      - id: metadata/signed/platform/
       - id: verified-google-signed-binary
-      - id: metadata/binary/installer/family/
+      - id: verified-sumatrapdf-signed-binary
+      - id: metadata/installer/product/
       # UPX0/UPX1 are the packer's section names. The stub walks the PEB to
       # resolve imports, and the packed program may import IsDebuggerPresent.
-      - id: metadata/binary/section/label::upx-section-pair
+      - id: metadata/binary/section/label/packing::upx-section-pair
   # Proofs, not names: the leaf subject names Google LLC and the Authenticode
   # signature verifies with an intact content digest chaining to an issuing
   # authority, so a self-signed binary faking the publisher name does not
   # qualify. A verified Google-signed binary (e.g. the Widevine CDM) carries
   # toolchain sections, crypto-table entropy, DRM PEB reads and a dead
   # debugger import without being a malicious loader.
+      # Chrome's own loader and sandbox binaries.
+      - id: well-known/tool/browser::verified-google-chromium-distribution-binary
   - id: verified-google-signed-binary
     desc: Binary carries verified Google signature
     crit: exception
     conf: 0.98
+    exempt:
+      unverified-signature-suppressor: Signature-structure logic (present, absent, intact), not trust in a signer.
     all:
-      - id: metadata/signed/leaf::google-llc
-      - id: metadata/signed/certificate/chain::ca-issued-intact-signature
+      - id: metadata/signature/verified/signer::google-llc
+      - id: metadata/signature/certificate/chain::ca-issued-intact-signature
+
+  - id: verified-sumatrapdf-signed-binary
+    desc: Binary carries verified SumatraPDF signature
+    crit: exception
+    conf: 0.98
+    exempt:
+      unverified-signature-suppressor: Signature-structure logic (present, absent, intact), not trust in a signer.
+    all:
+      - id: well-known/app/productivity/sumatrapdf::sumatrapdf-signed-binary
+      - id: metadata/signature/certificate/chain::ca-issued-intact-signature
 
   - id: nonstandard-section-packed-dynamic-api-loader
     desc: Packed executable with nonstandard sections resolves APIs via PEB
     crit: hostile
     conf: 0.95
     all:
-      - id: metadata/binary/section/label::multiple-nonstandard-section-names
+      - id: metadata/binary/section/layout::multiple-nonstandard-section-names
       - id: metadata/file/entropy::high-overall-entropy-70
-      - id: micro-behaviors/os/api-resolution/hash-based::peb-ldr-list-access-x86
+      - id: micro-behaviors/os/api-resolution/digest-export/walk::peb-ldr-list-access-x86
       - id: micro-behaviors/data/parse/portable-executable::x86-e-lfanew-pe-walk
     unless:
-      - id: metadata/signed/platform/
       - id: verified-google-signed-binary
-      - id: metadata/binary/installer/family/
-      - id: metadata/binary/section/label::upx-section-pair
+      - id: verified-sumatrapdf-signed-binary
+      - id: metadata/installer/product/
+      - id: metadata/binary/section/label/packing::upx-section-pair
 

@@ -1,122 +1,40 @@
-# Code that rewrites somebody else's AI coding-agent configuration so the agent
-# stops asking before it acts.
-#
-# The shape a package uses to do this is stable across harnesses and languages:
-# locate the agent's config file in the user's home (or the current checkout),
-# parse it, set every tool permission to `allow` (or flip the harness's
-# equivalent approval switch), optionally swap the default agent for one it
-# supplies, and write the file back. The victim's next agent session then runs
-# tool calls — shell, write, webfetch — with no human in the loop.
-#
-# Nothing here names a product. The config-path leg comes from the per-vendor
-# atoms in micro-behaviors/fs/path/agent-config, and the approval leg from
-# micro-behaviors/process/create/permission-agent::agent-approval-gate-disabled, so a
-# variant aimed at a different harness is covered by adding one atom to either
-# list rather than by rewriting these composites.
-#
-# The harness's own installer and a user's dotfile-management script both write
-# their config legitimately, which is why the neutral mutation capability
-# lives under micro-behaviors and the hostile reading here requires the
-# approval gate to be removed as part of it.
+# Potential agent-configuration changes and approval-bypass context. A config
+# path near a write and a nearby approval setting do not bind the setting to
+# the written file or prove the user's intent; the combined finding is
+# suspicious rather than proof of a hostile rewrite.
 defaults:
   crit: hostile
   platforms: [unix, windows]
   for: [javascript, typescript, python, shell, powershell, ruby, go]
-  attack: T1562.001
 
 composite_rules:
-  - id: agent-config-approval-gate-disarmed
-    desc: Rewrites agent config to auto-approve tools
-    conf: 0.97
-    scope: file
-    for: [javascript, typescript, python, shell]
-    all:
-      - id: micro-behaviors/fs/write/file/target::agent-config-path-near-write
-    # Require a permission-table rewrite, not merely documenting another
-    # harness's bypass flag beside a headless `-p` adapter (agent relay CLIs).
-    any:
-      - id: micro-behaviors/process/create/permission-agent::agent-permission-wildcard-allow
-      - id: micro-behaviors/process/create/permission-agent::agent-allow-array-grants-all-bash
-      - id: micro-behaviors/process/create/permission-agent::agent-permission-allow-assignment
-      - id: micro-behaviors/process/create/permission-agent::agent-auto-approve-enabled
-      - id: micro-behaviors/process/create/permission-agent::vendor-agent-approval-setting-disabled
-      - id: micro-behaviors/process/create/permission-agent::vendor-agent-approval-mode-disabled
-    unless:
-      - id: micro-behaviors/process/create/permission-agent::isolated-worktree-sandbox-config
-      # A headless job runner starts the harness itself, against an isolated
-      # throwaway session config it passes on the spawned command line. The
-      # bypass flags belong to that one child process; nothing is left behind
-      # for the victim's next session, which is the hijack claim.
-      - id: agent-config-user-initiated-context
-      # An agent launcher writes the config of the agent it is about to start,
-      # and does it because the user asked: the file declares `--yolo` /
-      # `--dangerously-skip-permissions` as its own CLI option and routes it to
-      # each harness's mechanism. That is the opposite of the shape described
-      # above -- somebody else's config, rewritten without the victim choosing.
-      - id: micro-behaviors/process/create/permission-agent::agent-bypass-cli-handling-context
-      # Same isolated-session shape through the agent's config env var: the
-      # harness writes a throwaway config for one child run and pairs the
-      # grants with an explicit egress deny list. Nested inside
-      # agent-config-user-initiated-context to keep this unless list small.
-      - id: metadata/package/testing/
-      - id: well-known/tool/detection/
-      # The harness's own source writes the config it owns, including a local
-      # development profile. That is the product scaffolding a project the user
-      # asked to initialize, not a rewrite of somebody else's approval gate.
-      # Same source set already used by agent-approval-gate-disabled.
-      - id: micro-behaviors/process/create/permission-agent::coding-agent-harness-source
-
   # A scheduled-job or relay runner: it spawns the harness now, against an
   # isolated session config passed on the child's command line, so the
   # approval flags never reach a persistent config file. The bypass-mode leg
   # ties the context to the actual gate decision being made for that child.
-  - id: headless-agent-runner-isolated-session
-    desc: Headless runner starts an isolated agent session
-    crit: exception
-    conf: 0.93
-    for: [javascript, typescript, python, shell]
-    all:
-      - id: micro-behaviors/process/create/permission-agent::agent-isolated-session-launch
-      - id: micro-behaviors/process/create/agent::ai-agent-bypass-permissions-mode
+- id: headless-agent-runner-isolated-session
+  desc: Headless runner starts an isolated agent session
+  crit: exception
+  conf: 0.93
+  for: [javascript, typescript, python, shell]
+  all:
+  - id: micro-behaviors/data/llm/session::agent-isolated-session-launch
+  - id: micro-behaviors/data/llm/permission::ai-agent-bypass-permissions-mode
 
   # Three shapes where the write is not a covert rewrite: the headless runner
   # above, a front-end that stores the allow reply a user just gave, and a
   # swarm/eval harness that provisions a throwaway config for the child agent
   # it is about to spawn (isolation env plus an egress deny list — see
   # harness-provisioned-child-agent-config below).
-  - id: agent-config-user-initiated-context
-    desc: Agent config write answers a user or an isolated run
-    crit: exception
-    conf: 0.93
-    for: [javascript, typescript, python, shell]
-    any:
-      - id: headless-agent-runner-isolated-session
-      - id: micro-behaviors/process/create/permission-agent::allow-everywhere-approval-reply
-      - id: harness-provisioned-child-agent-config
-
-  # A package that pre-approves the consent prompts themselves — folder-trust
-  # and external-CLAUDE.md-include acceptance in the victim's global agent
-  # state — so the next session never asks. Unlike the approval-gate rewrite
-  # above this leaves tool permissions alone, so it is a consent bypass
-  # (suspicious) rather than a full gate disarm; the harness sets these flags
-  # itself only after the user answers.
-  - id: claude-trust-consent-prompts-preapproved
-    desc: Pre-approves Claude trust consent prompts
-    crit: suspicious
-    conf: 0.9
-    for: [javascript, typescript]
-    all:
-      - id: micro-behaviors/fs/path/agent-config/directory::claude-config-directory
-      - id: micro-behaviors/fs/write/file/full::js-file-write
-    any:
-      - id: micro-behaviors/data/config/write::claude-trust-dialog-accepted-assignment
-      - id: micro-behaviors/data/config/write::claude-md-includes-approved-assignment
-    needs: 1
-    near_bytes: 4000
-    unless:
-      - id: micro-behaviors/process/create/permission-agent::coding-agent-harness-source
-      - id: well-known/tool/detection/
-      - id: well-known/lib/testing/mongodb-harness-tester/
+- id: agent-config-user-initiated-context
+  desc: Agent config write answers a user or an isolated run
+  crit: exception
+  conf: 0.93
+  for: [javascript, typescript, python, shell]
+  any:
+  - id: headless-agent-runner-isolated-session
+  - id: micro-behaviors/data/llm/permission::allow-everywhere-approval-reply
+  - id: harness-provisioned-child-agent-config
 
   # A swarm/eval harness provisions a fresh permission config for the child
   # agent it is about to spawn and hands it over through the agent's
@@ -125,49 +43,11 @@ composite_rules:
   # the user's own agent config — and the deny entries are the opposite of a
   # disarm. The config write itself is already the hostile rule's all-leg;
   # these two facts are what make that write provisioning, not hijacking.
-  - id: harness-provisioned-child-agent-config
-    desc: Harness provisions a sandboxed config for its child agent
-    crit: exception
-    conf: 0.95
-    for: [python, javascript, typescript, shell]
-    all:
-      - id: micro-behaviors/process/create/permission-agent::opencode-config-env-isolated-session
-      - id: metadata/lang/source/literal::egress-command-array-head
-
-  # The same rewrite, reached automatically: npm runs the hook on `npm install`,
-  # so the victim never chooses to run the patcher. Archive scope because the
-  # hook is declared in package.json and performed by a sibling script.
-  - id: install-hook-disarms-agent-approval-gate
-    for: [javascript, typescript, python, shell, powershell, ruby, go, npm]
-    desc: Install hook disarms agent approval gate
-    conf: 0.98
-    scope: archive
-    attack: T1195.002
-    all:
-      - id: agent-config-approval-gate-disarmed
-    any:
-      # Any declared npm lifecycle hook: install, preinstall or postinstall all
-      # run unattended on `npm install`.
-      # An install hook is a trigger, not an objective: what this rule needs is
-      # the fact that the manifest declares one, which lives in metadata.
-      - id: metadata/package/scripts/lifecycle::install-hooks
-
-  # A package that both removes the approval gate and installs its own agent
-  # persona owns every later session in that checkout: the replacement agent
-  # answers the prompts and the gate that would have shown the user its tool
-  # calls is gone.
-  - id: agent-persona-and-gate-takeover
-    desc: Replaces default agent and drops approvals
-    conf: 0.97
-    scope: file
-    for: [javascript, typescript, python, shell]
-    all:
-      - id: micro-behaviors/process/create/permission-agent::agent-default-agent-override
-      - id: micro-behaviors/process/create/permission-agent::agent-approval-gate-disabled
-      - id: micro-behaviors/fs/path/agent-config/file::ai-agent-config-file-target
-    unless:
-      - id: metadata/package/testing/harness/runtime/
-      - id: metadata/package/testing/presence/manifest::test-fixtures
-      - id: micro-behaviors/process/create/permission-agent::coding-agent-harness-source
-      - id: micro-behaviors/process/create/permission-agent::agent-locked-down-headless-run
-      - id: micro-behaviors/process/create/permission-agent::agent-permission-mode-menu
+- id: harness-provisioned-child-agent-config
+  desc: Harness provisions a sandboxed config for its child agent
+  crit: exception
+  conf: 0.95
+  for: [python, javascript, typescript, shell]
+  all:
+  - id: micro-behaviors/os/env/runtime::opencode-config-env-isolated-session
+  - id: metadata/lang/source/literal/array::egress-command-array-head

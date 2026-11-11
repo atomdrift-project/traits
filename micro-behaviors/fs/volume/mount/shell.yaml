@@ -6,8 +6,6 @@ defaults:
     - ios
   for:
     - shell
-  mbc: E1222
-  attack: T1222
 traits:
   - id: mount-keyword
     desc: References filesystem mounting
@@ -16,16 +14,12 @@ traits:
       type: string_literal
       word: mount
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
     downgrade:
       any:
         # Package descriptions such as "sshfs: mount remotes" are metadata,
         # not a mount command executed by the recipe.
-        - id: metadata/file/string/identity::pkgbuild-basename
+        - id: metadata/filename/development::pkgbuild-basename
   - id: fstab-file
     desc: References the fstab filesystem table
     conf: 0.7
@@ -39,31 +33,42 @@ traits:
       type: string_literal
       word: remount
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
   - id: pseudo-filesystem-mount-command
     desc: Mounts devpts or tmpfs pseudo-filesystem
     conf: 0.92
     if:
       type: text
       regex: '(?m)^\s*mount\s+-t\s+(devpts|tmpfs)\s+\S+\s+/dev/(pts|shm)\b'
-  # Distro init scripts mount /tmp, but they do not re-arm it rw+exec: adding
-  # the exec flag back onto a remounted filesystem (tmpfs /var/run, /tmp,
-  # /dev/shm, or a previously noexec volume) is the dropper step that lets
-  # fetched payloads run where the mount table forbids execution.
+  # Match the option list, including reversed order and quoted arguments in
+  # embedded commands. Require complete tokens: noexec is not exec. Other
+  # options may precede the flags or separate remount from a final exec.
+  # Require exec last, or followed only by remount, so a later noexec cannot
+  # contradict the executable-remount claim.
+  # The operation alone is neutral; service-launcher abuse is composed in
+  # objectives/persistence/system/service/runit.
   - id: remount-executable-flag
-    desc: Remount adds executable permission
+    desc: Remount command requests executable permission
     conf: 0.94
+    for: [scripts, source, binaries]
     if:
       type: text
-      regex: '\bmount[^\n;]{0,40}\bremount[^\n;]{0,20}\bexec\b'
+      regex: '\bmount\s+-o\s+["'']?[\w,]*\b(remount,[\w,]*\bexec|exec,remount)["'']?\s'
   # IoT botnets stage payloads over NFS: the injection mounts the operator's
   # export (host:/path source) with exec among the options, then runs the
   # binary straight from the mountpoint. A local exec remount has no
   # host:/path source and stays in the remount trait above.
+  # Read-write remount in either option order, including inside a quoted
+  # command string handed to a shell. Neutral on its own (recovery and
+  # provisioning scripts do this); Android system-partition abuse is
+  # composed from it under objectives/.
+  - id: remount-writable
+    desc: Remounts a filesystem read-write
+    conf: 0.94
+    for: [scripts, source, binaries]
+    if:
+      type: text
+      regex: '\bmount\s+[^;|&\n]{0,80}-o\s+["'']?[\w,]*\b(rw,remount|remount,rw)\b'
   - id: remote-export-exec-mount
     desc: Mounts a remote export with exec permission
     conf: 0.9

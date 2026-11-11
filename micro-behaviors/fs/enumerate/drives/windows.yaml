@@ -1,12 +1,141 @@
 defaults:
-  platforms: [unix, windows, macos]
+  for:
+    - pe
+  platforms:
+    - windows
 traits:
-  - id: get-logical-drive-strings-w
-    desc: "GetLogicalDriveStringsW drive enum import"
-    crit: baseline
+  - id: get-logical-drives
+    desc: Enumerate logical drive letters
+    crit: notable
     conf: 0.9
-    platforms: [windows]
-    for: [pe, dll]
+    for: [c, cpp]
+    attack: T1083
+    mbc: E1083
     if:
-      type: import
-      exact: GetLogicalDriveStringsW
+      type: symbol
+      exact: GetLogicalDrives
+  - id: get-logical-drives-text
+    desc: References GetLogicalDrives API name
+    crit: notable
+    conf: 0.75
+    for: [pe, dll]
+    attack: T1083
+    mbc: E1083
+    if:
+      type: text
+      exact: GetLogicalDrives
+  - id: get-drive-type
+    desc: Drive-type query API reference
+    crit: notable
+    conf: 0.9
+    attack: T1083
+    if:
+      type: symbol
+      regex: GetDriveType[AW]?$
+  - id: directory-get-logical-drives-source
+    desc: Enumerate logical drives in C# source
+    crit: notable
+    conf: 0.91
+    attack: T1083
+    for:
+      - csharp
+    if:
+      type: text
+      substr: "Directory.GetLogicalDrives()"
+  - id: drive-loop-logic
+    desc: Drive count-based loop
+    crit: notable
+    if:
+      type: text
+      regex: mov\s+cl,26\s+div\s+cl
+  - id: drive-type-check-raw
+    desc: Checks drive type via raw bytes
+    crit: notable
+    if:
+      type: text
+      regex: cmp\s+al,DRIVE_FIXED|cmp\s+al,DRIVE_REMOTE
+  - id: get-logical-drive-strings-obfuscated
+    desc: Obfuscated GetLogicalDriveStrings API string
+    crit: notable
+    conf: 0.92
+    attack: T1083
+    if:
+      type: text
+      exact: LcrSntiDeiAeglvrsGoaitg
+  - id: get-drive-type-obfuscated
+    desc: Obfuscated GetDriveType API string
+    crit: notable
+    conf: 0.92
+    attack: T1083
+    if:
+      type: text
+      exact: DeetvpeiyGrTA
+  # VB6 p-code WindowProc hook checking `uMsg = WM_DEVICECHANGE` (`0x0219`),
+  # `wParam = DBT_DEVICEARRIVAL` (`0x8000`), and `dbch_devicetype = DBT_DEVTYP_VOLUME` (`2`).
+  - id: vb6-pcode-wm-devicechange-volume-arrival
+    desc: VB6 p-code monitors WM_DEVICECHANGE arrival
+    crit: notable
+    conf: 0.96
+    attack: T1091
+    if:
+      type: hex
+      section: .text
+      pattern: '(F5 19 02 00 00 C7 | F3 19 02 C6) [0-24] (F5 00 80 00 00 C7 | F3 00 80 C6) [0-48] (F5 02 00 00 00 C7 | F4 02 C6)'
+composite_rules:
+  - id: logical-drive-enumeration
+    desc: Enumerate logical drives
+    crit: notable
+    conf: 0.89
+    attack: T1083
+    any:
+      - id: get-logical-drives
+      - id: get-logical-drives-text
+      - id: micro-behaviors/fs/enumerate/drives::get-logical-drive-strings
+  - id: logical-drive-type-enumeration
+    desc: Enumerates logical drives and queries drive types
+    crit: notable
+    conf: 0.92
+    attack: T1083
+    all:
+      - id: logical-drive-enumeration
+      - id: get-drive-type
+  - id: win32-drive-loop
+    desc: Enumerates and scans all drives
+    crit: notable
+    conf: 0.85
+    attack: T1018
+    all:
+      - id: micro-behaviors/os/sysinfo/disk::get-drive-type-api-name
+      - id: drive-loop-logic
+    any:
+      - id: drive-type-check-raw
+    unless:
+      - id: well-known/lib/native/openmp::openmp-runtime
+  - id: drive-context-switching
+    desc: Drive context switching via cwd APIs
+    crit: notable
+    conf: 0.86
+    attack: T1083
+    all:
+      - id: micro-behaviors/fs/directory/cwd::get-current-directory
+      - id: micro-behaviors/fs/directory/chdir::set-current-directory
+    any:
+      - id: logical-drive-enumeration
+      - id: get-drive-type
+  - id: obfuscated-drive-enumeration
+    desc: Obfuscated drive enumeration APIs
+    crit: suspicious
+    conf: 0.93
+    attack: T1083
+    all:
+      - id: get-logical-drive-strings-obfuscated
+      - id: get-drive-type-obfuscated
+  - id: drive-and-file-tree-traversal
+    desc: Enumerates drive types and walks file trees
+    crit: notable
+    conf: 0.95
+    for: [pe, dll]
+    attack: T1083
+    all:
+      - id: micro-behaviors/fs/directory/readdir/native::find-file-walker-wide
+      - id: logical-drive-type-enumeration

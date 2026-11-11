@@ -1,0 +1,47 @@
+defaults:
+  platforms: [unix, windows]
+  for: [python, whl, python-sdist]
+  attack: T1105,T1059.004,T1070.004
+  mbc: B0024
+  crit: hostile
+  conf: 0.98
+
+traits:
+  # Extension managers (GRASS g.extension) define their own urlretrieve with
+  # custom headers; that file is a download library, not a one-shot stager.
+  - id: python-defines-urlretrieve-wrapper
+    desc: Defines its own urlretrieve wrapper
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: symbol
+      kind: function
+      exact: urlretrieve
+
+composite_rules:
+  - id: python-download-execute-and-remove
+    desc: Downloads executes and removes staged script
+    # Wheel/sdist evaluation otherwise pools legs from unrelated members (an
+    # ISO fetch in one hook, shell=True in a helper module); one file must
+    # hold the whole download, launch and cleanup sequence.
+    scope: file
+    near_lines: 60
+    all:
+      - id: micro-behaviors/communications/http/download/helper::urlretrieve-call-near-process-launch
+      - id: micro-behaviors/fs/delete/path::script-file-unlink-call
+    any:
+      - id: metadata/lang/source/syntax/command/launch::shell-exec-script-path
+      - id: micro-behaviors/process/create/shell/command-string::python-subprocess-shell-true
+    unless:
+      - id: micro-behaviors/fs/delete/file/self::python-delete-self-file
+      - id: micro-behaviors/fs/file/rename::os-replace
+      - id: micro-behaviors/fs/file/rename::os-rename
+      - id: micro-behaviors/fs/file/rename::shutil-move
+      - id: objectives/execution/staging/http::recognized-download-chmod-marker
+      - id: python-defines-urlretrieve-wrapper
+      # A self-update downloads an archive and extracts it over its own
+      # directory after deleting files; it replaces its code rather than
+      # executing a staged script. Legs are co-occurrence based, so this
+      # context suppresses its overlap with the download/execute pattern.
+      - id: micro-behaviors/communications/http/download/helper::python-download-archive-extract-replace

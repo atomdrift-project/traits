@@ -1,0 +1,204 @@
+defaults:
+  crit: notable
+  for:
+    - pe
+    - dll
+    - c
+    - cpp
+    - csharp
+  platforms:
+    - windows
+traits:
+  - id: windows-gethostname-import
+    desc: Query the local hostname through Winsock
+    conf: 0.9
+    attack: T1082
+    if:
+      type: import
+      exact: gethostname
+
+  - id: get-computer-name
+    desc: Query computer/host name
+    conf: 0.9
+    attack: T1082
+    if:
+      type: symbol
+      regex: '^GetComputerName(Ex)?[AW]?$'
+    unless:
+      # A statically linked Go binary's import table is the runtime's, not the
+      # program's: the Go runtime pulls this API in regardless of what the
+      # program does, so the import is not evidence the program queried it.
+      # That makes the finding wrong here, not merely less interesting — which
+      # is `unless:`, not a downgrade to a tier that would claim every program
+      # does this.
+      - id: metadata/lang/compiler/systems::go-binary-comp
+      - id: metadata/lang/compiler/systems::go-pe-symtab
+  - id: dotnet-user-domain-name
+    desc: Query current Windows logon domain
+    conf: 0.9
+    attack: T1033
+    for: [pe, csharp]
+    if:
+      type: text
+      exact: get_UserDomainName
+  - id: powershell-computer-name-read
+    desc: PowerShell reads computer name
+    conf: 0.9
+    for: [powershell]
+    if:
+      type: text
+      regex: '(?i)Win32_ComputerSystem.{0,80}Name'
+  - id: powershell-computer-system-query
+    desc: PowerShell queries computer system
+    conf: 0.88
+    for: [powershell]
+    if:
+      type: text
+      word: Win32_ComputerSystem
+  - id: powershell-environment-machine-name
+    desc: PowerShell reads machine name
+    conf: 0.9
+    for: [powershell]
+    if:
+      type: text
+      exact: Environment.MachineName
+  - id: powershell-dotnet-dns-hostname
+    desc: PowerShell queries .NET DNS hostname
+    conf: 0.96
+    for: [powershell]
+    if:
+      type: text
+      regex: '(?i)\b(Net[.]Dns|System[.]Net[.]Dns)\]::GetHostName\s*\('
+  # The most common PowerShell host-identity read: the COMPUTERNAME
+  # environment variable. Same capability as the sibling atoms, observed one
+  # layer down -- implants embed it in C2 prompts and exfil reports.
+  - id: powershell-computername-env-read
+    desc: PowerShell reads COMPUTERNAME variable
+    conf: 0.9
+    for: [powershell]
+    if:
+      type: text
+      exact: '$env:COMPUTERNAME'
+
+  - id: net-domain-join-info
+    desc: Query host domain join status
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: NetGetJoinInformation
+    for:
+      - pe
+      - dll
+      - c
+      - cpp
+    attack: T1016
+  # Entra ID (Azure AD) counterpart: the device's cloud tenant join state.
+  # NetGetAadJoinInformation is the netapi32 entry; DsrGetJoinInfo is the
+  # dsreg.dll backend it calls, which loaders resolve directly.
+  - id: entra-device-join-info
+    desc: Query Entra ID device join state
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: NetGetAadJoinInformation
+    for:
+      - pe
+      - dll
+      - c
+      - cpp
+    attack: T1016
+  - id: entra-device-join-backend
+    desc: Query Entra ID join state via dsreg
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: DsrGetJoinInfo
+    for:
+      - pe
+      - dll
+      - c
+      - cpp
+    attack: T1016
+
+  - id: net-wksta-get-info
+    desc: Query workstation domain via NetWkstaGetInfo
+    crit: notable
+    conf: 0.88
+    for: [pe, dll, c, cpp, csharp, go, rust]
+    attack: T1016
+    if:
+      type: symbol
+      exact: NetWkstaGetInfo
+
+  - id: ds-get-dc-name
+    desc: Query domain controller via DsGetDcName
+    crit: notable
+    conf: 0.9
+    for: [pe, dll, c, cpp, csharp, go, rust]
+    attack: T1016
+    if:
+      type: symbol
+      regex: '^DsGetDcName[AW]?$'
+
+  - id: windows-logonserver-env-name
+    desc: Reads Windows LOGONSERVER variable
+    crit: notable
+    conf: 0.9
+    for: [pe, dll, c, cpp, csharp, go, rust, python, powershell, batch]
+    attack: T1016
+    if:
+      type: text
+      regex: '(?-i)\bLOGONSERVER\b'
+
+  - id: windows-userdomain-env-name
+    desc: Reads Windows USERDOMAIN variable
+    crit: notable
+    conf: 0.86
+    for: [pe, dll, c, cpp, csharp, go, rust, python, powershell, batch]
+    attack: T1033
+    if:
+      type: text
+      regex: '(?-i)USERDOMAIN\b'
+    not:
+      - substr: USERDOMAIN_ROAMINGPROFILE
+
+  - id: cross-lang-hostname-call
+    desc: Queries local hostname in Go or Python
+    crit: notable
+    conf: 0.88
+    for: [go, python]
+    platforms: [windows, linux, macos]
+    attack: T1082
+    if:
+      type: text
+      regex: '\b(os\.Hostname|socket\.gethostname|platform\.node)\s*\('
+
+composite_rules:
+  - id: host-hostname-lookup-any
+    desc: Queries local computer or host name
+    crit: notable
+    conf: 0.9
+    for: [pe, dll, c, cpp, csharp, go, rust, python, powershell]
+    attack: T1082
+    any:
+      - id: get-computer-name
+      - id: windows-gethostname-import
+      - id: powershell-computername-env-read
+      - id: powershell-environment-machine-name
+      - id: cross-lang-hostname-call
+
+  - id: windows-domain-logon-discovery
+    desc: Queries Windows domain or logon server identity
+    crit: notable
+    conf: 0.92
+    for: [pe, dll, c, cpp, csharp, go, rust, python, powershell, batch]
+    attack: T1016
+    any:
+      - id: net-wksta-get-info
+      - id: ds-get-dc-name
+      - id: net-domain-join-info
+      - id: dotnet-user-domain-name
+      - id: windows-logonserver-env-name

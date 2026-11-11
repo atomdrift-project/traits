@@ -6,14 +6,14 @@ defaults:
 
 traits:
   - id: native-flood-worker-symbol-cluster--transport
-    desc: Transport flood worker symbol
+    desc: UDP, TCP or SYN flood worker symbol
     crit: suspicious
     conf: 0.97
     if:
       type: symbol
       regex: '(?i)^(udp|tcp|syn)_?flood(_(thread|worker))?$'
   - id: native-flood-worker-symbol-cluster--application
-    desc: Application flood worker symbol
+    desc: ACK or HTTP flood worker symbol
     crit: suspicious
     conf: 0.97
     if:
@@ -72,20 +72,50 @@ traits:
       # while worker scans 16-byte method entries and calls method[i].func.
       pattern: "89 EF E8 ?? ?? ?? ?? E8 ?? ?? ?? ?? BE 09 00 00 00 89 C7 E8 [260-380] 48 83 C2 10 40 8A 74 24 ?? 40 3A 72 F0 75 ?? [10-20] 48 C1 E0 04 48 89 EE 41 FF 54 00 08"
 
-  - id: sequential-x64-attack-vector-table
-    desc: Sequential 64-bit attack vector handler table
+  - id: native-protocol-flood-function-set
+    desc: Three or more protocol flood functions
+    crit: suspicious
+    conf: 0.95
+    count_min: 3
+    if:
+      type: symbol
+      regex: '(?i)^[a-z]{3,4}_([a-z]{2,10}_)?flood$'
+
+  - id: slowloris-established-holding-status
+    desc: Slowloris connection-holding status
     crit: suspicious
     conf: 0.98
-    size_max: 10485760
+    if:
+      type: text
+      regex: 'SLOWLORIS\s+established=%d/%d,\s+holding\s+%ds'
+
+  - id: cc-worker-done-rate-status
+    desc: CC flood worker rate status
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: text
+      regex: 'CC\s+worker\s+done:\s+%d\s+reqs,\s+%\.1f\s+req/s'
+
+  - id: mips-attack-vector-dispatcher
+    desc: MIPS multi-vector attack dispatcher table
+    crit: suspicious
+    conf: 0.95
+    arch: [mips]
     if:
       type: hex
-      section: .data
-      # Sequential (uint64_t vector_id, uint64_t fn_ptr) entries for vectors 0..5.
-      pattern: "00 00 00 00 00 00 00 00 ?? ?? 40 00 00 00 00 00 01 00 00 00 00 00 00 00 ?? ?? 40 00 00 00 00 00 02 00 00 00 00 00 00 00 ?? ?? 40 00 00 00 00 00 03 00 00 00 00 00 00 00 ?? ?? 40 00 00 00 00 00 04 00 00 00 00 00 00 00 ?? ?? 40 00 00 00 00 00 05 00 00 00 00 00 00 00 ?? ?? 40 00 00 00 00 00"
-    unless:
-      - id: metadata/binary/header/identity::shared-object-type
+      section: .text
+      pattern: "0a 00 02 2e [0-16] c0 f0 10 00 21 10 d7 03 04 00 45 8c"
 
 composite_rules:
+  - id: native-slowloris-cc-multivector-flood-engine
+    desc: Native multi-vector flood tool with Slowloris and CC worker telemetry
+    crit: hostile
+    conf: 0.99
+    all:
+      - id: objectives/impact/dos/flood::native-multivector-flood-worker-symbols
+      - id: slowloris-established-holding-status
+      - id: cc-worker-done-rate-status
   - id: native-flood-worker-symbol-cluster
     desc: Multiple protocol flood workers
     crit: suspicious
@@ -101,8 +131,8 @@ composite_rules:
       - id: native-flood-worker-symbol-cluster
       - id: native-attack-dispatcher-symbol
       - id: native-attack-type-table
-      - id: micro-behaviors/communications/socket/send::send
-      - id: micro-behaviors/process/threading/concurrency::pthread
+      - id: micro-behaviors/communications/socket/send/reference::send
+      - id: micro-behaviors/process/thread/runtime::pthread
 
   - id: iot-multivector-flood-functions
     desc: IoT bot TCP, TLS, and game-query floods
@@ -132,5 +162,25 @@ composite_rules:
     conf: 0.99
     all:
       - id: timed-sigkill-vector-table-dispatcher
-      - id: sequential-x64-attack-vector-table
+      - id: metadata/binary/layout/table::sequential-x64-id-address-table
       - id: micro-behaviors/communications/flood::native-packet-send-loop
+
+  # A raw-socket flood engine that also detaches into a background session is
+  # a deployed bot, not an interactive stress tester.
+  - id: daemonized-raw-socket-multi-vector-flooder
+    desc: Daemonized raw-socket multi-vector flood engine
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: native-protocol-flood-function-set
+      - id: micro-behaviors/communications/socket/raw::raw
+      - id: micro-behaviors/process/daemonize/background::daemon
+
+  - id: mips-iot-multivector-flood-bot
+    desc: MIPS IoT flood bot with socket guard
+    crit: hostile
+    conf: 0.98
+    arch: [mips]
+    all:
+      - id: mips-attack-vector-dispatcher
+      - id: micro-behaviors/process/lifecycle/single-instance::mips-localhost-socket-single-instance

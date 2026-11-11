@@ -1,0 +1,97 @@
+defaults:
+  attack: T1580
+  platforms: [unix, windows]
+  for: [javascript, typescript]
+
+# A field survey can be a diagnostic. Require the metadata URL in the
+# iterated fetch, its returned text appended to the collector, and that
+# same collector written after the loop. No chosen output filename,
+# unrelated module-scope call, or generic substring API establishes this.
+composite_rules:
+  # Role-list enumeration is cloud-environment discovery even when the
+  # program does not request the role's credential document.
+  - id: startup-alibaba-metadata-enumeration
+    desc: Startup probes Alibaba instance metadata
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-client-usage
+      - id: micro-behaviors/communications/http/services/alibaba::alibaba-imds-ram-role-list
+      - id: micro-behaviors/data/control-flow/module-exec::direct-zero-arg-call
+
+  - id: startup-alibaba-metadata-probe-report
+    desc: Reports Alibaba metadata probe status remotely
+    crit: hostile
+    conf: 0.98
+    attack: "T1580,T1041"
+    all:
+      - id: startup-alibaba-metadata-enumeration
+      - id: micro-behaviors/communications/url/resource-path/collection::beacon-path-token
+      - id: micro-behaviors/communications/url/host/domain-http::js-remote-host-url
+
+  - id: javascript-alibaba-imds-field-dump
+    desc: Collects Alibaba metadata into local file
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-client-usage
+      - id: micro-behaviors/fs/write/file/unspecified::node-write-file-sync-call
+      - id: micro-behaviors/data/string/access::js-substring-call
+      - id: micro-behaviors/fs/write/file/response-body::alibaba-metadata-text-file-loop
+
+  - id: javascript-alibaba-imds-and-staragent-probe
+    desc: Dumps Alibaba Cloud IMDS fields and probes StarAgent configuration
+    crit: hostile
+    conf: 0.99
+    for: [npm, tar, javascript, typescript]
+    all:
+      - id: javascript-alibaba-imds-field-dump
+      - id: micro-behaviors/fs/path/cloud::alibaba-staragent-config-path
+
+  # Some probes request a small set of metadata endpoints directly instead
+  # of iterating a field list. Preserve the discovery behavior when the
+  # decoded response is written to an artifact file.
+  - id: javascript-alibaba-metadata-response-file
+    desc: Alibaba role metadata collection with file-write code
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-client-usage
+      - id: micro-behaviors/communications/http/services/alibaba::alibaba-imds-ram-role-list
+      - id: micro-behaviors/data/decode/utf8::buffer-concat-utf8-decode
+      - id: micro-behaviors/fs/write/file/unspecified::node-write-file-sync-call
+
+  # The field dump alone can be a diagnostic. Pair it with actual file reads
+  # and references to credential stores before inferring credential collection.
+  - id: javascript-alibaba-metadata-and-local-credential-collection
+    desc: JavaScript dumps Alibaba metadata and reads credential stores
+    crit: hostile
+    conf: 0.97
+    attack: "T1552.005,T1005,T1580"
+    all:
+      - id: javascript-alibaba-imds-field-dump
+      - id: micro-behaviors/fs/read/file/content/unspecified::read-node
+    any:
+      - id: micro-behaviors/fs/path/private-key::ssh-private-key
+      - id: micro-behaviors/fs/path/token::serviceaccount-token-path
+      - id: micro-behaviors/fs/path/secret-config::dotenv-filename-literal
+      - id: micro-behaviors/os/privilege/paths::etc-shadow
+
+  - id: startup-multicloud-metadata-reporting
+    desc: Startup probes cloud metadata endpoints and reports probe results
+    crit: hostile
+    conf: 0.98
+    # A startup probe keeps its metadata URLs, HTTP client and report path
+    # together; bundled cloud SDKs (google-auth-library, @azure/identity)
+    # scatter the same atoms across megabytes of unrelated CLI code.
+    near_bytes: 16384
+    all:
+      - id: micro-behaviors/communications/http/request/client::http-client-usage
+      - id: micro-behaviors/communications/url/resource-path/collection::beacon-path-token
+      - id: micro-behaviors/data/control-flow/module-exec::direct-zero-arg-call
+    any:
+      - id: micro-behaviors/communications/http/services/aws::aws-metadata-endpoint
+      - id: micro-behaviors/communications/http/services/aws::aws-imds-v2-token-endpoint
+      - id: micro-behaviors/communications/http/services/gcp::gcp-metadata-endpoint-reference
+      - id: micro-behaviors/communications/http/services/azure::azure-metadata-endpoint
+    needs: 2

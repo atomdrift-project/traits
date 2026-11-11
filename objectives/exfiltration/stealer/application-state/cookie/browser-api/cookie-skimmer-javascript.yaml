@@ -1,0 +1,92 @@
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript, html]
+  attack: "T1539"
+
+composite_rules:
+- id: vsent-beacon-cookie
+  desc: vsent marker links cookie access to outbound send
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: micro-behaviors/communications/http/cookie-store::vsent-cookie-access
+  any:
+  - id: micro-behaviors/communications/http/client/reference::vsent-near-fetch-send
+  - id: micro-behaviors/communications/http/client/reference::vsent-before-client-send
+  - id: micro-behaviors/communications/http/client/reference::vsent-after-fetch-send
+  - id: micro-behaviors/communications/http/client/reference::vsent-after-client-send
+  near_lines: 160
+- id: js-cookie-form-webhook-exfil
+  for: [javascript]
+  desc: Browser cookie stolen by hidden POST form
+  crit: hostile
+  conf: 0.985
+  mbc: "E1005"
+  all:
+  - id: objectives/exfiltration/http/collect::js-hidden-form-post
+  - id: objectives/credential-access/browser/session-hijack::js-cookie-form-field
+  - id: micro-behaviors/communications/url/host/oob/endpoint::webhook-site
+  any:
+  - id: micro-behaviors/communications/http/request/reference::quoted-post-token
+  - id: micro-behaviors/communications/http/message::https-prefix
+- id: js-cookie-query-webhook-exfil
+  for: [javascript]
+  desc: Browser cookie exfiltrated to webhook query endpoint
+  crit: hostile
+  conf: 0.98
+  mbc: "E1005"
+  near_lines: 40
+  all:
+  - id: micro-behaviors/communications/http/cookie-store::document-cookie-reference
+  - id: micro-behaviors/communications/url/construction/query::cookie-session-query-encoding-cooccurrence
+  - id: micro-behaviors/communications/http/request/client::xmlhttprequest-new
+  - id: micro-behaviors/communications/url/host/oob/endpoint::webhook-site
+  any:
+  - id: micro-behaviors/communications/http/message::https-prefix
+  - id: objectives/exfiltration/http/query::browser-query-data-exfil
+  downgrade:
+    any:
+    - id: metadata/path/directory::test-directory-component
+- id: html-script-cookie-fetch-exfil
+  for: [html]
+  desc: HTML script reads cookies and exfiltrates via fetch
+  crit: hostile
+  conf: 0.97
+  attack: T1539,T1041
+  mbc: E1005
+  near_lines: 30
+  near_bytes: 2048
+  all:
+  - id: micro-behaviors/communications/http/cookie-store::browser-document-cookie-reference
+  - id: micro-behaviors/communications/http/request/html::html-fetch-call
+  any:
+  # The channel must be evidence, not a page-wide idiom: a bare
+  # encodeURIComponent call or a POST fetch appears in every same-origin app
+  # (a CSRF helper reading its own token cookie beside the app's fetch
+  # wrapper convicted a dashboard's logout button). Require the harvested
+  # value inside the request itself, or an off-origin destination.
+  - id: micro-behaviors/communications/http/request/html::html-fetch-args-carry-cookie
+  - id: micro-behaviors/communications/http/request/html::html-fetch-absolute-url
+  needs: 1
+  unless:
+  - id: well-known/tool/offensive/payload-corpus::documented-pentest-payload-corpus
+  - id: micro-behaviors/communications/http/cookie-store::document-cookie-expire-directive
+  downgrade:
+    any:
+    - id: metadata/path/directory::test-directory-component
+- id: browser-cookie-harvest-ajax-loader
+  for: [javascript]
+  desc: Browser script sends harvested cookies to a hardcoded remote endpoint
+  crit: hostile
+  conf: 0.97
+  attack: T1539,T1185,T1105
+  mbc: E1005
+  all:
+  - id: micro-behaviors/communications/http/cookie-store::document-cookie-split-iterate
+  - id: micro-behaviors/communications/http/cookies::cookie-value-body-field
+  - id: micro-behaviors/communications/http/request/client::jquery-ajax-call
+  - id: micro-behaviors/communications/url/host/domain-http::js-remote-host-url
+  # Keep the cookie read/body field, request, and destination in one local
+  # workflow. Large application bundles commonly contain an unrelated cookie
+  # helper, AJAX clients, and documentation URLs in separate modules.
+  near_bytes: 2048

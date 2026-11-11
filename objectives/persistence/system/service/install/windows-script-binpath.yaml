@@ -17,7 +17,7 @@
 # ATT&CK: T1543.003 (Create or Modify System Process: Windows Service)
 defaults:
   platforms: [windows]
-  for: [powershell, batch, csharp, go]
+  for: [scripts, binaries, source]
   crit: suspicious
   conf: 0.93
   attack: T1543.003
@@ -34,20 +34,13 @@ traits:
     desc: Service binPath in AppData or Temp
     if:
       type: text
-      regex: '(?i)\bbinPath\s*=[^\r\n]{0,80}((%|\$env:)(TEMP|APPDATA)|[\\/]AppData[\\/])'
-
-  - id: binpath-env-temp
-    desc: Service binPath in PowerShell Temp variable
-    for: [powershell]
-    if:
-      type: text
-      regex: '(?i)\bbinPath\s*=[^\r\n]{0,80}\$env:(TEMP|APPDATA)'
+      regex: '(?i)\bbinPath\s*=[^\r\n]{0,80}((%|\$env:)(TEMP|(LOCAL)?APPDATA)|[\\/]AppData[\\/])'
 
   - id: binpath-users-public
     desc: Service binPath in Users Public directory
     if:
       type: text
-      regex: '(?i)\bbinPath\s*=[^\r\n]{0,80}[\\/]Users[\\/]Public[\\/]'
+      regex: '(?i)\bbinPath\s*=[^\r\n]{0,80}([\\/]Users[\\/]Public[\\/]|(%|\$env:)PUBLIC)'
 
   - id: new-service-shell-folder
     desc: New-Service image in user shell folder
@@ -61,9 +54,40 @@ traits:
     for: [powershell]
     if:
       type: text
-      regex: '(?i)-BinaryPathName[^\r\n]{0,80}(\$env:TEMP|\$env:APPDATA|[\\/]AppData[\\/])'
+      regex: '(?i)-BinaryPathName[^\r\n]{0,80}(\$env:TEMP|\$env:(LOCAL)?APPDATA|[\\/]AppData[\\/])'
+
+  - id: new-service-users-public
+    desc: New-Service image in Users Public directory
+    for: [powershell]
+    if:
+      type: text
+      regex: '(?i)-BinaryPathName[^\r\n]{0,80}([\\/]Users[\\/]Public[\\/]|(\$env:|%)PUBLIC)'
+
+  - id: binpath-interpreter-execution
+    desc: Service binPath executes shell interpreter
+    crit: notable
+    conf: 0.94
+    if:
+      type: text
+      regex: '(?i)\bbinPath\s*=[^\r\n]{0,60}(%COMSPEC%|cmd|powershell|pwsh)\b'
 
 composite_rules:
+  # A shell interpreter in a service binPath is a meaningful reconfiguration,
+  # but without evidence of the service account or a writable image path it
+  # does not establish privilege escalation.
+  - id: service-binpath-shell-command-reconfiguration
+    desc: Windows service binPath assigned a shell command
+    crit: suspicious
+    conf: 0.95
+    for: [batch, powershell, pe]
+    all:
+      - id: micro-behaviors/os/service/configure::sc-config-binpath
+    any:
+      - id: micro-behaviors/process/argument/interpreter::powershell-command-options-text
+      - id: micro-behaviors/process/create/shell/command-mode::windows-command-shell-invocation
+    unless:
+      - id: micro-behaviors/os/service/query::sc-config-restores-queried-image
+
   - id: writable-service-image-any
     desc: Windows service image in writable path
     crit: suspicious
@@ -71,10 +95,10 @@ composite_rules:
     any:
       - id: binpath-shell-folder
       - id: binpath-appdata-temp
-      - id: binpath-env-temp
       - id: binpath-users-public
       - id: new-service-shell-folder
       - id: new-service-appdata-temp
+      - id: new-service-users-public
 
   - id: user-writable-service-image-autostart
     desc: Auto-start service image in writable path
@@ -89,5 +113,14 @@ composite_rules:
       - id: micro-behaviors/os/service/create::sc-auto-start-service-create
       - id: micro-behaviors/os/service/create::sc-local-system-service-create
     unless:
-      - id: metadata/package/testing/presence/harness/
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
+
+  - id: service-install-hidden-script-binpath
+    desc: Service binPath executes hidden script
+    crit: hostile
+    conf: 0.98
+    attack: T1543.003,T1059.001
+    all:
+      - id: binpath-interpreter-execution
+      - id: micro-behaviors/process/argument/file::powershell-script-file-option-text
+      - id: micro-behaviors/process/argument/visibility::powershell-hidden-command-text

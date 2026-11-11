@@ -3,15 +3,22 @@ defaults:
   for: [batch]
   attack: T1499
 traits:
-  - id: batch-repeated-start-call
-    desc: Batch repeatedly starts GUI process
+  - id: batch-timed-reboot-command
+    desc: Batch contains a timed reboot command
     crit: notable
-    conf: 0.9
+    conf: 0.96
+    attack: T1529
     if:
-      type: symbol
-      kind: call
-      exact: start
-    count_min: 8
+      type: text
+      regex: '(?i)\bshutdown\s+[-/]r\s+[-/]t\s+[1-9]\d*\b'
+
+  - id: batch-shutdown-taunt-option-text
+    desc: Shutdown /c option is followed by taunt
+    crit: notable
+    conf: 0.96
+    if:
+      type: text
+      regex: '(?i)\bshutdown\b.{0,24}[-/]c.{0,40}\byou got owned\b'
 
   - id: batch-start-spam
     desc: Batch start command spam
@@ -23,7 +30,7 @@ traits:
       regex: '(?im)^\s*start\s*$'
 
   - id: batch-empty-start-loop
-    desc: Batch empty start loop
+    desc: Repeated argument-free START commands
     crit: suspicious
     conf: 0.94
     count_min: 4
@@ -55,15 +62,6 @@ traits:
     if:
       type: text
       regex: '(?im)^\s*start\s+mspaint(\.exe)?\s*$'
-  - id: batch-text-repeated-start
-    desc: Batch text repeats the start command
-    crit: notable
-    conf: 0.9
-    count_min: 30
-    if:
-      type: text
-      regex: '(?im)^\s*start\s+\S+'
-
   - id: batch-reg-disable-desktop
     desc: Batch writes NoDesktop registry value as one
     crit: suspicious
@@ -73,18 +71,6 @@ traits:
       type: text
       regex: '(?i)reg\s+add.{0,120}NoDesktop.{0,80}/d\s+1\b'
 
-  - id: batch-file-association-disruption
-    desc: Batch disrupts Windows file association
-    crit: suspicious
-    conf: 0.9
-    attack: T1112
-    if:
-      type: text
-      regex: '(?im)^\s*assoc\s+\.[A-Za-z0-9]{1,8}='
-
-    unless:
-    - id: well-known/lib/platform/wine::wine-source-tree
-    - id: well-known/tool/reverse-engineering/radare2::radare2-release-source-tree
   - id: batch-multi-gui-loop
     desc: Batch loops GUI launches
     crit: suspicious
@@ -130,20 +116,20 @@ traits:
       type: text
       regex: '(?i)\btaskkill\b[^\r\n]{0,40}\bsvchost\.exe\b'
 
-  - id: batch-mass-rd
-    desc: Removes many directories
-    crit: suspicious
-    conf: 0.9
-    for: [batch, static-lib]
-    count_min: 20
-    unless:
-      - type: basename
-        regex: '(?i)^clean\.(bat|cmd)$'
-    if:
-      type: text
-      regex: '(?im)^rd \S'
-
 composite_rules:
+  - id: batch-taunting-timed-reboot
+    desc: Batch reboot command is paired with taunt text
+    crit: hostile
+    conf: 0.98
+    attack: T1529
+    # The sample omits quotes around the /c argument. This reports a nearby
+    # taunting comment string as evidence of intent, not successful parsing
+    # or display of that comment.
+    near_bytes: 80
+    all:
+      - id: batch-timed-reboot-command
+      - id: batch-shutdown-taunt-option-text
+
   - id: batch-md-then-rd-flood
     desc: Creates then removes many directories
     crit: hostile
@@ -151,30 +137,30 @@ composite_rules:
     for: [batch, static-lib]
     all:
       - id: micro-behaviors/fs/directory/create::batch-repeated-md
-      - id: batch-mass-rd
+      - id: micro-behaviors/fs/delete/command::batch-mass-rd
 
   - id: batch-desktop-disruption-loop
-    desc: Batch desktop disruption loop
+    desc: Self-installed batch disrupts the desktop
     crit: hostile
     conf: 0.97
     all:
       - id: micro-behaviors/process/terminate/command::taskkill-explorer-force
-      - id: micro-behaviors/data/control-flow/loop::batch-goto-chaos-loop
+      - id: micro-behaviors/data/control-flow/transfer::batch-goto-chaos-loop
       - id: micro-behaviors/process/daemonize/spawn::batch-start-minimized
 
   - id: batch-nuisance-desktop-policy-disruption
-    desc: Batch nuisance desktop policy disruption
+    desc: Batch contains an app launch loop and desktop disruption commands
     crit: hostile
     conf: 0.97
     all:
       - id: batch-mspaint-loop
-      - id: micro-behaviors/os/registry/write::batch-reg-add-explorer-policy-path
+      - id: micro-behaviors/os/registry/explorer/write::batch-reg-add-explorer-policy-path
       - id: batch-reg-disable-desktop
     needs: 2
     any:
-      - id: batch-file-association-disruption
+      - id: micro-behaviors/os/registry/association/write::batch-assoc-extension-assignment
       - id: batch-cursor-delete
-      - id: micro-behaviors/process/create/shell/script-host::rundll32-command-reference
+      - id: well-known/app/system/microsoft/rundll32::rundll32-command-reference
       - id: micro-behaviors/fs/delete/file/command::del-command
 
   # Suspicious, matching `batch-url-launch-loop-disruption` below, which is
@@ -190,7 +176,7 @@ composite_rules:
     conf: 0.98
     all:
       - id: batch-multi-gui-loop
-      - id: micro-behaviors/data/control-flow/branch::batch-goto-single-letter-label
+      - id: micro-behaviors/data/control-flow/transfer::batch-goto-single-letter-label
     near_lines: 16
 
   - id: batch-url-launch-loop-disruption
@@ -198,19 +184,20 @@ composite_rules:
     crit: suspicious
     conf: 0.98
     all:
-      - id: micro-behaviors/process/create/launch::batch-starts-multiple-urls
-      - id: micro-behaviors/data/control-flow/branch::batch-label-definition
-      - id: micro-behaviors/data/control-flow/branch::batch-goto-branch
+      - id: batch-browser-launch-loop
+      - id: micro-behaviors/communications/url/open::batch-starts-multiple-urls
+      - id: metadata/lang/source/naming/label::batch-label-definition
+      - id: micro-behaviors/data/control-flow/transfer::batch-goto-branch
     near_lines: 16
 
   - id: batch-empty-start-loop-disruption
-    desc: Batch empty start loop disruption
+    desc: Repeated argument-free START commands disruption
     crit: hostile
     conf: 0.96
     all:
       - id: batch-empty-start-loop
-      - id: metadata/lang/source/declaration::batch-label-loop
-      - id: micro-behaviors/data/control-flow/loop::batch-goto-loop-command
+      - id: metadata/lang/source/naming/label::batch-label-loop
+      - id: micro-behaviors/data/control-flow/transfer::batch-goto-loop-command
 
   # Unconditional browser-spam loop: the tight label/start/goto shape plus an
   # explicit browser-launch capability. One `start` line is enough -- the
@@ -224,9 +211,9 @@ composite_rules:
     all:
       - id: batch-browser-launch-loop
     any:
-      - id: micro-behaviors/process/create/launch::batch-starts-bare-web-host
-      - id: micro-behaviors/process/create/launch::batch-starts-url
-      - id: micro-behaviors/process/create/launch::batch-starts-multiple-urls
+      - id: micro-behaviors/communications/url/open::batch-starts-bare-web-host
+      - id: micro-behaviors/communications/url/open::batch-starts-url
+      - id: micro-behaviors/communications/url/open::batch-starts-multiple-urls
 
   - id: batch-system-process-kill-loop
     desc: Batch system process kill loop
@@ -241,7 +228,7 @@ composite_rules:
     crit: hostile
     conf: 0.98
     all:
-      - id: batch-repeated-start-call
+      - id: metadata/lang/source/syntax/call/invocation::batch-repeated-start-call
       - id: batch-start-spam
     any:
       - id: batch-start-shutdown
@@ -252,7 +239,7 @@ composite_rules:
     conf: 0.96
     all:
       - id: batch-unrolled-gui-start
-      - id: batch-text-repeated-start
+      - id: micro-behaviors/process/create/exec::batch-text-repeated-start
 
   - id: batch-taskmgr-disable-process-disruption
     desc: Batch disables Task Manager during process disruption
@@ -260,7 +247,7 @@ composite_rules:
     conf: 0.97
     all:
       - id: objectives/impact/degrade/windows-policy::batch-reg-disable-taskmgr
-      - id: batch-repeated-start-call
+      - id: metadata/lang/source/syntax/call/invocation::batch-repeated-start-call
       - id: micro-behaviors/process/terminate/command::batch-taskkill-image-name
 
   - id: batch-mass-rd-eventlog-wipe
@@ -269,7 +256,7 @@ composite_rules:
     conf: 0.97
     attack: T1485,T1070.001
     all:
-      - id: batch-mass-rd
+      - id: micro-behaviors/fs/delete/command::batch-mass-rd
       - id: micro-behaviors/os/event/log::wevtutil-clear-log-command
     any:
       - id: micro-behaviors/fs/delete/target::windows-system32-delete-cmd-first
@@ -283,7 +270,7 @@ composite_rules:
     all:
       - id: objectives/impact/degrade/windows-policy::batch-taskmgr-registry-lockout
       - id: micro-behaviors/process/terminate/command::taskkill-explorer-force
-      - id: micro-behaviors/os/registry/write::batch-reg-add-explorer-policy-path
+      - id: micro-behaviors/os/registry/explorer/write::batch-reg-add-explorer-policy-path
       - id: batch-reg-disable-desktop
 
   - id: batch-rundll-desktop-session-termination
@@ -292,5 +279,5 @@ composite_rules:
     conf: 0.95
     attack: T1499,T1529
     all:
-      - id: micro-behaviors/process/create/shell/script-host::rundll16-dll-export-command
+      - id: well-known/app/system/microsoft/core-utilities::rundll16-dll-export-command
       - id: micro-behaviors/os/event/shutdown::rundll-user-exitwindows-command

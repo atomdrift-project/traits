@@ -25,41 +25,58 @@ traits:
       kind: call
       regex: '^(window\.|globalThis\.|self\.)?unescape$'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
   - id: js-unicode-unescape-payload
     desc: JavaScript decodes Unicode percent escapes
     crit: notable
     conf: 0.93
-    for: [javascript, typescript, html, text, makefile, elixir, scala, objectivec]
+    for: [scripts, typescript, html, text, makefile, elixir, scala, objectivec]
     attack: T1140
     if:
       type: text
-      regex: 'unescape(\s*\(|["'']\s*\]\s*\()\s*(["'']{2}\s*\+\s*){0,6}["'']%u[0-9A-Fa-f]{4}'
+      regex: 'unescape(\s*\(|["'']\s*\]\s*\()\s*(["'']{2}\s*\+\s*){0,6}["''“”]%u[0-9A-Fa-f]{4}'
     unless:
-      - id: metadata/lang/source/syntax/call/invocation::markup-or-decoded-alert-calls
-      - id: metadata/package/testing/presence/harness::test-directory
-      - id: metadata/package/testing/presence/path::bundled-cve-exploit-sample-context
+      - id: metadata/lang/source/syntax/call/relationship::markup-or-decoded-alert-calls
+  # Exploit pages bind the decoder to another name (`var d = unescape;`)
+  # and decode through it, so the direct-call atoms never see "unescape(".
+  # The binding alone is matched here; it does not prove a later call.
+  - id: js-unescape-alias-binding
+    desc: Binds unescape to an alias variable
+    crit: notable
+    conf: 0.92
+    for: [javascript, html]
+    attack: T1140
+    if:
+      type: text
+      regex: '(?m)[\w$]+\s*=\s*((window|self|globalThis)\.)?unescape\s*([;,]|$)'
+      exclude_comments: true
+  # A bare-identifier call whose first argument traces (through variables)
+  # to a %u-escaped literal: the decode step of a percent-u payload, whatever
+  # the decoder is named. Flow origin, not call-site text.
+  - id: js-percent-u-literal-call-argument
+    desc: Call argument traces to a %u literal
+    crit: notable
+    conf: 0.9
+    attack: T1140
+    if:
+      type: symbol
+      kind: call
+      regex: '^[A-Za-z_$][\w$]*$'
+      arg:
+        index: 0
+        from:
+          value: '%u[0-9A-Fa-f]{4}'
   - id: js-percent-byte-unescape
     desc: JavaScript decodes percent-encoded bytes
     crit: notable
     conf: 0.9
-    for: [javascript, typescript, html, makefile, elixir, scala]
+    for: [javascript, typescript, html, makefile, elixir, scala, ruby, python]
     attack: T1140
     if:
       type: text
       regex: 'unescape\s*\(\s*["'']%[0-9A-Fa-f]{2}%'
     unless:
-      - id: metadata/lang/source/syntax/call/invocation::markup-or-decoded-alert-calls
-      - id: metadata/package/testing/presence/harness::test-directory
-      - id: metadata/package/testing/presence/path::bundled-cve-exploit-sample-context
-  # Staged decoders rarely spell eval(unescape(...)) directly: they decode
-  # into a variable and evaluate it a statement later
-  # (`x=unescape(a+b+c);eval(x)`), which the direct-call atoms above miss.
-  # The statement sequence is the observation; data flow is left to composites.
+      - id: metadata/lang/source/syntax/call/relationship::markup-or-decoded-alert-calls
   - id: js-unescape-eval-sequence
     desc: URL-decode call followed by eval
     crit: notable
@@ -70,14 +87,14 @@ traits:
       type: text
       regex: '\bunescape\s*\([^)]{1,200}\)\s*;[\s\S]{0,120}?\beval\s*\('
     unless:
-      - id: metadata/lang/source/syntax/call/invocation::markup-or-decoded-alert-calls
+      - id: metadata/lang/source/syntax/call/relationship::markup-or-decoded-alert-calls
       - id: well-known/tool/development/webinspector/
   - id: js-shellcode-unescape-assignment
     desc: Assigns unescape to a shellcode-named variable
     crit: notable
     conf: 0.96
     attack: T1140
-    for: [javascript, html, text, makefile]
+    for: [javascript, html, text, makefile, ruby, python]
     if:
       type: text
       regex: '(?i)(\w{0,8}shellcode\w{0,8}|payLoadCode)\s*=\s*unescape\s*\('
@@ -105,10 +122,13 @@ traits:
       regex: '(?i)%3C(%53|S)(%63|C)(%72|R)(%69|I)(%70|P)(%54|T)'
 
   # HTML and non-JavaScript carriers do not expose embedded JS call facts.
+  # Ruby and Python PoC generators carry the same invocation as string text;
+  # the embedded-layer extraction misses it when the block opens with
+  # comments, so the carrier text is matched directly.
   - id: js-unescape-carrier-call-text
     desc: Embedded JavaScript unescape invocation text
     crit: notable
-    for: [html, elixir, scala]
+    for: [html, elixir, scala, ruby, python]
     if:
       type: text
       regex: '\bunescape(\s*\(|["'']\s*\]\s*\()'
@@ -122,3 +142,22 @@ composite_rules:
     any:
       - id: js-unescape-call
       - id: js-unescape-carrier-call-text
+
+  # unescape is bound to another name and some call decodes a %u literal.
+  # Same-file co-occurrence: the flow leg does not prove the called name is
+  # the alias, only that a %u value reaches a call.
+  - id: js-unescape-alias-percent-u-call
+    desc: Unescape alias and %u-literal call argument
+    crit: notable
+    all:
+      - id: js-unescape-alias-binding
+      - id: js-percent-u-literal-call-argument
+  # A Unicode %u literal passed straight to unescape, or unescape bound to
+  # an alias beside a call that consumes a %u literal.
+  - id: js-unicode-or-aliased-unescape
+    desc: Direct Unicode or aliased unescape decoding
+    crit: notable
+    for: [scripts, typescript, html, text, makefile, elixir, scala, objectivec]
+    any:
+      - id: js-unicode-unescape-payload
+      - id: js-unescape-alias-percent-u-call

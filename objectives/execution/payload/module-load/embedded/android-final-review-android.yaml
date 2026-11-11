@@ -1,0 +1,180 @@
+# Android staged loader using a hidden asset DEX and reflective classloader patching.
+defaults:
+  platforms: [android]
+  for: [apk, zip]
+  crit: suspicious
+  conf: 0.95
+  attack: "T1406"
+
+composite_rules:
+- id: staged-dex-loader
+  desc: APK hides and loads a second-stage DEX from assets
+  crit: hostile
+  conf: 0.995
+  mbc: "B0030"
+  all:
+  - id: micro-behaviors/os/module/load/class::reflective-classloader-patch
+  - id: objectives/execution/staging/store::android-hex-dex-file-write-clues
+
+- id: android-asset-payload-reflective-apk
+  desc: APK asset payload reflective loader
+  crit: hostile
+  conf: 0.995
+  all:
+  - id: micro-behaviors/os/module/load/class::asset-inflater-reflective-loader
+  - id: metadata/package/files/android-assets::apk-opaque-extensionless-asset
+
+- id: android-encrypted-asset-dex-reflective-loader
+  desc: APK decrypts hidden asset DEX and injects into classloader
+  crit: hostile
+  conf: 0.99
+  for: [apk, zip, dex]
+  attack: "T1406,T1027.002"
+  all:
+  - id: micro-behaviors/os/module/load/class::asset-cipher-reflective-loader
+  - id: metadata/package/files/android-assets::apk-opaque-extensionless-asset
+
+- id: encoded-android-native-stage-loader
+  for: [android_apk, zip, elf]
+  desc: Encoded Android loader with native stage writer
+  crit: hostile
+  conf: 0.995
+  all:
+  - id: micro-behaviors/os/module/load/class::encoded-application-swap-loader
+  - id: objectives/execution/staging/store::jni-export-file-api-clues
+  - id: metadata/binary/layout/entropy::elf-high-entropy-data-large-or-string-sparse
+
+- id: encoded-delimited-native-stage-loader
+  for: [android_apk, zip, elf]
+  desc: Delimited encoded Android loader with native stage writer
+  crit: hostile
+  conf: 0.995
+  all:
+  - id: micro-behaviors/os/module/load/class::encoded-delimited-application-swap-loader
+  - id: objectives/execution/staging/store::jni-export-file-api-clues
+  - id: metadata/binary/layout/entropy::elf-high-entropy-data-large-or-string-sparse
+
+- id: encoded-hqjgwjslwxj-native-stage-loader
+  for: [android_apk, zip, elf]
+  desc: Delimited encoded Android loader with native stage writer
+  crit: hostile
+  conf: 0.995
+  all:
+  - id: micro-behaviors/os/module/load/class::encoded-hqjgwjslwxj-application-swap-loader
+  - id: micro-behaviors/os/module/load/class::jni-export-dex-file-api-clues
+  - id: metadata/binary/layout/entropy::elf-high-entropy-data-large-or-string-sparse
+
+- id: staged-loader-with-push-control
+  desc: Staged Android loader with push and background control hooks
+  for: [apk, zip, dex]
+  crit: hostile
+  conf: 0.99
+  all:
+  - id: objectives/execution/payload/module-load/embedded::staged-dex-loader
+  - id: well-known/lib/cloud/firebase-messaging::firebase-messaging-event
+  any:
+  - id: micro-behaviors/os/service/daemon::android-foreground-service-permission
+  - id: micro-behaviors/os/message/intent::connectivity-change-receiver
+  - id: micro-behaviors/communications/http/client/configure::cleartext-traffic-enabled
+  needs: 2
+
+- id: android-opaque-asset-dex-loader
+  desc: Android opaque asset DEX loader
+  crit: suspicious
+  conf: 0.97
+  for: [apk, binaries, zip]
+  ref: sha256:093c727149837d576d10f843edce933436efe648e74b9008ccd91badf197fc5c
+  scope: outer
+  all:
+  - id: metadata/package/files/mobile-package::android-apk-opaque-loader-layout
+  - id: micro-behaviors/os/module/load/class::dynamic-dex-loading
+  - id: micro-behaviors/data/archive/extract/zip::jvm-zipfile-class-reference
+  any:
+  - id: micro-behaviors/process/lifecycle/initialize::attach-base-context
+  - id: micro-behaviors/data/decompress/gzip::gzip-decompress
+  - id: metadata/import/jvm::jvm-fileoutputstream-bytecode
+  downgrade:
+    all:
+    - id: micro-behaviors/os/telemetry/activity::appsflyer-event-endpoint
+    - id: metadata/package/files/mobile-package::apk-multiple-secondary-dex
+    - id: metadata/package/files/mobile-package::apk-face-landmarker-model
+  needs: 2
+
+  # A hostile in-memory loader claim needs the package to look like a loader
+  # in the first place. The opaque-layout leg (nonstandard archive layout with
+  # opaque loader assets) is the same admission its sibling
+  # android-opaque-asset-dex-loader uses; without it, stock androidx.webkit
+  # carries the InMemoryDexClassLoader descriptor for nearly every modern app
+  # and the AppComponentFactory surface is the stock androidx factory, so the
+  # bare two-leg co-occurrence matched ordinary apps (Google's Play-integrity
+  # DroidGuard module and ByteDance's APM/ads stack are recognized loader
+  # contexts in the advertising exceptions).
+- id: android-app-component-in-memory-dex-loader
+  desc: Opaque package hooks AppComponentFactory for in-memory DEX
+  crit: hostile
+  conf: 0.99
+  attack: T1027,T1129,T1406
+  for: [apk, zip, dex]
+  all:
+  - id: metadata/package/files/mobile-package::android-apk-opaque-loader-layout
+  - id: micro-behaviors/os/module/load/class::android-in-memory-asset-dex-loader
+  - id: micro-behaviors/os/application/hook/event::android-app-component-factory-instantiate-surface
+
+- id: android-poisoned-archive-in-memory-dex-loader
+  desc: Path-poisoned APK runs an in-memory asset DEX loader
+  crit: hostile
+  conf: 0.995
+  attack: T1027,T1406
+  for: [apk, zip, dex]
+  all:
+  - id: objectives/anti-static/pack/archive::apk-path-poisoned-payload-table
+  - id: micro-behaviors/os/module/load/class::android-in-memory-asset-dex-loader
+
+- id: android-opaque-loader-control-surface
+  for: [android_apk, zip, xml]
+  desc: Hidden Android loader with install and storage control
+  crit: hostile
+  conf: 0.995
+  attack: T1129
+  all:
+  - id: objectives/execution/payload/module-load/embedded::android-opaque-asset-dex-loader
+  - id: metadata/permission/management::android-install-packages-permission-reference
+  - id: micro-behaviors/os/privilege/manifest::manage-external-storage
+  - id: micro-behaviors/os/privilege/paths::android-root-check
+  any:
+  - id: micro-behaviors/os/privilege/manifest::bind-notification-listener
+  - id: micro-behaviors/os/privilege/manifest::package-usage-stats
+
+- id: android-dex-zip-native-loader
+  desc: Android staged DEX/native loader with an opaque payload asset
+  crit: suspicious
+  conf: 0.97
+  for: [apk, binaries]
+  ref: sha256:093c727149837d576d10f843edce933436efe648e74b9008ccd91badf197fc5c
+  all:
+  - id: micro-behaviors/os/module/load/class::dynamic-dex-and-native-loading
+  - id: micro-behaviors/data/archive/extract/zip::jvm-zipfile-class-reference
+  - id: micro-behaviors/process/lifecycle/initialize::attach-base-context
+  any:
+  - id: metadata/package/files/mobile-package::android-apk-opaque-loader-layout
+  - id: metadata/package/files/android-assets::apk-asset-dex-member
+  unless:
+  - id: metadata/package/files/mobile-package::appsflyer-internal-opaque-asset-member
+
+- id: android-split-native-loader-bundle
+  desc: Android split native loader bundle
+  crit: suspicious
+  conf: 0.96
+  for: [apk, binaries, zip]
+  ref: sha256:093c727149837d576d10f843edce933436efe648e74b9008ccd91badf197fc5c
+  scope: outer
+  all:
+  - id: metadata/package/files/mobile-package::xapk-opaque-consonant-jni-split-pair
+  - id: micro-behaviors/os/module/load/class::dynamic-dex-and-native-loading
+  - id: micro-behaviors/data/archive/extract/zip::jvm-zipfile-class-reference
+  any:
+  - id: micro-behaviors/process/lifecycle/initialize::attach-base-context
+  - id: micro-behaviors/os/privilege/paths::android-root-check
+  - id: micro-behaviors/process/interpreter/runtime/jvm::java-runtime-class-getter-exec-text-context
+  needs: 1
+

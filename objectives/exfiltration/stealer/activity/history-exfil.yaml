@@ -15,25 +15,25 @@ composite_rules:
   crit: hostile
   conf: 0.95
   all:
-  - id: micro-behaviors/communications/http/url/navigation::url-object-host-read
-  - id: micro-behaviors/process/hook/webextension::chrome-webrequest-pre-request
+  - id: micro-behaviors/communications/url/navigation-http::url-object-host-read
+  - id: micro-behaviors/communications/http/intercept::chrome-webrequest-pre-request
   - id: micro-behaviors/communications/http/request/client::javascript-http-request-channel
-  - id: micro-behaviors/data/db/web-storage::browser-local-storage-interfaces
+  - id: micro-behaviors/data/db/access::browser-local-storage-interfaces
   unless:
-  - id: micro-behaviors/process/hook/webextension::content-filter-request-blocking
+  - id: micro-behaviors/communications/http/intercept::content-filter-request-blocking
   - id: well-known/app/ai/browser-agent/webbrain::webbrain-ai-agent-context
   - id: well-known/dual-use/tunnel/vpn-browser::vpn-browser-extension-context
     # A download-manager companion hands the media URL to an app on
     # 127.0.0.1. That hop is not a remote history upload.
   - id: micro-behaviors/communications/ip/endpoint::fetch-loopback-http-url
-  - id: micro-behaviors/communications/http/url/host::loopback-client-url-cooccurrence
+  - id: micro-behaviors/communications/url/host/http::loopback-client-url-cooccurrence
   any:
   - id: micro-behaviors/data/serialize/json::visited-url-before-json-serialization
   - id: micro-behaviors/data/serialize/json::json-serialization-before-visited-url
-  - id: micro-behaviors/communications/http/request/body::visited-url-before-request-body
-  - id: micro-behaviors/communications/http/request/body::request-body-before-visited-url
-- id: extension-history-api-harvest-exfil
-  desc: Uploads browser history to a remote service
+  - id: micro-behaviors/communications/http/request/body/application-state::visited-url-before-request-body
+  - id: micro-behaviors/communications/http/request/body/application-state::request-body-before-visited-url
+- id: extension-history-transfer-cooccurrence
+  desc: History, storage and HTTP client co-occur
     # A history-search extension may intentionally send user-selected records
     # to a user-configured AI service. The collection and upload remain
     # security-relevant, but this shape alone does not establish theft.
@@ -43,12 +43,14 @@ composite_rules:
   near_bytes: 16384
   all:
   - id: micro-behaviors/communications/http/request/client::javascript-http-request-channel
-  - id: micro-behaviors/data/db/web-storage::browser-local-storage-interfaces
+  - id: micro-behaviors/data/db/access::browser-local-storage-interfaces
   any:
-  - id: micro-behaviors/data/db/access::history-search
-  - id: micro-behaviors/data/db/access::history-get-visits
-  - id: micro-behaviors/data/db/access::top-sites-get
+  - id: micro-behaviors/data/db/read/records::history-search
+  - id: micro-behaviors/data/db/read/records::history-get-visits
+  - id: micro-behaviors/data/db/read/records::top-sites-get
   unless:
+  # The specific history-to-JSON-POST finding already reports this file.
+  - id: extension-history-post-exfil
 - id: all-url-pageview-record-upload
   desc: All-URL extension uploads recorded pageview URLs and referrers
   crit: suspicious
@@ -57,11 +59,41 @@ composite_rules:
   scope: archive
   for: [crx, xpi, zip, chrome-manifest, javascript]
   all:
-  - id: metadata/permission/manifest::permission-all-urls
+  - id: metadata/permission/host::permission-all-urls
   - id: micro-behaviors/os/telemetry/activity::pageview-record-fields
-  - id: micro-behaviors/process/hook/webextension::webrequest-completed-listener
+  - id: micro-behaviors/communications/http/intercept::webrequest-completed-listener
   - id: micro-behaviors/communications/http/request/client::js-fetch-call
 
   # Require a navigation listener as well as the content-script relay.  A
   # content script may read its own host for ordinary site-specific UI; the
   # listener is the evidence that the extension observes navigation events.
+
+- id: extension-history-post-exfil
+  desc: History access and remote JSON POST
+  crit: suspicious
+  conf: 0.98
+  scope: file
+  attack: T1041,T1555
+  mbc: E1041
+  all:
+  - id: micro-behaviors/data/db/read/records::history-search
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/url/host/domain-http::js-remote-host-url
+  - id: micro-behaviors/communications/http/request/json::fetch-direct-json-post-body
+
+- id: jvm-browser-bookmark-http-exfil
+  desc: JVM sends browser bookmarks
+  crit: hostile
+  conf: 0.98
+  for: [class, java_class, jar]
+  scope: archive
+  attack: T1217,T1041
+  all:
+    - id: micro-behaviors/fs/path/application/browser/storage::safari-bookmarks-plist-path
+    - id: micro-behaviors/fs/read/file/content/unspecified::java-readallbytes
+  any:
+    - id: micro-behaviors/communications/http/post
+    - id: micro-behaviors/communications/http/client/
+  needs: 1
+  unless:
+    - id: metadata/path/directory::test-directory-component

@@ -21,36 +21,6 @@ defaults:
   crit: suspicious
   conf: 0.93
 traits:
-  - id: split-scheme-separator-fragment
-    desc: URL scheme separator split mid-token
-    unless:
-      - id: well-known/app/system/anthropic-cybersecurity-skills::defensive-cybersecurity-skills-repository
-      - id: metadata/path::test-directory-component
-      - id: metadata/package/testing/presence/path::test-fixture-directory-path
-      # Phishing URL signatures encode the split-scheme pattern as detection
-      # content.
-      - id: well-known/tool/detection/malware-signature-table::antivirus-signature-database
-      # Split SVG namespace URI ("http:" + "//www.w3.org/2000/svg"), not a
-      # hidden remote fetch target.
-      - type: text
-        substr: www.w3.org/2000/svg
-      # Parsers often search for a custom scheme marker and add the marker's
-      # length to the returned index. The string is an intact search key, not
-      # a fragment used to assemble a hidden URL.
-      - type: text
-        regex: 'indexOf\(''[a-z]{1,4}://''\)[\s\S]{0,100}\+\s?''[a-z]{1,4}://''\.length'
-    if:
-      # `& "s://"` -- one or two letters of the scheme left attached to the
-      # separator and glued on with a concatenation operator. A whole
-      # `"http://"` has four letters and does not match; a one- or two-letter
-      # stub only exists because the scheme was cut in the middle. The
-      # `':' + '/'` seam must be a bare slash fragment: `':' + '/src'` is a
-      # host:container volume spec, not a scheme separator.
-      type: text
-      regex: '(?i)[&+]\s*["''][a-z]{1,2}://["'']|["''][a-z]{0,4}:\s*["'']\s*[+&]\s*["''](//|/["''])'
-
-    not:
-      - substr: 'ws://'
   - id: line-break-scheme-separator-fragment
     desc: URL scheme separator split by line break
     # Web-executable scope only: the motivating shape is a line-broken URL in
@@ -65,7 +35,7 @@ traits:
       - id: metadata/file/format/markup::adblock-filter-list
       # A URL-parser test suite lists malformed URLs ("http:// shouldfail.com",
       # ":// should fail") on separate lines as its inputs.
-      - id: metadata/path::test-directory-component
+      - id: metadata/path/directory::test-directory-component
     if:
       type: text
       regex: '(?i)\b[a-z]{1,3}\s*[\r\n]+\s*://'
@@ -77,3 +47,33 @@ traits:
       # covered as a plain moniker, is not what matches here.
       type: text
       regex: '"[A-Za-z]{0,6}pt:ht[a-z]{0,3}"'
+  - id: listed-http-scheme-split-elements
+    desc: HTTP scheme split across adjacent list elements
+    # `['htt', 'ps', '://', host, path]` joined or concatenated at runtime.
+    # The cut falls inside the scheme word itself, so neither element is a
+    # usable token; code that keeps URLs as data writes `https://` whole.
+    for: [javascript, typescript, python, powershell, ruby, php]
+    unless:
+      - id: metadata/path/directory::test-directory-component
+    if:
+      type: text
+      # The pieces must recombine into `http`/`https`: `'h','ttp'`, `'ht','tps'`,
+      # `'htt','ps'`. Unrelated one-letter lists (`['h', 'p']`) do not.
+      regex: '["''](h["'']\s*,\s*["'']ttps?|ht["'']\s*,\s*["'']tps?|htt["'']\s*,\s*["'']ps?)(:(//)?)?["'']'
+composite_rules:
+  # One script both hides the URL it requests and renames its own variables
+  # into `_0x` noise. Either alone has a weak benign story (a test of URL
+  # parsing, a stray obfuscator name); together they conceal where the
+  # script talks to, whether it runs from an install hook or on import.
+  - id: hex-renamed-split-scheme-request
+    desc: Hex-renamed script requests split-scheme URL
+    crit: hostile
+    conf: 0.93
+    for: [javascript, typescript]
+    all:
+      - id: listed-http-scheme-split-elements
+      - id: micro-behaviors/communications/http/request
+    any:
+      - id: metadata/lang/source/naming/variable::short-hex-variable-names
+      - id: metadata/lang/source/naming/variable::hex-variable-names
+      - id: metadata/lang/source/naming/function/name-form::hex-function-names

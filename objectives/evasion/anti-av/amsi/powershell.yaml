@@ -7,11 +7,12 @@ defaults:
   mbc: E1562
 traits:
 - id: amsi-init-failed-reflection
-  desc: PowerShell AMSI reflection disables scanning
+  desc: AMSI reflection field-write sequence
+  for: [powershell, ruby]
   crit: suspicious
   conf: 0.98
   unless:
-  - id: metadata/file/profile/markup::technique-catalog-notes
+  - id: metadata/package/documentation/security-exercise::technique-catalog-notes
   if:
     type: text
     regex: (?is)AmsiUtils.{0,180}amsiInitFailed.{0,140}SetValue\s*\(
@@ -25,13 +26,11 @@ traits:
   if:
     type: text
     substr: U3lzdGVtLk1hbmFnZW1lbnQuQXV0b21hdGlvbi5BbXNpVXRpbHM=
-  unless:
-  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
   downgrade:
     scope: archive
     any:
     - id: metadata/package/testing/presence/path::archive-test-directory-member-path
-    - id: metadata/filename/name-form::sha256-hex-basename
+    - id: metadata/filename/shape::sha256-hex-basename
     - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 - id: base64-amsi-init-failed-field
   desc: Base64-encoded AMSI failure field
@@ -43,13 +42,11 @@ traits:
   if:
     type: text
     substr: YW1zaUluaXRGYWlsZWQ=
-  unless:
-  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
   downgrade:
     scope: archive
     any:
     - id: metadata/package/testing/presence/path::archive-test-directory-member-path
-    - id: metadata/filename/name-form::sha256-hex-basename
+    - id: metadata/filename/shape::sha256-hex-basename
     - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 - id: amsi-dll-char-concat
   desc: AMSI DLL character concat
@@ -122,7 +119,7 @@ traits:
   crit: suspicious
   conf: 0.95
   unless:
-  - id: metadata/file/profile/markup::technique-catalog-notes
+  - id: metadata/package/documentation/security-exercise::technique-catalog-notes
   if:
     type: text
     regex: \*[a-z]{0,4}iUtils
@@ -173,6 +170,47 @@ traits:
     type: text
     regex: \*F?ailed.{0,2}\)?\s*\)
     case_insensitive: true
+- id: amsi-reflection-init-flag-tampering
+  for: [powershell, ruby]
+  desc: AMSI initialization flag forced by reflection
+  crit: hostile
+  conf: 0.99
+  if:
+    # Bind the true write to the failure-field lookup, rather than any
+    # unrelated static-field write elsewhere in a generator.
+    type: yara
+    source: |
+      rule amsi_reflection_init_flag_tampering {
+        strings:
+          $type = "AmsiUtils" nocase
+          $write = /GetField\s*\([^;]{0,180}amsiInitFailed[^;]{0,180}\)\s*\.SetValue\s*\(\s*\$null\s*,\s*\$true\s*\)/ nocase
+          $field = /\$[\w%{}]+[ \t]*=[^;]{0,160}GetField\s*\([^;]{0,180}amsiInitFailed[^;]{0,180}\)/ nocase
+          $setter = /\$[\w%{}]+\.SetValue\s*\(\s*\$null\s*,\s*\$true\s*\)/ nocase
+          $var = /\$[\w%{}]+/
+        condition:
+          for any w in (1..#write) : (
+            (@write[w] >= 400 and $type in (@write[w]-400..@write[w]))
+            or (@write[w] < 400 and $type in (0..@write[w]))
+          ) or
+          for any f in (1..#field) : (
+            ((@field[f] >= 400 and $type in (@field[f]-400..@field[f])) or
+             (@field[f] < 400 and $type in (0..@field[f]))) and
+            for any s in (1..#setter) : (
+              @setter[s] > @field[f] and @setter[s] < @field[f]+800 and
+              for any p in (1..#var) : (
+                @var[p] == @field[f] and
+                for any q in (1..#var) : (
+                  @var[q] == @setter[s] and !var[p] == !var[q] and
+                  for all k in (0..!var[p]-1) : (
+                    (uint8(@var[p]+k) | 32) == (uint8(@var[q]+k) | 32)
+                  )
+                )
+              )
+            )
+          )
+      }
+  unless:
+  - id: metadata/package/documentation/security-exercise::technique-catalog-notes
 composite_rules:
 - id: base64-amsi-init-failed-reflection-bypass
   desc: Encoded PowerShell AMSI reflection bypass
@@ -189,21 +227,18 @@ composite_rules:
   all:
   - id: base64-amsiutils-type-name
   - id: base64-amsi-init-failed-field
-  - id: micro-behaviors/metaprogramming/reflection::dotnet-type-field-setvalue
-  - id: micro-behaviors/metaprogramming/reflection::powershell-setvalue-null-true
+  - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::dotnet-type-field-setvalue
+  - id: micro-behaviors/metaprogramming/reflection/modify/member::powershell-setvalue-null-true
   unless:
   - id: metadata/package/testing/presence/path::archive-test-directory-member-path
-  - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
-  - id: well-known/app
-  - id: well-known/tool
   downgrade:
     scope: archive
     any:
     - id: metadata/package/testing/presence/path::archive-test-directory-member-path
     - id: metadata/package/testing/presence/corpus::binary-test-fixture-member
 - id: powershell-normalize-replace-deobfuscation
-  desc: PowerShell Normalize replace deobfuscation
-  crit: suspicious
+  desc: PowerShell Normalize and replace references
+  crit: notable
   conf: 0.93
   for:
   - powershell
@@ -215,11 +250,6 @@ composite_rules:
   all:
   - id: metadata/lang/source/syntax/call/invocation::decoded-normalize-call
   - id: metadata/lang/source/syntax/operator::decoded-powershell-replace
-  unless:
-  - id: metadata/file/extension/asset::javascript-source-map-path
-  - id: metadata/file/format/source-map::sourcemap
-  - id: metadata/file/format/source-map::sourcemap-sources-content
-  - id: well-known/app/communication/thunderbird::firefox-omni-runtime-path
 - id: powershell-char-byte-build-chain
   desc: PowerShell char-byte string builder
   crit: suspicious
@@ -242,8 +272,8 @@ composite_rules:
   conf: 0.98
   all:
   - id: objectives/anti-static/obfuscation/string/broken-api::truncated-virtualprotect-name
-  - id: micro-behaviors/mem/c-runtime/functions::marshal-copy-via-type-variable
-  - id: micro-behaviors/metaprogramming/generation::powershell-add-type-variable
+  - id: micro-behaviors/mem/copy::marshal-copy-via-type-variable
+  - id: micro-behaviors/metaprogramming/generation/compile::powershell-add-type-variable
   any:
   - id: amsi-dll-char-concat
   - id: amsi-open-session-concat
@@ -269,16 +299,7 @@ composite_rules:
   conf: 0.98
   all:
   - id: amsi-init-failed-reflection
-  - id: micro-behaviors/metaprogramming/generation::powershell-base64-scriptblock-construction
-- id: amsi-reflection-init-flag-tampering
-  desc: AMSI initialization flag forced by reflection
-  crit: hostile
-  conf: 0.99
-  all:
-  - id: amsi-init-failed-reflection
-  - id: objectives/evasion/anti-av/amsi::amsi-bypass-amsiutils-setvalue
-  unless:
-  - id: metadata/file/profile/markup::technique-catalog-notes
+  - id: micro-behaviors/metaprogramming/generation/function::powershell-base64-scriptblock-construction
 - id: amsi-wildcard-reflection-bypass
   desc: AMSI flag located by wildcard reflection
   crit: hostile
@@ -290,15 +311,15 @@ composite_rules:
   - id: nonpublic-static-field-lookup
   - id: wildcard-init-failed-fragment
   unless:
-  - id: metadata/file/profile/markup::technique-catalog-notes
+  - id: metadata/package/documentation/security-exercise::technique-catalog-notes
 - id: amsi-hashed-assembly-field-bypass
   desc: Hashed assembly walk sets AMSI failed
   crit: hostile
   conf: 0.97
   all:
-  - id: micro-behaviors/process/interpreter/reflection/runtime::powershell-appdomain-getassemblies
+  - id: micro-behaviors/metaprogramming/reflection/inspect/class/assembly::powershell-appdomain-getassemblies
   - id: nonpublic-static-field-lookup
-  - id: micro-behaviors/metaprogramming/reflection::powershell-setvalue-null-true
+  - id: micro-behaviors/metaprogramming/reflection/modify/member::powershell-setvalue-null-true
 - id: amsi-context-writeint32-bypass
   desc: AMSI AmsiUtils context field patched
   crit: hostile
@@ -307,7 +328,7 @@ composite_rules:
   - id: amsiutils-type-token
   - id: amsicontext-field-token
   unless:
-  - id: metadata/file/profile/markup::technique-catalog-notes
+  - id: metadata/package/documentation/security-exercise::technique-catalog-notes
 - id: amsi-context-patch-constant-bypass
   desc: AMSI context patched with 0x41414141
   crit: hostile
@@ -322,3 +343,15 @@ composite_rules:
   all:
   - id: amsiutils-type-token
   - id: amsi-context-patch-constant
+- id: amsi-context-intptr-zero-bypass
+  desc: AMSI context field zeroed via reflection
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: micro-behaviors/metaprogramming/reflection/modify/member::powershell-setvalue-intptr-zero
+  any:
+  - id: amsicontext-field-token
+  - id: amsiutils-type-token
+  - id: micro-behaviors/metaprogramming/reflection/inspect/class/assembly::powershell-psobject-assembly-gettype
+  unless:
+  - id: metadata/package/documentation/security-exercise::technique-catalog-notes

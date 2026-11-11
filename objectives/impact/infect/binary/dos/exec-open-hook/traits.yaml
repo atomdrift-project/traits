@@ -26,6 +26,38 @@ traits:
       type: hex
       pattern: "81 3F 4F 4D [2-24] 81 3F 58 45"
 
+  # Register form of the same target filter: the extension's first two
+  # letters are loaded and tested with CMP AX,'EX' and CMP AX,'CO' (third
+  # letter checked separately), selecting both program formats (Larry.491).
+  - id: dos-filename-com-exe-reg-cmp
+    desc: Compares extension in AX to COM, EXE
+    crit: notable
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule dos_filename_com_exe_reg_cmp {
+          meta:
+            filetypes = "dos_com,static-lib,data"
+          strings:
+            $ec = { 3D 45 58 ( 74 | 75 ) [1-20] 3D 43 4F ( 74 | 75 ) }
+            $ce = { 3D 43 4F ( 74 | 75 ) [1-20] 3D 45 58 ( 74 | 75 ) }
+          condition:
+            any of them
+        }
+
+  # Handler uppercases the filename extension with AND-mask stores, then
+  # compares it case-insensitively against "COM": the target selector of a
+  # COM infector. AND DFDF/DF folds both letter cases, and the trailing
+  # zero in the second compare pins the end of the ASCIIZ name.
+  - id: dos-filename-com-uppercase-filter
+    desc: Uppercases extension and matches COM
+    crit: notable
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "81 24 DF DF [0-4] AD 3D 43 4F [0-16] 3D 4D 00"
+
   # Swallows INT 24h critical errors so write-protected disks stay silent.
   - id: dos-ivt-int24-set-direct
     desc: Writes INT 24h vector into the IVT
@@ -130,7 +162,7 @@ composite_rules:
     conf: 0.95
     all:
       - id: dos-handler-xchg-exec-filter
-      - id: micro-behaviors/fs/file/open::dos-open-update-int
+      - id: micro-behaviors/fs/file/open/write::dos-open-update-int
       - id: dos-own-image-append-rewind-entry-write
 
   # When the resident EXEC path opens an existing host for update, reads its
@@ -142,10 +174,10 @@ composite_rules:
     conf: 0.96
     all:
       - id: micro-behaviors/os/msdos/interrupt::dos-int21-exec-intercept
-      - id: micro-behaviors/fs/file/open::dos-int21-open-update-saved-vector
+      - id: micro-behaviors/fs/file/open/unspecified::dos-int21-open-update-saved-vector
       - id: micro-behaviors/fs/read/file/handle::dos-int21-read-saved-vector
       - id: micro-behaviors/fs/file/seek::dos-int21-seek-eof-saved-vector
-      - id: micro-behaviors/fs/write/file/handle::dos-int21-write-saved-vector
+      - id: micro-behaviors/fs/write/file/handle/int21::dos-int21-write-saved-vector
       - id: metadata/binary/code/control-transfer::entry-near-jump-bytes
 
   # First-generation copy of the same appender: the dropper has no entry jump
@@ -160,11 +192,11 @@ composite_rules:
       - id: micro-behaviors/os/msdos/interrupt::dos-int21-exec-intercept
       - id: micro-behaviors/fs/read/file/handle::dos-int21-read-saved-vector
       - id: micro-behaviors/fs/file/seek::dos-int21-seek-eof-saved-vector
-      - id: micro-behaviors/fs/write/file/handle::dos-int21-write-saved-vector
+      - id: micro-behaviors/fs/write/file/handle/int21::dos-int21-write-saved-vector
       - id: dos-saved-vector-rewind-header-write
     any:
-      - id: micro-behaviors/fs/file/open::dos-int21-open-update-saved-vector
-      - id: micro-behaviors/fs/file/open::dos-open-update-far
+      - id: micro-behaviors/fs/file/open/unspecified::dos-int21-open-update-saved-vector
+      - id: micro-behaviors/fs/file/open/write::dos-open-update-far
 
   - id: dos-ivt-exec-open-infector
     desc: Hooks DOS exec and open to infect
@@ -177,6 +209,26 @@ composite_rules:
       - id: dos-filename-com-exe-cmp
       - id: dos-ivt-int24-set-direct
 
+  # Resident OPEN-only hook: intercepts AH=3Dh opens of COM programs, opens
+  # the victim read-write through the saved-vector helper, appends its own
+  # body at the host end and rewrites the entry with a short jump — a
+  # parasitic infector that spreads when files are opened, not only when
+  # they are executed. Each required leg is content-derived; none is a name,
+  # size or count.
+  - id: dos-ivt-open-hook-com-appender
+    desc: DOS open hook appends itself to COM files
+    crit: hostile
+    conf: 0.95
+    for: [dos_com, data]
+    all:
+      - id: micro-behaviors/os/msdos/interrupt::dos-int21-open-filter-trigger
+      - id: micro-behaviors/fs/file/open/write::dos-open-update-e8
+      - id: objectives/impact/infect/binary/dos/interrupt::dos-helper-seek-append-entry-write
+    any:
+      - id: micro-behaviors/os/msdos/interrupt::dos-ivt-int21-set-direct
+      - id: micro-behaviors/os/msdos/interrupt::dos-low-copy-vector-store
+    needs: 1
+
   # Resident overwriter: on each EXEC the handler rewinds the program file
   # and writes the virus image from 0100h over its start.
   - id: dos-resident-exec-image-overwriter
@@ -185,7 +237,7 @@ composite_rules:
     conf: 0.95
     all:
       - id: micro-behaviors/os/msdos/interrupt::dos-int21-exec-intercept
-      - id: micro-behaviors/fs/write/file/handle::dos-seek-start-own-image-write
+      - id: micro-behaviors/fs/write/file/binary::dos-seek-start-own-image-write
     any:
       - id: micro-behaviors/os/msdos/interrupt::dos-set-int21-vector
       - id: micro-behaviors/os/msdos/interrupt::dos-ivt-int21-set-direct
@@ -204,7 +256,7 @@ composite_rules:
     conf: 0.96
     all:
       - id: dos-exec-resident-image-write
-      - id: micro-behaviors/fs/write/file/handle::dos-int21-write-call
+      - id: micro-behaviors/fs/write/file/handle/int21::dos-int21-write-call
 
   - id: dos-exec-writeonly-overwrite-hook
     desc: EXEC hook overwrites via write-only open
@@ -212,7 +264,7 @@ composite_rules:
     conf: 0.97
     all:
       - id: dos-exec-writeonly-image-write
-      - id: micro-behaviors/fs/write/file/handle::dos-int21-write
+      - id: micro-behaviors/fs/write/file/handle/int21::dos-int21-write
   - id: dos-resident-writeonly-exec-overwriter
     desc: Installs an EXEC hook that overwrites
     crit: hostile

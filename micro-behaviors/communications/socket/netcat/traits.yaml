@@ -28,12 +28,8 @@ traits:
       # assignment such as `nc = 2` is not interpreted as a connection.
       regex: '(?m)(^|[;&|(`"''])\s*(/(usr/)?bin/)?nc\s+(-[A-Za-z]+|[A-Za-z0-9_.$:-]+\s+\d{1,5})\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: well-known/tool/detection/security-scanner::auditr-defensive-signature-catalog
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+      - id: micro-behaviors/os/security/scan/signature::scanner-module-wording-context
   - id: netcat
     desc: netcat command text
     if:
@@ -41,17 +37,24 @@ traits:
       regex: \bnetcat\s+(-[a-zA-Z]+|[\w./:][\w./:-]*\s+\d{1,5})\b
     unless:
       - id: metadata/package/vendor::bitdefender-ecnet-telemetry
-      - id: metadata/file/catalog/identity/
-  - id: nc-connect-endpoint
-    desc: Netcat command text with endpoint arguments
+  - id: nc-connect-literal-port
+    desc: Netcat command text with numeric port
     crit: notable
     conf: 0.95
     for: [shell, package.json, javascript, typescript, scripts, text]
     if:
       type: text
-      # A connect target distinguishes an outbound relay from `nc -l -p PORT`,
-      # which exposes a local listener and belongs with bind-shell behavior.
-      regex: '(?m)(^|[;&|(`"'']|\\n) *(nc(at)?|netcat) +(-[a-km-z]+ +){0,5}[\w.$-]+ +(\d+|\$\w+)\b'
+      # Require the host token to start with an identifier/digit/$ character so
+      # listen flags (`nc -l 4444`, `nc -lvnp 4444`) cannot match as hostnames.
+      regex: '(?m)(^|[;&|(`"'']|\\n) *(n(et)?cat|nc) +(-[a-km-z]+ +){0,5}[\w$][\w.$-]* +\d+\b'
+  - id: nc-connect-variable-port
+    desc: Netcat command text with variable port
+    crit: notable
+    conf: 0.95
+    for: [shell, package.json, javascript, typescript, scripts, text]
+    if:
+      type: text
+      regex: '(?m)(^|[;&|(`"'']|\\n) *(n(et)?cat|nc) +(-[a-km-z]+ +){0,5}[\w$][\w.$-]* +\$\w+\b'
   - id: nc-brace-endpoint-slots
     desc: Netcat command with brace endpoint slots
     crit: notable
@@ -61,14 +64,19 @@ traits:
       type: text
       regex: 'nc +\{[^{}\n]{0,24}\} +\{[^{}\n]{0,24}\}'
     unless:
-      - id: metadata/file/format/structured::serialized-news-article-catalog
+      - id: metadata/file/format/news::serialized-news-article-catalog
       - id: nc-listen-mode
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      - id: metadata/file/catalog/identity/
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
+  - id: nc-exec-option-connect-endpoint
+    desc: Netcat exec option precedes connect endpoint
+    crit: notable
+    conf: 0.95
+    for: [shell, package.json, javascript, typescript, scripts, text]
+    if:
+      type: text
+      # -e consumes an executable before the actual host and port. Require a
+      # non-option start on the host token so `nc -e /bin/sh -l 5555` is excluded.
+      regex: '(?m)(^|[;&|(`"'']) *(n(et)?cat|nc) +-(e|-exec) +\S+ +[\w$][\w.$-]* +\d+\b'
   - id: netcat-keyword
     desc: netcat name reference
     crit: notable
@@ -85,11 +93,7 @@ traits:
       type: text
       regex: '\b(toybox|busybox[0-9A-Za-z._-]*)\s+nc\s+\S+\s+\d{1,5}\b'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
   - id: nc-pipe
     desc: Pipe into netcat command
     # Neutral shell pipeline into nc; reverse-shell intent requires additional
@@ -101,11 +105,7 @@ traits:
       type: text
       regex: '\|\s*(/(usr/)?bin/)?nc\s'
     unless:
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
       - type: text
         regex: '\becho\b.{0,16}\|\s*(/(usr/)?bin/)?nc\b'
   - id: nc-listen-mode
@@ -130,14 +130,25 @@ traits:
       regex: '\bnc\b[^\n]{0,32}"?\$[A-Za-z0-9_{}]+"?\s+"?\$[A-Za-z0-9_{}]+"?'
 
 composite_rules:
+  - id: nc-connect-endpoint
+    desc: Netcat command text with endpoint arguments
+    for: [shell, package.json, javascript, typescript, scripts, text]
+    crit: notable
+    conf: 0.95
+    any:
+      - id: nc-connect-literal-port
+      - id: nc-connect-variable-port
+
   - id: nc-outbound-target
     desc: Netcat text names an outbound target
+    for: [scripts, binaries, package.json, text]
     crit: notable
     conf: 0.95
     any:
       - id: nc-connect-endpoint
       - id: nc-brace-endpoint-slots
       - id: nc-variable-endpoint
+      - id: nc-exec-option-connect-endpoint
 
   - id: nc
     desc: nc command text

@@ -56,9 +56,9 @@ composite_rules:
     mbc: B0032,E1059
     all:
       - id: objectives/evasion/anti-av/amsi::amsi-memory-patch-hostile
-      - id: micro-behaviors/crypto/symmetric/xor/loop::cil-indexed-key-byte-array-xor-loop
+      - id: micro-behaviors/data/bitwise/xor-forms/indexed::cil-indexed-key-byte-array-xor-loop
       - id: micro-behaviors/data/codec::dotnet-gzip-compression
-      - id: micro-behaviors/process/interpreter/reflection/runtime::dotnet-entrypoint-launch-members
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::dotnet-entrypoint-launch-members
 
   - id: html-reversed-base64-assembly-stage
     desc: HTA reverses Base64 assembly data
@@ -70,7 +70,7 @@ composite_rules:
     all:
       - id: html-char-array-stage
       - id: html-array-reverse
-      - id: metadata/lang/source/naming/resource::dotnet-frombase64string-text
+      - id: micro-behaviors/data/decode/base64/reference::dotnet-frombase64string-text
   - id: html-reflective-encoded-assembly-loader
     desc: HTA encoded reflective assembly loader
     crit: hostile
@@ -93,13 +93,13 @@ composite_rules:
     mbc: E1059
     near_bytes: 4096
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-class-token
       - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-currentdomain
-      - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
-      - id: micro-behaviors/metaprogramming/reflection::get-methods-token
-      - id: micro-behaviors/metaprogramming/reflection::invoke-member-token
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::load-member-token
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::gettypes-member-token
+      - id: micro-behaviors/metaprogramming/reflection/resolve::get-methods-token
+      - id: micro-behaviors/metaprogramming/reflection/invoke::invoke-member-token
 
   - id: dotnet-network-resource-method-loader
     desc: Downloads Base64 resource for reflective execution
@@ -111,90 +111,66 @@ composite_rules:
     # assembly image. The download, decode, and invoke of one stub land together.
     near_bytes: 1048576
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: micro-behaviors/communications/http/get::getstringasync
-      - id: metadata/lang/source/naming/resource::dotnet-frombase64string-text
+      - id: micro-behaviors/data/decode/base64/reference::dotnet-frombase64string-text
       - id: metadata/binary/resource/size::clr-resource-large
       # Mere co-occurrence is common in large IL-merged applications: an HTTP
       # client, credential/JSON Base64 decoding, resources, and library
       # reflection may all belong to unrelated subsystems. Require both access
       # to a managed resource and the explicit Assembly.Load + Invoke chain
       # before describing the combination as a reflective payload loader.
-      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: micro-behaviors/metaprogramming/reflection::dotnet-load-invoke-api-references
-      - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
+      - id: micro-behaviors/data/embedded/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/metaprogramming/reflection/resolve::dotnet-load-invoke-api-references
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::reflection-method-access
     unless:
       # Fiddler Classic is a signed .NET HTTP debugger. Its update client,
       # encoded resources, and reflection-based UI/scripting infrastructure
       # satisfy this generic loader shape without being a payload loader.
       - id: well-known/app/network/fiddler::fiddler-classic
-  - id: dotnet-assembly-load-delegate-invoke
-    desc: .NET assembly load delegate invocation
-    crit: suspicious
-    conf: 0.94
-    attack: T1620
-    mbc: E1059
-    all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: metadata/lang/compiler/managed::reflection-namespace
-      - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
-      - id: micro-behaviors/metaprogramming/reflection::get-methods-token
-      - id: micro-behaviors/metaprogramming/reflection::dotnet-create-delegate-reference
-      - id: micro-behaviors/process/interpreter/reflection/runtime::action-member-token
-    # Reflection.Emit (a code-generating host) is the softening context here
-    # and in the siblings below. The whole `managed/` directory was named
-    # instead, which also holds the `reflection-namespace` leg and pinned
-    # these rules to notable.
-    downgrade:
-      any:
-        - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/
-    unless:
-      - id: well-known/lib/vendor-sdk/hypertube::hypertube-benign-runtime-context
-      - id: well-known/lib/vendor-sdk/hypertube::netcore-assembly-basename
-      - id: well-known/lib/ui/devexpress/
-      # Plugin-host libraries reference Assembly.Load, GetTypes, GetMethods,
-      # CreateDelegate and Action as ordinary metadata tokens. A binary that
-      # names its product and version is not an anonymous loader stub.
-      - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
-
-  # Hex text of a PE image (DOS header and the DOS stub sentence) is a
-  # concealed executable stage. The delegate-invoke chain stays suspicious
-  # on its own because plugin hosts use it; encrypted-resource loaders miss
-  # this stage because hex text sits near entropy 4. A large managed
-  # resource co-occurs with that image and the invoke chain; this does not
-  # prove the decoded bytes are the argument to Assembly.Load.
-  # The invoke legs are inlined rather than naming the suspicious sibling:
-  # its product-identity exception answers "plugin host with VERSIONINFO",
-  # but a crypter stub fills a throwaway ProductName/FileVersion too, and a
-  # hex-text PE image is not something a versioned plugin host ships.
   - id: dotnet-hex-encoded-pe-delegate-loader
-    desc: Hex-encoded PE with reflective delegate invoke
-    crit: hostile
+    desc: Hex-encoded PE with reflection references
+    crit: suspicious
     conf: 0.97
     attack: T1027,T1620
     mbc: E1059
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: metadata/lang/compiler/managed::reflection-namespace
-      - id: micro-behaviors/process/interpreter/reflection/runtime::load-member-token
-      - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
-      - id: micro-behaviors/metaprogramming/reflection::get-methods-token
-      - id: micro-behaviors/metaprogramming/reflection::dotnet-create-delegate-reference
-      - id: micro-behaviors/process/interpreter/reflection/runtime::action-member-token
-      - id: metadata/file/encoded::hex-encoded-pe-image
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::load-member-token
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::gettypes-member-token
+      - id: micro-behaviors/metaprogramming/reflection/resolve::get-methods-token
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/construction::dotnet-create-delegate-reference
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::action-member-token
+      - id: metadata/file/encoding/hex::hex-encoded-pe-image
       - id: metadata/binary/resource/size::clr-resource-large
-    downgrade:
-      any:
-        - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/
-    unless:
-      - id: metadata/signed/platform/
-      - id: metadata/binary/installer/family/
-      - id: well-known/lib/vendor-sdk/hypertube::hypertube-benign-runtime-context
-      - id: well-known/lib/vendor-sdk/hypertube::netcore-assembly-basename
-      - id: well-known/lib/ui/devexpress/
+
+  # The suspicious hex/delegate rule above rests on name tokens and file-wide
+  # co-occurrence: a hex-text PE plus reflection references. This hostile rule
+  # additionally requires the compiled execution path that turns the stage
+  # into code: a managed-resource read, a manual hex-pair decode loop
+  # (Substring with radix-16 conversion at adjacent CIL call sites), a
+  # byte-buffer Assembly/AppDomain load, type/method discovery, and a
+  # delegate DynamicInvoke dispatch. Plugin hosts and resource-backed UI
+  # applications ship the tokens but not the hex-encoded stage together with
+  # its decode-and-invoke chain.
+  - id: dotnet-hex-pe-resource-reflective-loader
+    desc: Hex-encoded PE stage decoded and invoked in memory
+    crit: hostile
+    conf: 0.98
+    attack: T1027,T1140,T1620
+    mbc: E1059
+    all:
+      - id: metadata/lang/compiler/managed::dotnet-assembly
+      - id: metadata/binary/resource/size::clr-resource-large
+      - id: metadata/file/encoding/hex::hex-encoded-pe-image
+      - id: micro-behaviors/data/embedded/resource::dotnet-cil-resource-read-call
+      - id: micro-behaviors/data/decode/hex::cil-substring-radix16-byte-decode
+      - id: micro-behaviors/data/decode/charset::cil-encoding-getstring-call
+      - id: micro-behaviors/process/interpreter/runtime/clr::managed-assembly-load-api
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::gettypes-member-token
+      - id: micro-behaviors/metaprogramming/reflection/resolve::get-methods-token
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/construction::dotnet-delegate-dynamic-invoke-call
 
   # Hostile only when the reflective/decode chain is paired with the generic
   # Visual Studio template identity and a renamed on-disk PE. This keeps
@@ -206,12 +182,12 @@ composite_rules:
     conf: 0.97
     attack: "T1027.009,T1140,T1620,T1036.005"
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: metadata/build/manifest::pe-manifest-myapplication-template
       - id: metadata/binary/resource/size::clr-resource-large
-      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: metadata/lang/source/naming/resource::dotnet-frombase64string-text
-      - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
+      - id: micro-behaviors/data/embedded/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/data/decode/base64/reference::dotnet-frombase64string-text
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::reflection-method-access
       - id: metadata/binary/provenance/version-info::pe-basename-differs-from-original-filename
     unless:
       # Every leg above is a .NET #Strings metadata token, which a large
@@ -219,8 +195,7 @@ composite_rules:
       # assembly naming a product and version has the identity these
       # composites assume is absent.
       - id: objectives/evasion/masquerade/binary/loader::dotnet-template-product-identity-context
-      - id: metadata/signed/platform::microsoft
-      - id: metadata/binary/installer/family/
+      - id: metadata/signature/verified/platform::microsoft
       - id: well-known/tool/packaging/nuget-cli::nuget-cli-tool
 
   - id: dotnet-template-resource-reflective-stage
@@ -229,15 +204,14 @@ composite_rules:
     conf: 0.98
     attack: T1027.009,T1140,T1620
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: metadata/build/manifest::pe-manifest-myapplication-template
       - id: metadata/binary/resource/size::clr-resource-large
-      - id: micro-behaviors/data/embedded/payload/resource::dotnet-managed-resource-access
-      - id: metadata/lang/source/naming/resource::dotnet-frombase64string-text
-      - id: micro-behaviors/metaprogramming/reflection::methodbase-class
+      - id: micro-behaviors/data/embedded/resource::dotnet-managed-resource-access
+      - id: micro-behaviors/data/decode/base64/reference::dotnet-frombase64string-text
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::methodbase-class
     unless:
-      - id: metadata/signed/platform::microsoft
-      - id: metadata/binary/installer/family/
+      - id: metadata/signature/verified/platform::microsoft
       - id: well-known/tool/packaging/nuget-cli::nuget-cli-tool
       # A VB.NET app that ships a vendor VERSIONINFO block and a Visual Studio
       # PDB path is a product build; embedded images in a large CLR resource
@@ -251,12 +225,15 @@ composite_rules:
     attack: "T1027.009,T1140,T1620"
     mbc: "B0030,B0040"
     all:
-      - id: metadata/binary/framework::dotnet-assembly
-      - id: metadata/binary/layout/overlay::large-overlay-64k
-      - id: micro-behaviors/fs/read/file/full::dotnet-readallbytes-token
-      - id: micro-behaviors/crypto/decrypt::dotnet-create-decryptor
-      - id: micro-behaviors/process/interpreter/reflection/runtime::reflection-method-access
-      - id: micro-behaviors/metaprogramming/reflection::activator
+      - id: metadata/lang/compiler/managed::dotnet-assembly
+      - id: metadata/binary/layout/size::large-overlay-64k
+      - id: micro-behaviors/fs/read/file/content/unspecified::dotnet-readallbytes-token
+      - id: micro-behaviors/crypto/decrypt/initialize::dotnet-create-decryptor
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::reflection-method-access
+      - id: micro-behaviors/metaprogramming/reflection/inspect/member::activator
+    unless:
+      # The .NET single-file host's overlay is the bundled app, not a payload.
+      - id: well-known/lib/runtime/managed/dotnet-runtime::dotnet-singlefile-host-context
   - id: dotnet-in-memory-assembly-invoke
     desc: .NET in-memory assembly invoke chain
     crit: suspicious
@@ -264,18 +241,17 @@ composite_rules:
     attack: T1620
     mbc: E1059
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: metadata/lang/compiler/managed::reflection-namespace
       - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-currentdomain
-      - id: micro-behaviors/metaprogramming/reflection::invoke-member-token
+      - id: micro-behaviors/metaprogramming/reflection/invoke::invoke-member-token
       - id: assembly-bytes-buffer
     any:
-      - id: micro-behaviors/metaprogramming/reflection::load-and-invoke-name
-      - id: micro-behaviors/process/interpreter/reflection/runtime::gettypes-member-token
+      - id: metadata/lang/source/naming/action/function-name::load-and-invoke-name
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/inspection::gettypes-member-token
     downgrade:
       any:
         - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/
   - id: dotnet-appdomain-byte-array-load
     desc: .NET AppDomain byte array loader
     crit: suspicious
@@ -283,13 +259,12 @@ composite_rules:
     attack: T1620
     mbc: E1059
     all:
-      - id: metadata/binary/framework::dotnet-assembly
+      - id: metadata/lang/compiler/managed::dotnet-assembly
       - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-class-token
       - id: micro-behaviors/process/interpreter/runtime/clr::appdomain-currentdomain
-      - id: micro-behaviors/process/interpreter/reflection/runtime::loadassembly-member-token
+      - id: micro-behaviors/metaprogramming/reflection/inspect/class/assembly::loadassembly-member-token
       - id: assembly-bytes-buffer
       - id: metadata/binary/layout/size::tiny-dotnet
     downgrade:
       any:
         - id: metadata/lang/compiler/managed::reflection-emit
-        - id: metadata/binary/vendor/

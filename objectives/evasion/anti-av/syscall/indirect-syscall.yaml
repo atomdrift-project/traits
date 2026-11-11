@@ -15,7 +15,7 @@ composite_rules:
   - id: micro-behaviors/os/syscall/raw::syscall-x64-instruction
   - id: micro-behaviors/os/syscall/raw::mov-eax-syscall
   unless:
-  - id: metadata/binary/framework::bsjb-marker
+  - id: metadata/lang/compiler/managed::bsjb-marker
   downgrade:
     any:
     - id: well-known/tool/browser/
@@ -35,10 +35,7 @@ composite_rules:
   - id: micro-behaviors/os/syscall/raw::ssn-stub-runtime-bytecheck
   - id: micro-behaviors/os/syscall/raw::syscall-gadget-byte-scan
   unless:
-  - id: metadata/binary/framework::bsjb-marker
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
+  - id: metadata/lang/compiler/managed::bsjb-marker
 # Direct-memory compiler variant of the same technique: validate the ntdll
 # syscall prologue byte-by-byte and locate a syscall;ret instruction to invoke
 # the recovered service number without entering the userland API stub.
@@ -47,13 +44,27 @@ composite_rules:
   crit: hostile
   conf: 0.97
   all:
-  - id: micro-behaviors/os/syscall/raw::ssn-stub-runtime-memory-compare
   - id: micro-behaviors/os/syscall/raw::syscall-gadget-runtime-memory-compare
+  any:
+  - id: micro-behaviors/os/syscall/raw::ssn-stub-runtime-memory-compare
+  - id: micro-behaviors/os/syscall/raw::ssn-stub-runtime-memory-compare-indexed
   unless:
-  - id: metadata/binary/framework::bsjb-marker
-  downgrade:
-    any:
-    - id: metadata/signed/platform/
+  - id: metadata/lang/compiler/managed::bsjb-marker
+
+# Halo's Gate variant: iterates neighbor syscall stubs (+/- 0x20 bytes) to recover
+# unhooked SSNs when the primary stub is hooked.
+- id: runtime-halos-gate-ssn-hunt
+  desc: Runtime Halo's Gate neighbor syscall stub search and SSN extraction
+  crit: hostile
+  conf: 0.98
+  arch: [x86-64]
+  all:
+  - id: micro-behaviors/os/syscall/raw::halos-gate-neighbor-stub-search
+  any:
+  - id: micro-behaviors/os/syscall/raw::ssn-stub-runtime-memory-compare
+  - id: micro-behaviors/os/syscall/raw::ssn-stub-runtime-memory-compare-indexed
+  unless:
+  - id: metadata/lang/compiler/managed::bsjb-marker
 
 # Source variant of the runtime binary signatures above. Resolving service
 # numbers from ntdll and then locating an in-module syscall trampoline is the
@@ -64,7 +75,28 @@ composite_rules:
   conf: 0.98
   for: [c, cpp, csharp, go, rust]
   all:
-  - id: micro-behaviors/fs/path/library::ntdll-module-name-source
+  - id: micro-behaviors/fs/path/system/library::ntdll-module-name-source
   - id: micro-behaviors/os/syscall/invoke::windows-ssn-resolver-call-source
   - id: micro-behaviors/os/syscall/invoke::windows-syscall-gadget-search-source
   near_lines: 60
+
+# Per-API gadget hunt: each Nt* export is located without the import table
+# (PEB loader walk or hand-parsed export directory) and its body is searched
+# for a stack-stored `syscall; ret` needle, so every wrapped call executes the
+# syscall instruction from inside ntdll and user-mode hooks never see it.
+# Repeating the needle per API is the shape of indirect-syscall tables; code
+# that merely calls NT APIs has neither the needle nor the hand resolution.
+- id: hand-resolved-api-syscall-gadget-hunt
+  desc: Hand-resolved Nt APIs feed syscall-gadget hunts
+  crit: hostile
+  conf: 0.96
+  arch: [x86-64]
+  all:
+  - id: micro-behaviors/os/syscall/raw::syscall-ret-needle-stack-immediates
+  any:
+  - id: micro-behaviors/os/api-resolution/manual::teb-self-peb-ldr-access-x64
+  - id: micro-behaviors/os/api-resolution/manual::gs-peb-ldr-access-x64
+  - id: micro-behaviors/os/api-resolution/manual::x64-peb-access-immediate
+  - id: micro-behaviors/os/api-resolution/export-table::x64-pe-signature-export-rva-read
+  unless:
+  - id: metadata/lang/compiler/managed::bsjb-marker

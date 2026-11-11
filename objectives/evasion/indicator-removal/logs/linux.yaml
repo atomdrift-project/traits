@@ -13,20 +13,6 @@ traits:
     if:
       type: string_literal
       exact: /var/log/lastlog
-  - id: var-log-auth
-    desc: /var/log/auth authentication log
-    crit: notable
-    conf: 0.7
-    if:
-      type: text
-      substr: /var/log/auth
-  - id: var-log-cron
-    desc: /var/log/cron cron log
-    crit: notable
-    conf: 0.7
-    if:
-      type: text
-      substr: /var/log/cron
   - id: empty-echo-truncate-var-log
     desc: Empty echo truncates system log
     crit: suspicious
@@ -40,16 +26,6 @@ traits:
       - id: well-known/tool/development/observability/datadog-system-tests::system-tests-path
       # Test helpers reset a service log so a later assertion sees an empty
       # file. testdata/hostile is not this path class.
-      - id: metadata/path::test-directory-component
-  - id: echo-redirect-var-spool
-    desc: echo overwrite to /var/spool
-    crit: suspicious
-    conf: 0.9
-    mbc: F0005
-    attack: T1070.001
-    if:
-      type: text
-      regex: echo\s+\S+\s*>\s*/var/spool/
   - id: redirect-var-log
     desc: '>/var/log/ redirect to log file'
     crit: suspicious
@@ -70,8 +46,8 @@ traits:
       substr: history -c
     unless:
       - id: well-known/app/utility/cmdchamp/
+      - id: well-known/app/utility/ble-sh::ble-sh-context
       - id: metadata/build/package/maintainer-scripts::cloud-marketplace-cleanup-script
-      - id: metadata/file/extension/identity::markdown-file-basename
   - id: history-clear-call
     desc: Shell clears command history
     crit: suspicious
@@ -86,15 +62,9 @@ traits:
         kind: identifier
         name: -c
     unless:
+      - id: well-known/app/utility/ble-sh::ble-sh-context
       - id: metadata/build/package/maintainer-scripts::cloud-marketplace-cleanup-script
-      - id: well-known/app/infrastructure/dokku::dokku-source-tree
-      - id: well-known/app/utility/cmdchamp/
       - id: metadata/package/testing/harness/fixture::shell-spec-case-file-context
-      # Bash's own tests/histexp*.sub scripts call `history -c` to exercise
-      # the builtin. A file under a test directory is the suite, not a wipe.
-      - id: metadata/path::test-directory-component
-      - type: path
-        regex: '(^|[\/])(vagrant|packer)[\/]'
       # `history -c` immediately re-seeded with `history -s <value>` (readline
       # prompt suggestion) or reloaded with `history -r` (switch HISTFILE and
       # reload from disk) does not remove evidence. Disk-wiping forgers pair
@@ -125,14 +95,14 @@ traits:
       type: string_literal
       substr: unset HISTFILE
   - id: truncate-var-log
-    desc: truncate /var/log command
+    desc: Truncate system authentication or audit log
     crit: suspicious
     conf: 0.9
     mbc: F0005
     attack: T1070.001
     if:
       type: text
-      regex: truncate\s+(-s\s*0\s+)?/var/log
+      regex: 'truncate\s+(-s\s*0\s*)?/var/log/(auth\.log|secure|syslog|messages|[bw]tmp|lastlog|audit)\b'
     unless:
       # Provisioning initializes an app-owned log right before the service's
       # first write: create it, truncate-to-empty, chown it to the service
@@ -145,7 +115,6 @@ traits:
       # managing an app log it owns. Wiping evidence targets system logs.
       - id: app-owned-log-directory-truncate
       # Test harnesses empty the log they are about to assert on.
-      - id: metadata/package/testing/presence/harness::test-directory
       - id: objectives/evasion/indicator-removal/log-removal::image-login-accounting-scrub
   - id: audit-account-gid-suppression-source
     desc: Suppresses audit events for a selected GID
@@ -186,9 +155,9 @@ composite_rules:
     any:
       - id: micro-behaviors/fs/path/log/accounting::multiple-log-files
       - id: var-log-lastlog
-      - id: var-log-auth
+      - id: micro-behaviors/fs/path/log/system::authentication-log-path-prefix
       - id: micro-behaviors/fs/path/log/system::log-var
-      - id: var-log-cron
+      - id: micro-behaviors/fs/path/log/system::cron-log-path-prefix
     unless:
       - id: well-known/app/utility/cmdchamp/
       - id: metadata/build/package/maintainer-scripts::cloud-marketplace-cleanup-script
@@ -201,12 +170,12 @@ composite_rules:
     any:
       - id: redirect-var-log
       - id: empty-echo-truncate-var-log
-      - id: echo-redirect-var-spool
       - id: history-c
       - id: unset-histfile
       - id: truncate-var-log
     unless:
       - id: well-known/app/utility/cmdchamp/
+      - id: well-known/app/utility/ble-sh::ble-sh-context
   - id: multi-log-wipe
     desc: Overwrites multiple log files
     crit: suspicious
@@ -222,9 +191,9 @@ composite_rules:
     any:
       - id: micro-behaviors/fs/path/log/accounting::multiple-log-files
       - id: var-log-lastlog
-      - id: var-log-auth
+      - id: micro-behaviors/fs/path/log/system::authentication-log-path-prefix
       - id: micro-behaviors/fs/path/log/system::log-var
-      - id: var-log-cron
+      - id: micro-behaviors/fs/path/log/system::cron-log-path-prefix
 
   - id: downloaded-payload-history-clear
     desc: Downloaded payload clears shell history
@@ -233,7 +202,7 @@ composite_rules:
     attack: "T1105,T1070.003"
     near_bytes: 256
     all:
-      - id: micro-behaviors/process/create/local-exec::raw-ip-redirected-download-chmod-exec
+      - id: objectives/execution/staging/transfer::raw-ip-redirected-download-chmod-exec
       - id: history-clear-call
 
   - id: audit-account-event-suppression-hook

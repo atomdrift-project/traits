@@ -120,11 +120,15 @@ See [Matcher Defines Identity](TAXONOMY.md#matcher-defines-identity) in TAXONOMY
   and near misses. Put each fact in its specific subject home; same-file
   co-occurrence alone does not justify a profile. See the
   [directory placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
-- **100 rules is the default validator budget and directory review trigger
-  across all its YAML files, not an automatic split point.** First check that
-  every rule is accurate, at the right level, and nonduplicative. A larger leaf needs an exact-path reviewed
-  budget enforced by Cleave; do not raise a global limit or split by language,
-  backend, or rule form. Define each child's boundary and a home for the
+- **80 rules is the forward budget across a directory’s YAML files.** Keep
+  new and reorganized leaves below 80; at 72, review the parent and siblings
+  and divide on a durable semantic distinction. Existing larger leaves remain
+  migration debt under the engine’s current 93-rule gate. First check that
+  every rule is accurate, at the right level, and nonduplicative. Do not change
+  the cap without asking. A larger leaf requires a complete relevance audit and
+  explicit user approval before adding an exact-path exception enforced by
+  Cleave. Do not split by language or platform merely to meet the cap.
+  Define each child's boundary and a home for the
   broadest observation before splitting; do not add an `other` bucket. Follow
   the official [placement procedure](TAXONOMY.md#placement-procedure).
 - IDs auto-prefixed by directory path (e.g., `traits/micro-behaviors/process/create/shell/` → prefix `micro-behaviors/process/create/shell`)
@@ -165,13 +169,20 @@ An import finding does not establish that the imported function is called.
 JavaScript imports use the `npm` ecosystem. Static YAML namespaces such as
 `metadata/import/package::…` retain their existing IDs.
 
-Some findings are emitted by cleave itself rather than loaded from YAML, for example package facts such as `supply-chain/install-hook/postinstall`. Treat these as built-in facts when triaging: they may appear in output like traits, but they cannot be suppressed with a YAML `unless:` on a local trait id unless the engine exposes a corresponding rule hook. Do not create duplicate YAML traits solely to shadow them. Instead, document the benign context in `metadata/` or adjust the consuming YAML composites that reference YAML install-hook traits; engine-level severity changes belong in cleave, not this taxonomy.
+A few findings are emitted by cleave itself rather than loaded from YAML, such as archive extraction guards. They appear in output like traits and are tuned like them: `unless:` and `downgrade:` apply to an engine-emitted finding exactly as to a YAML one, with the same effect and the same suppression record. Do not create duplicate YAML traits solely to shadow them.
+
+To attach `unless:` or `downgrade:` to an engine-emitted finding, write an override: a trait with the finding's own id and no `if:`, such as `metadata/file/format/installer::inno-setup-loader-checksum-mismatch` in `metadata/file/format/installer/traits.yaml`. Its `unless:` suppresses the engine finding, and its `downgrade:` demotes it from the finding's own criticality; the override's `crit` is ignored. An override never matches on its own, so it is never itself a finding, and `cleave validate` rejects one at an id the engine does not emit, and an ordinary trait with an `if:` at an id the engine does emit. Every engine-emitted id is `dir::leaf` under a taxonomy tier, and dynamic leaves (a signer name, a decoded payload type) are normalized so an override can name them exactly. Tests in `cleave/src/capabilities/mapper_test.rs` cover this. File-format observations (npm manifest judgements, installer kinds, embedded executables) are filefacts facts that ordinary YAML traits read, so they are tuned here like any other rule. Judgements about outcomes the engine merely records, such as UPX unpacking results, are YAML traits over metrics.
 
 A Base64-decoded ZIP emits the notable format observation
 `metadata/file/encoding::base64-decoded-zip`. Encoding and ZIP magic alone
 do not establish evasion; the decoded archive and its members still receive
 their normal analysis. Do not add a YAML shadow or a filename exclusion for
 an ordinary document or application asset carrying this format.
+
+A rule-evaluation timeout records `evaluation-deadline` in `analysis_gaps`.
+It does not establish an analysis-bomb attack: large legitimate source trees
+and machine load can exhaust the same deadline. Keep this transient diagnostic
+out of threat findings and do not create a YAML shadow for it.
 
 ## Criticality Levels
 
@@ -342,7 +353,7 @@ defaults:
 
 | Type | Purpose | Matchers | Modifiers |
 |------|---------|----------|-----------|
-| `text` | Byte-scan extracted runs (binaries) or raw text (source) | `exact`, `substr`, `regex`, `word` | count, density, location, `case_insensitive`, `exclude_html_comments`, `is` |
+| `text` | Byte-scan extracted runs (binaries) or raw text (source) | `exact`, `substr`, `regex`, `word` | count, density, location, `case_insensitive`, `exclude_comments`, `exclude_html_comments`, `is` |
 | `literal` | Parser-extracted constants — strings and numbers | `exact`, `substr`, `regex`, `word`, `value`, `radix` | `kind: string\|number`, count, density, location, `case_insensitive`, `exclude_docstrings`, `is` |
 | `raw` | Raw file bytes | `exact`, `substr`, `regex`, `word` | count, density, location, `case_insensitive`, `is` |
 | `symbol` | Imports/exports/forwards/functions/calls | `exact`, `substr`, `regex` | `platforms`, `is`, `kind`, `arg` (call only) |
@@ -375,6 +386,14 @@ offsets and line endings, and does not interpret comment-like text inside
 `script`, `style`, `textarea`, or other raw-text elements as markup comments.
 Decoded string layers are still searched as decoded content, not as HTML.
 
+`exclude_comments: true` on a `text` condition skips source-language comments
+(the comment bodies filefacts parses: `//`, `#`, `/* */`, `<# #>`, `rem`, …)
+during raw source scans, so commented-out code and prose about a command do not
+match. Offsets and line endings are preserved. It applies only to languages
+filefacts parses into a syntax tree; AppleScript comments, for one, are not
+masked. Use it when the matcher describes code; leave it off for rules about
+what comments say, which belong in `type: comment`.
+
 **Matcher notes:**
 - `word` - Word boundary match (equivalent to `\b{value}\b`). Available on `text`, `literal`, `raw`, `section`, `encoded`. NOT available on `symbol`, `basename`, `hex`.
 - `is` - High-fidelity validator for common data patterns. Supported values:
@@ -391,41 +410,46 @@ Decoded string layers are still searched as decoded content, not as HTML.
   neutral fact does not activate an unsupported identity or intent claim.
 - **Symbol family shortcuts:** use `type: import`, `type: export`, or `type: function` when you know the family. They are clearer spellings for `type: symbol` with `kind: import/export/function`. Keep `type: symbol` for cross-family searches or `kind: forward` PE re-export rules. When `kind: forward`, the pattern is tested against both the export name *and* the forward target (`KERNEL32.LoadLibraryA`).
 
+For CPython 3.8–3.14 bytecode, `type: symbol, kind: identifier` matches
+entries in parsed code-object `co_names` tables, including nested code objects.
+Quoted constants and docstrings alone do not supply these identifiers. A name
+table reference establishes use of a name, not a call, import, or data flow;
+describe it accordingly and require additional evidence for behavioral claims.
+Malformed, unsupported, or budget-limited marshal streams supply no name-table
+identifiers. Use an engine with bytecode name-table extraction for these rules.
+
 **Which one should I use?**
 
-Speed and accuracy run together. From best to worst:
+Choose the fastest matcher that supports the claim with an acceptably low false-positive rate. Faster is not better if it matches unrelated code; slower is justified when its extra structure materially improves precision.
 
-1. **`symbol` / `import` / `export` / `function` / `literal`** — index lookups
-   against precomputed facts. No re-parse, no scan. Sharpest signal: the
-   walker already split code from comments and string contents, so these
-   never fire on a stray mention in a comment or unrelated string.
-2. **`text`** — substring/regex over extracted strings. Fast enough; less
-   precise than symbol/literal because the corpus includes everything the
-   string extractor recovered.
-3. **`raw`** — substring/regex over the full file bytes. Catches what the
-   string extractor missed (comments, byte sequences across boundaries),
-   pays for it in false positives and wall-clock.
-4. **`tree-sitter`** — live query against the parse tree. Slowest by a wide
-   margin (one walk per rule). Reach for it only when behavior depends on
-   tree shape the symbol projections can't express.
+A practical order, from fastest and most precise to slowest and most structural:
 
-Pick the highest tier that answers your question:
+1. **Structured facts and values** — `symbol` / `import` / `export` / `function` / `literal` / `value` / `metrics` and other precomputed facts. These use indexed or parsed evidence without rescanning file contents. They usually provide the best combination of speed and precision: code symbols are distinguished from comments and strings, and value paths identify the field being matched.
+2. **`text`** — substring/regex over extracted strings. Still fast, but less precise because strings may come from code, comments, documentation, or embedded data. Anchor and narrow the match, or combine it with independent evidence.
+3. **`hex`** — exact or masked byte patterns. For a simple byte signature, this is faster than YARA and avoids parsing source syntax. Use it when a stable byte sequence is the evidence; confirm it against benign near misses.
+4. **`yara`** — suitable signatures are a little slower than ordinary text or simple hex matching, but can express richer byte conditions. Use it when the signature needs YARA's combinations or modifiers; validate it against positive samples and benign near misses.
+5. **`raw`** — substring/regex over full file bytes. It catches comments and byte sequences the string extractor misses, but scans a broader surface and can cost more in both false positives and wall-clock. Use it only when those bytes are the evidence.
+6. **`tree-sitter`** — live query against the parse tree. It is much slower than the other forms because it walks the tree per rule, but can precisely express relationships between syntax nodes. Use it when that structural accuracy is necessary and faster forms cannot express the rule.
 
-- `symbol` for "is this called / imported / exported anywhere?" — and with
+Before writing a tree-sitter rule, run `cleave facts <file>` and check whether the needed call, member, bind, literal, or value is already available. Also consider expressing the evidence as ordinary fact or text traits and combining them in a composite. Use `all:` for jointly required evidence and `near_bytes` or `near_lines` when the relationship depends on co-location. A composite can avoid a per-rule tree walk, but proximity establishes co-occurrence, not data flow; describe only what its required evidence proves.
+
+Pick the least expensive matcher that still distinguishes the intended behavior from benign near misses:
+
+- Use `symbol` for "is this called / imported / exported anywhere?" — and with
   `kind: call, arg: ...` for "this specific call site with this specific
   arg" (see the call-matching section below).
-- `literal` for language-level constants — quoted strings or numeric
+- Use `literal` for language-level constants — quoted strings or numeric
   literals recovered from the parse. `kind: number` is the only way to
   match numbers by value and radix.
-- `text` for human-readable content that isn't tagged by the parser as
+- Use `value` or `metrics` for parsed fields, identities, measurements, and
+  derived properties; prefer exact or typed comparisons when available.
+- Use `text` for human-readable content that isn't tagged by the parser as
   string or symbol — error messages, log strings, embedded config.
-- `raw` for comments, byte-precise offsets, or matches that cross string
-  boundaries.
-- `tree-sitter` only when nothing above works.
-
-Before reaching for `tree-sitter`, check `cleave facts <file>` —
-the call, member, bind, or literal you need is usually already a
-structured fact.
+- Use `hex` for simple byte signatures; use `yara` when richer byte-signature
+  logic is needed. Use `raw` for comments, byte-precise offsets,
+  or matches that cross string boundaries.
+- Use `tree-sitter` when the behavior depends on tree shape the projections
+  and composite rules cannot express precisely.
 
 
 ### Structural
@@ -659,6 +683,17 @@ when the projection genuinely doesn't carry what you need.
 | Detect any call from a known dangerous family | `type: symbol regex: '^(eval\|exec\|system\|assert)$'` | Symbol regex with anchors stays tight. |
 | Match a structural shape the projection can't express (loop containing call inside try) | `type: tree-sitter query: "(call_expression ...)"` | Full S-expression query; omit `kind` and `node` — [tree-sitter docs](https://tree-sitter.github.io/tree-sitter/using-parsers#pattern-matching-with-queries). |
 
+For statement adjacency that should survive intervening comments, a `query`
+can set `(#set! cleave.ignore-comments "true")`. This setting applies to the
+entire query, including its other patterns. Cleave masks only parser-recognized
+extra nodes named `comment`, `line_comment`, or `block_comment`, then reparses
+with the same grammar. Byte positions and CR/LF are preserved; string contents
+are untouched. Text predicates and evidence still read the original source,
+so a capture spanning comments includes those comments. The view is cached
+per file and shares the query's existing CPU, byte, deadline, and cancellation
+limits. A failed or interrupted view produces no match and is not cached.
+Queries without the setting continue to use the original tree.
+
 **`arg:` filter shape** (used inside `type: symbol, kind: call`):
 
 ```yaml
@@ -670,7 +705,16 @@ arg:
   substr: "evil"     # substring on string/template values
   exact: "..."       # exact value match
   name: "BACKDOOR_PORT"  # identifier name (kind=identifier)
+  is: external_ip    # validator on the argument's own text (see `is` above)
 ```
+
+`is:` takes the same validators as text conditions (`external_ip`,
+`valid_ip`, `bitcoin_addr`, `base64`, `random_like`) and checks the argument's
+literal text: a string or template value, or an identifier's name. Shell words
+such as a curl URL are recorded as identifiers, so `curl http://<ip>/x` and
+Python `requests.get("http://<ip>/x")` both qualify. Because the text comes from
+a parsed call, a commented-out command never matches; prefer it to a text
+regex plus proximity when the claim is "this call targets that address".
 
 The filter matches if **at least one** arg in the call's arg list satisfies all
 specified fields. `kind: number, value: 511, radix: 8` matches `chmod(_,
@@ -704,6 +748,15 @@ of a concatenated value. `whole_value` is mutually exclusive with `call`,
 remain opaque. The CFML producer folds bounded constant concatenations and
 interpolations and distinguishes branch alternatives from concatenation;
 other producers' generic dependency merges remain opaque to this query.
+
+**Complete integer values.** `arg.from.whole_number` matches a proven complete
+integer, including an alias whose current value is known. It uses the same
+complete-value projection as `whole_value`; an arithmetic operand, string
+spelling a number, boolean, opaque call result or stale earlier assignment does
+not supply the integer. It is mutually exclusive with the other source selectors
+and does not accept transfer models. For example, `ShowWindow` argument 1 with
+`from: {whole_number: 0}` selects a possible `SW_HIDE` mode without relying on
+the variable's name or a source-text declaration that may have been overwritten.
 
 **Member-read provenance.** `arg.from.member` selects an actual member-read
 origin by canonical path, rather than a string that happens to contain that
@@ -791,12 +844,24 @@ itself a call.
 
 If you're ever in doubt about what a node's text is, run `cleave test-match <file> --type ast --kind <kind> --pattern <something-permissive>` and inspect the captured evidence.
 
-**Tree-sitter queries need captures.** The evaluator counts captured nodes, so a
-structurally valid query without a capture emits no finding. Capture the intended
+**Tree-sitter queries need captures.** A structurally valid query without a bound
+capture emits no finding. Each complete match counts as one occurrence; its
+captures supply the evidence. Capture the intended
 observation, for example `(subscript_expression index: (binary_expression
 operator: "+")) @access`. Use named fields to distinguish the index from the
 object being indexed. Verify a positive example and a nearby negative example
 with `test-rules`; successful query compilation alone does not prove detection.
+
+**Selecting evidence sites.** A query may name its intended source occurrence
+`@evidence`. When that capture exists, only its bound nodes supply evidence
+offsets; other captures still participate in predicates and the capture work
+budget. A pattern that does not bind `@evidence` contributes no occurrence.
+Queries without this capture keep all captured nodes as evidence. Selection is
+per original query, including when queries share a batch. This lets a structural
+query bind supporting values while emitting the exact call site a `near_bytes`
+consumer must join. It does not establish a relationship between different
+calls: both observations must independently bind the claimed values to that
+same emitted site. Each complete match still counts as one occurrence.
 
 ## Count & Density Constraints
 
@@ -1126,11 +1191,23 @@ composite_rules:
     all:
       - id: metadata/binary/layout::is-executable
     unless:
-      - id: metadata/signed/platform::apple
-      - id: metadata/signed/platform::microsoft
+      - id: metadata/signature/verified/platform::apple
+      - id: metadata/signature/verified/platform::microsoft
 ```
 
-`none:` *is* available inside a `downgrade:` block, which takes the full `all:`/`any:`/`none:`/`needs:` shape.
+**Signatures in suppressions:** cite only `metadata/signature/verified/`. The
+engine files every signer finding under the trust its signature earned --
+`verified/`, `unverified/`, `self-signed/`, `invalid/<reason>/` -- and only
+`verified/` proves who signed. A self-signed "Microsoft Corporation" names
+whoever made the certificate, so the `unverified-signature-suppressor`
+validator rejects any other `metadata/signature/` path in `unless:` or
+`downgrade:`. A detection leg that names a signer whatever its signature
+proves (a masquerade, a stolen certificate) lists the states it wants, or
+cites the shared `metadata/signature/claim/` composite for that name.
+`verified/` holds engine findings only; vendor context built on a verified
+signature lives with the vendor under `well-known/`.
+
+`none:` is also unavailable inside `downgrade:`. When a downgrade needs a negative guard, define the positive context as a separate rule with `unless:` and reference that context from `downgrade:`; putting `unless:` on the original rule would suppress the finding itself.
 
 **Circular references:** Composites can reference other composites. Circular references are handled safely — composite evaluation uses a fixed-point loop (max 10 iterations). Circular references will not crash but the circularly-dependent traits may not resolve.
 
@@ -1209,8 +1286,12 @@ same values as composite `scope:` (`archive`, `outer`, `package`):
     downgrade:
       scope: archive          # see findings from anywhere in the same archive
       any:
-        - id: metadata/signed/platform/
+        - id: metadata/signature/verified/
 ```
+
+Inline `type: path` conditions in a container-scoped downgrade still match
+the member whose finding is being reconsidered. Combine that local path with
+a named package identity when context applies only to test-data members.
 
 Reach for it only when the wider evidence is genuinely about this file — a
 signed installer whose signature covers the members it carries is the motivating
@@ -1304,7 +1385,7 @@ Reduces criticality by **one level** when conditions match:
 
 **Syntax** (works on both atomic traits and composite rules):
 
-`downgrade:` supports full boolean logic with `all:`, `any:`, `none:`, and `needs:` - the same structure as composite rule conditions.
+`downgrade:` supports `all:`, `any:`, and `needs:`. For a negative guard, reference a separate context rule that uses `unless:`; the original finding remains visible when that context does not match.
 
 ```yaml
 traits:
@@ -1317,7 +1398,7 @@ traits:
       exact: "ptrace"
     downgrade:                           # → notable if signed
       any:
-        - id: metadata/signed/platform::apple
+        - id: metadata/signature/verified/platform::apple
         - id: metadata/quality::versioned
 
 composite_rules:
@@ -1671,15 +1752,20 @@ with its decoded named-bit subtree in values (e.g. `pe.dll_characteristics.*`,
 ### Directory limits
 
 `make validate` enforces **100 atomic traits and composite rules combined** per
-directory, summed across its YAML files and criticalities. There are no
+directory, summed across its YAML files and criticalities. This is a temporary
+review cap. There are no
 path-specific directory-size exceptions. Review the parent and peer categories,
 remove misplaced or duplicate rules, and define any necessary semantic
 refinement before moving rules. See [Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
 Depth above five directory levels below the tier produces a soft validation
 warning, not a hard limit; count neither the tier nor the filename. Sibling
-groups below 35 combined rules also produce soft warnings under the criteria in
-[Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts)
-alongside the required sibling audit and the separate ML feature visibility limit.
+parents with ten or more child directories averaging eight or fewer rules
+per child produce a soft validation warning under the criteria in
+[Directory budgets and placement contracts](TAXONOMY.md#directory-budgets-and-placement-contracts).
+The notice reports child count, total rules, and average rules per child; it is
+a review prompt, not an instruction to merge distinct techniques. Since soft
+validation warnings fail strict repository validation, resolve each reported
+parent or revise the contract when the warning is unsound.
 A directory with more than 150 immediate subdirectories is a hard validation
 error; split broad catalogs by a stable function with a clear tiebreaker.
 
@@ -1703,6 +1789,15 @@ differently, by design:
 Practical consequence: it's safe to publish a rule pack that uses a new field;
 older analyzers skip just those rules instead of erroring out. Bump the analyzer
 when you need those rules to actually fire.
+
+### Measured rule performance
+
+Fresh validation compares confirmed AST execution costs among at least eight
+queries on the same fixture and in the same boolean or full-count mode. A query
+fails the relative check only when its cost exceeds the larger of 40 times the
+peer median or the median plus 40 median absolute deviations, plus a 1 ms
+allowance. This requires material excess cost above the relative cutoff.
+Whole-rule slow limits and query-budget exhaustion remain separate failures.
 
 ### Metadata section review
 

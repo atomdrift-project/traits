@@ -1,0 +1,45 @@
+# Cross-app token theft through an exposed Android ContentProvider. Provider
+# calls and Bundle reads are legitimate in isolation; the suspicious shape is
+# a provider RPC whose response exposes an authentication field, especially
+# when that value is logged or immediately reused as an HTTP credential.
+defaults:
+  platforms: [android]
+  for: [java, kotlin]
+  attack: T1552
+
+composite_rules:
+  - id: android-content-provider-credential-read
+    desc: Android app extracts a credential field from a ContentProvider response
+    crit: suspicious
+    conf: 0.96
+    all:
+      - id: micro-behaviors/communications/ipc/content-provider::android-content-provider-rpc-source
+      - id: metadata/lang/source/syntax/call/arguments::jvm-get-string-auth-key
+
+  - id: android-content-provider-credential-log
+    desc: Android app logs a credential obtained through a ContentProvider
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: android-content-provider-credential-read
+      - id: micro-behaviors/os/telemetry/logging/event::android-secret-label-log-call
+
+  - id: android-content-provider-credential-http-relay
+    desc: Android app forwards a ContentProvider credential in a custom HTTP header
+    crit: suspicious
+    conf: 0.98
+    all:
+      - id: android-content-provider-credential-read
+      - id: micro-behaviors/communications/http/token-auth::android-custom-token-header-source
+
+  # Captures a session token from an exposed Android ContentProvider and immediately
+  # replays it in an authenticated HTTP request. Replaying cross-process credentials
+  # to a network service constitutes an active session-relay / credential-reuse attack.
+  - id: android-content-provider-token-theft-and-replay
+    desc: Android app captures ContentProvider token and replays it in an HTTP request
+    crit: hostile
+    conf: 0.98
+    attack: "T1552,T1550"
+    all:
+      - id: android-content-provider-credential-http-relay
+      - id: micro-behaviors/communications/http/client/library::android-okhttp-client-reference

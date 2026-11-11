@@ -1,0 +1,51 @@
+# A published package can carry its own build-time trigger: a configuration
+# file that the registry's own tooling reads and obeys. YARD's `.yardopts`
+# is one -- a documentation builder that renders docs for arbitrary packages
+# applies the flags found in the package, including the flag that loads and
+# runs a Ruby file.
+#
+# Sibling to trigger/repository/, which covers the same idea for a Git
+# repository that ships its own hooks: the artifact under analysis supplies
+# both the code and the thing that causes it to run.
+defaults:
+  platforms: [unix, windows]
+  for: [scripts]
+  attack: "T1195.002,T1059"
+
+composite_rules:
+  # Writing a documentation preload hook is ordinary when a human authors one
+  # gem. Writing it from the same code that assembles the package archive is a
+  # generator: it emits the trigger into every package it produces.
+  - id: objectives/execution/trigger/package/build::gem-builder-writes-doc-preload-hook
+    desc: Gem builder writes a documentation preload hook
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: micro-behaviors/os/module/load/path::yard-options-preload-write
+      - id: micro-behaviors/data/archive/create/package::gem-package-build-call
+  - id: yard-options-preload-webhook-beacon
+    desc: YARD documentation hook posts host profile to webhook
+    crit: hostile
+    conf: 0.98
+    for: [ruby, gem, tar, scripts]
+    scope: archive
+    all:
+      - id: micro-behaviors/fs/path/config/app::yard-options-file-path
+      - id: micro-behaviors/communications/http/request/body/environment::ruby-json-hostname-path-form-post
+      - id: micro-behaviors/communications/http/request/oob::ruby-form-post-webhook-destination
+  # The campaign that ships `.yardopts` with `--load`/`--plugin` makes the
+  # documentation builder run a script that fetches third-party pages and
+  # carries them out through the registry under an embedded API token.
+  - id: gem-doc-hook-fetch-and-registry-publish
+    desc: Gem doc hook ships fetch-and-publish payload
+    crit: hostile
+    conf: 0.96
+    for: [gem, tar, tar.gz, ruby, pkg_info]
+    scope: outer
+    all:
+      - id: metadata/package/config/manifest::gem-metadata-lists-yard-options
+      - id: micro-behaviors/communications/http/request/netlib::ruby-gem-outbound-resource-fetch
+      - id: micro-behaviors/data/format/credentials::rubygems-api-token-shaped-text
+    any:
+      - id: micro-behaviors/communications/http/services/registry::ruby-gem-output-publish
+      - id: micro-behaviors/communications/http/services/registry::ruby-gem-webhook-api

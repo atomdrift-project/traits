@@ -5,40 +5,12 @@ defaults:
   conf: 0.9
 
 traits:
-  - id: tiny-single-function-pe
-    desc: Tiny PE single-function stub
-    crit: notable
-    conf: 0.8
-    size_max: 65536
-    if:
-      type: metrics
-      field: functions.count
-      min: 1
-      max: 1
-    unless:
-      - id: metadata/binary/resource/identity::resource-only-dll-context
-
   - id: pe-checksum-zeroed
     desc: PE checksum field is zero
     if:
       type: metrics
       field: pe.checksum
       max: 0
-    unless:
-      - id: well-known/game/mod::bedrockboot-preload-cpp-pdb
-      - id: well-known/game/mod::bedrockboot-preload-injector-pdb
-      - id: metadata/binary/framework::dotnet-metadata
-      - id: metadata/lang/compiler/systems::go-binary-comp
-      - id: metadata/lang/compiler/native::python-msvc-extension
-      - type: basename
-        regex: '^(uninstall .*|elevate)\.exe$'
-        case_insensitive: true
-      # The shared .node matcher, rather than a second copy of the regex.
-      - id: metadata/file/extension/identity::node-native-addon-extension
-      - type: metrics
-        field: sections.code_size
-        max: 65536
-
   - id: pe-checksum-missing
     desc: PE checksum field is missing or invalid
     if:
@@ -52,11 +24,7 @@ traits:
         }
     unless:
       - id: pe-checksum-zeroed
-      - id: metadata/binary/framework::dotnet-metadata
-      - type: basename
-        regex: '^(uninstall .*|elevate)\.exe$'
-        case_insensitive: true
-      # The shared .node matcher, rather than a second copy of the regex.
+      - id: metadata/lang/compiler/managed::dotnet-metadata
       - id: metadata/file/extension/identity::node-native-addon-extension
       - type: metrics
         field: sections.code_size
@@ -86,13 +54,6 @@ traits:
       type: metrics
       field: pe.checksum_valid
       max: 0
-    unless:
-      - type: basename
-        regex: '^(privoxy\.exe|privoxy\.exe\.gz)$'
-      # Wine rewrites the DOS stub to "Wine builtin DLL" after link, so the
-      # stored OptionalHeader.CheckSum no longer matches the file bytes.
-      - id: well-known/lib/platform/wine::wine-builtin-dll-marker
-
   - id: cert-table-present
     desc: PE certificate table entry populated
     # Presence of the Authenticode directory is ordinary file structure. The
@@ -124,32 +85,6 @@ traits:
       min: 1
 
 composite_rules:
-  # Native runtimes collected by bundlers or redistributables can retain stale
-  # security directory entries after the Authenticode blob has been removed.
-  - id: bundled-native-runtime-signature-context
-    desc: Native runtimes subject to signature stripping
-    crit: exception
-    conf: 0.98
-    any:
-      - id: well-known/lib/runtime/native-platform/tcl-tk::tcl-tk-runtime-library
-      - id: well-known/lib/runtime/scripted/cpython::python-core-native-component
-      - id: well-known/lib/runtime/compiled/msvc-runtime::msvc-runtime-library
-      - id: well-known/lib/format/zlib::zlib-shared-library
-
-  # Packaged applications where build pipelines leave dangling security
-  # directory entries after stripping or post-processing.
-  - id: packaged-app-signature-anomaly
-    desc: Packaged app with detached certificate table
-    crit: exception
-    conf: 0.98
-    any:
-      - id: well-known/app/productivity/axglyph/
-      - id: well-known/app/infrastructure/podman-desktop/
-      - id: well-known/app/communication/freedv/
-
-  # Populated-but-wrong CheckSum: the linker wrote a value and the bytes have
-  # changed since. Widely referenced as a "binary was modified after link"
-  # building block.
   - id: pe-checksum-mismatch
     desc: PE checksum differs from computed content
     crit: notable
@@ -159,8 +94,8 @@ composite_rules:
       - id: pe-checksum-content-invalid
     unless:
       - id: pe-checksum-zeroed
-      - id: tiny-single-function-pe
-      - id: metadata/binary/framework::dotnet-metadata
+      - id: metadata/binary/symbols/count::tiny-pe-one-recovered-function
+      - id: metadata/lang/compiler/managed::dotnet-metadata
       # The CheckSum algorithm folds in the image length, and a PE carved out
       # of a container is delimited by cleave's estimate of where it ends, not
       # by the linker's SizeOfImage. Recomputing over that span disagrees with
@@ -169,9 +104,8 @@ composite_rules:
       - id: well-known/lib/platform/wine::wine-builtin-dll-marker
     downgrade:
       any:
-        - id: metadata/signed/platform/
-        - id: metadata/signed/unknown::cisco-systems
-        - id: metadata/signed/leaf::cisco-systems-inc.
+        - id: metadata/signature/verified/signer::cisco-systems
+        - id: metadata/signature/verified/signer::cisco-systems-inc.
 
   # Stored checksum is zeroed or differs from computed content.
   # Typical of binaries altered post-compilation (infectors, stagers, patching).
@@ -195,24 +129,9 @@ composite_rules:
     all:
       - id: cert-table-present
       - id: pe-checksum-mismatch
+    # An invalid directory is handled by invalid-cert-directory-checksum.
     unless:
-      - id: metadata/binary/layout/embedded::embedded-pe-child
-      - id: well-known/tool/development/toolchain/go-toolchain::go-module-source-path
-      # Same fixture set cert-table-truncated below already excludes, and for
-      # the same reason: Go's debug/pe test corpus carries real EFI images
-      # (go/src/debug/pe/testdata/vmlinuz-4.15.0-47-generic) whose PE checksum
-      # was never maintained. Only the go@v module form was listed here, which
-      # does not match a toolchain tarball's go/src/ layout.
-      - id: well-known/tool/development/toolchain/go-toolchain::go-toolchain-source-path
-      - id: metadata/signed/certificate/signature::pe-signature-verified
-      - id: metadata/signed/certificate/signature::pe-signature-verified-kv
-      - id: metadata/signed/certificate/subject::pe-signer-ossign-scheibling
-      - id: well-known/app/infrastructure/podman-desktop::podman-desktop-nsis-installer-context
-      # An out-of-bounds certificate directory is not a signed PE. Do not
-      # describe this case as a signed checksum mismatch.
       - id: metadata/binary/layout/checksum::cert-table-truncated
-      - id: well-known/lib/runtime/scripted/node-runtime::windows-runtime-identity
-
   - id: cert-data-zeroed-checksum
     desc: Certificate table present but PE checksum zeroed
     crit: notable
@@ -220,40 +139,6 @@ composite_rules:
     all:
       - id: cert-table-present
       - id: pe-checksum-zeroed
-    unless:
-      - id: metadata/binary/framework/
-      - id: metadata/signed/certificate/signature::pe-signature-verified
-      - id: metadata/signed/certificate/signature::pe-signature-verified-kv
-      - id: metadata/signed/certificate/subject::pe-signer-ossign-scheibling
-      # EFI images commonly leave the Windows PE checksum unset; keep the
-      # structural facts, but do not infer Authenticode tampering from them.
-      - id: metadata/binary/header/characteristics::efi-pe-subsystem
-      # The verified Cygwin setup utility is UPX-packed and intentionally ships
-      # with a zero PE checksum; keep the structural fact without treating it
-      # as certificate tampering.
-      - id: well-known/tool/development/toolchain/cygwin::cygwin-setup-signature
-      # UPX zeroes OptionalHeader.CheckSum on every repack, so any signed
-      # binary that was UPX-packed after signing carries this pair by
-      # construction (e.g. the AKApplications-signed Stp2.dll installer helper
-      # in YARA's tests/data). Generalizes the Cygwin-specific carve-out above.
-      # Real cert transplants are still caught by invalid-cert-directory-checksum,
-      # which additionally requires an out-of-bounds security directory.
-      - id: metadata/binary/section/label::upx-section-pair
-      # The signed DesktopMania client was built with an unset PE checksum;
-      # its product identity and live wallpaper endpoint distinguish this
-      # historical Delphi build from a transplanted certificate carrier.
-      - id: well-known/unwanted/desktopmania::desktopmania-wallpaper-client
-
-  # The checksum leg is an `any:` for a reason. `pe-checksum-zeroed` carries
-  # carve-outs for the toolchains that ship a zero CheckSum as a matter of
-  # course -- Go, node addons, uninstaller stubs, and anything under 64KB of
-  # code. Those suppressions are right for the bare fact and wrong here: a
-  # transplant carrier is typically a small dropper, so the code-size carve-out
-  # alone blinded this rule to the shape it exists to catch. Requiring a
-  # certificate table AND a security directory that points outside the file
-  # already carries the specificity those carve-outs were protecting, so pair
-  # it with the raw measurement (`checksum_valid` false, which a zeroed
-  # CheckSum also produces) and let the conjunction do the work.
   - id: invalid-cert-directory-checksum
     desc: Out-of-bounds certificate directory with checksum mismatch
     crit: notable
@@ -264,47 +149,10 @@ composite_rules:
     any:
       - id: pe-checksum-zeroed
       - id: pe-checksum-content-invalid
-    unless:
-      - id: metadata/binary/framework/
-      # A file whose section headers run past its own end is truncated, and a
-      # security directory pointing outside a truncated file says nothing about
-      # a transplanted certificate -- the bytes it addresses were simply never
-      # shipped. Go's `debug/pe/testdata` kernel-header fixture is 474 bytes.
-      - id: metadata/binary/section/ratio::pe-section-overflow-present
-      - id: objectives/anti-static/pack/upack::dos-stub-kernel32-marker
-      - id: metadata/binary/layout/embedded::embedded-pe-child
-      # Bundlers (PyInstaller) strip the Authenticode blob from the Tcl/Tk DLLs
-      # they collect but leave the security directory entry pointing at the
-      # old offset, now end-of-file, and zero the checksum. That is a stripped
-      # signature on an unmodified runtime library, not a transplanted cert.
-      - id: bundled-native-runtime-signature-context
-      # CAPE sandbox reconstructed memory dumps drop the disk overlay where
-      # the certificate table lived, leaving the security directory dangling.
-      - id: metadata/binary/section/label::cape-sandbox-dump-section
   - id: cert-table-truncated
     desc: Claimed PE certificate table is truncated
-    crit: suspicious
+    crit: notable
     conf: 0.98
     all:
       - id: cert-table-present
       - id: security-dir-out-of-bounds
-    unless:
-      # A file whose section headers run past its own end is truncated, and a
-      # security directory pointing outside a truncated file says nothing about
-      # a transplanted certificate -- the bytes it addresses were simply never
-      # shipped.
-      - id: metadata/binary/section/ratio::pe-section-overflow-present
-      # Toolchain test suites (Go, .NET, etc.) carry unusual PE test fixtures.
-      - id: well-known/tool/development/toolchain/
-      - id: packaged-app-signature-anomaly
-      - id: metadata/path::test-directory-component
-      - id: objectives/anti-static/pack/upack::dos-stub-kernel32-marker
-      - id: metadata/binary/layout/embedded::embedded-pe-child
-      # Bundlers (PyInstaller) strip the Authenticode blob from the Tcl/Tk DLLs
-      # they collect but leave the security directory entry pointing at the
-      # old offset, now end-of-file, and zero the checksum. That is a stripped
-      # signature on an unmodified runtime library, not a transplanted cert.
-      - id: bundled-native-runtime-signature-context
-      # CAPE sandbox reconstructed memory dumps drop the disk overlay where
-      # the certificate table lived, leaving the security directory dangling.
-      - id: metadata/binary/section/label::cape-sandbox-dump-section

@@ -23,16 +23,13 @@ traits:
       field: sections.count
       min: 200
   - id: few-sections
-    desc: Very few sections (merged/stripped)
+    desc: Binary contains at most three sections
     crit: notable
     conf: 0.6
     if:
       type: metrics
       field: sections.count
       max: 3
-    unless:
-      - id: metadata/binary/resource/
-      - id: metadata/binary/framework/
   - id: single-section-pe
     desc: PE contains exactly one section
     crit: baseline
@@ -69,11 +66,11 @@ traits:
     unless:
       # Self-extracting installers and bundled runtimes legitimately carry
       # most shipped bytes outside the mapped PE sections.
-      - id: metadata/binary/installer/
-      - id: metadata/binary/framework::dotnet-runtime-host-stub
+      - id: well-known/lib/runtime/managed/dotnet-runtime::dotnet-singlefile-host-context
+      - id: metadata/binary/layout/embedded::dotnet-selfcontained-bundle
       - id: well-known/app/utility/screentogif::screentogif-app-context
       - id: well-known/app/system/miktex::miktex-setup-wizard
-      - id: well-known/dual-use/remote-admin/screenconnect::screenconnect-component-detected
+      - id: well-known/dual-use/remote-admin/screenconnect/client::screenconnect-component-detected
   - id: dominant-section
     desc: Single section dominates binary layout
     crit: notable
@@ -84,16 +81,7 @@ traits:
       field: binary.largest_section_ratio
       min: 0.95
     unless:
-      - type: basename
-        regex: \.(mun|rll)$
-      # Single-section dominance is structurally normal for a .NET assembly —
-      # the IL, metadata, and managed resources all live in one .text section
-      # (ratio ~0.997), so this is never a packing signal there. Guard on
-      # dotnet-metadata (BSJB in .text), which fires on every real managed
-      # assembly; the previous guard dotnet-assembly under-fires on managed PEs
-      # (two of its legs match in `section: rdata`, which .NET PEs lack).
-      - id: metadata/binary/framework::dotnet-metadata
-      - id: metadata/binary/resource/
+      - id: metadata/lang/compiler/managed::dotnet-metadata
       - type: metrics
         field: exports.count
         min: 50
@@ -142,7 +130,7 @@ traits:
       field: binary.code_to_data_ratio
       min: 0.99
     unless:
-      - id: metadata/binary/framework::dotnet-metadata
+      - id: metadata/lang/compiler/managed::dotnet-metadata
       - id: metadata/lang/compiler/systems::go-binary
       - id: metadata/lang/compiler/systems::go-pe-symtab
   - id: largest-section-dominance
@@ -182,7 +170,7 @@ traits:
       - regex: \.cpython-\d+-darwin\.so$
       - regex: '\.a$'
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
       - type: path
         regex: '(^|/)libswift[^/]*\.dylib$'
   - id: macho-minimal-cstring-section
@@ -214,17 +202,6 @@ traits:
       # DWARF-only debug companions "extremely sparse" string sections.
       size_ratio_min: 0.0000001
       size_ratio_max: 0.0005
-    unless:
-      - id: metadata/file/extension/bundle::bundle-data-file
-      - id: metadata/file/extension/identity::macho-so-extension
-      - id: metadata/binary/framework/
-      - id: metadata/lang/compiler/systems/
-      - id: metadata/signed/platform::apple
-      - id: metadata/package/files/runtime::benign-native-library-context
-      - id: well-known/tool/reverse-engineering/frida/
-      - id: well-known/lib/runtime/managed/jvm::macos-java-launcher
-      - type: path
-        regex: '\.a$'
   - id: macho-small-text-section-ratio
     desc: Mach-O text section under 5%
     for: [macho]
@@ -262,7 +239,7 @@ traits:
       compare_to: __cstring
       size_ratio_min: 50
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
       # A relocatable object holds one translation unit: __cstring can be a
       # single error string beside that unit's normal initialized tables
       # (type descriptors, mask tables), so the packed-image ratio inference
@@ -270,13 +247,7 @@ traits:
       - id: metadata/binary/header/identity::macho-object-file
       # PyObjC's standard CPython extension modules often have tiny __cstring
       # sections and ObjC-heavy __data sections; this layout is not packing.
-      - type: basename
-        regex: '\.cpython-\d+-darwin\.so$'
-      # Eclipse/Adoptium OpenJDK macOS AWT/UI dylibs carry large ObjC __data
-      # relative to __cstring without being packed payloads.
       - id: well-known/lib/platform/eclipse-osgi::eclipse-foundation-team-id
-      - type: basename
-        regex: '^universalJavaApplicationStub(\.(arm64|x86_64))?$'
       - type: metrics
         field: binary.string_count
         min: 1000
@@ -285,29 +256,13 @@ traits:
     desc: Data section dominates string section
     for: [macho]
     platforms: [macos, ios]
-    crit: suspicious
+    crit: notable
     conf: 0.85
     if:
       type: section
       substr: '__data'
       compare_to: __cstring
       size_ratio_min: 200
-    unless:
-      - id: metadata/signed/platform::apple
-      - id: metadata/signed/trust-level::developer-team-identifier
-      # Same object-file exclusion as data-larger-than-cstring: a relocatable
-      # object holds one translation unit, whose tables can dwarf its single
-      # string without any packing.
-      - id: metadata/binary/header/identity::macho-object-file
-      - type: basename
-        regex: '\.cpython-\d+-darwin\.so$'
-      - type: basename
-        regex: '^universalJavaApplicationStub(\.(arm64|x86_64))?$'
-      - type: metrics
-        field: binary.string_count
-        min: 1000
-      - id: well-known/tool/sysadmin/par-launcher::par-env-vars
-      - id: well-known/tool/development/testing/radamsa::radamsa-fuzzer-banner
   - id: text-dominates-cstring
     desc: Code section exceeds C strings 500-fold
     for: [macho]
@@ -320,7 +275,7 @@ traits:
       compare_to: __cstring
       size_ratio_min: 500
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
       - type: metrics
         # exports.api_count excludes C++ RTTI/typeinfo and mh_execute_header:
         # an obfuscated stub reaches four exports on compiler artifacts alone,
@@ -350,7 +305,7 @@ traits:
       compare_to: __cstring
       size_ratio_min: 1000
     unless:
-      - id: metadata/signed/platform::apple
+      - id: metadata/signature/verified/platform::apple
       - type: basename
         regex: '\.cpython-\d+-darwin\.so$'
       - type: metrics
@@ -385,11 +340,6 @@ traits:
       exact: .text
       compare_to: total
       size_ratio_min: 0.70
-    unless:
-      - id: metadata/lang/compiled/
-      - id: metadata/lang/compiler/systems::go-pe-symtab
-      - id: metadata/lang/go-build::go-trimpath
-
   - id: pe-largest-section-65-percent
     desc: Largest section 65%+ of non-DLL PE
     crit: baseline
@@ -403,26 +353,9 @@ traits:
       field: binary.largest_section_ratio
       min: 0.65
     unless:
-    - type: basename
-      regex: \.dll$
-    - type: basename
-      regex: \.winmd$
-    - type: basename
-      regex: \.mun$
     - id: metadata/lang/compiler/systems::go-pe-binary-context
     - id: metadata/lang/compiler/systems::rust-binary
-    - id: metadata/binary/framework/
-    - type: trait
-      id: metadata/file/extension/identity::linux-kernel-package-artifact-basename
-
 composite_rules:
-  - id: dominant-section-benign-build-context
-    desc: Benign dominant-section build context
-    crit: baseline
-    conf: 0.85
-    any:
-      - id: metadata/binary/vendor::common-fp-context
-      - id: metadata/binary/layout/addon::rust-node-api-native-addon
   - id: large-four-section-pe
     desc: PE over one MiB with exactly four sections
     crit: notable

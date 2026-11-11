@@ -1,0 +1,165 @@
+defaults:
+  platforms: [android, unix]
+  for: [scripts, source, binaries]
+  attack: T1552
+
+traits:
+  - id: android-keystore-file-path
+    desc: Android keystore file path
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '/data/(misc/keystore|system/(password|gesture|credentials)\.key)'
+    unless:
+      # Common root/emulator check lists probe su binaries alongside system key paths
+      - type: text
+        substr: "/sbin/su"
+      # Waydroid container setup and filesystem maintenance
+      - type: text
+        substr: "waydroid"
+
+  - id: android-wifi-credential-path
+    desc: Android Wi-Fi credential path
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '/(data/misc|system/etc)/wifi/(wpa_supplicant|wifi)\.conf'
+    unless:
+      - id: well-known/app/system/drivers/rtl8192eu::rtl8192eu-wlan-util-source
+      # Android's own init.rc chowns this path while starting the
+      # supplicant. The HIDL interface name is the system script, not a
+      # stealer reading the credential file.
+      - type: text
+        substr: android.hardware.wifi.supplicant
+
+  - id: android-firefox-secret-path
+    desc: Android Firefox secret path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '/data/org\.mozilla\.firefox.{0,80}webappsstore\.sqlite'
+
+  - id: android-browser-db-path
+    desc: Android browser DB path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '/data/com\.android\.browser.{0,80}browser2\.db'
+
+  - id: android-discord-secret-path
+    desc: Android Discord secret path
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '/data/com\.discord/(shared_prefs|databases|cache)'
+
+  - id: android-discord-webview-path
+    desc: Android Discord webview path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: '/data/com\.discord/(app_webview|files)'
+
+  - id: discord-token-field
+    desc: Discord token field parser
+    crit: suspicious
+    conf: 0.93
+    # Bare `auth_token` is a generic OAuth field name (matched dozens of
+    # youtube_dl video extractors). Anchor on the Discord-specific keys only.
+    if:
+      type: text
+      regex: 'discord_(auth|db|cache)_token'
+
+  - id: android-npki-certificate-path
+    desc: Android NPKI certificate directory path
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: text
+      regex: '(/NPKI\b|\bgetnpki\b)'
+
+composite_rules:
+  - id: android-credential-store-targeting
+    desc: Android credential store targeting
+    crit: hostile
+    conf: 0.97
+    any:
+      - id: android-keystore-file-path
+      - id: android-wifi-credential-path
+      - id: micro-behaviors/fs/path/account-db::android-account-store-path
+      - id: micro-behaviors/fs/path/application/browser/storage::android-chromium-secret-store-path
+      - id: android-firefox-secret-path
+      - id: android-browser-db-path
+      - id: android-discord-secret-path
+      - id: android-discord-webview-path
+      - id: android-npki-certificate-path
+      # WifiConfigStore.xml is the modern saved-network store that replaced
+      # wpa_supplicant.conf; reference the shared path fact rather than copy it.
+      - id: micro-behaviors/fs/path/config/network::android-wifi-config-store
+    needs: 2
+
+  - id: android-discord-token-harvest
+    desc: Android Discord token harvest
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: android-discord-secret-path
+    any:
+      - id: discord-token-field
+
+  - id: android-keystore-dex-element-patch
+    desc: Dex element patch with keystore paths
+    crit: hostile
+    conf: 0.96
+    for: [apk, zip, dex]
+    all:
+      - id: micro-behaviors/os/module/load/class::dex-class-loader
+      - id: micro-behaviors/os/module/load/class::dex-elements-field
+      - id: android-keystore-file-path
+
+  - id: android-keystore-networked-loader
+    desc: Keystore paths with DexClassLoader and sockets
+    crit: hostile
+    conf: 0.95
+    for: [apk, zip, dex]
+    all:
+      - id: android-keystore-file-path
+      - id: micro-behaviors/os/module/load/class::dex-class-loader
+      - id: micro-behaviors/communications/socket/create::java-socket-bytecode-reference
+
+  - id: android-keystore-reflective-bypass-loader
+    desc: Keystore paths with reflective loader bypass
+    crit: hostile
+    conf: 0.95
+    for: [apk, zip, dex]
+    all:
+      - id: android-keystore-file-path
+      - id: micro-behaviors/os/module/load/class::base-dex-class-loader
+      - id: micro-behaviors/metaprogramming/reflection/inspect/member::reflective-access-bypass
+
+  - id: android-wifi-credential-socket-stealer
+    desc: Targets Wi-Fi credentials with raw sockets
+    crit: hostile
+    conf: 0.95
+    platforms: [android]
+    for: [dex]
+    all:
+      - id: android-wifi-credential-path
+      - id: micro-behaviors/communications/socket/create::java-socket-bytecode-reference
+
+  - id: android-npki-certificate-socket-stealer
+    desc: Targets NPKI banking certificates with raw sockets
+    crit: hostile
+    conf: 0.96
+    platforms: [android]
+    for: [dex]
+    attack: T1552.004,T1041
+    all:
+      - id: android-npki-certificate-path
+      - id: micro-behaviors/communications/socket/create::java-socket-bytecode-reference

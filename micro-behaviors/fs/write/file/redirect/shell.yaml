@@ -47,8 +47,13 @@ traits:
     for: [binaries]
     if:
       type: text
-      # A backslash-newline continues this shell command before redirection.
-      regex: '(?im)(^|[;&])\s*printf\b([^\r\n]|\\\r?\n){0,160}(>[^&]|of=)'
+      # Retain the destination so special-device redirects can be separated
+      # from file writes. Backslash-newline still continues a command.
+      regex: '(?im)(^|[;&])\s*printf\b([^\r\n]|\\\r?\n){0,160}>[ \t]*[^\s>&|;]{1,256}'
+    not:
+      # Match only the final destination, not /dev/null in a quoted payload
+      # that is itself written to an ordinary file after a continuation.
+      - regex: '>[ \t]*["'']?/dev/(null["'']?|tcp/[^\s]{1,256}|udp/[^\s]{1,256})$'
   - id: shell-printf-file-redirect
     desc: Shell printf redirects output to a file
     conf: 0.94
@@ -98,13 +103,13 @@ traits:
     for: [shell, binaries]
     if:
       type: text
+      # Unix command names are case sensitive; uppercase packed noise is not dd.
       # Require an operand assignment or input redirection before a later
       # sink. Arbitrary positional words matched shuffled resource padding.
       regex: '(?m)(^|[;&])\s*dd\b\s*((\w+=|<\s*)\S+[^\n|;&]{0,160})?(\bof=|1?>[^&])'
-      case_insensitive: true
     unless:
-      - id: metadata/binary/installer/script::install4j-unix-sfx
-      - id: metadata/lang/encoding::non-ascii-script-text
+      - id: well-known/tool/packaging/install4j::install4j-unix-sfx
+      - id: metadata/lang/encoding/shape/character::non-ascii-script-text
       - id: well-known/lib/data/sqlite::powershell-embedded-system-data-sqlite
 
   - id: shell-output-redirect-to-data
@@ -119,8 +124,10 @@ traits:
     desc: Redirects output to user shell RC
     conf: 0.9
     if:
-      type: text
-      regex: '>>?\s*["'']?(\$HOME|~)/\.(bashrc|bash_profile|zshrc|zprofile|profile|zlogin)\b'
+      type: tree-sitter
+      query: |
+        ((file_redirect [">" ">>"] destination: (_) @destination)
+         (#match? @destination "^[\"']?(~|[$]HOME)/[.](bashrc|bash_profile|zshrc|zprofile|profile|zlogin)([\"']?)$"))
     unless:
       - id: metadata/package/files/ecosystem::conda-shell-activation-layout
   - id: shell-root-rc-redirect-write

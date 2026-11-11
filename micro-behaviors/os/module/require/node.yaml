@@ -205,7 +205,6 @@ traits:
     unless:
       - type: text
         regex: '^#!/usr/bin/env\s+node\b'
-      - id: metadata/path::test-directory-component
   - id: cjs-side-effect-package-require
     desc: CommonJS side-effect-only package require
     crit: notable
@@ -235,10 +234,6 @@ traits:
     unless:
       # Declaration imports are erased and do not establish runtime loading.
       - id: metadata/lang/scripted::dts-declaration-file
-      # Dart files parse as JavaScript, and `import 'package:flutter/…';` is a
-      # namespace import there, not an ESM side-effect-only import.
-      - id: metadata/file/extension/identity::dart-source-basename
-      - id: metadata/file/extension/identity::markdown-file-basename
   - id: esm-side-effect-local-import
     desc: ESM side-effect-only local import
     crit: notable
@@ -262,7 +257,6 @@ traits:
       regex: '(?m)^\s*import\s+["''][^"''/.\n][^"''/\n]{0,50}\.js["'']\s*;?\s*$'
     unless:
       - id: metadata/lang/scripted::dts-declaration-file
-      - id: metadata/file/extension/identity::dart-source-basename
   - id: js-require-extensions-mutate
     desc: require.extensions mutated
     crit: notable
@@ -280,6 +274,7 @@ traits:
     not:
       - substr: "originalModuleResolveFilename"
   - id: dynamic-import-string-literal
+    size_max: 262144
     desc: Dynamically imports a literal module path
     crit: notable
     conf: 0.8
@@ -303,16 +298,10 @@ traits:
       - type: tree-sitter
         language: typescript
         query: '((type_alias_declaration) @alias (#match? @alias "typeof\\s+import\\s*\\("))'
-      - id: metadata/lang/upstream::linux-kernel-secondary-tree-path
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-scripts
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-extra
-      - id: micro-behaviors/os/syscall/invoke::linux-kernel-tree-path-mmfs
-      - id: metadata/lang/upstream::linux-kernel-primary-tree-path
-      # Type-only declaration imports are erased and never load at runtime.
+      - id: micro-behaviors/os/syscall/invoke::linux-kernel-source-context
       - id: metadata/lang/scripted::dts-declaration-file
-      - type: basename
-        regex: '(?i)\.go\.(gtpl|gotmpl|tmpl|tpl)$'
   - id: dynamic-external-import-string-literal
+    size_max: 131072
     desc: Dynamically imports a non-relative module path
     crit: notable
     conf: 0.9
@@ -340,8 +329,6 @@ traits:
         query: '((type_alias_declaration) @alias (#match? @alias "typeof\\s+import\\s*\\("))'
       # Type-only declaration imports are erased and never load at runtime.
       - id: metadata/lang/scripted::dts-declaration-file
-      - type: basename
-        regex: '(?i)\.go\.(gtpl|gotmpl|tmpl|tpl)$'
   # `import("pkg").then(...)` — a bare (non-relative) specifier loaded lazily and
   # consumed straight off the promise. This is the isomorphic/lazy-load idiom and
   # nothing more on its own; it matters to composites because the loaded module
@@ -529,6 +516,19 @@ traits:
             arguments: (arguments (string) @module))
             (#match? @module "^[\"']?@(components|pages|utils|hooks|constants|apis|styles|types)/"))
       - id: dynamic-external-import-string-literal
+  # A require whose target is statically known yet written as adjacent
+  # string literals (`require('child_'+'process')`) defeats literal import
+  # scanners without changing resolution. No bundler emits this shape and
+  # no idiomatic code splits a constant module name, so the split itself
+  # is the concealment signal. Only literal-plus-literal qualifies: a
+  # variable or template operand is ordinary dynamic loading.
+  - id: node-split-literal-require-call
+    desc: Requires module through split string literals
+    crit: notable
+    conf: 0.93
+    if:
+      type: text
+      regex: '\brequire\s*\(\s*["''][^"''\n]{1,60}["'']\s*\+\s*["'']'
 composite_rules:
   - id: scoped-config-package-loader
     desc: Invokes scoped config package loadConfig
@@ -561,5 +561,5 @@ composite_rules:
     conf: 0.8
     all:
       - id: dynamic-import-string-literal
-      - id: micro-behaviors/data/control-flow/error-handling::empty-arrow-catch-handler
+      - id: micro-behaviors/data/control-flow/error-handling/suppress::empty-arrow-catch-handler
     near_bytes: 200

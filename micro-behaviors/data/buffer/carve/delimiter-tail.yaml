@@ -8,8 +8,14 @@ traits:
     desc: grep locates a marker by byte offset
     for: [shell]
     if:
-      type: text
-      regex: '\bgrep\s+-a\s+-b\s+-o\s+["'']?\$\{?[A-Za-z_]\w*'
+      type: tree-sitter
+      language: shell
+      query: |
+        ((command name: (command_name) @name) @carve
+          (#eq? @name "grep")
+          (#match? @carve "[ \\t]-[aboFn]*a[aboFn]*([ \\t]|$)")
+          (#match? @carve "[ \\t]-[aboFn]*b[aboFn]*([ \\t]|$)")
+          (#match? @carve "[ \\t]-[aboFn]*o[aboFn]*([ \\t]|$)"))
 
   - id: shell-variable-byte-tail
     desc: tail extracts a variable byte-offset suffix
@@ -29,17 +35,65 @@ traits:
     desc: Base64 decodes byte-delimited buffer tail
     for: [python]
     if:
+      # The carved receiver may be a member chain (`resp.content.split(...)`),
+      # the delimiter a bytes or str literal, maxsplit optional, and the tail
+      # subscript the first or last field. The claim stays the same: decode
+      # the buffer region a split selected.
       type: text
-      regex: '\bb64decode\s*\(\s*\w+\.split\(\s*b["''][^"''\r\n]{3,64}["'']\s*,\s*1\s*\)\s*\[\s*1\s*\]'
+      regex: '\bb64decode\(\s*[\w.]+\.split\(b?["''][^"''\r\n]{3,64}["'']\s*(,\s*1)?\)\[(1|-1)\]'
+
+  - id: sed-print-from-delimiter
+    desc: sed prints from a delimiter line
+    for: [shell]
+    if:
+      type: text
+      regex: '\bsed\s+(-n\s+)?["''][^''"\r\n]{0,24}/[^/\r\n]{3,64}/,\s*\\?\$!?(d|p)["'']'
+
+  - id: javascript-base64-decode-delimited-tail
+    desc: Buffer decodes Base64 from delimiter-carved tail
+    for: [javascript, typescript]
+    if:
+      type: tree-sitter
+      query: |
+        ((call_expression
+          function: (member_expression object: (identifier) @buffer
+            property: (property_identifier) @from)
+          arguments: (arguments . (subscript_expression
+            object: (call_expression
+              function: (member_expression property: (property_identifier) @split)
+              arguments: (arguments . (string) @delimiter .))
+            index: (number) @index) . (string) @encoding .)) @decode
+          (#eq? @buffer "Buffer") (#eq? @from "from")
+          (#eq? @split "split") (#eq? @index "1")
+          (#match? @delimiter "^[\"'].[^\"']{2,63}[\"']$")
+          (#match? @encoding "^[\"']base64[\"']$"))
 
 composite_rules:
+  - id: delimited-input-tail
+    desc: Extracts a marker-selected input region
+    for: [shell, python, javascript, typescript]
+    scope: file
+    any:
+      - id: delimited-base64-tail
+      - id: shell-marker-byte-tail
+      - id: shell-sed-marker-carve
+
+  - id: shell-marker-byte-tail
+    desc: Marker byte-offset lookup and suffix extraction co-occur
+    for: [shell]
+    scope: file
+    all:
+      - id: shell-marker-byte-offset
+      - id: shell-variable-byte-tail
+
   - id: delimited-base64-tail
     desc: Base64 decoding of delimiter-carved input
-    for: [shell, python]
+    for: [shell, python, javascript, typescript]
     scope: file
     any:
       - id: shell-delimited-base64-tail
       - id: python-base64-decode-delimited-tail
+      - id: javascript-base64-decode-delimited-tail
       - id: shell-offset-base64-tail
 
   - id: shell-offset-base64-tail
@@ -47,15 +101,22 @@ composite_rules:
     for: [shell]
     scope: file
     all:
-      - id: shell-marker-byte-offset
-      - id: shell-variable-byte-tail
-      - id: micro-behaviors/data/decode/base64::openssl-base64-decode-command
+      - id: shell-marker-byte-tail
+      - id: micro-behaviors/data/decode/command::openssl-base64-decode-command
+
+  - id: shell-sed-marker-carve
+    desc: sed carves input at a marker line
+    for: [shell]
+    scope: file
+    any:
+      - id: sed-delete-through-delimiter
+      - id: sed-print-from-delimiter
 
   - id: shell-delimited-base64-tail
-    desc: Delimiter removal with shell Base64 decode
+    desc: Marker-line carve with shell Base64 decode
     for: [shell]
     scope: file
     near_lines: 1
     all:
-      - id: sed-delete-through-delimiter
-      - id: micro-behaviors/data/decode/base64::base64-decode-command
+      - id: shell-sed-marker-carve
+      - id: micro-behaviors/data/decode/command::base64-decode-command

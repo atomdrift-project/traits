@@ -43,18 +43,45 @@ traits:
       type: symbol
       kind: function
       exact: getGpuNames
+  # A regex literal or string search for software/VM GPU names, applied with
+  # .test or a computed call. Headless Chrome reports SwiftShader, Mesa
+  # software rendering reports llvmpipe/softpipe, and guest drivers report
+  # VirtualBox or VMware; scripts look for these to recognise analysis hosts.
+  - id: js-virtual-gpu-name-regex-test
+    desc: Regex tests emulated or VM GPU names
+    conf: 0.9
+    if:
+      type: text
+      regex: '(?i)/(swiftshader|llvmpipe|softpipe|virtualbox|vmware)/i?\s*(\.test\b|\[)'
+  # Software-renderer names only occur in GPU strings. VMware/VirtualBox
+  # also name DMI/BIOS models that hardware-inventory libraries (e.g.
+  # systeminformation's system.js) report as a `virtual` field, so those
+  # vendor names count only when the searched value is GPU/renderer data.
+  - id: js-virtual-gpu-name-string-search
+    desc: String search for software GPU renderer names
+    conf: 0.88
+    if:
+      type: text
+      regex: '(?i)\.(includes|indexOf)\(\s*["''](swiftshader|llvmpipe|softpipe)'
+  - id: js-vm-vendor-gpu-string-search
+    desc: GPU renderer string searched for VM vendor
+    conf: 0.88
+    if:
+      type: text
+      regex: '(?i)(gpu|renderer|webgl)\w*[^\n]{0,60}\.(includes|indexOf)\(\s*["''](virtualbox|vmware)'
 composite_rules:
   - id: environment-gate-function-cluster
     desc: JavaScript host and GPU gate functions
     crit: component
     conf: 0.9
+    needs: 2
     any:
       - id: environment-gate-function-cluster--blocked-names
       - id: environment-gate-function-cluster--gpu
       - id: environment-gate-function-cluster--system
       - id: environment-gate-function-cluster--gpu-names
   - id: js-vm-environment-check
-    desc: JavaScript VM environment detection
+    desc: JavaScript hardware query references
     crit: notable
     conf: 0.92
     attack: T1497.001 - javascript - typescript
@@ -64,13 +91,8 @@ composite_rules:
       - id: micro-behaviors/os/sysinfo/hardware::system-profiler-hardware
       - id: micro-behaviors/fs/proc/system::system-cpuinfo
       - id: micro-behaviors/os/sysinfo/hardware::dmi-product-name-path
-    unless:
-      - id: well-known/lib/platform/systeminformation/
-      - id: well-known/app/ai/coding-agent/baidu-comate::baidu-comate
-      - id: well-known/app/communication/slack::slack-app-context
-      - id: metadata/path::compiled-directory-component
   - id: js-hardware-profiling
-    desc: Cross-platform hardware profiling (VM evasion)
+    desc: Hardware queries and VM vendor references
     crit: notable
     conf: 0.93
     attack: T1497.001 - javascript - typescript
@@ -80,9 +102,27 @@ composite_rules:
       - id: micro-behaviors/os/virtualization/hypervisor::vmware-vendor-name
       - id: micro-behaviors/os/virtualization/hypervisor::virtualbox-product-name-reference
       - id: micro-behaviors/os/virtualization/hypervisor::vbox-short-reference
-    unless:
-      - id: well-known/lib/platform/systeminformation/
-      - id: well-known/app/ai/coding-agent/baidu-comate::baidu-comate
+  - id: js-virtual-gpu-renderer-check
+    desc: Checks for emulated or VM GPU renderer
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: js-virtual-gpu-name-regex-test
+      - id: js-virtual-gpu-name-string-search
+      - id: js-vm-vendor-gpu-string-search
+      - id: objectives/anti-analysis/sandbox-detect/tool-references::webgl-vm-renderer-check
+  - id: js-virtual-gpu-redirect-evasion
+    desc: Virtual GPU check redirects to external URL
+    crit: hostile
+    conf: 0.96
+    near_bytes: 1500
+    all:
+      - id: js-virtual-gpu-renderer-check
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-external-method
+    any:
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-replace
+      - id: micro-behaviors/ui/window/navigation/location::browser-location-assign
+      - id: micro-behaviors/data/property/assign::location-href-write-text
   - id: js-obfuscated-environment-gate
     desc: Obfuscated JavaScript host and GPU analysis gate
     crit: suspicious
@@ -91,8 +131,6 @@ composite_rules:
       - id: environment-gate-function-cluster
     any:
       - id: objectives/anti-static/obfuscation/obfuscator/js-obfuscator/
+      - id: objectives/anti-static/obfuscation/string/reorder::global-require-permutation-obfuscation
       - id: objectives/anti-static/obfuscation/name-mangling/function-name/
-      - id: metadata/lang/source/declaration::hex-variable-names
-    unless:
-      - id: well-known/lib/platform/systeminformation/
-      - id: well-known/app/ai/coding-agent/baidu-comate::baidu-comate
+      - id: metadata/lang/source/naming/variable::hex-variable-names
