@@ -11,6 +11,30 @@ defaults:
   platforms:
   - windows
 traits:
+- id: js-ms-settings-uac-command-key
+  desc: JS references ms-settings UAC command key
+  crit: notable
+  conf: 0.95
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: '(?i)HKCU.{0,80}ms-settings.{0,120}Shell.{0,80}Open.{0,80}command'
+- id: js-reg-add-delegateexecute-value
+  desc: JavaScript writes DelegateExecute registry value
+  crit: notable
+  conf: 0.96
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: '(?i)reg add[^\n]{0,160}/v DelegateExecute[^\n]{0,100}/t REG_SZ'
+- id: js-run-cmd-launches-fodhelper
+  desc: JavaScript command launches fodhelper
+  crit: notable
+  conf: 0.96
+  for: [javascript, typescript]
+  if:
+    type: text
+    regex: '(?i)runCmd\(\s*[''\"]start\b[^\n]{0,120}fodhelper\.exe'
 - id: fodhelper-execution-logging
   desc: Binary logs fodhelper UAC elevation lifecycle
   crit: suspicious
@@ -160,6 +184,16 @@ traits:
     type: text
     regex: (?is)\b(create_key|create_subkey|set_value)\s*\([^;\n]{0,80}\b(DelegateExecute|del)\b
 composite_rules:
+- id: js-fodhelper-ms-settings-delegateexecute-bypass
+  desc: JavaScript configures and launches fodhelper UAC bypass
+  crit: hostile
+  conf: 0.98
+  for: [javascript, typescript]
+  near_bytes: 6000
+  all:
+  - id: js-ms-settings-uac-command-key
+  - id: js-reg-add-delegateexecute-value
+  - id: js-run-cmd-launches-fodhelper
 - id: fodhelper-uac-elevation-executable
   desc: Binary executes fodhelper auto-elevation UAC bypass
   crit: hostile
@@ -182,7 +216,9 @@ composite_rules:
   - id: micro-behaviors/os/registry/association/reference::ms-settings-curver
   - id: micro-behaviors/os/registry/association/write::batch-ms-settings-curver-write
   - id: micro-behaviors/process/create/path-execution::batch-start-fodhelper
-  near_lines: 4
+  # Generous window: a CurVer write plus a fodhelper launch anywhere in the
+  # same script is the bypass; decoy lines between the legs must not split it.
+  near_lines: 40
 - id: fodhelper-ms-settings-hijack
   desc: fodhelper ms-settings protocol hijack
   crit: hostile
@@ -204,14 +240,17 @@ composite_rules:
 - id: protocol-hijack-ms-settings
   for:
   - batch
-  desc: Per-user CurVer write with shell-command key
+  desc: Per-user CurVer hijack without fodhelper launch
   crit: suspicious
   conf: 0.9
   all:
   - id: micro-behaviors/os/registry/association/write::batch-ms-settings-curver-write
   - id: micro-behaviors/os/registry/association/reference::shell-open-command-key
+  # fodhelper-uac-bypass carries the fodhelper-launch flavor; the leg trait
+  # keeps the exclusion file-local on both raw and expanded representations.
   unless:
   - id: fodhelper-uac-bypass
+  - id: micro-behaviors/process/create/path-execution::batch-start-fodhelper
 - id: protocol-hijack-ms-settings-shell
   desc: ms-settings Shell Open command hijack
   crit: suspicious
