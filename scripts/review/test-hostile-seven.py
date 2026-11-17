@@ -26,7 +26,7 @@ ids = {
  'pty': 'micro-behaviors/process/tty/pty::ruby-pty-shell-identity-environment-writes',
  'collector': 'objectives/credential-access/files/secret-sweep::ruby-credential-store-host-environment-inventory',
  'identity': 'micro-behaviors/communications/http/request/encoded::ruby-base64-user-platform-post-body-flow',
- 'staging': 'objectives/exfiltration/stealer/system-info/profile::ruby-encoded-user-profile-post-staging',
+ 'staging': 'objectives/exfiltration/stealer/system-info/profile/host-report::ruby-encoded-user-profile-post-staging',
  'token': 'micro-behaviors/os/env/write::decoded-token-environment-assignment',
  'deps': 'metadata/package/dependencies/composition::npm-credential-store-capture-upload-dependencies',
 }
@@ -74,7 +74,7 @@ add('encoded-token.js', 'const retained = "' + encoded + '";', {'token'})
 add('encoded-other-key.js', 'const retained = "' + ''.join('\\u%04x' % ord(c) for c in 'process.env.DEBUG = value') + '";', set())
 add('encoded-comparison.js', 'const retained = "' + ''.join('\\u%04x' % ord(c) for c in 'process.env.ACCESS_TOKEN === value') + '";', set())
 
-env = dict(os.environ, CLEAVE_RAYON_THREADS='4', ATOMDRIFT_ENRICHED='0')
+env = dict(os.environ, CLEAVE_RAYON_THREADS='4', ATOMDRIFT_FEED='oss-delayed')
 result = subprocess.run([args.cleave, '--traits-dir', str(repo), '--json'] + [x['path'] for x in cases],
                         env=env, text=True, capture_output=True, check=True)
 seen = {}

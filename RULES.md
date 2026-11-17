@@ -174,7 +174,7 @@ A few findings are emitted by cleave itself rather than loaded from YAML, such a
 To attach `unless:` or `downgrade:` to an engine-emitted finding, write an override: a trait with the finding's own id and no `if:`, such as `metadata/file/format/installer::inno-setup-loader-checksum-mismatch` in `metadata/file/format/installer/traits.yaml`. Its `unless:` suppresses the engine finding, and its `downgrade:` demotes it from the finding's own criticality; the override's `crit` is ignored. An override never matches on its own, so it is never itself a finding, and `cleave validate` rejects one at an id the engine does not emit, and an ordinary trait with an `if:` at an id the engine does emit. Every engine-emitted id is `dir::leaf` under a taxonomy tier, and dynamic leaves (a signer name, a decoded payload type) are normalized so an override can name them exactly. Tests in `cleave/src/capabilities/mapper_test.rs` cover this. File-format observations (npm manifest judgements, installer kinds, embedded executables) are filefacts facts that ordinary YAML traits read, so they are tuned here like any other rule. Judgements about outcomes the engine merely records, such as UPX unpacking results, are YAML traits over metrics.
 
 A Base64-decoded ZIP emits the notable format observation
-`metadata/file/encoding::base64-decoded-zip`. Encoding and ZIP magic alone
+`metadata/file/encoding/base64::base64-decoded-zip`. Encoding and ZIP magic alone
 do not establish evasion; the decoded archive and its members still receive
 their normal analysis. Do not add a YAML shadow or a filename exclusion for
 an ordinary document or application asset carrying this format.
@@ -1399,7 +1399,7 @@ traits:
     downgrade:                           # → notable if signed
       any:
         - id: metadata/signature/verified/platform::apple
-        - id: metadata/quality::versioned
+        - id: metadata/package/completeness::versioned
 
 composite_rules:
   - id: process-hollowing
@@ -1411,7 +1411,7 @@ composite_rules:
       - id: micro-behaviors/mem/alloc/rwx
     downgrade:                           # → suspicious if debugger
       all:                               # Full boolean logic supported
-        - id: micro-behaviors/process/create/load/library::debugger-tool-marker
+        - id: micro-behaviors/process/debug/tool-markers::debugger-tool-marker
         - id: objectives/anti-analysis/packing::upx
 ```
 
@@ -1793,11 +1793,15 @@ when you need those rules to actually fire.
 ### Measured rule performance
 
 Fresh validation compares confirmed AST execution costs among at least eight
-queries on the same fixture and in the same boolean or full-count mode. A query
-fails the relative check only when its cost exceeds the larger of 40 times the
-peer median or the median plus 40 median absolute deviations, plus a 1 ms
-allowance. This requires material excess cost above the relative cutoff.
-Whole-rule slow limits and query-budget exhaustion remain separate failures.
+queries on the same fixture, in the same boolean or full-count mode, and with
+the same anchoring. A query whose literal predicates let cleave run it only
+at the nodes holding that literal is anchored; one that visits the whole tree
+is not, and costs far more on a large file without being slow for what it
+does. Each is judged only among its own kind. A query fails the relative check
+only when its cost exceeds the larger of 40 times the peer median or the
+median plus 40 median absolute deviations, plus a 1 ms allowance. This
+requires material excess cost above the relative cutoff. Whole-rule slow
+limits and query-budget exhaustion remain separate failures.
 
 ### Metadata section review
 
