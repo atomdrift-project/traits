@@ -127,6 +127,19 @@ those observations by their actual subject rather than a generic profile.
 
 ### Behavioral meaning and incomplete evidence
 
+Transfer hijacking under `objectives/impact/crypto-manipulation/hijack-transfer`
+is divided by the transfer element the evidence addresses. `address` holds
+destination recognition, replacement and routing evidence, including page,
+clipboard, request-body and RPC-endpoint rewrites. `transaction` holds wallet
+transaction interfaces, signing authority, reward transactions and signing
+relays. Prefer `address` when a matcher requires destination replacement;
+otherwise a provider-method hook with no proven destination change stays in
+`transaction`. A regex replacement of payment addresses is an address example;
+a wallet signing relay is the neighboring transaction example. A provider
+request assignment alone remains a notable interface observation, not proof
+of either theft or a changed destination. Existing parent selectors retain
+their union; the two leaves preserve their previous matchers and scopes.
+
 Placement answers **what this is evidence of**; the description answers
 **what was observed**. A neutral capability can be informative without being
 malicious. Assigning a function to an object's member, disabling certificate
@@ -1745,6 +1758,23 @@ distinguishes it.
 Firewall degradation separates `disable`, `rules`, `policy`, and `service` by
 the affected control. API endpoints and ordinary policy fields are capability
 or metadata evidence until a harmful action is supported.
+
+### Document-server exploit boundaries
+
+- `execution/exploit/conversion-parameters` covers caller-supplied task fields
+  that override a converter's source and destination through a script API.
+  DocBuilder `SaveFile` with raw X2T path fields qualifies; an ordinary X2T
+  conversion task or a normal document save does not. The directly overridden
+  destination distinguishes this from archive-member path traversal.
+- `privilege-escalation/exploit/maintenance-helper` covers command injection
+  through a privileged maintenance helper. A sudo cache helper with a sed
+  execute-flag injection qualifies; a valid maintenance hash and a standalone
+  sed execution command do not. Generic helper arguments and shell execution
+  stay in capabilities; the privilege crossing admits the objective.
+- `collection/file-targeting/font-api` covers non-font file acquisition through
+  a font-reading API. A `GetFontBinary` call on `/etc/passwd` qualifies; a font
+  path, including a font under `/etc/fonts`, does not. This records acquisition,
+  not transfer or credential theft; those require their own evidence.
 
 ### Objective boundaries
 

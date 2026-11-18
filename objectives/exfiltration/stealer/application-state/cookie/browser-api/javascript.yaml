@@ -23,7 +23,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/cookies::cookie-json-send-call
   near_bytes: 2400
 - id: js-browser-cookie-storage-oast-exfil
-  desc: Browser cookies and storage exfiltrated to OAST endpoint
+  desc: Browser cookies and storage sent to OAST
   conf: 0.98
   attack: T1555.003,T1041
   mbc: B0028
@@ -41,7 +41,7 @@ composite_rules:
   unless:
   - id: metadata/path/directory::test-directory-component
 - id: js-browser-cookie-oob-navigation-exfil
-  desc: Sends browser cookie to OOB callback via navigation
+  desc: Browser cookie sent via OOB navigation
   conf: 0.99
   attack: T1539,T1041
   mbc: E1005,E1041
@@ -63,7 +63,7 @@ composite_rules:
   - id: micro-behaviors/communications/http/client/xmlhttp::xhr-send-cookie-value
   - id: micro-behaviors/communications/url/host/domain-http::js-remote-host-url
 - id: js-storage-regex-cookie-xhr-exfil
-  desc: Storage keys matching a credential regex sent with the cookie
+  desc: Credential storage keys sent with cookie
   conf: 0.97
   attack: T1555.003,T1539,T1041
   mbc: B0028
@@ -77,21 +77,279 @@ composite_rules:
   near_bytes: 1200
   unless:
   - id: metadata/path/directory::test-directory-component
-- id: js-browser-cookie-fetch-post-exfil
-  desc: Browser session cookie sent in fetch POST body
-  conf: 0.98
-  attack: T1539,T1041
+- id: js-browser-cookie-discord-webhook-exfil
+  desc: Browser cookies posted to Discord webhook
+  conf: 0.99
+  attack: T1539,T1041,T1567.002
   mbc: B0028
   for:
   - javascript
   - typescript
-  near_bytes: 800
+  near_bytes: 1600
   all:
   - id: micro-behaviors/communications/http/cookie-store::document-cookie-reference
-  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/webhook::discord-webhook-path-any
   any:
-  - id: micro-behaviors/communications/http/cookies::cookie-value-json-payload
-  - id: micro-behaviors/communications/http/cookies::cookie-value-body-field
-  - id: micro-behaviors/data/serialize/json::json-stringify-post-body-core
+  - id: micro-behaviors/communications/http/post::fetch-post-call
+  - id: micro-behaviors/communications/http/post::axios-post-call
+  - id: micro-behaviors/communications/http/post::xhr-post-open-send
+  - id: micro-behaviors/communications/http/post::request-options-post-method
   unless:
   - id: metadata/path/directory::test-directory-component
+
+# Bind document.cookie serialization to the outgoing request body.
+# Adjacent statements prevent reassignment and unrelated read/POST matches.
+# Includes inline JSON and direct or promise-wrapped fetch calls. The AST is
+# needed because this specimen exhausts the ordinary flow projection budget.
+# No campaign host, cookie field key, or channel token gates the rule.
+traits:
+  - id: js-browser-cookie-fetch-post-exfil
+    for: [javascript, typescript]
+    platforms: [unix, windows]
+    desc: Posts browser cookies to an absolute URL
+    crit: hostile
+    conf: 0.98
+    attack: T1539,T1041
+    mbc: B0028
+    if:
+      type: tree-sitter
+      query: |
+        ((_ (_ . (variable_declarator name: (identifier) @payload value: [(call_expression function: (member_expression) @json
+          arguments: (arguments . (object (pair value: [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ])) .)) [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] (call_expression function: (identifier) @encode arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .)) (call_expression function: (member_expression) @json arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .))]) .) . (expression_statement (call_expression function: (identifier) @fetch arguments: (arguments . (string (string_fragment) @url) . [(object (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)) (pair key: [(property_identifier) (string)] @body_key value: (identifier) @sent)) (object (pair key: [(property_identifier) (string)] @body_key value: (identifier) @sent) (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)))] @options .)) @transfer))
+        (#set! cleave.ignore-comments "true")
+        (#eq? @json "JSON.stringify")
+        (#eq? @document "document") (#eq? @cookie "cookie")
+        (#eq? @slice "slice") (#eq? @start "0") (#match? @limit "^[1-9][0-9]*$")
+        (#match? @fallback "^document\\s*\\.\\s*cookie\\s*\\|\\|")
+        (#eq? @fetch "fetch") (#match? @url "^https?://")
+        (#match? @method_key "^[\"']?method[\"']?$") (#eq? @method "POST")
+        (#match? @body_key "^[\"']?body[\"']?$")
+        (#not-match? @options "\\bbody[\"']?\\s*:[^{}]*\\bbody[\"']?\\s*:")
+        (#eq? @encode "encodeURIComponent")
+        (#eq? @payload @sent))
+        ((_ (_ . (variable_declarator name: (identifier) @payload value: [(call_expression function: (member_expression) @json
+          arguments: (arguments . (object (pair value: [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ])) .)) [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] (call_expression function: (identifier) @encode arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .)) (call_expression function: (member_expression) @json arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .))]) .) . (expression_statement (call_expression function: (member_expression object: (call_expression function: (identifier) @fetch arguments: (arguments . (string (string_fragment) @url) . [(object (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)) (pair key: [(property_identifier) (string)] @body_key value: (identifier) @sent)) (object (pair key: [(property_identifier) (string)] @body_key value: (identifier) @sent) (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)))] @options .)) @transfer property: (property_identifier)) arguments: (arguments))))
+        (#set! cleave.ignore-comments "true")
+        (#eq? @json "JSON.stringify")
+        (#eq? @document "document") (#eq? @cookie "cookie")
+        (#eq? @slice "slice") (#eq? @start "0") (#match? @limit "^[1-9][0-9]*$")
+        (#match? @fallback "^document\\s*\\.\\s*cookie\\s*\\|\\|")
+        (#eq? @fetch "fetch") (#match? @url "^https?://")
+        (#match? @method_key "^[\"']?method[\"']?$") (#eq? @method "POST")
+        (#match? @body_key "^[\"']?body[\"']?$")
+        (#not-match? @options "\\bbody[\"']?\\s*:[^{}]*\\bbody[\"']?\\s*:")
+        (#eq? @encode "encodeURIComponent")
+        (#eq? @payload @sent))
+        ((_ (_ . (variable_declarator name: (identifier) @payload value: [(call_expression function: (member_expression) @json
+          arguments: (arguments . (object (pair value: [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ])) .)) [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] (call_expression function: (identifier) @encode arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .)) (call_expression function: (member_expression) @json arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .))]) .) . (expression_statement (call_expression function: (subscript_expression object: (call_expression function: (identifier) @fetch arguments: (arguments . (string (string_fragment) @url) . [(object (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)) (pair key: [(property_identifier) (string)] @body_key value: (identifier) @sent)) (object (pair key: [(property_identifier) (string)] @body_key value: (identifier) @sent) (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)))] @options .)) @transfer index: (string)) arguments: (arguments))))
+        (#set! cleave.ignore-comments "true")
+        (#eq? @json "JSON.stringify")
+        (#eq? @document "document") (#eq? @cookie "cookie")
+        (#eq? @slice "slice") (#eq? @start "0") (#match? @limit "^[1-9][0-9]*$")
+        (#match? @fallback "^document\\s*\\.\\s*cookie\\s*\\|\\|")
+        (#eq? @fetch "fetch") (#match? @url "^https?://")
+        (#match? @method_key "^[\"']?method[\"']?$") (#eq? @method "POST")
+        (#match? @body_key "^[\"']?body[\"']?$")
+        (#not-match? @options "\\bbody[\"']?\\s*:[^{}]*\\bbody[\"']?\\s*:")
+        (#eq? @encode "encodeURIComponent")
+        (#eq? @payload @sent))
+        ((call_expression function: (identifier) @fetch arguments: (arguments . (string (string_fragment) @url) . [(object (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)) (pair key: [(property_identifier) (string)] @body_key value: [(call_expression function: (member_expression) @json
+          arguments: (arguments . (object (pair value: [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ])) .)) [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] (call_expression function: (identifier) @encode arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .)) (call_expression function: (member_expression) @json arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .))])) (object (pair key: [(property_identifier) (string)] @body_key value: [(call_expression function: (member_expression) @json
+          arguments: (arguments . (object (pair value: [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ])) .)) [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] (call_expression function: (identifier) @encode arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .)) (call_expression function: (member_expression) @json arguments: (arguments . [
+          (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+          (call_expression function: (member_expression
+            object: (parenthesized_expression (binary_expression
+              left: (member_expression object: (identifier) @document property: (property_identifier) @cookie)
+              right: (string)) @fallback)
+            property: (property_identifier) @slice)
+            arguments: (arguments . (number) @start . (number) @limit .))
+        ] .))]) (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method)))] @options .)) @transfer
+        (#eq? @json "JSON.stringify")
+        (#eq? @document "document") (#eq? @cookie "cookie")
+        (#eq? @slice "slice") (#eq? @start "0") (#match? @limit "^[1-9][0-9]*$")
+        (#match? @fallback "^document\\s*\\.\\s*cookie\\s*\\|\\|")
+        (#eq? @fetch "fetch") (#match? @url "^https?://")
+        (#match? @method_key "^[\"']?method[\"']?$") (#eq? @method "POST")
+        (#match? @body_key "^[\"']?body[\"']?$")
+        (#not-match? @options "\\bbody[\"']?\\s*:[^{}]*\\bbody[\"']?\\s*:")
+        (#eq? @encode "encodeURIComponent"))
+        ((_ (_ . (variable_declarator name: (identifier) @destination value: [
+          (string (string_fragment) @url)
+          (member_expression object: (object . (pair key: (property_identifier) @key
+            value: (string (string_fragment) @url)) .) property: (property_identifier) @used_key)
+        ]) .) . (expression_statement (call_expression function: (identifier) @fetch
+          arguments: (arguments . (identifier) @target . (object
+            (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method))
+            (pair key: [(property_identifier) (string)] @body_key value: (member_expression
+              object: (identifier) @document property: (property_identifier) @cookie))) @options .)) @transfer))
+          (#set! cleave.ignore-comments "true")
+          (#eq? @destination @target) (#eq? @key @used_key)
+          (#match? @url "^https?://") (#eq? @fetch "fetch")
+          (#eq? @document "document") (#eq? @cookie "cookie")
+          (#match? @method_key "^[\"']?method[\"']?$") (#eq? @method "POST")
+          (#match? @body_key "^[\"']?body[\"']?$")
+          (#not-match? @options "\\bbody[\"']?\\s*:[^{}]*\\bbody[\"']?\\s*:"))
+        ((_ (_ . (variable_declarator name: (identifier) @destination value: (string (string_fragment) @url)) .) . (expression_statement (call_expression function: (identifier) @fetch
+          arguments: (arguments . (identifier) @target . (object
+            (pair key: [(property_identifier) (string)] @method_key value: (string (string_fragment) @method))
+            (pair key: [(property_identifier) (string)] @body_key value: (member_expression
+              object: (identifier) @document property: (property_identifier) @cookie))) @options .)) @transfer))
+          (#set! cleave.ignore-comments "true")
+          (#eq? @destination @target)
+          (#match? @url "^https?://") (#eq? @fetch "fetch")
+          (#eq? @document "document") (#eq? @cookie "cookie")
+          (#match? @method_key "^[\"']?method[\"']?$") (#eq? @method "POST")
+          (#match? @body_key "^[\"']?body[\"']?$")
+          (#not-match? @options "\\bbody[\"']?\\s*:[^{}]*\\bbody[\"']?\\s*:"))
